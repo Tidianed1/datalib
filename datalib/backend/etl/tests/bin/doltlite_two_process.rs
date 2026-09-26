@@ -664,7 +664,8 @@ async fn branch_read(args: &Args) -> Result<Value> {
         other => bail!("unknown --refresh {other:?}"),
     };
     let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db.display()))?
-        .create_if_missing(false);
+        .create_if_missing(false)
+        .busy_timeout(Duration::from_millis(args.num("busy-timeout-ms", 5000)));
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .idle_timeout(None)
@@ -678,6 +679,7 @@ async fn branch_read(args: &Args) -> Result<Value> {
         .fetch_one(&mut *conn)
         .await?;
     let retry_for = Duration::from_millis(args.num("retry-ms", 30_000));
+    let refresh_budget = Duration::from_millis(args.num("refresh-retry-ms", 0));
     if exists == 0 {
         let create = format!("SELECT dolt_branch('{branch}', 'main')");
         retry_busy(&mut conn, &create, retry_for)
@@ -703,15 +705,27 @@ async fn branch_read(args: &Args) -> Result<Value> {
     let mut txn = 0u64;
     while !until.exists() {
         let started = Instant::now();
-        let (refreshed, attempts) = retry_busy(&mut conn, refresh_sql, retry_for).await;
+        let (refreshed, attempts) = retry_busy(&mut conn, refresh_sql, refresh_budget).await;
         let ms = started.elapsed().as_millis() as u64;
-        if let Err(e) = &refreshed {
-            errors.push(format!(
-                "refresh {txn} after {attempts} attempts, {ms} ms: {e:#}"
-            ));
-        }
-        refreshes
-            .push(json!({ "txn": txn, "ms": ms, "attempts": attempts, "ok": refreshed.is_ok() }));
+        // A refresh that lost the race to the writer is not a failure: the
+        // reader keeps the snapshot it has and tries again next time.
+        let outcome = match &refreshed {
+            Ok(()) => "ok",
+            Err(e) if format!("{e:#}").contains("locked") => "busy",
+            Err(e) => {
+                errors.push(format!(
+                    "refresh {txn} after {attempts} attempts, {ms} ms: {e:#}"
+                ));
+                "error"
+            }
+        };
+        refreshes.push(json!({
+            "txn": txn,
+            "at_ms": now_ms(),
+            "ms": ms,
+            "attempts": attempts,
+            "outcome": outcome,
+        }));
         let opened = Instant::now();
         while opened.elapsed() < hold && !until.exists() {
             match sample_on(&mut conn, "entities").await {
@@ -833,10 +847,9 @@ async fn sample_on(conn: &mut sqlx::SqliteConnection, table: &str) -> Result<Val
     Ok(json!({ "at_ms": now_ms(), "count": count, "head": head }))
 }
 
-/// Run `sql` until it is not refused as busy or `budget` runs out. Doltlite's
-/// version-control calls report `SQLITE_BUSY` rather than waiting in the busy
-/// handler the way `dolt_commit` does, so a caller that means to wait loops.
-/// Returns the last outcome and how many tries it took.
+/// Run `sql` until it is not refused as busy or `budget` runs out; each try
+/// also waits out the connection's busy timeout. Returns the last outcome and
+/// how many tries it took.
 async fn retry_busy(
     conn: &mut sqlx::SqliteConnection,
     sql: &str,
