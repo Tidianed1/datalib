@@ -788,6 +788,127 @@ fn branch_readers_beside_a_writer_that_pauses_after_each_seal() {
     });
 }
 
+/// A reader that needs no branch of its own: it reads `main`'s tip, opens
+/// `<file>@<tip>` read-only (a detached snapshot), reads, closes, and goes
+/// again, beside the `commit_run` writer.
+#[allow(clippy::disallowed_macros)]
+fn detached_readers_beside_a_sealing_writer(readers: usize, commits: u64, txn_ms: u64) {
+    let t = Scratch::new();
+    let ready: Vec<String> = (0..readers)
+        .map(|i| t.path(&format!("reader-{i}-ready")))
+        .collect();
+    let commits_s = commits.to_string();
+    let txn_ms = txn_ms.to_string();
+    let go_when = ready.join(",");
+    let mut writer = t.spawn(&[
+        "write",
+        "--db",
+        &t.dot_db(),
+        "--seed",
+        "--pin-out",
+        &t.path("pin"),
+        "--go-when",
+        &go_when,
+        "--max-commits",
+        &commits_s,
+        "--interval-ms",
+        "0",
+        "--txn-ms",
+        &txn_ms,
+        "--out",
+        &t.path("writer.json"),
+    ]);
+    let seed = t.await_file("pin", &mut writer);
+    let mut children: Vec<Child> = (0..readers)
+        .map(|i| {
+            t.spawn(&[
+                "rev-read",
+                "--db",
+                &t.dot_db(),
+                "--until",
+                &t.path("writer.json"),
+                "--hold-ms",
+                "20",
+                "--ready-out",
+                &ready[i],
+                "--out",
+                &t.path(&format!("reader-{i}.json")),
+            ])
+        })
+        .collect();
+    t.wait("writer", &mut writer);
+    for c in &mut children {
+        t.wait("reader", c);
+    }
+    let writer = t.report("writer.json");
+    if writer["dolt"] == Value::Bool(false) {
+        return;
+    }
+    let reports: Vec<Value> = (0..readers)
+        .map(|i| t.report(&format!("reader-{i}.json")))
+        .collect();
+    for (i, r) in reports.iter().enumerate() {
+        let mut ms: Vec<u64> = r["opens"]
+            .as_array()
+            .expect("opens")
+            .iter()
+            .filter_map(|x| x["ms"].as_u64())
+            .collect();
+        ms.sort_unstable();
+        let heads: std::collections::BTreeSet<&str> = samples(r)
+            .iter()
+            .filter_map(|s| s["head"].as_str())
+            .collect();
+        eprintln!(
+            "reader {i}: {} opens, median {} ms, max {} ms, {} distinct commits read, {} errors",
+            ms.len(),
+            ms.get(ms.len() / 2).copied().unwrap_or(0),
+            ms.last().copied().unwrap_or(0),
+            heads.len(),
+            errors(r).len(),
+        );
+    }
+    let mut seal_ms: Vec<u64> = writer["commits"]
+        .as_array()
+        .expect("commits")
+        .iter()
+        .filter_map(|c| c["ms"].as_u64())
+        .collect();
+    seal_ms.sort_unstable();
+    eprintln!(
+        "writer: {} seals, median {} ms, max {} ms, {} errors, file {} bytes",
+        seal_ms.len(),
+        seal_ms.get(seal_ms.len() / 2).copied().unwrap_or(0),
+        seal_ms.last().copied().unwrap_or(0),
+        errors(&writer).len(),
+        writer["size_after"],
+    );
+    assert_eq!(errors(&writer), Vec::<String>::new(), "writer errors");
+    assert_eq!(
+        seal_ms.len() as u64,
+        commits,
+        "the writer did not seal every chunk"
+    );
+    for r in &reports {
+        assert_eq!(errors(r), Vec::<String>::new(), "reader errors");
+        assert_reads_only_sealed_commits(&writer, &seed, samples(r));
+        assert_each_transaction_read_one_commit(r);
+        assert_committed_throughout(&writer, r);
+    }
+}
+
+#[test]
+fn detached_readers_are_snapshots_while_the_writer_seals() {
+    detached_readers_beside_a_sealing_writer(3, 500, 0);
+}
+
+/// A detached open takes no write lock, so a writer holding its batch open
+/// does not hold it up.
+#[test]
+fn detached_readers_open_while_the_writer_holds_a_transaction() {
+    detached_readers_beside_a_sealing_writer(3, 5, 2000);
+}
+
 #[test]
 fn a_second_writer_in_another_process_is_refused_and_told_who_holds_the_store() {
     let t = Scratch::new();
@@ -1288,6 +1409,12 @@ impl Scratch {
 
     fn db(&self) -> String {
         self.path("store.doltlite_db")
+    }
+
+    /// Doltlite splits `<file>@<rev>` only when the file's name contains
+    /// `.db` or `.sqlite` (`doltliteLooksLikeDbPath`); `.doltlite_db` does not.
+    fn dot_db(&self) -> String {
+        self.path("store.db")
     }
 
     fn path(&self, name: &str) -> String {

@@ -61,6 +61,8 @@ async fn main() -> Result<()> {
         "watch" => watch(&args).await,
         "txn-read" => txn_read(&args).await,
         "branch-read" => branch_read(&args).await,
+        "rev-probe" => rev_probe(&args).await,
+        "rev-read" => rev_read(&args).await,
         "seal-existing" => seal_existing(&args).await,
         other => bail!("unknown role {other:?}"),
     }?;
@@ -845,6 +847,141 @@ async fn sample_on(conn: &mut sqlx::SqliteConnection, table: &str) -> Result<Val
         .fetch_one(&mut *conn)
         .await?;
     Ok(json!({ "at_ms": now_ms(), "count": count, "head": head }))
+}
+
+/// A read-only pool on one revision of the store, opened by path:
+/// `<db>@<rev>`. A revision that is not a branch opens detached -- pinned
+/// there, and refusing every write.
+async fn open_revision(db: &Path, rev: &str) -> Result<SqlitePool> {
+    let opts = SqliteConnectOptions::new()
+        .filename(format!("{}@{rev}", db.display()))
+        .create_if_missing(false)
+        .read_only(true);
+    SqlitePoolOptions::new()
+        .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
+        .connect_with(opts)
+        .await
+        .with_context(|| format!("open {}@{rev}", db.display()))
+}
+
+/// What one detached open can and cannot do, statement by statement.
+async fn rev_probe(args: &Args) -> Result<Value> {
+    let db = args.path("db")?;
+    let rev = args.str("rev")?;
+    let other = args.str("other").unwrap_or(rev);
+    let pool = match open_revision(&db, rev).await {
+        Ok(p) => p,
+        Err(e) => return Ok(json!({ "role": "rev-probe", "open_error": format!("{e:#}") })),
+    };
+    let mut out = serde_json::Map::new();
+    let probes: [(&str, String); 7] = [
+        ("active_branch", "SELECT quote(active_branch())".into()),
+        ("count", "SELECT COUNT(*) FROM entities".into()),
+        ("hashof_head", "SELECT dolt_hashof('HEAD')".into()),
+        ("plan", "EXPLAIN QUERY PLAN SELECT * FROM entities WHERE id = 'seed-0'".into()),
+        (
+            "diff_to_other",
+            format!(
+                "SELECT COUNT(*) FROM dolt_diff_entities WHERE from_ref = '{rev}' AND to_ref = '{other}'"
+            ),
+        ),
+        ("log", "SELECT COUNT(*) FROM dolt_log()".into()),
+        ("insert", "INSERT INTO entities (id, body) VALUES ('probe', 'x')".into()),
+    ];
+    for (name, sql) in probes {
+        // Audited: `rev` and `other` are hashes the test read from the store.
+        let got = sqlx::query(sqlx::AssertSqlSafe(sql))
+            .fetch_all(&pool)
+            .await
+            .map(|rows| {
+                rows.iter()
+                    .map(|r| {
+                        use sqlx::Row;
+                        (0..r.len())
+                            .map(|i| {
+                                r.try_get::<String, _>(i)
+                                    .or_else(|_| r.try_get::<i64, _>(i).map(|n| n.to_string()))
+                                    .unwrap_or_else(|_| "?".into())
+                            })
+                            .collect::<Vec<_>>()
+                            .join("|")
+                    })
+                    .collect::<Vec<_>>()
+            });
+        out.insert(
+            name.into(),
+            match got {
+                Ok(rows) => json!({ "ok": rows }),
+                Err(e) => json!({ "err": e.to_string() }),
+            },
+        );
+    }
+    pool.close().await;
+    out.insert("role".into(), json!("rev-probe"));
+    Ok(Value::Object(out))
+}
+
+/// The reader that needs no branch: look up `main`'s tip on a read-only
+/// connection, open `<db>@<tip>` read-only and detached, read it for
+/// `--hold-ms`, close, and go again. Each window's samples carry the tip it
+/// opened at.
+async fn rev_read(args: &Args) -> Result<Value> {
+    let db = args.path("db")?;
+    let until = args.path("until")?;
+    let hold = Duration::from_millis(args.num("hold-ms", 100));
+    let interval = Duration::from_millis(args.num("interval-ms", 5));
+    write_atomic(&args.path("ready-out")?, b"ready")?;
+    let mut samples: Vec<Value> = Vec::new();
+    let mut opens: Vec<Value> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    let mut txn = 0u64;
+    while !until.exists() {
+        let started = Instant::now();
+        let tip = match main_tip(&db).await {
+            Ok(tip) => tip,
+            Err(e) => {
+                errors.push(format!("window {txn}: read main's tip: {e:#}"));
+                txn += 1;
+                continue;
+            }
+        };
+        let pool = match open_revision(&db, &tip).await {
+            Ok(p) => p,
+            Err(e) => {
+                errors.push(format!("window {txn}: {e:#}"));
+                txn += 1;
+                continue;
+            }
+        };
+        opens.push(json!({ "txn": txn, "ms": started.elapsed().as_millis() as u64 }));
+        let opened = Instant::now();
+        while opened.elapsed() < hold && !until.exists() {
+            match sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM entities")
+                .fetch_one(&pool)
+                .await
+            {
+                Ok(count) => samples.push(json!({
+                    "txn": txn, "at_ms": now_ms(), "count": count, "head": tip,
+                })),
+                Err(e) => errors.push(format!("sample in window {txn}: {e:#}")),
+            }
+            tokio::time::sleep(interval).await;
+        }
+        pool.close().await;
+        txn += 1;
+    }
+    Ok(json!({ "role": "rev-read", "samples": samples, "opens": opens, "errors": errors }))
+}
+
+async fn main_tip(db: &Path) -> Result<String> {
+    let pool = datalib_pin::open_reader(db).await?;
+    let tip = sqlx::query_scalar::<_, String>("SELECT hash FROM dolt_branches WHERE name = 'main'")
+        .fetch_one(&pool)
+        .await;
+    pool.close().await;
+    Ok(tip?)
 }
 
 /// Run `sql` until it is not refused as busy or `budget` runs out; each try
