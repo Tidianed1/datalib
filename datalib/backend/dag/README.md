@@ -502,7 +502,7 @@ header says rollback-journal:
 
 | table | one row per | what it holds |
 |---|---|---|
-| `steps` | step | its state now (`state`, `state_detail`, `turned_off_by`, and the open `request` it serves), what it read at its last success (`reads`), under which definition (`fingerprint`), and what happened the last time a run reached it (`last_*`) |
+| `steps` | step | its state now (`state`, `state_detail`, `turned_off_by`, and `requests`, the open requests it still has work in: a JSON array, NULL once it has none, which is when its Manage row offers Sync again), what it read at its last success (`reads`), under which definition (`fingerprint`), and what happened the last time a run reached it (`last_*`) |
 | `sinks` | tree a step writes | the version it last published |
 | `runs` | busy period of the loop | when it started and finished |
 | `run_steps` | step the newest run has reached | what it is doing in that run |
@@ -529,7 +529,11 @@ UI silently shows none. `started_at` stays the pinned
 `DATALIB_DAG_NOW`.
 
 The record is the only channel to a reader who did not spawn the run, and the loop
-saves it before it closes a request, so a reader that sees a request
-closed never finds a step still serving it. `POST /api/requests`
-answers only once a step names the new request (`Store::taken_on`), so
-the rows read after a Sync already show it.
+saves it before it closes a request whose work is done, so a reader that
+sees such a request closed never finds a step still serving it. A
+stopped request is closed as soon as the loop reads the stop; its steps
+let go of it on the next save, and read Stopping until then. `POST /api/requests`
+opens one request per group its roots belong to, so each source's sync
+has a Stop of its own, and answers only once a step names each new
+request (`Store::taken_on`), so the rows read after a Sync already show
+them.

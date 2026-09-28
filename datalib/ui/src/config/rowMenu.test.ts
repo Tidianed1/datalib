@@ -12,7 +12,7 @@ const target = (over: Partial<MenuTarget> = {}): MenuTarget => ({
   revealBlocked: null,
   browseBlocked: null,
   rawStore: false,
-  stopRequestId: null,
+  stopRequestIds: [],
   turnedOffBy: null,
   statusFrom: "slack/render_markdown",
   revealPath: "/data/slack",
@@ -91,7 +91,7 @@ describe("rowMenu", () => {
   it("offers Reset on a source and its steps, and nowhere else", () => {
     const index = target({ id: "unified_index", type: null, statusFrom: null });
     expect(has(rowMenu([index], opts), "reset")).toBe(false);
-    const busy = target({ stopRequestId: "req-1" });
+    const busy = target({ stopRequestIds: ["req-1"] });
     expect(entry(rowMenu([busy], opts), "reset").disabled).toBe("Busy — stop the sync first");
     expect(entry(rowMenu([busy], opts), "reset_blobs").disabled).toBe("Busy — stop the sync first");
     const ingest = target({ kind: "step", func: "ingest" });
@@ -170,11 +170,11 @@ describe("rowMenu", () => {
   });
 
   it("turns Sync into Stop only when every target is claimed", () => {
-    expect(entry(rowMenu([target({ stopRequestId: "r1" })], opts), "stop").name).toBe(
+    expect(entry(rowMenu([target({ stopRequestIds: ["r1"] })], opts), "stop").name).toBe(
       "Stop the sync",
     );
     const mixed = rowMenu(
-      [target({ stopRequestId: "r1" }), target({ id: "mail", name: "Mail" })],
+      [target({ stopRequestIds: ["r1"] }), target({ id: "mail", name: "Mail" })],
       opts,
     );
     expect(entry(mixed, "sync").disabled).toMatch(/already syncing/);

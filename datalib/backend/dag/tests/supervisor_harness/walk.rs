@@ -1,6 +1,7 @@
 //! A seeded random walk over everything the scenarios do one at a time:
 //! sources `a` and `b`, a consumer `c` of `a`, a fan-in `d` of both, and
-//! syncs, stops, steps turned
+//! syncs (one at a time, or one per source at once, as Sync everything
+//! opens them), stops, steps turned
 //! off and on, and every way a step can end, in any order. The invariants are
 //! checked as it goes (one process per step, on every start) and after
 //! each episode. `HARNESS_SEED=<n>` replays one walk; `HARNESS_SEEDS=<n>`
@@ -10,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use datalib_dag::supervisor::store::RequestOutcome;
+use datalib_dag::supervisor::tick::StateKind;
 
 use crate::harness::{reads, source, Clocks, Harness, Seen};
 
@@ -94,6 +96,17 @@ impl Walk {
 
     async fn sync(&mut self) {
         let roots: &[&str] = self.rng.pick(&[&["a"][..], &["b"], &["a", "b"], &["c"]]);
+        self.open_sync(roots).await;
+    }
+
+    /// What Sync everything opens: a sync of each source, at once.
+    async fn sync_everything(&mut self) {
+        for source in ["a", "b"] {
+            self.open_sync(&[source]).await;
+        }
+    }
+
+    async fn open_sync(&mut self, roots: &[&'static str]) {
         for r in roots {
             if let Some(n) = self.allowed.get_mut(r) {
                 *n += 1;
@@ -201,9 +214,9 @@ impl Walk {
             format!("did {instruction}")
         };
         let what = format!("{step} [{pid}] to do {instruction:?} or be stopped");
-        let (w, p) = self
+        let answer = self
             .h
-            .wait(&what, |s| match s {
+            .wait_while_alive(pid, &what, |s| match s {
                 Seen::Ack {
                     step: st,
                     pid: p,
@@ -214,7 +227,51 @@ impl Walk {
                 _ => None,
             })
             .await;
-        self.absorb(step, p, &w);
+        match answer {
+            Some((w, p)) => self.absorb(step, p, &w),
+            // Killed before it could say so; the instruction waits in its
+            // pipe for the step's next process.
+            None => {
+                if let Some(puppet) = self.puppets.get_mut(step) {
+                    puppet.listening = None;
+                }
+            }
+        }
+    }
+
+    /// A step names only requests still open, and only while it has work
+    /// left in them: running, waiting, or up to date with something above
+    /// it still moving. The requests are read before the record, since
+    /// the loop saves a step's record before it closes a request whose
+    /// work is done. A stopped one it closes as soon as it reads the stop,
+    /// and the record lets go of it on the next save.
+    async fn check_served(&mut self) {
+        let requests = self.h.state().await.requests;
+        let record = self.h.state().await.record;
+        for (step, st) in &record.steps {
+            if st.requests.is_empty() {
+                continue;
+            }
+            let working = matches!(
+                st.state,
+                Some(StateKind::Running | StateKind::Waiting | StateKind::Fresh)
+            );
+            if !working {
+                self.h.fail(&format!(
+                    "{step} reads {:?} and still names {:?}",
+                    st.state, st.requests
+                ));
+            }
+            for id in &st.requests {
+                let closed = requests
+                    .iter()
+                    .any(|r| &r.id == id && r.closed.is_some() && r.stop_requested_by.is_none());
+                if closed {
+                    self.h
+                        .fail(&format!("{step} names {id}, which had already closed"));
+                }
+            }
+        }
     }
 
     /// Stop everything and wait for the loop to be at rest; then check.
@@ -228,11 +285,15 @@ impl Walk {
         }
         let requests = self.requests.clone();
         self.h
-            .until("every request closed and every invocation ended", |s| {
-                let closed = requests.iter().all(|id| s.outcome(id).is_some());
-                let ended = s.invocations.iter().all(|(_, end)| end.is_some());
-                (closed && ended).then_some(())
-            })
+            .until(
+                "every request closed, every invocation ended, and no step naming a request",
+                |s| {
+                    let closed = requests.iter().all(|id| s.outcome(id).is_some());
+                    let ended = s.invocations.iter().all(|(_, end)| end.is_some());
+                    let named = s.record.steps.values().any(|st| !st.requests.is_empty());
+                    (closed && ended && !named).then_some(())
+                },
+            )
             .await;
         let state = self.h.state().await;
         for id in &self.requests {
@@ -307,13 +368,15 @@ async fn walk(seed: u64) {
     for episode in 0..EPISODES {
         w.h.say(format!("walk: episode {episode}"));
         for _ in 0..ACTIONS {
-            match w.rng.below(10) {
+            match w.rng.below(11) {
                 0..=2 => w.sync().await,
-                3 => w.stop().await,
-                4 => w.turn_off().await,
-                5 => w.turn_on().await,
+                3 => w.sync_everything().await,
+                4 => w.stop().await,
+                5 => w.turn_off().await,
+                6 => w.turn_on().await,
                 _ => w.tell().await,
             }
+            w.check_served().await;
         }
         w.quiesce().await;
     }

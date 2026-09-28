@@ -30,9 +30,9 @@ export type MenuTarget = {
   /// Browse opens the step's raw store rather than the grid: a download
   /// step with one, in the desktop app.
   rawStore: boolean;
-  /// Non-null while an open request wants this row — the state in which
-  /// Sync reads as Stop.
-  stopRequestId: string | null;
+  /// The open requests this row has work left in; non-empty is the
+  /// state in which Sync reads as Stop.
+  stopRequestIds: string[];
   /// Who turned it off; for a group, who turned off every step under it.
   turnedOffBy: string | null;
   /// For a group, the step whose status it shows; the log to open.
@@ -195,7 +195,7 @@ export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
   const only = targets[0];
   const oneRow: Verdict = one ? null : ABSENT;
   const busy = firstBlocked(targets, (t) =>
-    t.stopRequestId ? "Busy — stop the sync first" : null,
+    t.stopRequestIds.length > 0 ? "Busy — stop the sync first" : null,
   );
   const entries: MenuEntry[] = [];
   const add = (action: MenuAction, name: string, disabled: Verdict) => {
@@ -204,7 +204,7 @@ export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
   const separator = () => entries.push({ separator: true });
 
   add("browse", browseLabel(only), oneRow ?? only.browseBlocked);
-  const claimed = targets.filter((t) => t.stopRequestId).length;
+  const claimed = targets.filter((t) => t.stopRequestIds.length > 0).length;
   if (claimed === targets.length) {
     add("stop", one ? "Stop the sync" : `Stop ${plural(targets.length, "sync")}`, null);
   } else {
