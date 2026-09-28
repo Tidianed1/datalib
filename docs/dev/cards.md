@@ -358,10 +358,16 @@ card is named by its card again.
 The factories in `ViewLibs` are the public surface card source
 programs against:
 
-- `gridView(opts?: { q?: string })` — search bar + a SlickGrid over
-  `/applet/unified_index/search`. Row click opens the row's document via
-  `host.openCard`; double-click opens it as a standalone
-  single-column page in a new tab. Persists `q`/`sel`/`cols` state.
+- `gridView(opts?: { q?, columns?, name?, url?, placeholder? })` —
+  search bar + a SlickGrid over `/applet/unified_index/search`, or over
+  `url`, another table that pages, sorts and groups the way the search
+  does (the Manage screen's problems cell opens
+  `/applet/unified_index/problems` this way). Each answer says which
+  field names a row, which document a row opens and whether qmd ranks
+  its free text (`RowsSpec`); the qmd columns and ranking appear only
+  for the search. Row click opens the row's document via
+  `host.openCard`; double-click opens it as a standalone single-column
+  page in a new tab. Persists `q`/`sel`/`cols` state.
 - `documentView(markdownUuid?, sectionUuid?)` — renders one document
   (`/applet/unified_index/chat/{markdownUuid}`), highlighting and scrolling to
   `sectionUuid`. A different selection is a different card: the grid
@@ -393,9 +399,9 @@ programs against:
   `config.toml` declares over `GET /api/manage/rows`, drawn by
   `TableGrid`, with the row actions and the dialogs they open — the
   wizard, a removal's confirm — teleported to `<body>`. Browse
-  opens a `gridView(...)` beside it through `host.openCards`, a
-  step's log or the server's a `logView(...)` the same way, and a
-  row's commit history a `historyView(...)`. The
+  opens a `gridView(...)` beside it through `host.openCards`, as does a
+  problems count, a step's log or the server's a `logView(...)` the
+  same way, and a row's commit history a `historyView(...)`. The
   `/data_sources` route is this card at 1.6× width
   with `configView()` beside it (`MANAGE_STACK` in `router/index.ts`).
 - `logView({ run, step, launch, q, jumpToEnd })` — the run log
