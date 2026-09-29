@@ -112,6 +112,15 @@ pub struct FetchSummary {
     pub files_removed: usize,
 }
 
+/// Whether the export holds `product_dir` at all. Only a product that is
+/// here says what was deleted from it: one missing entirely was left out of
+/// the Takeout request, so its records stay and its cursor is kept.
+pub(crate) fn product_exported(scan: &fsscan::Scan, product_dir: &str) -> bool {
+    scan.files
+        .iter()
+        .any(|f| fsscan::is_under(&f.rel, product_dir))
+}
+
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = opts.db.clone();
 
@@ -131,7 +140,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     if opts.sync.maps_reviews {
         match maps_reviews::ingest(&db, scan, progress).await {
-            Ok(n) => summary.maps_reviews = n,
+            Ok(n) => {
+                summary.maps_reviews = n.written;
+                summary.removed += n.removed;
+            }
             Err(e) => {
                 warn!(event = "google_takeout_feed_failed", feed = "maps_reviews", error = %e, "a feed of the export could not be ingested; continuing with the rest");
                 summary.parse_errors += 1;
@@ -140,7 +152,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     }
     if opts.sync.maps_saved_places {
         match maps_saved_places::ingest(&db, scan, progress).await {
-            Ok(n) => summary.maps_saved_places = n,
+            Ok(n) => {
+                summary.maps_saved_places = n.written;
+                summary.removed += n.removed;
+            }
             Err(e) => {
                 warn!(event = "google_takeout_feed_failed", feed = "maps_saved_places", error = %e, "a feed of the export could not be ingested; continuing with the rest");
                 summary.parse_errors += 1;
@@ -163,7 +178,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     }
     if opts.sync.youtube_watch_history {
         match youtube_watch_history::ingest(&db, scan, progress).await {
-            Ok(n) => summary.youtube_watch_history = n,
+            Ok(n) => {
+                summary.youtube_watch_history = n.written;
+                summary.removed += n.removed;
+            }
             Err(e) => {
                 warn!(event = "google_takeout_feed_failed", feed = "youtube_watch_history", error = %e, "a feed of the export could not be ingested; continuing with the rest");
                 summary.parse_errors += 1;
@@ -172,7 +190,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     }
     if opts.sync.youtube_subscriptions {
         match youtube_subscriptions::ingest(&db, scan, progress).await {
-            Ok(n) => summary.youtube_subscriptions = n,
+            Ok(n) => {
+                summary.youtube_subscriptions = n.written;
+                summary.removed += n.removed;
+            }
             Err(e) => {
                 warn!(event = "google_takeout_feed_failed", feed = "youtube_subscriptions", error = %e, "a feed of the export could not be ingested; continuing with the rest");
                 summary.parse_errors += 1;
@@ -202,6 +223,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 summary.gemini_activity += s.activity;
                 summary.gemini_attachments += s.attachments;
                 summary.blobs_stored += s.blobs_stored;
+                summary.removed += s.removed;
             }
             Err(e) => {
                 warn!(event = "google_takeout_feed_failed", feed = "gemini_apps", error = %e, "a feed of the export could not be ingested; continuing with the rest");

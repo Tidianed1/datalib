@@ -1,6 +1,8 @@
 //! `My Activity/Gemini Apps/MyActivity.html` walker.
 
 use datalib_etl::fsscan;
+use datalib_etl::prune;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -26,6 +28,8 @@ pub struct GeminiSummary {
     pub activity: usize,
     pub attachments: usize,
     pub blobs_stored: usize,
+    /// Activity the file no longer lists, deleted with its attachment edges.
+    pub removed: usize,
 }
 
 pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Result<GeminiSummary> {
@@ -122,11 +126,16 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
     let n_activity = rows.len();
     progress.set_message(&format!("gemini: {n_activity} entries"));
 
+    // The file is the whole activity log, so what it no longer lists is gone.
+    let keep: HashSet<String> = rows.iter().map(|r| r.id_and_payload.id.clone()).collect();
     let now = IsoOffsetTimestamp::now_local();
     let mut tx = db.pool().begin().await.context("begin gemini_apps tx")?;
     bulk_upsert_in_tx(&mut tx, &rows, &now).await?;
+    let gone = prune::prune_scope_in_tx(&mut tx, "gemini_activity", &[], &keep).await?;
+    prune::delete_owned_in_tx(&mut tx, "gemini_attachments", "activity_id", &gone).await?;
     file_checkpoint::record_file(&mut tx, SCOPE, f).await?;
     tx.commit().await.context("commit gemini_apps tx")?;
+    prune::record("gemini_activity", keep.len() + gone.len(), gone.len());
 
     let blobs_stored = acc.bundle_mut().cas_inserts().len();
     acc.flush(db.pool(), db.cas(), |owning, ref_id, blake3| {
@@ -143,6 +152,7 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
         activity: n_activity,
         attachments: n_attachments,
         blobs_stored,
+        removed: gone.len(),
     })
 }
 
