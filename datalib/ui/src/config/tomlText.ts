@@ -1,11 +1,75 @@
 // TOML written by hand, into text a person also edits: a quoted string,
 // and an array of strings edited where it stands, keeping how it was
 // written — on one line, or one id per line with its indentation, its
-// trailing comma and the comments and blank lines between the ids. The
-// config upgrade's `datalib/backend/migrate_config/src/array_layout.rs`
-// edits an array the same way.
+// trailing comma and the comments and blank lines between the ids. An
+// edit is refused unless it reads back as the ids asked for. The server's
+// config upgrade edits an array the same way, in Rust
+// (`datalib/backend/dag/src/config_array.rs`, over `config_lex.rs`).
 
 import { parseTOML, getStaticTOMLValue } from "toml-eslint-parser";
+
+/// What `tokens` cuts TOML text into. `str` is a string of any of the four
+/// kinds, quotes included; only a multi-line one spans a line break.
+/// `punct` is one of `[ ] { } , =`; `bare` is anything else — a key, a
+/// number, `true`.
+type Kind = "str" | "comment" | "punct" | "newline" | "space" | "bare";
+
+type Token = { kind: Kind; text: string; start: number };
+
+function tokens(text: string, from: number): Token[] {
+  const out: Token[] = [];
+  const newlineAt = (i: number) => text[i] === "\n" || text.startsWith("\r\n", i);
+  for (let i = from; i < text.length;) {
+    const start = i;
+    let kind: Kind;
+    if (newlineAt(i)) {
+      kind = "newline";
+      i += text[i] === "\r" ? 2 : 1;
+    } else if (" \t\r".includes(text[i])) {
+      kind = "space";
+      while (i < text.length && " \t\r".includes(text[i]) && !newlineAt(i)) i++;
+    } else if (text[i] === "#") {
+      kind = "comment";
+      while (i < text.length && !newlineAt(i)) i++;
+    } else if ("[]{},=".includes(text[i])) {
+      kind = "punct";
+      i++;
+    } else if (text[i] === '"' || text[i] === "'") {
+      kind = "str";
+      i = stringEnd(text, i);
+    } else {
+      kind = "bare";
+      while (i < text.length && !" \t\r\n#[]{},=\"'".includes(text[i])) i++;
+    }
+    out.push({ kind, text: text.slice(start, i), start });
+  }
+  return out;
+}
+
+/// Past the closing quote of the string opening at `i`. A one-line string
+/// left open ends at its line break.
+function stringEnd(text: string, i: number): number {
+  const q = text[i];
+  const triple = text.startsWith(q.repeat(3), i);
+  let j = i + (triple ? 3 : 1);
+  while (j < text.length) {
+    if (q === '"' && text[j] === "\\") {
+      j += 2;
+    } else if (triple && text.startsWith(q.repeat(3), j)) {
+      // Up to two more quotes are the string's own last characters.
+      let end = j + 3;
+      while (end < text.length && end < j + 5 && text[end] === q) end++;
+      return end;
+    } else if (!triple && text[j] === q) {
+      return j + 1;
+    } else if (!triple && text[j] === "\n") {
+      return j;
+    } else {
+      j++;
+    }
+  }
+  return text.length;
+}
 
 type Id = {
   kind: "id";
@@ -31,117 +95,110 @@ type Scanned = {
   /// The indentation of a `]` on its own line; null when it closes the
   /// last line of entries.
   close: string | null;
-  /// Where the `]` is.
+  /// Just past the `]`.
   end: number;
 };
 
-/// Rewrite the array whose `[` is at `open` to hold `edit`'s values: those
-/// that stay keep their place, and new ones go at the end. The text comes
-/// back unchanged when the values do not change, or when there is no
-/// closed array at `open`.
+/// Rewrite the array whose `[` is at `open` to hold `edit`'s strings: those
+/// that stay keep their place, and new ones go at the end. Unchanged text
+/// when the strings do not change.
 export function editStringArray(
   text: string,
   open: number,
   edit: (values: string[]) => string[],
 ): string {
-  const scanned = scan(text, open + 1);
-  if (!scanned) return text;
-  const ids = scanned.entries.filter(isId);
-  const before = ids.flatMap((e) => (e.value === null ? [] : [e.value]));
+  const scanned = scan(text, open);
+  const before = scanned.entries.flatMap(stringOf);
   const after = edit(before);
   if (after.length === before.length && after.every((v, i) => v === before[i])) return text;
-  const kept = scanned.entries.filter(
-    (e) => !isId(e) || e.value === null || after.includes(e.value),
-  );
+  const kept = scanned.entries.filter((e) => stringOf(e).every((v) => after.includes(v)));
   const added: Id[] = after
     .filter((v) => !before.includes(v))
     .map((v) => ({ kind: "id", token: quote(v), value: v, indent: null, note: "" }));
-  return text.slice(0, open) + render(scanned, [...kept, ...added]) + text.slice(scanned.end + 1);
+  const entries = [...kept, ...added];
+  const edited = render(scanned, entries);
+  const wanted = entries.flatMap(stringOf);
+  const got = stringsIn(edited);
+  if (!got || got.length !== wanted.length || got.some((v, i) => v !== wanted[i])) {
+    throw new Error(`the edited array would not read back as ${JSON.stringify(wanted)}: ${edited}`);
+  }
+  return text.slice(0, open) + edited + text.slice(scanned.end);
 }
 
 function isId(e: Entry): e is Id {
   return e.kind === "id";
 }
 
-function scan(text: string, from: number): Scanned | null {
-  const entries: Entry[] = [];
-  let head = "";
-  let multiline = false;
-  let trailingComma = false;
+/// The entry's string, as a list of none or one.
+function stringOf(e: Entry): string[] {
+  return isId(e) && e.value !== null ? [e.value] : [];
+}
+
+/// The strings of the array `text` holds, as TOML reads them; null when it
+/// does not read as an array.
+function stringsIn(text: string): string[] | null {
+  try {
+    const { v } = getStaticTOMLValue(parseTOML(`v = ${text}`)) as { v: unknown };
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : null;
+  } catch {
+    return null;
+  }
+}
+
+function scan(text: string, open: number): Scanned {
+  const [first, ...rest] = tokens(text, open);
+  if (first?.text !== "[") throw new Error(`no array at ${open}`);
+  const s: Scanned = {
+    entries: [],
+    head: "",
+    multiline: false,
+    trailingComma: false,
+    close: null,
+    end: 0,
+  };
   // Only whitespace so far on a line after the first.
   let lineStart = false;
   let space = "";
   let onThisLine: Id | null = null;
-  for (let i = from; i < text.length;) {
-    const c = text[i];
-    if (c === "]") {
-      return { entries, head, multiline, trailingComma, close: lineStart ? space : null, end: i };
+  for (const t of rest) {
+    if (t.kind === "space") {
+      space += t.text;
+      continue;
     }
-    if (c === " " || c === "\t" || c === "\r") {
-      if (c !== "\r") space += c;
-      i++;
-    } else if (c === "\n") {
-      if (lineStart) entries.push({ kind: "blank" });
-      multiline = true;
+    if (t.kind === "newline") {
+      if (lineStart) s.entries.push({ kind: "blank" });
+      s.multiline = true;
       lineStart = true;
       space = "";
       onThisLine = null;
-      i++;
-    } else if (c === "#") {
-      const stop = text.indexOf("\n", i) === -1 ? text.length : text.indexOf("\n", i);
-      const comment = text.slice(i, stop).replace(/\r$/, "");
-      if (onThisLine) onThisLine.note = space + comment;
-      else if (!multiline) head = space + comment;
-      else entries.push({ kind: "comment", indent: space, text: comment });
-      lineStart = false;
-      space = "";
-      i = stop;
-    } else if (c === ",") {
-      trailingComma = true;
-      lineStart = false;
-      space = "";
-      i++;
+      continue;
+    }
+    if (t.kind === "punct" && t.text === "]") {
+      return { ...s, close: lineStart ? space : null, end: t.start + 1 };
+    } else if (t.kind === "punct" && t.text === ",") {
+      s.trailingComma = true;
+    } else if (t.kind === "punct") {
+      throw new Error(`${JSON.stringify(t.text)} in an array of strings`);
+    } else if (t.kind === "comment") {
+      if (onThisLine) onThisLine.note = space + t.text;
+      else if (!s.multiline) s.head = space + t.text;
+      else s.entries.push({ kind: "comment", indent: space, text: t.text });
     } else {
-      const stop = tokenEnd(text, i);
-      const token = text.slice(i, stop);
       const id: Id = {
         kind: "id",
-        token,
-        value: valueOf(token),
+        token: t.text,
+        value: stringsIn(`[${t.text}]`)?.[0] ?? null,
         indent: lineStart ? space : null,
         note: "",
       };
-      entries.push(id);
+      s.entries.push(id);
       onThisLine = id;
-      trailingComma = false;
-      lineStart = false;
-      space = "";
-      i = stop;
+      s.trailingComma = false;
     }
+    lineStart = false;
+    space = "";
   }
-  return null;
-}
-
-/// Where the value starting at `i` ends: past its closing quote for a
-/// string, else at the next separator.
-function tokenEnd(text: string, i: number): number {
-  for (const q of ['"""', "'''", '"', "'"]) {
-    if (!text.startsWith(q, i)) continue;
-    let j = i + q.length;
-    while (j < text.length && !text.startsWith(q, j)) j += q[0] === '"' && text[j] === "\\" ? 2 : 1;
-    return Math.min(j + q.length, text.length);
-  }
-  const stop = text.slice(i).search(/[ \t\r\n,#\]]/);
-  return stop === -1 ? text.length : i + stop;
-}
-
-function valueOf(token: string): string | null {
-  try {
-    const { v } = getStaticTOMLValue(parseTOML(`v = ${token}`)) as { v: unknown };
-    return typeof v === "string" ? v : null;
-  } catch {
-    return null;
-  }
+  throw new Error("the array is not closed");
 }
 
 function render(s: Scanned, entries: Entry[]): string {

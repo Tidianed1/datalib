@@ -10,9 +10,11 @@
 //! everything), and points the embedding map at the aggregator.
 //!
 //! Unlike `convert.rs`, a text edit: the config is otherwise current, so
-//! values are replaced where they stand and the missing steps appended,
-//! and every comment, lock and key the file holds survives, down to how
-//! an `inputs` array was laid out.
+//! values are replaced where they stand, down to how an `inputs` array was
+//! laid out, and every comment, lock and key the file holds survives. The
+//! missing steps are added and the file put back in the order data flows
+//! (`datalib_dag::config_order`), so each lands below the render it reads
+//! and the aggregator below them all.
 
 use std::collections::BTreeSet;
 use std::ops::Range;
@@ -20,7 +22,8 @@ use std::ops::Range;
 use anyhow::{Context as _, Result};
 use serde::Deserialize;
 
-use crate::array_layout::edit_string_array;
+use datalib_dag::config_array::edit_string_array;
+use datalib_dag::config_order::sort_config;
 
 #[derive(Deserialize)]
 struct View {
@@ -150,7 +153,10 @@ pub fn rewrite(text: &str) -> Result<String> {
             edits.push((f.span(), quote("qmd_aggregator")));
         }
         if let Some(i) = &old.inputs {
-            edits.push((i.span(), edit_string_array(&text[i.span()], &aggregated)?));
+            edits.push((
+                i.span(),
+                edit_string_array(&text[i.span()], &aggregated).map_err(anyhow::Error::msg)?,
+            ));
         }
         aggregator_id = old.group.as_ref().map(|g| format!("{g}/qmd_aggregator"));
     }
@@ -162,14 +168,20 @@ pub fn rewrite(text: &str) -> Result<String> {
                 .filter(|x| !old_ids.contains(*x))
                 .cloned()
                 .collect();
-            edits.push((i.span(), edit_string_array(&text[i.span()], &kept)?));
+            edits.push((
+                i.span(),
+                edit_string_array(&text[i.span()], &kept).map_err(anyhow::Error::msg)?,
+            ));
         }
     }
     if let Some(aggregator) = &aggregator_id {
         for map in view.steps.iter().filter(|s| s.is_builtin("embedding_map")) {
             if let Some(i) = &map.inputs {
                 let only = std::slice::from_ref(aggregator);
-                edits.push((i.span(), edit_string_array(&text[i.span()], only)?));
+                edits.push((
+                    i.span(),
+                    edit_string_array(&text[i.span()], only).map_err(anyhow::Error::msg)?,
+                ));
             }
         }
     }
@@ -183,16 +195,15 @@ pub fn rewrite(text: &str) -> Result<String> {
     }
     if !blocks.is_empty() {
         out = format!("{}\n", out.trim_end());
-        out.push_str(
-            "\n# Added by the config migration: each source's own qmd steps, which\n\
-             # `unified_index/qmd_aggregator` reads.\n",
-        );
         for b in blocks {
             out.push('\n');
             out.push_str(&b);
         }
     }
-    Ok(out)
+    let sorted = sort_config(&out)
+        .map_err(anyhow::Error::msg)
+        .context("put the rewritten config in data-flow order")?;
+    Ok(sorted.unwrap_or(out))
 }
 
 #[cfg(test)]
@@ -391,6 +402,23 @@ inputs = [\"mail/embed\"]
             "{after}"
         );
         loads_clean(&after);
+    }
+
+    /// The added steps land beside their source, below the render they
+    /// read, rather than at the end of the file below the aggregator
+    /// that reads them.
+    #[test]
+    fn the_rewrite_leaves_the_file_in_data_flow_order() {
+        for before in [everything_in_the_fan_in(), fan_in_upstream()] {
+            let after = rewrite(&before).unwrap();
+            assert_eq!(sort_config(&after), Ok(None), "{after}");
+            let at = |needle: &str| after.find(needle).unwrap_or_else(|| panic!("{needle}"));
+            assert!(
+                at("group = \"mail\"\nfunction = \"keyword_index\"")
+                    < at("[[groups]]\nid = \"notes\""),
+                "{after}"
+            );
+        }
     }
 
     #[test]

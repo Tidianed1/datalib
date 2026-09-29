@@ -918,6 +918,14 @@ inputs = ["bridge/keyword_index"]
     expect(wireIntoFanIns(before, "bridge/render_markdown")).toBe(before);
   });
 
+  /// An array the edit cannot lay out is refused rather than written.
+  it("refuses to edit an array holding something other than strings", () => {
+    const nested = gridIndex(`["bridge/render_markdown", ["sickbay/render_markdown"]]`);
+    expect(() => wireIntoFanIns(nested, "holodeck/render_markdown")).toThrow(
+      /in an array of strings/,
+    );
+  });
+
   /// A multi-line array with nothing in it yet takes the indentation of
   /// its `]`, one step in.
   it("wires into an empty multi-line array", () => {

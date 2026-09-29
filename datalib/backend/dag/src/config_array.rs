@@ -1,10 +1,10 @@
-//! Rewrite a TOML array of strings where it stands, keeping how it was
+//! Edit a TOML array of strings where it stands, keeping how it was
 //! written: on one line, or one id per line with its indentation, its
 //! trailing comma and the comments and blank lines between the ids. The
-//! UI edits the fan-ins' `inputs` the same way
-//! (`datalib/ui/src/config/tomlText.ts`).
+//! result is refused unless it reads back as the ids asked for. The UI
+//! edits a fan-in's `inputs` the same way (`datalib/ui/src/config/tomlText.ts`).
 
-use anyhow::{Context as _, Result};
+use crate::config_lex::{tokens, Kind};
 
 enum Entry {
     Id {
@@ -37,18 +37,11 @@ struct Scanned {
 }
 
 /// `written` is one whole array, `[` to `]`, as the file has it. The
-/// values of `after` that it already holds keep their place, and the
-/// rest go at the end.
-pub fn edit_string_array(written: &str, after: &[String]) -> Result<String> {
-    let scanned = scan(written).with_context(|| format!("read the array {written:?}"))?;
-    let before: Vec<&str> = scanned
-        .entries
-        .iter()
-        .filter_map(|e| match e {
-            Entry::Id { value: Some(v), .. } => Some(v.as_str()),
-            _ => None,
-        })
-        .collect();
+/// strings of `after` that it already holds keep their place, and the
+/// rest go at the end. Unchanged text when the strings do not change.
+pub fn edit_string_array(written: &str, after: &[String]) -> Result<String, String> {
+    let scanned = scan(written)?;
+    let before: Vec<&str> = scanned.entries.iter().filter_map(value).collect();
     if before == after {
         return Ok(written.to_string());
     }
@@ -56,22 +49,47 @@ pub fn edit_string_array(written: &str, after: &[String]) -> Result<String> {
         .iter()
         .filter(|v| !before.contains(&v.as_str()))
         .map(|v| Entry::Id {
-            token: quote(v),
+            token: toml::Value::String(v.clone()).to_string(),
             value: Some(v.clone()),
             indent: None,
             note: String::new(),
         })
         .collect();
-    let kept = scanned.entries.iter().filter(|e| match e {
-        Entry::Id { value: Some(v), .. } => after.contains(v),
-        _ => true,
-    });
+    let kept = scanned
+        .entries
+        .iter()
+        .filter(|e| value(e).is_none_or(|v| after.iter().any(|a| a == v)));
     let entries: Vec<&Entry> = kept.chain(&added).collect();
-    Ok(render(&scanned, &entries))
+    let edited = render(&scanned, &entries);
+    let wanted: Vec<&str> = entries.iter().copied().filter_map(value).collect();
+    if strings_in(&edited).is_none_or(|got| got != wanted) {
+        return Err(format!(
+            "the edited array would not read back as {wanted:?}; left as it is:\n{edited}"
+        ));
+    }
+    Ok(edited)
 }
 
-fn scan(written: &str) -> Option<Scanned> {
-    let inner = written.strip_prefix('[')?;
+fn value(e: &Entry) -> Option<&str> {
+    match e {
+        Entry::Id { value, .. } => value.as_deref(),
+        _ => None,
+    }
+}
+
+/// The strings of the array `text` holds, as TOML reads them.
+fn strings_in(text: &str) -> Option<Vec<String>> {
+    let table: toml::Table = toml::from_str(&format!("v = {text}")).ok()?;
+    let array = table.get("v")?.as_array()?;
+    Some(
+        array
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect(),
+    )
+}
+
+fn scan(written: &str) -> Result<Scanned, String> {
     let mut s = Scanned {
         entries: Vec::new(),
         head: String::new(),
@@ -79,24 +97,30 @@ fn scan(written: &str) -> Option<Scanned> {
         trailing_comma: false,
         close: None,
     };
+    let tokens = tokens(written);
+    let mut rest = tokens.iter();
+    if rest.next().map(|t| t.text(written)) != Some("[") {
+        return Err(format!("not an array: {written:?}"));
+    }
     // Only whitespace so far on a line after the first.
     let mut line_start = false;
     let mut space = String::new();
     // The index of the id on the current line, for a note after it.
     let mut on_this_line: Option<usize> = None;
-    let mut i = 0;
-    while let Some(c) = inner[i..].chars().next() {
-        match c {
-            ']' => {
+    for t in rest {
+        let text = t.text(written);
+        match (t.kind, text) {
+            (Kind::Punct, "]") => {
                 s.close = line_start.then_some(space);
-                return Some(s);
+                return Ok(s);
             }
-            ' ' | '\t' => {
-                space.push(c);
-                i += 1;
+            (Kind::Punct, ",") => s.trailing_comma = true,
+            (Kind::Punct, _) => return Err(format!("{text:?} in an array of strings")),
+            (Kind::Space, _) => {
+                space.push_str(text);
+                continue;
             }
-            '\r' => i += 1,
-            '\n' => {
+            (Kind::Newline, _) => {
                 if line_start {
                     s.entries.push(Entry::Blank);
                 }
@@ -104,81 +128,35 @@ fn scan(written: &str) -> Option<Scanned> {
                 line_start = true;
                 space.clear();
                 on_this_line = None;
-                i += 1;
+                continue;
             }
-            '#' => {
-                let stop = inner[i..].find('\n').map_or(inner.len(), |n| i + n);
-                let comment = inner[i..stop].trim_end_matches('\r').to_string();
-                match on_this_line {
-                    Some(at) => {
-                        if let Entry::Id { note, .. } = &mut s.entries[at] {
-                            *note = format!("{space}{comment}");
-                        }
+            (Kind::Comment, _) => match on_this_line {
+                Some(at) => {
+                    if let Entry::Id { note, .. } = &mut s.entries[at] {
+                        *note = format!("{space}{text}");
                     }
-                    None if !s.multiline => s.head = format!("{space}{comment}"),
-                    None => s.entries.push(Entry::Comment {
-                        indent: std::mem::take(&mut space),
-                        text: comment,
-                    }),
                 }
-                line_start = false;
-                space.clear();
-                i = stop;
-            }
-            ',' => {
-                s.trailing_comma = true;
-                line_start = false;
-                space.clear();
-                i += 1;
-            }
-            _ => {
-                let stop = i + token_len(&inner[i..]);
-                let token = inner[i..stop].to_string();
+                None if !s.multiline => s.head = format!("{space}{text}"),
+                None => s.entries.push(Entry::Comment {
+                    indent: space.clone(),
+                    text: text.to_string(),
+                }),
+            },
+            (Kind::Str | Kind::Bare, _) => {
                 on_this_line = Some(s.entries.len());
                 s.entries.push(Entry::Id {
-                    value: value_of(&token),
-                    token,
+                    token: text.to_string(),
+                    value: strings_in(&format!("[{text}]")).and_then(|v| v.into_iter().next()),
                     indent: line_start.then(|| space.clone()),
                     note: String::new(),
                 });
                 s.trailing_comma = false;
-                line_start = false;
-                space.clear();
-                i = stop;
             }
         }
+        line_start = false;
+        space.clear();
     }
-    None
-}
-
-/// How long the value at the start of `rest` is: through its closing
-/// quote for a string, else up to the next separator.
-fn token_len(rest: &str) -> usize {
-    for q in ["\"\"\"", "'''", "\"", "'"] {
-        if !rest.starts_with(q) {
-            continue;
-        }
-        let bytes = rest.as_bytes();
-        let mut j = q.len();
-        while j < bytes.len() && !bytes[j..].starts_with(q.as_bytes()) {
-            j += if q.starts_with('"') && bytes[j] == b'\\' {
-                2
-            } else {
-                1
-            };
-        }
-        return (j + q.len()).min(rest.len());
-    }
-    rest.find([' ', '\t', '\r', '\n', ',', '#', ']'])
-        .unwrap_or(rest.len())
-}
-
-fn value_of(token: &str) -> Option<String> {
-    let table: toml::Table = toml::from_str(&format!("v = {token}")).ok()?;
-    match table.get("v")? {
-        toml::Value::String(s) => Some(s.clone()),
-        _ => None,
-    }
+    Err(format!("the array is not closed: {written:?}"))
 }
 
 fn render(s: &Scanned, entries: &[&Entry]) -> String {
@@ -203,8 +181,7 @@ fn render(s: &Scanned, entries: &[&Entry]) -> String {
             Entry::Blank => None,
         })
         .unwrap_or_else(|| format!("{}  ", s.close.as_deref().unwrap_or("")));
-    let id_count = tokens.len();
-    let mut seen = 0;
+    let mut ids_left = tokens.len();
     let lines: Vec<String> = entries
         .iter()
         .map(|e| match e {
@@ -216,8 +193,8 @@ fn render(s: &Scanned, entries: &[&Entry]) -> String {
                 note,
                 ..
             } => {
-                seen += 1;
-                let comma = if seen < id_count || trailing_comma {
+                ids_left -= 1;
+                let comma = if ids_left > 0 || trailing_comma {
                     ","
                 } else {
                     ""
@@ -241,10 +218,6 @@ fn render(s: &Scanned, entries: &[&Entry]) -> String {
     }
 }
 
-fn quote(s: &str) -> String {
-    toml::Value::String(s.to_string()).to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,7 +227,7 @@ mod tests {
         edit_string_array(written, &after).unwrap()
     }
 
-    /// #897: the upgrade wrote every `inputs` it touched on one line.
+    /// #897: the qmd upgrade wrote every `inputs` it touched on one line.
     #[test]
     fn one_id_per_line_stays_one_id_per_line() {
         let written = "[\n    \"a/render_markdown\",\n    \"b/render_markdown\",\n]";
@@ -309,5 +282,14 @@ mod tests {
         assert_eq!(edit("[\n  \"a\",\n  \"b\"]", &["a"]), "[\n  \"a\"]");
         // …unless a comment would swallow it.
         assert_eq!(edit("[\n  # x\n  \"a\"]", &[]), "[\n  # x\n]");
+    }
+
+    /// Anything the edit cannot lay out is refused, not written.
+    #[test]
+    fn what_it_cannot_edit_is_refused() {
+        let after = ["a".to_string()];
+        for written in ["[\"a\", [\"b\"]]", "[\"a\"", "\"a\""] {
+            assert!(edit_string_array(written, &after).is_err(), "{written}");
+        }
     }
 }
