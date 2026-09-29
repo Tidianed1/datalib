@@ -587,12 +587,11 @@ async fn every_wire_field_survives_the_round_trip() {
     drop(repo);
 }
 
-/// The keys the search has no index for: each filters by walking the
-/// newest-first index and testing every row. Measured at full size
-/// (74,163 rows, 2026-09-27): 0.25 s for the whole listing, against 0.01
-/// s for an indexed key, which the result cache then pays once per
-/// search. Columns people rarely narrow by; one that turns out common
-/// earns an index, and leaves this list.
+/// The keys the search has no index for: the planner reads the whole table
+/// and sorts what matches. Over 74,000 synthetic rows that took 3-6 ms,
+/// where walking the newest-first index and testing each row took 32-35
+/// ms; an indexed key is faster than either. Columns people rarely narrow
+/// by; one that turns out common earns an index, and leaves this list.
 const SCANS: &[&str] = &[
     "created_at",
     "modified_at",
@@ -604,11 +603,11 @@ const SCANS: &[&str] = &[
 ];
 
 /// A key the search bar offers must be served by an index in the order
-/// the grid sorts by, or be one of [`SCANS`]: a new key does not pass
-/// until someone decides which. Fails naming the query whose plan does
-/// neither, a key in `SCANS` that no longer scans, and an index no query
-/// uses. `before:`/`after:` are ranges on `created_at_utc`, which cannot
-/// share an index with a newest-first order.
+/// the grid sorts by, with no sort of its own, or be one of [`SCANS`]: a
+/// new key does not pass until someone decides which. Fails naming the
+/// query whose plan does neither, a key in `SCANS` that an index now
+/// serves, and an index no query uses. `before:`/`after:` are ranges on
+/// `created_at_utc`, which cannot share an index with a newest-first order.
 #[tokio::test]
 async fn every_filter_key_is_served_by_an_index() {
     let db_path = unique_db_path();
@@ -649,8 +648,8 @@ async fn every_filter_key_is_served_by_an_index() {
             .collect();
         // A filter must SEARCH an index on its own column. SCANning the
         // newest-first index in order and testing each row also avoids a
-        // sort, and is exactly the walk this test exists to catch; only
-        // the unfiltered grid may do it.
+        // sort, and is the slow walk this test exists to catch; only the
+        // unfiltered grid may do it.
         let served = if q.is_empty() {
             plan.iter().any(|d| {
                 d.starts_with("SCAN grid_rows USING") && d.contains("grid_rows_by_touched")
@@ -661,7 +660,8 @@ async fn every_filter_key_is_served_by_an_index() {
             })
         };
         let sorts = plan.iter().any(|d| d.contains("TEMP B-TREE"));
-        if served == scans || sorts {
+        let as_expected = if scans { !served } else { served && !sorts };
+        if !as_expected {
             let why = if scans {
                 "listed in SCANS but served"
             } else {

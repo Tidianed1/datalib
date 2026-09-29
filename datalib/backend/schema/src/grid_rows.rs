@@ -21,9 +21,9 @@ use serde::{Deserialize, Serialize};
     table = "grid_rows",
     primary_key = "uuid",
     // Newest first (a document ahead of its rows at the same moment), and
-    // the same within each key the search bar filters on. Without its own index a filter that matches few rows
-    // walks the whole sort index row by row: 38 s for one provider's
-    // single row over 74k rows, 0.08 s with this shape
+    // the same within each key the search bar filters on. Without its own
+    // index a filter reads every row: walking the sort index took 38 s
+    // for one provider's single row over 74k rows, 0.08 s with this shape
     // (docs/dev/plans/paged_grids.md). A key added to the search bar
     // wants an index here, and an index no key uses costs every write
     // for nothing: `every_filter_key_is_served_by_an_index` names both.

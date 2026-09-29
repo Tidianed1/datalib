@@ -60,8 +60,15 @@ bazel_dep(name = "bazel_skylib", version = "1.9.0")
 # ~300-line file-curation that took). v0.11.4 fixed the amalgamation
 # pipeline, so we're back to the trivial single-file build.
 #
-# v0.50.12 is an exception to the 7-day burn-in above (it was five days
-# old when pinned). What we need from it arrived in v0.50.10:
+# v0.50.13 is an exception to the 7-day burn-in above (it was a day old
+# when pinned). It carries dolthub/doltlite#3231's fix: a read-only open
+# of `<store>@<commit>` is a detached snapshot, and before it doltlite
+# split the revision off only when the file's name held `.db` or
+# `.sqlite`, which `.doltlite_db` does not. The etl two-process tests
+# `detached_readers_*` check it on our names.
+#
+# v0.50.12 was an exception too (five days old when pinned). What we
+# needed from it arrived in v0.50.10:
 # dolthub/doltlite#2837, which stops `dolt_status` on a read-only
 # connection from failing a concurrent writer's `dolt_commit` and
 # losing its rows (dolthub/doltlite#2832). The etl two-process test
@@ -94,9 +101,9 @@ bazel_dep(name = "bazel_skylib", version = "1.9.0")
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 http_archive(
     name = "doltlite_amalgamation",
-    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.50.12/doltlite-amalgamation-0.50.12.zip"],
-    sha256 = "22209ff737a0113c585d5b4ea9e52ab29835453e009a77fd924bfebe18f28bb7",
-    strip_prefix = "doltlite-amalgamation-0.50.12",
+    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.50.13/doltlite-amalgamation-0.50.13.zip"],
+    sha256 = "9a7a8b7bc96dc595ea51c7fde8d7ae8df8391662096f46c48d23bd412798f081",
+    strip_prefix = "doltlite-amalgamation-0.50.13",
     build_file = "//third-party/doltlite:amalgamation.BUILD",
 )
 
@@ -116,9 +123,9 @@ http_archive(
 # fails the build if the two pins drift.
 http_archive(
     name = "doltlite_autoconf",
-    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.50.12/doltlite-autoconf-0.50.12.tar.gz"],
-    sha256 = "817f93ec0f34da03076a0a5cab82e422edaa98bc4a6d9d1103a4038a4d586cfa",
-    strip_prefix = "doltlite-autoconf-0.50.12",
+    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.50.13/doltlite-autoconf-0.50.13.tar.gz"],
+    sha256 = "07b4e5a88446d82b7d21bce79461d3ff0034942ae5e5164f9ff27954ce59135a",
+    strip_prefix = "doltlite-autoconf-0.50.13",
     build_file = "//third-party/doltlite:autoconf.BUILD",
 )
 

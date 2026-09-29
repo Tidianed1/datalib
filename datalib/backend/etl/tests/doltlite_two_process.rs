@@ -496,6 +496,420 @@ fn the_harness_writer_seals_an_existing_store_beside_a_read_transaction() {
     assert_each_transaction_read_one_commit(&reader);
 }
 
+/// How `branch_readers_beside_a_sealing_writer` runs.
+struct BranchRun {
+    readers: usize,
+    hold_ms: u64,
+    commits: u64,
+    txn_ms: u64,
+    gap_ms: u64,
+    reader_busy_ms: u64,
+    refresh: &'static str,
+}
+
+/// A reader with a branch of its own, fast-forwarded to `main` on each
+/// refresh, beside the real `commit_run` writer. On doltlite 0.50.3 this
+/// refused 1-2 of 300 seals at 100 ms refreshes and once hung the writer at
+/// 20 ms (`docs/dev/plans/paged_grids.md`). Returns the writer's report and
+/// each reader's, after checking nobody saw an error and every reader read
+/// only sealed commits, one commit per refresh.
+// The timings go to the test log; there is no progress bar to corrupt here.
+#[allow(clippy::disallowed_macros)]
+fn branch_readers_beside_a_sealing_writer(run: BranchRun) -> Option<(Value, Vec<Value>)> {
+    let t = Scratch::new();
+    let commits = run.commits.to_string();
+    let txn_ms = run.txn_ms.to_string();
+    let gap_ms = run.gap_ms.to_string();
+    let reader_busy_ms = run.reader_busy_ms.to_string();
+    let ready: Vec<String> = (0..run.readers)
+        .map(|i| t.path(&format!("reader-{i}-ready")))
+        .collect();
+    let go_when = ready.join(",");
+    let mut writer = t.spawn(&[
+        "write",
+        "--db",
+        &t.db(),
+        "--seed",
+        "--pin-out",
+        &t.path("pin"),
+        "--go-when",
+        &go_when,
+        "--max-commits",
+        &commits,
+        "--interval-ms",
+        &gap_ms,
+        "--txn-ms",
+        &txn_ms,
+        "--out",
+        &t.path("writer.json"),
+    ]);
+    let seed = t.await_file("pin", &mut writer);
+
+    let hold_ms = run.hold_ms.to_string();
+    let mut readers: Vec<Child> = (0..run.readers)
+        .map(|i| {
+            t.spawn(&[
+                "branch-read",
+                "--db",
+                &t.db(),
+                "--branch",
+                &format!("reader_{i}"),
+                "--until",
+                &t.path("writer.json"),
+                "--hold-ms",
+                &hold_ms,
+                "--refresh",
+                run.refresh,
+                "--busy-timeout-ms",
+                &reader_busy_ms,
+                "--ready-out",
+                &ready[i],
+                "--out",
+                &t.path(&format!("reader-{i}.json")),
+            ])
+        })
+        .collect();
+    t.wait("writer", &mut writer);
+    for r in &mut readers {
+        t.wait("reader", r);
+    }
+
+    let writer = t.report("writer.json");
+    if writer["dolt"] == Value::Bool(false) {
+        return None;
+    }
+    let reports: Vec<Value> = (0..run.readers)
+        .map(|i| t.report(&format!("reader-{i}.json")))
+        .collect();
+    for (i, r) in reports.iter().enumerate() {
+        let ms: Vec<u64> = r["refreshes"]
+            .as_array()
+            .expect("refreshes")
+            .iter()
+            .filter_map(|x| x["ms"].as_u64())
+            .collect();
+        let mut sorted = ms.clone();
+        sorted.sort_unstable();
+        let refreshes = r["refreshes"].as_array().expect("refreshes");
+        let count = |o: &str| refreshes.iter().filter(|x| x["outcome"] == o).count();
+        let mut last_ok = refreshes
+            .first()
+            .and_then(|x| x["at_ms"].as_u64())
+            .unwrap_or(0);
+        let mut stalest = 0u64;
+        for x in refreshes {
+            let at = x["at_ms"].as_u64().unwrap_or(0);
+            stalest = stalest.max(at.saturating_sub(last_ok));
+            if x["outcome"] == "ok" {
+                last_ok = at;
+            }
+        }
+        eprintln!(
+            "reader {i}: {} refreshes: {} ok, {} busy (kept its snapshot), median {} ms, \
+             longest between two ok refreshes {stalest} ms, {} errors, dirty at end {}",
+            ms.len(),
+            count("ok"),
+            count("busy"),
+            sorted.get(sorted.len() / 2).copied().unwrap_or(0),
+            errors(r).len(),
+            r["dirty_at_end"],
+        );
+    }
+    let seal_ms: Vec<u64> = writer["commits"]
+        .as_array()
+        .expect("commits")
+        .iter()
+        .filter_map(|c| c["ms"].as_u64())
+        .collect();
+    let mut sorted = seal_ms.clone();
+    sorted.sort_unstable();
+    eprintln!(
+        "writer: {} seals, median {} ms, max {} ms, {} errors, file {} bytes",
+        seal_ms.len(),
+        sorted.get(sorted.len() / 2).copied().unwrap_or(0),
+        sorted.last().copied().unwrap_or(0),
+        errors(&writer).len(),
+        writer["size_after"],
+    );
+
+    assert_eq!(errors(&writer), Vec::<String>::new(), "writer errors");
+    assert_eq!(
+        seal_ms.len() as u64,
+        run.commits,
+        "the writer did not seal every chunk"
+    );
+    for r in &reports {
+        assert_eq!(errors(r), Vec::<String>::new(), "reader errors");
+        assert_reads_only_sealed_commits(&writer, &seed, samples(r));
+        assert_each_transaction_read_one_commit(r);
+        assert_committed_throughout(&writer, r);
+    }
+    let every_commits_rows = SEED_ROWS + 2 * run.commits as i64;
+    assert_eq!(
+        t.probe()["committed_rows"].as_i64(),
+        Some(every_commits_rows),
+        "rows the writer committed are missing from main"
+    );
+    Some((writer, reports))
+}
+
+#[test]
+fn a_branch_reader_refreshing_every_20ms_never_refuses_a_seal() {
+    branch_readers_beside_a_sealing_writer(BranchRun {
+        readers: 1,
+        hold_ms: 20,
+        commits: 500,
+        txn_ms: 0,
+        gap_ms: 0,
+        reader_busy_ms: 5000,
+        refresh: "merge",
+    });
+}
+
+#[test]
+fn a_branch_reader_refreshing_every_100ms_never_refuses_a_seal() {
+    branch_readers_beside_a_sealing_writer(BranchRun {
+        readers: 1,
+        hold_ms: 100,
+        commits: 500,
+        txn_ms: 0,
+        gap_ms: 0,
+        reader_busy_ms: 5000,
+        refresh: "merge",
+    });
+}
+
+#[test]
+fn three_branch_readers_refreshing_every_20ms_never_refuse_a_seal() {
+    branch_readers_beside_a_sealing_writer(BranchRun {
+        readers: 3,
+        hold_ms: 20,
+        commits: 500,
+        txn_ms: 0,
+        gap_ms: 0,
+        reader_busy_ms: 5000,
+        refresh: "merge",
+    });
+}
+
+/// A render checkpoint or a `grid_index` pass holds a SQL transaction for
+/// its whole batch, and doltlite's graph lock with it. A reader's refresh
+/// is a write, so it waits for the batch; with a writer that starts the next
+/// batch straight after sealing, it misses most gaps (1 s batches: refreshes
+/// took 4-6 s on doltlite 0.50.12).
+#[test]
+#[ignore = "measurement: how long a branch reader's refresh waits behind held transactions"]
+fn a_branch_reader_waits_out_a_writers_held_transaction() {
+    branch_readers_beside_a_sealing_writer(BranchRun {
+        readers: 1,
+        hold_ms: 20,
+        commits: 10,
+        txn_ms: 1000,
+        gap_ms: 0,
+        reader_busy_ms: 5000,
+        refresh: "merge",
+    });
+}
+
+#[test]
+/// 7 s batches: the one refresh waited out the whole run (21 s).
+#[ignore = "measurement: a branch reader beside batches longer than the busy timeout"]
+fn a_branch_reader_beside_a_transaction_longer_than_the_busy_timeout() {
+    branch_readers_beside_a_sealing_writer(BranchRun {
+        readers: 1,
+        hold_ms: 20,
+        commits: 3,
+        txn_ms: 7000,
+        gap_ms: 0,
+        reader_busy_ms: 5000,
+        refresh: "merge",
+    });
+}
+
+/// A download: each batch's rows go in one short transaction once the
+/// fetch has returned, and the next fetch is a wait on the network with no
+/// transaction open. Refreshes land in those waits.
+#[test]
+fn branch_readers_refresh_between_a_downloads_batches() {
+    branch_readers_beside_a_sealing_writer(BranchRun {
+        readers: 3,
+        hold_ms: 20,
+        commits: 40,
+        txn_ms: 20,
+        gap_ms: 100,
+        reader_busy_ms: 5000,
+        refresh: "merge",
+    });
+}
+
+#[test]
+#[ignore = "measurement: batches ten times longer than the network wait between them"]
+fn branch_readers_beside_long_batches_and_short_waits() {
+    branch_readers_beside_a_sealing_writer(BranchRun {
+        readers: 3,
+        hold_ms: 20,
+        commits: 20,
+        txn_ms: 500,
+        gap_ms: 50,
+        reader_busy_ms: 5000,
+        refresh: "merge",
+    });
+}
+
+/// The 7 s batches again, with the reader waiting at most 20 ms for the
+/// lock: a lost refresh costs it 20 ms rather than the 5 s default, and it
+/// goes on reading the snapshot it has.
+#[test]
+#[ignore = "measurement: a reader that gives up on a busy refresh quickly"]
+fn a_branch_reader_with_a_short_busy_timeout_keeps_its_snapshot() {
+    branch_readers_beside_a_sealing_writer(BranchRun {
+        readers: 1,
+        hold_ms: 20,
+        commits: 3,
+        txn_ms: 7000,
+        gap_ms: 0,
+        reader_busy_ms: 20,
+        refresh: "merge",
+    });
+}
+
+/// A writer that pauses 20 ms after each seal, before its next batch.
+#[test]
+#[ignore = "measurement: long batches with a short pause after each seal"]
+fn branch_readers_beside_a_writer_that_pauses_after_each_seal() {
+    branch_readers_beside_a_sealing_writer(BranchRun {
+        readers: 3,
+        hold_ms: 20,
+        commits: 5,
+        txn_ms: 3000,
+        gap_ms: 20,
+        reader_busy_ms: 20,
+        refresh: "merge",
+    });
+}
+
+/// A reader that needs no branch of its own: it reads `main`'s tip, opens
+/// `<file>@<tip>` read-only (a detached snapshot), reads, closes, and goes
+/// again, beside the `commit_run` writer. Before doltlite 0.50.13 that open
+/// failed for a file named `*.doltlite_db` (dolthub/doltlite#3231).
+#[allow(clippy::disallowed_macros)]
+fn detached_readers_beside_a_sealing_writer(readers: usize, commits: u64, txn_ms: u64) {
+    let t = Scratch::new();
+    let ready: Vec<String> = (0..readers)
+        .map(|i| t.path(&format!("reader-{i}-ready")))
+        .collect();
+    let commits_s = commits.to_string();
+    let txn_ms = txn_ms.to_string();
+    let go_when = ready.join(",");
+    let mut writer = t.spawn(&[
+        "write",
+        "--db",
+        &t.db(),
+        "--seed",
+        "--pin-out",
+        &t.path("pin"),
+        "--go-when",
+        &go_when,
+        "--max-commits",
+        &commits_s,
+        "--interval-ms",
+        "0",
+        "--txn-ms",
+        &txn_ms,
+        "--out",
+        &t.path("writer.json"),
+    ]);
+    let seed = t.await_file("pin", &mut writer);
+    let mut children: Vec<Child> = (0..readers)
+        .map(|i| {
+            t.spawn(&[
+                "rev-read",
+                "--db",
+                &t.db(),
+                "--until",
+                &t.path("writer.json"),
+                "--hold-ms",
+                "20",
+                "--ready-out",
+                &ready[i],
+                "--out",
+                &t.path(&format!("reader-{i}.json")),
+            ])
+        })
+        .collect();
+    t.wait("writer", &mut writer);
+    for c in &mut children {
+        t.wait("reader", c);
+    }
+    let writer = t.report("writer.json");
+    if writer["dolt"] == Value::Bool(false) {
+        return;
+    }
+    let reports: Vec<Value> = (0..readers)
+        .map(|i| t.report(&format!("reader-{i}.json")))
+        .collect();
+    for (i, r) in reports.iter().enumerate() {
+        let mut ms: Vec<u64> = r["opens"]
+            .as_array()
+            .expect("opens")
+            .iter()
+            .filter_map(|x| x["ms"].as_u64())
+            .collect();
+        ms.sort_unstable();
+        let heads: std::collections::BTreeSet<&str> = samples(r)
+            .iter()
+            .filter_map(|s| s["head"].as_str())
+            .collect();
+        eprintln!(
+            "reader {i}: {} opens, median {} ms, max {} ms, {} distinct commits read, {} errors",
+            ms.len(),
+            ms.get(ms.len() / 2).copied().unwrap_or(0),
+            ms.last().copied().unwrap_or(0),
+            heads.len(),
+            errors(r).len(),
+        );
+    }
+    let mut seal_ms: Vec<u64> = writer["commits"]
+        .as_array()
+        .expect("commits")
+        .iter()
+        .filter_map(|c| c["ms"].as_u64())
+        .collect();
+    seal_ms.sort_unstable();
+    eprintln!(
+        "writer: {} seals, median {} ms, max {} ms, {} errors, file {} bytes",
+        seal_ms.len(),
+        seal_ms.get(seal_ms.len() / 2).copied().unwrap_or(0),
+        seal_ms.last().copied().unwrap_or(0),
+        errors(&writer).len(),
+        writer["size_after"],
+    );
+    assert_eq!(errors(&writer), Vec::<String>::new(), "writer errors");
+    assert_eq!(
+        seal_ms.len() as u64,
+        commits,
+        "the writer did not seal every chunk"
+    );
+    for r in &reports {
+        assert_eq!(errors(r), Vec::<String>::new(), "reader errors");
+        assert_reads_only_sealed_commits(&writer, &seed, samples(r));
+        assert_each_transaction_read_one_commit(r);
+        assert_committed_throughout(&writer, r);
+    }
+}
+
+#[test]
+fn detached_readers_are_snapshots_while_the_writer_seals() {
+    detached_readers_beside_a_sealing_writer(3, 500, 0);
+}
+
+/// A detached open takes no write lock, so a writer holding its batch open
+/// does not hold it up.
+#[test]
+fn detached_readers_open_while_the_writer_holds_a_transaction() {
+    detached_readers_beside_a_sealing_writer(3, 5, 2000);
+}
+
 #[test]
 fn a_second_writer_in_another_process_is_refused_and_told_who_holds_the_store() {
     let t = Scratch::new();
