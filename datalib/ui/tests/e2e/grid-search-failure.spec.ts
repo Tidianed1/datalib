@@ -5,10 +5,10 @@
 // 502: {"error":"read response: Resource temporarily unavailable (os
 // error 35)"}" above rows that answered a different query.
 import { test, expect } from "@playwright/test";
-import { SEARCH_ROWS } from "./grid-helpers";
+import { EVERY_ROW, SEARCH_ROWS } from "./grid-helpers";
 
 test("a timed-out search says so, marks the old rows, and retries", async ({ page }) => {
-  await page.goto("/");
+  await page.goto(EVERY_ROW);
   await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 10_000 });
 
   let fail = true;

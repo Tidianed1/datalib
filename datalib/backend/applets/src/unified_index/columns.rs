@@ -67,6 +67,8 @@ fn declared() -> Vec<ColumnSpec> {
              config.toml gives it. Datalib's own rows, like a source's storage report, say \
              Datalib rather than the source they describe.",
         ),
+        // Second, so what a row says is on screen at any width.
+        ColumnSpec::new("snippet", "Contents", ColumnType::Text),
         ColumnSpec::new("kind", "Type", ColumnType::Text),
         ColumnSpec::new("conversation_name", "Conversation", ColumnType::Text).hidden(),
         ColumnSpec::new("project", "Project", ColumnType::Text)
@@ -98,7 +100,6 @@ fn declared() -> Vec<ColumnSpec> {
                  not known to have changed since it was created.",
             )
             .hidden(),
-        ColumnSpec::new("snippet", "Contents", ColumnType::Text),
         ColumnSpec::new("author", "Author", ColumnType::Text),
         ColumnSpec::new("account", "Account", ColumnType::Text).hidden(),
         ColumnSpec::new("org_name", "Org", ColumnType::Text).hidden(),

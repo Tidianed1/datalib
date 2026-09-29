@@ -3,7 +3,7 @@
 // the newest of them, and the rest arrive as it is scrolled.
 
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
-import { SEARCH_ROWS, searchHeader, type GridApi } from "./grid-helpers";
+import { EVERY_ROW, SEARCH_ROWS, searchHeader, type GridApi } from "./grid-helpers";
 
 async function searchUuids(request: APIRequestContext, params: string): Promise<string[]> {
   const r = await request.get(`/applet/unified_index/search?q=&${params}`);
@@ -33,7 +33,7 @@ test("the grid opens on the newest page and loads older rows as it is scrolled u
   request,
 }) => {
   const newestFirst = await searchUuids(request, "limit=100000");
-  await page.goto("/");
+  await page.goto(EVERY_ROW);
   await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 15_000 });
 
   const opened = await held(page);
@@ -60,7 +60,7 @@ test("the grid opens on the newest page and loads older rows as it is scrolled u
 /// held only the newest.
 test("a header sort orders the whole search", async ({ page, request }) => {
   const [oldest] = await searchUuids(request, "limit=1&sort=touched_at:asc");
-  await page.goto("/");
+  await page.goto(EVERY_ROW);
   await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 15_000 });
   const openedOn = await page.evaluate(() =>
     (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.rows().map((r) => r.uuid),

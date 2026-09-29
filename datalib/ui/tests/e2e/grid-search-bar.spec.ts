@@ -4,6 +4,7 @@
 
 import { test, expect, type APIRequestContext, type Page, type Route } from "@playwright/test";
 import {
+  EVERY_ROW,
   actOnRowByUuid,
   firstRowUuid,
   gridSettled,
@@ -21,7 +22,7 @@ async function searchUuids(request: APIRequestContext, params: string): Promise<
 }
 
 async function openGrid(page: Page) {
-  await page.goto("/");
+  await page.goto(EVERY_ROW);
   await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 15_000 });
 }
 

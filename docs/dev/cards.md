@@ -370,7 +370,10 @@ programs against:
   its free text (`RowsSpec`); the qmd columns and ranking appear only
   for the search. Row click opens the row's document via
   `host.openCards`; double-click opens it as a standalone single-column
-  page in a new tab. Persists `q`/`sel`/`cols` state.
+  page in a new tab. Persists `q`/`sel`/`cols` state. A search given
+  no `q` opens on `is:document`, one row per document; with no
+  `placeholder`, the empty bar suggests filters on the biggest source
+  the index holds (`cards/searchDefaults.ts`).
 - `documentView(markdownUuid?, sectionUuid?)` — renders one document
   (`/applet/unified_index/chat/{markdownUuid}`), highlighting and scrolling to
   `sectionUuid`. A different selection is a different card: the grid
