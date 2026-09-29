@@ -14,7 +14,7 @@ use datalib_schema::render_cursor::RenderCursorRow;
 use crate::dispatch::{PlannedSource, Wave};
 use crate::events::{Emitter, OutputClaim};
 use crate::source::StepEnv;
-use datalib_etl_render::indexed_markdown::{blocking, IndexedMarkdownStore};
+use datalib_etl_render::indexed_markdown::{blocking, Holdings, IndexedMarkdownStore};
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
@@ -85,7 +85,7 @@ pub async fn run(
     // The last word on what the source holds, after the sweep: a run
     // that deleted more than it wrote leaves the checkpoints' last
     // number too high, and this is the one that stands between runs.
-    progress.metric(datalib_metrics::DOCUMENTS, &[], report.documents);
+    report_holdings(&progress, report.holdings);
     if report.removed > 0 {
         progress.set_message(&format!(
             "{} document(s) dropped — their source is gone upstream",
@@ -126,6 +126,13 @@ pub async fn run(
     // the first render materializes the dir.
     datalib_core::layout::mark_derived_cache(&rendered_root);
     Ok(claims(&env.step, &report))
+}
+
+/// The Manage screen's Documents and Items, as one pair so they never
+/// disagree about which moment they describe.
+pub(crate) fn report_holdings(progress: &Progress, h: Holdings) {
+    progress.metric(datalib_metrics::DOCUMENTS, &[], h.documents);
+    progress.metric(datalib_metrics::ITEMS, &[], h.items);
 }
 
 /// What a render reports: its store's HEAD, the tree's content version.
@@ -171,9 +178,9 @@ pub struct RenderReport {
     /// Documents written.
     pub docs: usize,
     pub removed: usize,
-    /// Documents the store holds afterwards, storage report excluded —
-    /// what the source has, not what this run did.
-    pub documents: i64,
+    /// What the store holds afterwards, storage report excluded — what
+    /// the source has, not what this run did.
+    pub holdings: Holdings,
     /// Whole-store problem counts by severity.
     pub problems: HashMap<Severity, i64>,
     /// The store's HEAD after the final commit. `None` without doltlite.
@@ -289,11 +296,7 @@ pub fn render_source(
             // reading a torn batch. This is what keeps the Manage
             // screen's Documents column moving while a render runs;
             // between seals it stands still, which is honest.
-            progress.metric(
-                datalib_metrics::DOCUMENTS,
-                &[],
-                store.document_count(storage_uuid.as_deref())?,
-            );
+            report_holdings(&progress, store.holdings(storage_uuid.as_deref())?);
             store.begin_batch()?;
         }
         Ok(())
@@ -449,14 +452,14 @@ pub fn render_source(
     // consumes it.
     let versions = store.render_versions()?;
     let problems = store.problem_counts()?;
-    let documents = store.document_count(storage_uuid.as_deref())?;
+    let holdings = store.holdings(storage_uuid.as_deref())?;
     let head = store.head()?;
     store.close();
     every_stored_version_must_be_declared(&name, &rendered_root, &versions, declared.as_ref())?;
     Ok(RenderReport {
         docs,
         removed,
-        documents,
+        holdings,
         problems,
         head,
         // What the final commit sealed beyond the last checkpoint.
@@ -967,6 +970,7 @@ mod plan_tests {
             .body("body")
             .markdown_uuid(Some(uuid.to_string()))
             .is_document(true)
+            .item_count(Some(1))
             .build()
             .unwrap();
         store
@@ -1193,6 +1197,7 @@ mod stale_tree_tests {
             .body("body")
             .markdown_uuid(Some(chat_uuid.to_string()))
             .is_document(true)
+            .item_count(Some(1))
             .build()
             .unwrap();
         store

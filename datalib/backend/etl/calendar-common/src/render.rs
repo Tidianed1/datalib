@@ -416,6 +416,7 @@ fn build_grid_row(
         .kind(kind_of(event).to_string())
         .source_label(profile.source_label.clone())
         .is_document(true)
+        .item_count(Some(1))
         .created_at(start)
         // The grid orders a document's stamps created-then-modified, and
         // an event is nearly always last edited before it happens. The

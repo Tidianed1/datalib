@@ -109,6 +109,7 @@ mod tests {
     title TEXT,
     created_at VARCHAR(40),
     modified_at VARCHAR(40),
+    item_count BIGINT,
     md_path VARCHAR(1024),
     upstream_cursor VARCHAR(64),
     renderer_version VARCHAR(32),

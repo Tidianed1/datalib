@@ -1259,8 +1259,8 @@ async fn upsert_markdown(
     sqlx::query(
         "INSERT INTO markdowns \
          (markdown_uuid, source_id, provider, kind, title, created_at, modified_at, \
-          md_path, upstream_cursor, renderer_version, bucket_key) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          item_count, md_path, upstream_cursor, renderer_version, bucket_key) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&md.markdown_uuid)
     .bind(&source_id)
@@ -1269,6 +1269,7 @@ async fn upsert_markdown(
     .bind(&canonical.conversation_name)
     .bind(canonical.created_at.as_deref())
     .bind(canonical.modified_at.as_deref())
+    .bind(canonical.item_count)
     .bind(qmd_path)
     .bind(md.upstream_cursor.as_deref())
     .bind(&version_str)
@@ -2128,6 +2129,7 @@ mod source_cursor_tests {
             .markdown_uuid(Some(uuid.to_string()))
             .created_at(Some("2026-01-01T00:00:00+00:00".to_string()))
             .is_document(true)
+            .item_count(Some(1))
             .build()
             .unwrap();
         RenderedMarkdown {

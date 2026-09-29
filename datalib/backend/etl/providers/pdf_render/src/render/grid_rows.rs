@@ -185,7 +185,7 @@ pub fn rows_for_document(
         notion_block_uuid: None,
         markdown_uuid: Some(doc_uuid.clone()),
         byte_size: None,
-        item_count: Some(pages.len() as i64),
+        item_count: Some(1),
         diff_status: None,
         diff_changed_columns: None,
     });

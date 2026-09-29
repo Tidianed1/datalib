@@ -14,3 +14,9 @@
 /// renders nothing: a zero there is the true answer, and a missing
 /// series means "never counted", which the column draws as blank.
 pub const DOCUMENTS: &str = "documents";
+
+/// What those documents count between them — messages, readings,
+/// events; each document's `item_count`, summed. Reported beside
+/// [`DOCUMENTS`], by the same steps, at the same moments. The Manage
+/// screen's Items column, and its sparkline.
+pub const ITEMS: &str = "items";

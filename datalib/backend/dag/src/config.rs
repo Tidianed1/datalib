@@ -1529,11 +1529,11 @@ fn builtin_lock(function: Option<&str>) -> Option<&'static str> {
 pub const BUILTIN_STORE_SHAPES: &[(&str, &str)] = &[
     (
         "render_markdown",
-        "94ce64e9de6a72547840782662f06815e01d6da29bbb17c01940c0c1060ff9d3",
+        "ab274403f2cdfd2f0fc3233f47deb3f02cbd0b03a2ba9e4cd63a263b2d912c13",
     ),
     (
         "grid_index",
-        "7eb041d05b657f5bcdac580386b7050cf29c0a06460dd6cc27d54bde02282ef0",
+        "65d172a1090a352d7566cbd9ad7d315e2c2e90336fad29f5bb62b973f904bc3f",
     ),
 ];
 

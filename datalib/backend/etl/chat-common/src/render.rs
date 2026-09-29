@@ -22,7 +22,7 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// `datalib_step`'s render step checks that every version stored on
 /// disk is one its processors declare, so this must not be mixed into
 /// the stored value.
-pub const LAYOUT_VERSION: u32 = 5;
+pub const LAYOUT_VERSION: u32 = 6;
 
 /// What every chat-common provider declares through
 /// `RenderProcessor::render_params`, merged with its own knobs: the
@@ -368,7 +368,7 @@ fn render_markdown(
     if let Some(e) = &chat.external_id {
         s.push_str(&format!("external_id: {e}\n"));
     }
-    s.push_str(&format!("item_count: {}\n", doc.items.len()));
+    s.push_str(&format!("item_count: {}\n", message_count(doc)));
     s.push_str("---\n\n");
 
     // The chat's name and the period go in separately: a long title is
@@ -684,7 +684,7 @@ fn build_grid_rows(
             .created_at(first_ts)
             .modified_at(last_ts)
             .byte_size(Some(bodies.iter().map(|b| b.len() as i64).sum()))
-            .item_count(Some(doc.items.len() as i64))
+            .item_count(Some(message_count(doc)))
             .author(chat.author.clone())
             .account(chat.account.clone())
             .org_uuid(chat.org_uuid.clone())
@@ -758,7 +758,7 @@ fn build_grid_rows(
                 .upstream_account(chat.upstream_account.clone())
                 .created_at(stamp_from_ms(item.date_ms, profile.stamp_precision))
                 .byte_size(Some(text.len() as i64))
-                .item_count(Some(1))
+                .item_count(item.is_message().then_some(1))
                 // An empty display is "upstream named nobody", which is a
                 // null — never a row whose author is the empty string,
                 // and never a stand-in like "unknown".
@@ -868,6 +868,10 @@ fn non_empty(s: &str) -> Option<String> {
 /// The message-level row's `text`, and the bytes its `byte_size` counts:
 /// the body alone, never an attachment's bytes, so the number means one
 /// thing on every provider whether or not it knows its attachments' sizes.
+fn message_count(doc: &NormalizedDoc) -> i64 {
+    doc.items.iter().filter(|i| i.is_message()).count() as i64
+}
+
 fn message_body(item: &NormalizedChatItem) -> String {
     match item.kind {
         ItemKind::Text => item.text.clone().unwrap_or_default(),
@@ -1126,9 +1130,11 @@ mod tests {
     }
 
     /// A message weighs its body in bytes, the document weighs the sum
-    /// of its messages and counts them, and a reaction is neither.
+    /// of its items and counts only what was said — a system note and a
+    /// tool call are in the transcript but are not messages — and a
+    /// reaction is neither.
     #[test]
-    fn document_size_and_count_are_the_sum_of_its_messages() {
+    fn document_size_is_every_item_and_its_count_is_the_messages() {
         let profile = test_profile();
         let mut chat = mk_chat();
         chat.buckets[0].items.push(NormalizedChatItem {
@@ -1148,6 +1154,10 @@ mod tests {
             unread: false,
             problems: Vec::new(),
         });
+        chat.buckets[0].items.push(aside_item(
+            "66666666-6666-6666-6666-666666666666",
+            "tricorder scan",
+        ));
         let rows = rows_of(&profile, &chat);
 
         let by_kind = |k: &str| rows.iter().filter(|r| r.kind == k).collect::<Vec<_>>();
@@ -1157,11 +1167,14 @@ mod tests {
         // Bytes, not characters: the vulcan salute is four of them.
         assert_eq!(messages[1].byte_size, Some("Worf joined 🖖".len() as i64));
         assert_eq!(messages[1].byte_size, Some(16));
-        assert!(messages.iter().all(|m| m.item_count == Some(1)));
+        let counts: Vec<_> = messages.iter().map(|m| m.item_count).collect();
+        assert_eq!(counts, [Some(1), None], "a system note is not a message");
+        let tool = &by_kind("Tool Call")[0];
+        assert_eq!(tool.item_count, None, "nor is a tool call");
 
         let doc = &by_kind(&profile.chat_kind)[0];
-        assert_eq!(doc.byte_size, Some(11 + 16));
-        assert_eq!(doc.item_count, Some(2));
+        assert_eq!(doc.byte_size, Some(11 + 16 + "tricorder scan".len() as i64));
+        assert_eq!(doc.item_count, Some(1));
 
         let reaction = &by_kind(&profile.reaction_kind)[0];
         assert_eq!((reaction.byte_size, reaction.item_count), (None, None));

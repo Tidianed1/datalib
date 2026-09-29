@@ -95,7 +95,7 @@ display: "Klingon Diplomatic Greeting Drafting"
 account: jlpicard@enterprise.starfleet.test
 project: Bridge Operations
 external_id: c0000003-1701-4d00-8000-00000000c003
-item_count: 6
+item_count: 4
 ---
 
 <h1 class="page-title" data-page-title-uuid="00000000-0000-856b-944c-412bf8dca640">Klingon Diplomatic Greeting Drafting (all) <a class="source-link" href="https://claude.ai/chat/c0000003-1701-4d00-8000-00000000c003" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -196,7 +196,7 @@ period: all
 display: "Borg Encryption Signature Lookup"
 account: jlpicard@enterprise.starfleet.test
 external_id: c0000005-1701-4d00-8000-00000000c005
-item_count: 6
+item_count: 2
 ---
 
 <h1 class="page-title" data-page-title-uuid="00000000-0000-882d-b21e-5e54f3f20dbb">Borg Encryption Signature Lookup (all) <a class="source-link" href="https://claude.ai/chat/c0000005-1701-4d00-8000-00000000c005" target="_blank" rel="noopener noreferrer">↗</a></h1>

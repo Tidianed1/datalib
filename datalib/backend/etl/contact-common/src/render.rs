@@ -268,6 +268,7 @@ fn build_grid_row(
         .kind(profile.contact_kind.clone())
         .source_label(profile.source_label.clone())
         .is_document(true)
+        .item_count(Some(1))
         .created_at(contact.created_at.clone())
         .modified_at(contact.modified_at.clone())
         .author(Some(title))
