@@ -11,14 +11,19 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use crate::db::{build_where, ChatMeta};
+use crate::group::{group_sql, where_within, GroupCount, Grouping, Within, MAX_GROUPS};
+use crate::problems::ProblemsQuery;
 use crate::qmd::GridRowRef;
 use crate::query::ParsedQuery;
-use crate::repo::{DocRow, EdgeRowOut, IndexRepo, MapDocRow};
+use crate::repo::{DocRow, EdgeRowOut, IndexRepo, Listing, LocatedProblem, MapDocRow};
 use crate::search::SearchRow;
+use crate::sort::{default_order, order_by, Sort};
 use datalib_core::repo::RepoError;
 use datalib_pin::{is_missing_table, open_reader};
+use datalib_query::table::{Column, SearchTable};
 use datalib_schema::edges::EdgeRow;
-use datalib_schema::problems::{ProblemRow, ScopeKind};
+use datalib_schema::grid_rows::GridRowColumn;
+use datalib_schema::problems::{ProblemRow, ProblemRowColumn, ScopeKind};
 
 /// SQLite/doltlite-backed implementation of [`IndexRepo`].
 pub struct DoltRepo {
@@ -38,41 +43,121 @@ pub struct DoltRepo {
 /// ends the transaction.
 struct At {
     tx: sqlx::Transaction<'static, sqlx::Sqlite>,
+    commit: String,
     grid_rows: &'static str,
     markdowns: &'static str,
     edges: &'static str,
     problems: &'static str,
 }
 
-/// The `grid_rows` columns every [`SearchRow`] is built from. One
-/// constant because `search` and `search_by_uuids` select exactly the
-/// same set through [`search_row_from`]; two hand-kept lists drifted for
-/// as long as they existed.
-const SEARCH_ROW_COLUMNS: &str =
-    "uuid, provider, kind, source_label, created_at, modified_at, is_document, author, account, \
-     project, org_uuid, org_name, channel, conversation_name, conversation_uuid, markdown_uuid, \
-     message_index, entire_chat, preview, source_url, notion_page_uuid, upstream_id, \
-     upstream_entity_kind, source_id, byte_size, item_count, diff_status, diff_changed_columns";
-
-/// What `search` runs, with its parameters; `LIMIT ?` is bound last.
-/// Newest first, the order every `grid_rows` index is built for.
-pub fn search_sql(q: &ParsedQuery) -> (String, Vec<String>) {
-    let (where_sql, params) = build_where(q);
-    let sql = format!(
-        "SELECT {SEARCH_ROW_COLUMNS} FROM grid_rows{where_sql} \
-         ORDER BY touched_at_utc DESC, is_document DESC, uuid DESC \
-         LIMIT ?"
-    );
-    (sql, params)
+/// The rows `uuids` name, in that order, read inside `at`'s snapshot; one
+/// the snapshot lacks is left out.
+async fn rows_in(at: &mut At, uuids: &[String]) -> Result<Vec<SearchRow>, RepoError> {
+    let mut by_uuid: std::collections::HashMap<String, SearchRow> =
+        std::collections::HashMap::with_capacity(uuids.len());
+    for chunk in uuids.chunks(LOOKUP_CHUNK) {
+        let placeholders = vec!["?"; chunk.len()].join(",");
+        let sql = format!(
+            "SELECT {} FROM {} WHERE uuid IN ({placeholders})",
+            search_row_select(),
+            at.grid_rows
+        );
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
+        for u in chunk {
+            query = query.bind(u);
+        }
+        let rows = match query.fetch_all(&mut *at.tx).await {
+            Ok(rows) => rows,
+            Err(e) if is_missing_table(&e, "grid_rows") => return Ok(Vec::new()),
+            Err(e) => return Err(RepoError::Internal(e.to_string())),
+        };
+        for r in rows {
+            let row = search_row_from(&r);
+            by_uuid.insert(row.uuid.clone(), row);
+        }
+    }
+    Ok(uuids.iter().filter_map(|u| by_uuid.remove(u)).collect())
 }
 
+/// The `grid_rows` columns every [`SearchRow`] is built from. One
+/// constant because every read of a search's rows selects exactly the
+/// same set through [`search_row_from`]; two hand-kept lists drifted for
+/// as long as they existed.
+const SEARCH_ROW_COLUMNS: &[GridRowColumn] = {
+    use GridRowColumn as G;
+    &[
+        G::Uuid,
+        G::Provider,
+        G::Kind,
+        G::SourceLabel,
+        G::CreatedAt,
+        G::ModifiedAt,
+        G::TouchedAt,
+        G::IsDocument,
+        G::Author,
+        G::Account,
+        G::Project,
+        G::OrgUuid,
+        G::OrgName,
+        G::Channel,
+        G::ConversationName,
+        G::ConversationUuid,
+        G::MarkdownUuid,
+        G::MessageIndex,
+        G::EntireChat,
+        G::Preview,
+        G::SourceUrl,
+        G::NotionPageUuid,
+        G::UpstreamId,
+        G::UpstreamEntityKind,
+        G::SourceId,
+        G::ByteSize,
+        G::ItemCount,
+        G::DiffStatus,
+        G::DiffChangedColumns,
+    ]
+};
+
+fn search_row_select() -> String {
+    let names: Vec<&str> = SEARCH_ROW_COLUMNS.iter().map(|c| c.as_str()).collect();
+    names.join(", ")
+}
+
+/// What `ordered_uuids` runs, with its parameters.
+pub fn listing_sql(q: &ParsedQuery, sort: &[Sort], within: &[Within]) -> (String, Vec<String>) {
+    ordered_sql("grid_rows", q, sort, within)
+}
+
+/// The primary keys of the rows `q` keeps in `table` (the pinned name of
+/// `C`'s table), in `sort`'s order or the table's own, with its
+/// parameters.
+fn ordered_sql<C: Column>(
+    table: &str,
+    q: &ParsedQuery<C>,
+    sort: &[Sort<C>],
+    within: &[Within<C>],
+) -> (String, Vec<String>) {
+    let (where_sql, params) = where_within(q, within);
+    let order = order_by(sort).unwrap_or_else(default_order::<C::Table>);
+    let key = <C::Table as SearchTable>::PRIMARY_KEY.as_str();
+    (
+        format!("SELECT {key} FROM {table}{where_sql} ORDER BY {order}"),
+        params,
+    )
+}
+
+/// Rows per `uuid IN (…)` lookup, well under SQLite's bound-variable
+/// limit however many rows one page asks for.
+const LOOKUP_CHUNK: usize = 10_000;
+
 fn search_row_from(r: &sqlx::sqlite::SqliteRow) -> SearchRow {
-    let kind: String = r.try_get("kind").unwrap_or_default();
-    let author: String = r.try_get("author").unwrap_or_default();
-    let provider: Option<String> = r.try_get("provider").ok().flatten();
+    use GridRowColumn as G;
+    let kind: String = r.try_get(G::Kind.as_str()).unwrap_or_default();
+    let author: String = r.try_get(G::Author.as_str()).unwrap_or_default();
+    let provider: Option<String> = r.try_get(G::Provider.as_str()).ok().flatten();
     SearchRow {
-        uuid: r.try_get("uuid").unwrap_or_default(),
-        conversation_uuid: r.try_get("conversation_uuid").unwrap_or_default(),
+        uuid: r.try_get(G::Uuid.as_str()).unwrap_or_default(),
+        conversation_uuid: r.try_get(G::ConversationUuid.as_str()).unwrap_or_default(),
         markdown_uuid: r
             .try_get::<Option<String>, _>("markdown_uuid")
             .ok()
@@ -82,18 +167,21 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow) -> SearchRow {
             .ok()
             .flatten()
             .map(|n| n as usize),
-        snippet: r.try_get("preview").unwrap_or_default(),
+        snippet: r.try_get(G::Preview.as_str()).unwrap_or_default(),
         sender: author.clone(),
         created_at: r.try_get::<Option<String>, _>("created_at").ok().flatten(),
         modified_at: r.try_get::<Option<String>, _>("modified_at").ok().flatten(),
-        is_document: r.try_get::<bool, _>("is_document").unwrap_or(false),
-        conversation_name: r.try_get("conversation_name").unwrap_or_default(),
-        project: r.try_get("project").unwrap_or_default(),
-        account: r.try_get("account").unwrap_or_default(),
-        org_uuid: r.try_get("org_uuid").unwrap_or_default(),
-        org_name: r.try_get("org_name").unwrap_or_default(),
-        entire_chat: r.try_get("entire_chat").unwrap_or_default(),
-        source: r.try_get("source_label").unwrap_or_default(),
+        touched_at: r.try_get::<Option<String>, _>("touched_at").ok().flatten(),
+        is_document: r
+            .try_get::<bool, _>(G::IsDocument.as_str())
+            .unwrap_or(false),
+        conversation_name: r.try_get(G::ConversationName.as_str()).unwrap_or_default(),
+        project: r.try_get(G::Project.as_str()).unwrap_or_default(),
+        account: r.try_get(G::Account.as_str()).unwrap_or_default(),
+        org_uuid: r.try_get(G::OrgUuid.as_str()).unwrap_or_default(),
+        org_name: r.try_get(G::OrgName.as_str()).unwrap_or_default(),
+        entire_chat: r.try_get(G::EntireChat.as_str()).unwrap_or_default(),
+        source: r.try_get(G::SourceLabel.as_str()).unwrap_or_default(),
         provider: provider.clone().unwrap_or_default(),
         source_ref: None,
         source_id: r
@@ -103,11 +191,13 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow) -> SearchRow {
             .unwrap_or_default(),
         kind,
         author,
-        channel: r.try_get("channel").unwrap_or_default(),
-        source_url: r.try_get("source_url").unwrap_or_default(),
-        notion_page_uuid: r.try_get("notion_page_uuid").unwrap_or_default(),
-        upstream_id: r.try_get("upstream_id").unwrap_or_default(),
-        upstream_entity_kind: r.try_get("upstream_entity_kind").unwrap_or_default(),
+        channel: r.try_get(G::Channel.as_str()).unwrap_or_default(),
+        source_url: r.try_get(G::SourceUrl.as_str()).unwrap_or_default(),
+        notion_page_uuid: r.try_get(G::NotionPageUuid.as_str()).unwrap_or_default(),
+        upstream_id: r.try_get(G::UpstreamId.as_str()).unwrap_or_default(),
+        upstream_entity_kind: r
+            .try_get(G::UpstreamEntityKind.as_str())
+            .unwrap_or_default(),
         byte_size: r.try_get::<Option<i64>, _>("byte_size").ok().flatten(),
         item_count: r.try_get::<Option<i64>, _>("item_count").ok().flatten(),
         diff_status: r.try_get::<Option<String>, _>("diff_status").ok().flatten(),
@@ -181,11 +271,12 @@ impl DoltRepo {
             .fetch_optional(&mut *tx)
             .await
             .unwrap_or(None);
-        if commit.is_none() {
+        let Some(commit) = commit else {
             return Ok(None);
-        }
+        };
         Ok(Some(At {
             tx,
+            commit,
             grid_rows: "grid_rows",
             markdowns: "markdowns",
             edges: "edges",
@@ -194,7 +285,159 @@ impl DoltRepo {
     }
 }
 
+/// One group as `group_sql` counts it: its values, its count, and its
+/// newest row's primary key.
+type GroupKey = (Vec<Option<String>>, u64, String);
+
+// Pairs each group with its sample, which the caller read in key order.
+fn grouping<R>(
+    keys: Vec<GroupKey>,
+    samples: Vec<R>,
+    truncated: bool,
+    commit: String,
+) -> Grouping<R> {
+    let groups = keys
+        .into_iter()
+        .zip(samples)
+        .map(|((values, count, _), sample)| GroupCount {
+            values,
+            count,
+            sample,
+        })
+        .collect();
+    Grouping {
+        groups,
+        truncated,
+        at: Some(commit),
+    }
+}
+
 impl At {
+    /// Runs [`ordered_sql`]; a table the index does not have yet holds no
+    /// rows.
+    async fn ordered_keys<C: Column>(
+        &mut self,
+        table: &str,
+        q: &ParsedQuery<C>,
+        sort: &[Sort<C>],
+        within: &[Within<C>],
+    ) -> Result<Vec<String>, RepoError> {
+        let (sql, params) = ordered_sql(table, q, sort, within);
+        // Audited: the table name is a literal on `At`, every column name
+        // a column enum's `as_str`, and every value bound.
+        let mut query = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql));
+        for p in &params {
+            query = query.bind(p);
+        }
+        match query.fetch_all(&mut *self.tx).await {
+            Ok(keys) => Ok(keys),
+            Err(e) if is_missing_table(&e, <C::Table as SearchTable>::TABLE) => Ok(Vec::new()),
+            Err(e) => Err(RepoError::Internal(e.to_string())),
+        }
+    }
+
+    /// The groups of the rows `where_sql` keeps in `table`, at most
+    /// [`MAX_GROUPS`] of them, and whether there were more.
+    async fn group_keys<C: Column>(
+        &mut self,
+        table: &str,
+        where_sql: &str,
+        params: &[String],
+        by: &[C],
+    ) -> Result<(Vec<GroupKey>, bool), RepoError> {
+        let sql = group_sql(table, where_sql, by);
+        // Audited: as `ordered_keys`.
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
+        for p in params {
+            query = query.bind(p);
+        }
+        let rows = match query.fetch_all(&mut *self.tx).await {
+            Ok(rows) => rows,
+            Err(e) if is_missing_table(&e, <C::Table as SearchTable>::TABLE) => Vec::new(),
+            Err(e) => return Err(RepoError::Internal(e.to_string())),
+        };
+        let n = by.len();
+        let truncated = rows.len() > MAX_GROUPS;
+        let groups = rows[..rows.len().min(MAX_GROUPS)]
+            .iter()
+            .map(|r| {
+                (
+                    (0..n).map(|i| r.get::<Option<String>, _>(i)).collect(),
+                    r.get::<i64, _>(n) as u64,
+                    r.get::<String, _>(n + 1),
+                )
+            })
+            .collect();
+        Ok((groups, truncated))
+    }
+
+    /// The problems `keys` name, in that order; one the snapshot lacks is
+    /// left out.
+    async fn problems_in(&mut self, keys: &[String]) -> Result<Vec<ProblemRow>, RepoError> {
+        let mut by_key: std::collections::HashMap<String, ProblemRow> =
+            std::collections::HashMap::with_capacity(keys.len());
+        for chunk in keys.chunks(LOOKUP_CHUNK) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let where_sql = format!(" WHERE problem_uuid IN ({placeholders})");
+            for row in self.problem_rows(&where_sql, chunk, chunk.len()).await? {
+                by_key.insert(row.problem_uuid.clone(), row);
+            }
+        }
+        Ok(keys.iter().filter_map(|k| by_key.remove(k)).collect())
+    }
+
+    /// `rows`, each with the document it is about.
+    async fn located(&mut self, rows: Vec<ProblemRow>) -> Result<Vec<LocatedProblem>, RepoError> {
+        let items: Vec<String> = rows
+            .iter()
+            .filter(|r| r.scope_kind == ScopeKind::Entity)
+            .filter_map(|r| r.item_uuid.clone())
+            .collect();
+        let documents = self.documents_of(&items).await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let markdown_uuid = match row.scope_kind {
+                    ScopeKind::Markdown => Some(row.scope_key.clone()),
+                    ScopeKind::Entity => row
+                        .item_uuid
+                        .as_ref()
+                        .and_then(|item| documents.get(item).cloned()),
+                };
+                LocatedProblem { row, markdown_uuid }
+            })
+            .collect())
+    }
+
+    /// The document each of `uuids` is a row of, for the ones the
+    /// snapshot holds.
+    async fn documents_of(
+        &mut self,
+        uuids: &[String],
+    ) -> Result<std::collections::HashMap<String, String>, RepoError> {
+        let mut out = std::collections::HashMap::with_capacity(uuids.len());
+        for chunk in uuids.chunks(LOOKUP_CHUNK) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let sql = format!(
+                "SELECT uuid, markdown_uuid FROM {} \
+                 WHERE uuid IN ({placeholders}) AND markdown_uuid IS NOT NULL",
+                self.grid_rows
+            );
+            // Audited: the table name is a literal; a placeholder run
+            // sized from the chunk, every uuid bound.
+            let mut query = sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(sql));
+            for u in chunk {
+                query = query.bind(u);
+            }
+            match query.fetch_all(&mut *self.tx).await {
+                Ok(rows) => out.extend(rows),
+                Err(e) if is_missing_table(&e, "grid_rows") => return Ok(out),
+                Err(e) => return Err(RepoError::Internal(e.to_string())),
+            }
+        }
+        Ok(out)
+    }
+
     /// `SELECT * FROM problems` in this read, with the caller's clause,
     /// as typed rows. An index built before the table existed reads as
     /// empty; a row this build cannot parse is an error.
@@ -208,9 +451,9 @@ impl At {
             "SELECT * FROM {}{where_sql} ORDER BY last_seen_at_utc DESC, problem_uuid LIMIT ?",
             self.problems
         );
-        // Audited: the table name is a literal; `where_sql`
-        // comes from `problems::parse`, which splices only the column
-        // names of its closed `Key` match and binds every value.
+        // Audited: the table name is a literal; `where_sql` splices only
+        // column names from a column enum's `as_str`, or literals, and
+        // binds every value.
         let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
         for p in params {
             query = query.bind(p.clone());
@@ -229,37 +472,127 @@ impl At {
 
 #[async_trait]
 impl IndexRepo for DoltRepo {
-    async fn search(&self, q: &ParsedQuery, limit: usize) -> Result<Vec<SearchRow>, RepoError> {
-        let (sql, params) = search_sql(q);
+    async fn head(&self) -> Result<Option<String>, RepoError> {
+        Ok(self.pinned().await?.map(|at| at.commit))
+    }
+
+    async fn ordered_uuids(
+        &self,
+        q: &ParsedQuery,
+        sort: &[Sort],
+        within: &[Within],
+    ) -> Result<Listing, RepoError> {
+        let Some(mut at) = self.pinned().await? else {
+            return Ok(Listing::default());
+        };
+        let uuids = at.ordered_keys("grid_rows", q, sort, within).await?;
+        Ok(Listing {
+            uuids,
+            at: Some(at.commit),
+        })
+    }
+
+    async fn filter_uuids(
+        &self,
+        q: &ParsedQuery,
+        uuids: &[String],
+        sort: &[Sort],
+        within: &[Within],
+    ) -> Result<Listing, RepoError> {
+        let Some(mut at) = self.pinned().await? else {
+            return Ok(Listing::default());
+        };
+        let (where_sql, params) = where_within(q, within);
+        let order = order_by(sort);
+        // One statement: qmd hands over at most its ranking depth of hits,
+        // far under SQLite's bound-variable limit.
+        let placeholders = vec!["?"; uuids.len()].join(",");
+        let joiner = if where_sql.is_empty() {
+            " WHERE"
+        } else {
+            " AND"
+        };
+        let sql = format!(
+            "SELECT uuid FROM {}{where_sql}{joiner} uuid IN ({placeholders}){}",
+            at.grid_rows,
+            order
+                .as_deref()
+                .map(|o| format!(" ORDER BY {o}"))
+                .unwrap_or_default()
+        );
+        let mut query = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql));
+        for p in params.iter().chain(uuids) {
+            query = query.bind(p);
+        }
+        let kept = match query.fetch_all(&mut *at.tx).await {
+            Ok(found) => found,
+            Err(e) if is_missing_table(&e, "grid_rows") => Vec::new(),
+            Err(e) => return Err(RepoError::Internal(e.to_string())),
+        };
+        let uuids = match order {
+            Some(_) => kept,
+            None => {
+                let kept: std::collections::HashSet<String> = kept.into_iter().collect();
+                let mut ranked: Vec<String> = uuids
+                    .iter()
+                    .filter(|u| kept.contains(*u))
+                    .cloned()
+                    .collect();
+                // A score sort, which sorts alone, is the ranking itself;
+                // ascending reads it from the bottom.
+                if sort.first().is_some_and(|s| !s.descending) {
+                    ranked.reverse();
+                }
+                ranked
+            }
+        };
+        Ok(Listing {
+            uuids,
+            at: Some(at.commit),
+        })
+    }
+
+    async fn group_counts(
+        &self,
+        q: &ParsedQuery,
+        by: &[GridRowColumn],
+        among: Option<&[String]>,
+    ) -> Result<Grouping, RepoError> {
+        let Some(mut at) = self.pinned().await? else {
+            return Ok(Grouping::default());
+        };
+        let (mut where_sql, params) = where_within(q, &[]);
+        if let Some(uuids) = among {
+            // qmd's ranking: at most its depth, far under SQLite's
+            // bound-variable limit.
+            let joiner = if where_sql.is_empty() {
+                " WHERE"
+            } else {
+                " AND"
+            };
+            let placeholders = vec!["?"; uuids.len()].join(",");
+            where_sql = format!("{where_sql}{joiner} uuid IN ({placeholders})");
+        }
+        let params: Vec<String> = params
+            .into_iter()
+            .chain(among.unwrap_or_default().iter().cloned())
+            .collect();
+        let (keys, truncated) = at.group_keys(at.grid_rows, &where_sql, &params, by).await?;
+        let sample_uuids: Vec<String> = keys.iter().map(|(_, _, uuid)| uuid.clone()).collect();
+        // In the same snapshot as the counts, so every group's newest row
+        // is there and the samples line up with the groups one for one.
+        let samples = rows_in(&mut at, &sample_uuids).await?;
+        Ok(grouping(keys, samples, truncated, at.commit))
+    }
+
+    async fn rows_by_uuids(&self, uuids: &[String]) -> Result<Vec<SearchRow>, RepoError> {
+        if uuids.is_empty() {
+            return Ok(Vec::new());
+        }
         let Some(mut at) = self.pinned().await? else {
             return Ok(Vec::new());
         };
-
-        // Audited for injection per sqlx 0.9's `SqlSafeStr` bound. Everything
-        // interpolated into `sql` is a literal (the table names on `At`
-        // included), or comes from `build_where`, which only ever
-        // splices `&'static str` column names returned by
-        // `column_for_field`'s closed match — every user-supplied value
-        // leaves as a `?` in `params`. Same reasoning for the other
-        // `AssertSqlSafe` sites in this file, where the interpolated part is
-        // a literal table name or a `?,?,?` run built from a count.
-        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
-        for p in &params {
-            query = query.bind(p);
-        }
-        query = query.bind(limit as i64);
-
-        let rows = match query.fetch_all(&mut *at.tx).await {
-            Ok(rows) => rows,
-            Err(e) if is_missing_table(&e, "grid_rows") => return Ok(Vec::new()),
-            Err(e) => return Err(RepoError::Internal(e.to_string())),
-        };
-
-        let mut out: Vec<SearchRow> = Vec::with_capacity(rows.len());
-        for r in rows {
-            out.push(search_row_from(&r));
-        }
-        Ok(out)
+        rows_in(&mut at, uuids).await
     }
 
     async fn chat_meta(&self, markdown_uuid: &str) -> Result<Option<ChatMeta>, RepoError> {
@@ -307,16 +640,44 @@ impl IndexRepo for DoltRepo {
         }))
     }
 
-    async fn problems(
+    async fn problem_keys(
         &self,
-        query: &crate::problems::ProblemsQuery,
-        limit: usize,
-    ) -> Result<Vec<ProblemRow>, RepoError> {
+        q: &ProblemsQuery,
+        sort: &[Sort<ProblemRowColumn>],
+        within: &[Within<ProblemRowColumn>],
+    ) -> Result<Listing, RepoError> {
+        let Some(mut at) = self.pinned().await? else {
+            return Ok(Listing::default());
+        };
+        let uuids = at.ordered_keys(at.problems, q, sort, within).await?;
+        Ok(Listing {
+            uuids,
+            at: Some(at.commit),
+        })
+    }
+
+    async fn problems_by_keys(&self, keys: &[String]) -> Result<Vec<LocatedProblem>, RepoError> {
         let Some(mut at) = self.pinned().await? else {
             return Ok(Vec::new());
         };
-        at.problem_rows(&query.where_sql, &query.params, limit)
-            .await
+        let rows = at.problems_in(keys).await?;
+        at.located(rows).await
+    }
+
+    async fn problem_groups(
+        &self,
+        q: &ProblemsQuery,
+        by: &[ProblemRowColumn],
+    ) -> Result<Grouping<LocatedProblem>, RepoError> {
+        let Some(mut at) = self.pinned().await? else {
+            return Ok(Grouping::default());
+        };
+        let (where_sql, params) = where_within(q, &[]);
+        let (keys, truncated) = at.group_keys(at.problems, &where_sql, &params, by).await?;
+        let sample_keys: Vec<String> = keys.iter().map(|(_, _, key)| key.clone()).collect();
+        let samples = at.problems_in(&sample_keys).await?;
+        let samples = at.located(samples).await?;
+        Ok(grouping(keys, samples, truncated, at.commit))
     }
 
     async fn document_problems(&self, markdown_uuid: &str) -> Result<Vec<ProblemRow>, RepoError> {
@@ -484,57 +845,6 @@ impl IndexRepo for DoltRepo {
         Ok(out)
     }
 
-    async fn search_by_uuids(
-        &self,
-        q: &ParsedQuery,
-        uuids: &[String],
-        limit: usize,
-    ) -> Result<Vec<SearchRow>, RepoError> {
-        if uuids.is_empty() {
-            return Ok(Vec::new());
-        }
-        let (mut where_sql, mut params) = build_where(q);
-        let take = uuids.len().min(limit);
-        let placeholders = std::iter::repeat_n("?", take).collect::<Vec<_>>().join(",");
-        if where_sql.is_empty() {
-            where_sql = format!(" WHERE uuid IN ({placeholders})");
-        } else {
-            where_sql.push_str(&format!(" AND uuid IN ({placeholders})"));
-        }
-        for u in uuids.iter().take(take) {
-            params.push(u.clone());
-        }
-        let Some(mut at) = self.pinned().await? else {
-            return Ok(Vec::new());
-        };
-        let sql = format!(
-            "SELECT {SEARCH_ROW_COLUMNS} FROM {}{}",
-            at.grid_rows, where_sql
-        );
-        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
-        for p in &params {
-            query = query.bind(p);
-        }
-        let rows = match query.fetch_all(&mut *at.tx).await {
-            Ok(rows) => rows,
-            Err(e) if is_missing_table(&e, "grid_rows") => return Ok(Vec::new()),
-            Err(e) => return Err(RepoError::Internal(e.to_string())),
-        };
-        let mut by_uuid: std::collections::HashMap<String, SearchRow> =
-            std::collections::HashMap::new();
-        for r in rows {
-            let row = search_row_from(&r);
-            by_uuid.insert(row.uuid.clone(), row);
-        }
-        let mut out: Vec<SearchRow> = Vec::with_capacity(by_uuid.len());
-        for u in uuids.iter().take(take) {
-            if let Some(r) = by_uuid.remove(u) {
-                out.push(r);
-            }
-        }
-        Ok(out)
-    }
-
     async fn outgoing_edges(&self, markdown_uuid: &str) -> Result<Vec<EdgeRowOut>, RepoError> {
         // LEFT JOIN so that an edge with a dangling FK (destination no
         // longer in `markdowns`) still surfaces — the UI can show the
@@ -662,24 +972,5 @@ impl IndexRepo for DoltRepo {
         let Some(r) = row else { return Ok(None) };
         let rel: Option<String> = r.try_get("md_path").ok();
         Ok(rel.map(|p| self.root.as_ref().join(p)))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The SELECT list is hand-written and the DDL is derived from
-    /// `GridRow`; a name here the table does not have fails every
-    /// search with "no such column", but only once a search runs.
-    #[test]
-    fn every_selected_column_is_in_the_grid_rows_ddl() {
-        let (_, ddl_columns) = datalib_schema::grid_rows::COLUMNS[0];
-        for name in SEARCH_ROW_COLUMNS.split(',').map(str::trim) {
-            assert!(
-                ddl_columns.contains(&name),
-                "SEARCH_ROW_COLUMNS names `{name}`, which grid_rows does not have"
-            );
-        }
     }
 }

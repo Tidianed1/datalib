@@ -5,7 +5,7 @@ use std::time::Duration;
 use datalib_dag::supervisor::store::RequestOutcome;
 use datalib_dag::Event;
 
-use crate::harness::{reads, source, Clocks, Harness, Seen, Step};
+use crate::harness::{reads, source, Clocks, Harness, Seen, State, Step};
 
 const SIGABRT: i32 = 6;
 const SIGKILL: i32 = 9;
@@ -653,6 +653,66 @@ async fn a_burst_of_seals_costs_a_running_fan_in_exactly_one_more_pass_on_the_ne
     h.finish().await;
 }
 
+/// The requests a step's record says it still has work in.
+fn served(s: &State, step: &str) -> Vec<String> {
+    s.record
+        .steps
+        .get(step)
+        .map(|r| r.requests.clone())
+        .unwrap_or_default()
+}
+
+/// Sync everything: one sync per source, opened at once, all feeding one
+/// fan-in. A source done with its download serves none of them — its row
+/// offers Sync — while the fan-in, waiting on the sources still running,
+/// serves every sync. It runs once, after the last, and every sync stays
+/// open until that pass has ended.
+#[tokio::test(flavor = "multi_thread")]
+async fn syncs_of_every_source_share_the_fan_in_and_close_with_its_pass() {
+    let mut h = Harness::new(&fan_in(&["a", "b", "c"])).await;
+    let syncs = [
+        h.sync(&["a"]).await,
+        h.sync(&["b"]).await,
+        h.sync(&["c"]).await,
+    ];
+    for s in ["a", "b", "c"] {
+        h.started(s).await;
+    }
+    h.run("a", "ok a1").await;
+    h.until("a to serve nothing, and d every sync", |s| {
+        (served(s, "a").is_empty() && served(s, "d") == syncs).then_some(())
+    })
+    .await;
+    let state = h.state().await;
+    assert_eq!(served(&state, "b"), [syncs[1].as_str()]);
+    assert_eq!(served(&state, "c"), [syncs[2].as_str()]);
+    assert_eq!(state.started("d"), 0, "d waits for b and c to finish");
+
+    h.run("b", "ok b1").await;
+    h.run("c", "ok c1").await;
+    h.started("d").await;
+    let state = h.state().await;
+    assert_eq!(
+        state.outcome(&syncs[0]),
+        None,
+        "a's sync is open until d has read it"
+    );
+    h.run("d", "ok d1").await;
+    for id in &syncs {
+        assert_eq!(h.closed(id).await, RequestOutcome::Done);
+    }
+    let state = h.state().await;
+    assert_eq!(state.started("d"), 1);
+    for step in ["a", "b", "c", "d"] {
+        assert!(
+            served(&state, step).is_empty(),
+            "{step}: {:?}",
+            served(&state, step)
+        );
+    }
+    h.finish().await;
+}
+
 /// A fan-in serving two syncs outlives the stop of one: the other still
 /// wants it, and it runs again when that one's source seals.
 #[tokio::test(flavor = "multi_thread")]
@@ -699,6 +759,75 @@ async fn stopping_every_sync_a_fan_in_serves_stops_it() {
     for id in &syncs {
         assert_eq!(h.closed(id).await, RequestOutcome::Stopped);
     }
+    h.finish().await;
+}
+
+/// What the loop committed, as heard, from `id`'s stop to its close.
+async fn stop_to_close(h: &mut Harness, id: &str) -> Vec<String> {
+    let closed = format!("request closed {id}");
+    h.wait(&format!("{closed:?} to be heard"), |s| {
+        matches!(s, Seen::Heard(l) if *l == closed).then_some(())
+    })
+    .await;
+    let heard = h.heard();
+    let asked = format!("stop asked {id}");
+    let from = heard
+        .iter()
+        .position(|l| *l == asked)
+        .expect("the stop was heard");
+    let to = heard.iter().position(|l| *l == closed).expect("just heard");
+    heard[from..=to].to_vec()
+}
+
+/// A stopped sync closes only after the loop has saved a record in which
+/// no step names it, so a reader that sees it closed never finds a step
+/// still serving it. The loop used to close it the moment it read the
+/// stop, and let go of it on the save after.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stopped_sync_is_let_go_of_before_it_closes() {
+    let mut h = Harness::new(&[source("a")]).await;
+    let sync = h.sync(&["a"]).await;
+    h.started("a").await;
+    // Deaf, so it is still running, and could still name the sync, after.
+    h.run("a", "on_stop ignore").await;
+    h.until("a to serve the sync", |s| {
+        (served(s, "a") == [sync.as_str()]).then_some(())
+    })
+    .await;
+    h.stop(&sync).await;
+    let committed = stop_to_close(&mut h, &sync).await;
+    assert!(
+        committed.iter().any(|l| l == "record saved"),
+        "closed before any save let go of it: {committed:?}"
+    );
+    let state = h.state().await;
+    assert!(served(&state, "a").is_empty(), "{:?}", served(&state, "a"));
+    h.run("a", "fail cancelled").await;
+    assert_eq!(h.ended("a", 1).await.outcome, "stopped");
+    h.finish().await;
+}
+
+/// The same for a sync the loop set aside, whose step its config lacks:
+/// the record names it on that step until a save lets go of it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stopped_sync_set_aside_is_let_go_of_before_it_closes() {
+    let mut h = Harness::new(&[source("a")]).await;
+    let sync = h.sync(&["a"]).await;
+    h.started("a").await;
+    let aside = h.sync(&["x"]).await;
+    h.until("x to wait on the sync set aside", |s| {
+        (served(s, "x") == [aside.as_str()]).then_some(())
+    })
+    .await;
+    h.stop(&aside).await;
+    let committed = stop_to_close(&mut h, &aside).await;
+    assert!(
+        committed.iter().any(|l| l == "record saved"),
+        "closed before any save let go of it: {committed:?}"
+    );
+    assert!(served(&h.state().await, "x").is_empty());
+    h.run("a", "ok v1").await;
+    assert_eq!(h.closed(&sync).await, RequestOutcome::Done);
     h.finish().await;
 }
 

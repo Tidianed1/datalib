@@ -23,7 +23,7 @@ Three ways in, from least to most hands-on:
 1. **The desktop app** (macOS, Apple Silicon). Download the `.dmg` from
    the [latest release](https://github.com/imbue-ai/datalib/releases/latest).
    It asks which folder to keep your data in, then opens the app; you
-   add your first source from the **Manage** screen.
+   add your first source from the **Data sources** card.
 2. **The command-line tools** (macOS or Linux). One `curl | sh` installs
    them. The [**first-time user guide**](docs/user/first_time_user.md)
    walks through install, credentials, the config file, and your first
@@ -44,9 +44,10 @@ look before you hand it anything of yours. Building from source is the
 
 datalib is Plain Old Software. Running a sync invokes no cloud AI model and no
 agent, and nothing leaves your machine: the only network traffic is
-datalib reading from the services you configured, plus a one-time
-download of the search models the first time the semantic index is
-built.
+datalib reading from the services you configured, plus one-time
+downloads the first time they are needed: the search models, and (for
+the command-line install) the Node runtime that search and latchkey run
+on.
 
 What it produces, though, is a very valuable pile of private data in one
 place — and most of it was written by other people. Three things follow:
@@ -93,28 +94,29 @@ export, or a backup pulled off a phone.
   <tr>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#fastmail"><img src="datalib/ui/src/assets/fastmail.svg" width="40" height="40" alt=""><br><b>Fastmail</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#fastmail-calendar"><img src="datalib/ui/src/assets/fastmail.svg" width="40" height="40" alt=""><br><b>Fastmail Calendar</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#fastmail-contacts"><img src="datalib/ui/src/assets/fastmail.svg" width="40" height="40" alt=""><br><b>Fastmail Contacts</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#garmin"><img src="datalib/ui/src/assets/garmin.svg" width="40" height="40" alt=""><br><b>Garmin</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#github"><img src="datalib/ui/src/assets/github.svg" width="40" height="40" alt=""><br><b>GitHub</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#gitlab"><img src="datalib/ui/src/assets/gitlab.svg" width="40" height="40" alt=""><br><b>GitLab</b></a></td>
-    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#gmail"><img src="datalib/ui/src/assets/gmail.svg" width="40" height="40" alt=""><br><b>Gmail</b></a></td>
   </tr>
   <tr>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#gmail"><img src="datalib/ui/src/assets/gmail.svg" width="40" height="40" alt=""><br><b>Gmail</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#google-calendar"><img src="datalib/ui/src/assets/google_calendar.svg" width="40" height="40" alt=""><br><b>Google Calendar</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#google-chat"><img src="docs/assets/google_chat.svg" width="40" height="40" alt=""><br><b>Google Chat</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#google-takeout"><img src="datalib/ui/src/assets/google_takeout.svg" width="40" height="40" alt=""><br><b>Google Takeout</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#google-voice"><img src="docs/assets/google_voice.png" width="40" height="40" alt=""><br><b>Google Voice</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#lightroom"><img src="datalib/ui/src/assets/lightroom.svg" width="40" height="40" alt=""><br><b>Lightroom</b></a></td>
-    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#linkedin"><img src="datalib/ui/src/assets/linkedin.svg" width="40" height="40" alt=""><br><b>LinkedIn</b></a></td>
   </tr>
   <tr>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#linkedin"><img src="datalib/ui/src/assets/linkedin.svg" width="40" height="40" alt=""><br><b>LinkedIn</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#local-files"><img src="datalib/ui/src/assets/fsindex.svg" width="40" height="40" alt=""><br><b>Local files</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#media"><img src="datalib/ui/src/assets/media.svg" width="40" height="40" alt=""><br><b>Media</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#notion"><img src="datalib/ui/src/assets/notion.svg" width="40" height="40" alt=""><br><b>Notion</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#pdfs"><img src="datalib/ui/src/assets/pdf.svg" width="40" height="40" alt=""><br><b>PDFs</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#perseus"><img src="datalib/ui/src/assets/perseus.svg" width="40" height="40" alt=""><br><b>Perseus</b></a></td>
-    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#signal"><img src="datalib/ui/src/assets/signal.svg" width="40" height="40" alt=""><br><b>Signal</b></a></td>
   </tr>
   <tr>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#signal"><img src="datalib/ui/src/assets/signal.svg" width="40" height="40" alt=""><br><b>Signal</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#slack"><img src="datalib/ui/src/assets/slack.svg" width="40" height="40" alt=""><br><b>Slack</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#sms-backup-and-restore"><img src="datalib/ui/src/assets/sms.svg" width="40" height="40" alt=""><br><b>SMS Backup &amp; Restore</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#whatsapp"><img src="datalib/ui/src/assets/whatsapp.svg" width="40" height="40" alt=""><br><b>WhatsApp</b></a></td>
@@ -126,7 +128,8 @@ A source's `type` says *what* is being mirrored (`claude`, `whatsapp`,
 …). Its ingest step says *how*, with one table named for the method:
 `[steps.params.api]` reads the product's own API, `[steps.params.export]`
 an unpacked export, `[steps.params.backup]` a phone backup,
-`[steps.params.fswalk]` a folder on disk. So a `claude` source pulled
+`[steps.params.fswalk]` a folder on disk, and so on (`jmap`, `mbox`,
+`caldav`, …). So a `claude` source pulled
 from the API and one read from an export share a type and differ only
 in that table. Every shape, fully commented, is in
 [`all_sources.toml`](docs/user/config_examples/all_sources.toml).
@@ -145,10 +148,10 @@ executable that speaks a small NDJSON protocol can be a step — see
 [`docs/dev/step_protocol.md`](docs/dev/step_protocol.md).
 
 **The upper layer is the batteries.** For each source above, an `ingest`
-step that brings the raw data in and a `render_markdown` step that turns
-it into readable markdown; then two shared index steps that fan in over
+step that brings the raw data in and, for most, a `render_markdown` step
+that turns it into readable markdown; then the index steps over
 everything rendered — a SQL table of every message and document
-(`grid_rows`) and a semantic search index (built with
+(`grid_rows`) and a keyword and semantic search index (built with
 [qmd](https://github.com/tobi/qmd)). A local web UI, also shipped as a
 desktop app, searches and browses the result. The batteries are Rust;
 the UI is Vue, wrapped in Tauri for the desktop app.
@@ -171,9 +174,9 @@ Two mechanisms carry it here:
 - **Every store keeps its history.** A raw store's commits are the
   syncs; a render store's commits are the renders. `datalib-doltlite`
   reads either at any commit or diffs any two (`dolt_log`, `dolt_diff`),
-  and the Manage screen shows a source's commit history with what each
-  commit did to each table.
-- **A comparison is a source of its own.** "Compare two syncs…" on a
+  and a source's commit history in the app shows what each commit did
+  to each table.
+- **A comparison is a source of its own.** "Compare two versions…" on a
   source makes a *diff group*: the source's own renderer run at both
   commits and subtracted, written as an ordinary source. Its documents
   carry the changes marked — added and removed sections on green and
@@ -208,7 +211,7 @@ back into other apps.
 
 A mirror you can't leave is just another silo, so the exits are plain:
 
-- **Markdown** — `<name>/render_markdown/` is ordinary `.md` files, one
+- **Markdown** — `<source id>/render_markdown/` is ordinary `.md` files, one
   per conversation or document. Nothing to export.
 - **SQL** — `datalib-doltlite` ships with the tools and is a `sqlite3`
   shell that understands the versioned format. One pipe writes a plain

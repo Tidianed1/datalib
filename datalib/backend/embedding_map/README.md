@@ -8,7 +8,7 @@ computation: the `embedding_map` function in `datalib-step`
 result, and the `unified_index` applet serves it joined to the grid.
 
 ```
-unified_index/qmd_index/qmd/index.sqlite     qmd's chunk vectors
+unified_index/qmd_aggregator/qmd/index.sqlite     qmd's chunk vectors
         │  datalib_unified_index::qmd::vectors — one unit vector per document
         ▼
 datalib_embedding_map::layout                 this crate
@@ -72,8 +72,9 @@ it scattered):
 
 `optimize` here is umap-learn's loop, on one thread with a fixed seed,
 which also makes a layout a pure function of its inputs: the same
-corpus from the same starting map always lays out the same way. The graph construction and
-curve fit we still take from `umap-rs`; they match umap-learn.
+corpus from the same starting map always lays out the same way. The
+graph construction and curve fit we still take from `umap-rs`; they
+match umap-learn.
 
 ## Colours
 

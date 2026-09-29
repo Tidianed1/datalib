@@ -26,6 +26,9 @@ export type SearchRow = {
   // thread, a PR's updated_at, a vCard's REV. Null on a row not known
   // to have changed since created_at — most messages.
   modified_at: string | null;
+  // When it last changed at its source: modified_at, else created_at,
+  // unless the provider knows better. What newest-first sorts on.
+  touched_at: string | null;
   // True on the one row per rendered document that *is* the document
   // (the thread, the PR, the page); false on every row inside one.
   // `is:document` in the search bar.
@@ -101,18 +104,41 @@ export type QueryEcho = {
   [key: string]: unknown;
 };
 
-export type SearchResponse = {
-  query_echo: QueryEcho;
+/// What a paged grid reads of its rows beyond their columns — see
+/// `datalib_columns::RowsSpec`.
+export type RowsSpec = {
+  // The field that names a row.
+  row_key: string;
+  // The document a selected row opens: the first of `fields` the row has
+  // a value in, at the section its `anchor` field names.
+  document: { fields: string[]; anchor: string };
+  // qmd ranks free text, best first; `like` matches a substring and keeps
+  // the rows' order.
+  free_text: "qmd" | "like";
+};
+
+/// One page of a paged table's rows: the search's, or the problems'.
+export type RowsResponse<Row> = RowsSpec & {
+  // Only the search has one.
+  query_echo?: QueryEcho;
   // The columns the rows carry, typed — see `ColumnSpec`.
   columns: ColumnSpec[];
-  rows: SearchRow[];
-  total_estimated: number;
+  // One page of the rows, from `offset`.
+  rows: Row[];
+  // Every row the search holds, not just this page's.
+  total: number;
+  // Where the next page starts; null when this one reaches the end.
+  next_offset: number | null;
+  // The index commit the search was read at; null with no index yet.
+  at: string | null;
   // Backend-side errors that don't fail the response — e.g. the
   // structured-search SQL errored and we returned zero rows rather than
   // surface a 500. `api.ts` raises each as a toast so the user sees
   // them; the field is omitted when empty (serde `skip_serializing_if`).
   errors?: string[];
 };
+
+export type SearchResponse = RowsResponse<SearchRow> & { query_echo: QueryEcho };
 
 // QMDs are write-only output. The backend ships the body verbatim
 // (frontmatter stripped) and the UI runs markdown-it on it. Per-section
@@ -150,8 +176,10 @@ export type ProblemReason =
   | "deliberate_loss"
   | "render_failed"
   | "fetch_failed"
+  | "over_size_limit"
   | "not_found"
   | "forbidden"
+  | "silent"
   | "noted";
 
 /// One problem on a document, as the document view lists it above the
@@ -459,18 +487,46 @@ export async function fetchHealth(signal?: AbortSignal): Promise<Health> {
   return h;
 }
 
-export async function fetchSearch(
+/// Which page of a search, and in what order: `sort` is a column id and
+/// a direction (`created_at:desc`), or none for newest first (qmd's rank
+/// for free text). `through` names a row the page must reach, however
+/// far past `offset` it is. `within` narrows it to one group,
+/// `[[column, value], …]` as JSON.
+export type SearchPageSpec = {
+  offset?: number;
+  sort?: string | null;
+  through?: string | null;
+  within?: string | null;
+};
+
+export const SEARCH = `${UNIFIED_INDEX}/search`;
+
+export function fetchSearch(
   q: string,
   limit = 200,
   signal?: AbortSignal,
   options: GetOptions = {},
+  spec: SearchPageSpec = {},
 ): Promise<SearchResponse> {
+  return fetchRows<SearchRow>(SEARCH, q, limit, signal, options, spec) as Promise<SearchResponse>;
+}
+
+/// A page of the table `url` serves: `/search`, or another table that
+/// pages the way it does.
+export async function fetchRows<Row>(
+  url: string,
+  q: string,
+  limit = 200,
+  signal?: AbortSignal,
+  options: GetOptions = {},
+  spec: SearchPageSpec = {},
+): Promise<RowsResponse<Row>> {
   const params = new URLSearchParams({ q, limit: String(limit) });
-  const r = await getJson<SearchResponse>(
-    `${UNIFIED_INDEX}/search?${params.toString()}`,
-    signal,
-    options,
-  );
+  if (spec.offset) params.set("offset", String(spec.offset));
+  if (spec.sort) params.set("sort", spec.sort);
+  if (spec.through) params.set("through", spec.through);
+  if (spec.within) params.set("within", spec.within);
+  const r = await getJson<RowsResponse<Row>>(`${url}?${params.toString()}`, signal, options);
   // Backend returned 200 but is telling us something went sideways
   // (schema mismatch, fallback path errored, etc.). Surface each entry
   // as its own toast — the dedupe window in `pushToast` keeps repeated
@@ -478,6 +534,39 @@ export async function fetchSearch(
   if (r.errors && r.errors.length > 0) {
     for (const e of r.errors) pushToast(e);
   }
+  return r;
+}
+
+/// One group of a table's rows: its value in each grouped column, how
+/// many rows it holds, and its newest row, which its labels are read from.
+export type RowGroup<Row> = { values: (string | null)[]; count: number; sample: Row };
+
+export type GroupsResponse<Row = SearchRow> = {
+  groups: RowGroup<Row>[];
+  // More groups than one answer carries; the rest are left out.
+  truncated: boolean;
+  at: string | null;
+  // Only the search has one.
+  qmd_error?: string | null;
+  errors: string[];
+};
+
+/// The groups the rows of `url` (the search's, by default) fall into by
+/// `by`, grid column ids outermost first and comma-joined
+/// (`source_ref,kind`), each with its true count.
+export async function fetchGroups<Row = SearchRow>(
+  q: string,
+  by: string,
+  signal?: AbortSignal,
+  url: string = SEARCH,
+): Promise<GroupsResponse<Row>> {
+  const params = new URLSearchParams({ q, by });
+  const r = await getJson<GroupsResponse<Row>>(`${url}/groups?${params.toString()}`, signal, {
+    toast: false,
+  });
+  for (const e of r.errors) pushToast(e);
+  if (r.truncated)
+    pushToast("There are more groups than the grid can show; the rest are left out.");
   return r;
 }
 
@@ -846,6 +935,12 @@ export type ColumnSpec = {
   description?: string;
   default_visible: boolean;
   editable: boolean;
+  // How the producer's search bar filters on this column: the key a term
+  // starts with, and the row field holding the value it names.
+  search?: { key: string; field: string };
+  // On an identity column: the row field of chips drawn after the label,
+  // as bare counts. Double-clicking them is a double-click on that field.
+  badges?: string;
 };
 
 /// Something resolved before it was sent: the id the producer joins on,
@@ -870,25 +965,19 @@ export type Timeseries = {
   detail?: string | null;
 };
 
-export type Segment = { id: string; key: string; label: string };
-
 /// One row's status, reduced to a vocabulary the Status column can
 /// draw. Mirrors `datalib_columns::Status`.
 export type StatusView = {
   key: string;
   label: string;
-  /// When this status was reached. Feeds the "Last synced" column, so
-  /// the two can never disagree about which run they describe.
+  /// When this status was reached, drawn beside its glyph. Feeds the
+  /// "Last synced" column too, so the two can never disagree about
+  /// which run they describe.
   at: string | null;
   /// When it last succeeded, whatever it has done since. Feeds "Last
   /// success"; older than `at` when the runs since have failed.
   last_success_at?: string | null;
   detail: string | null;
-  /// How far along, in [0, 1], while `key` is `running`.
-  fraction?: number | null;
-  /// For a status aggregating several things in flight: one segment
-  /// each, drawn as a bar instead of the glyph.
-  segments?: Segment[] | null;
 };
 
 export type ChipKind = "info" | "idle" | "metric" | "warning" | "error" | "ok";
@@ -942,13 +1031,15 @@ export type ManageRow = {
   actions: Action[];
   seeds: string[];
   reveal_blocked: string | null;
-  /// The open request this row is being run for: what Stop stops.
-  stop_request_id: string | null;
+  /// The open requests this row has work left in: what Stop stops.
+  /// Several for a step more than one source's sync reaches.
+  stop_request_ids: string[];
   /// Who turned this step off, while it is off.
   turned_off_by: string | null;
   last_run_id: string;
   live_run_id: string | null;
   reveal_path: string | null;
+  raw_store_path: string | null;
 };
 
 export type ManageResponse = {
@@ -1062,9 +1153,10 @@ export function fetchRequests(signal?: AbortSignal): Promise<SyncRequest[]> {
   return getJson<SyncRequest[]>("/api/requests", signal);
 }
 
-/// Sync `roots` and everything downstream of them; none syncs every source.
-export async function openRequest(roots: string[]): Promise<SyncRequest> {
-  return (await (await post("/api/requests", { roots })).json()) as SyncRequest;
+/// Sync `roots` and everything downstream of them, one request per
+/// source they belong to; no roots syncs every source.
+export async function openRequest(roots: string[]): Promise<SyncRequest[]> {
+  return (await (await post("/api/requests", { roots })).json()) as SyncRequest[];
 }
 
 export async function stopRequest(id: string): Promise<void> {
@@ -1205,26 +1297,21 @@ export function fetchRuns(
 // `seq` is monotone across runs.
 export function fetchLog(
   opts: {
-    run?: string;
-    // The lines one process wrote, by id: a launch of the server, or
-    // the runner.
-    process?: string;
-    step?: string;
-    // With `step`: the lines about one attempt of it.
-    attempt?: number;
+    // The search, what the panel's pickers narrow it to included:
+    // `run:`, `process_id:`, `step:`, `attempt:`.
     q?: string;
+    // The lines after this `seq` (the tail), or the newest before it (an
+    // older page); neither is the newest lines.
     afterSeq?: number;
+    beforeSeq?: number;
     limit?: number;
   },
   signal?: AbortSignal,
 ): Promise<RunLogLine[]> {
   const params = new URLSearchParams();
-  if (opts.run) params.set("run", opts.run);
-  if (opts.process) params.set("process", opts.process);
-  if (opts.step) params.set("step", opts.step);
-  if (opts.attempt != null) params.set("attempt", String(opts.attempt));
   if (opts.q) params.set("q", opts.q);
   if (opts.afterSeq != null) params.set("after_seq", String(opts.afterSeq));
+  if (opts.beforeSeq != null) params.set("before_seq", String(opts.beforeSeq));
   if (opts.limit != null) params.set("limit", String(opts.limit));
   return fetchLogLines(`/api/log?${params.toString()}`, signal);
 }
@@ -1362,6 +1449,9 @@ export type LatchkeyService = {
   service: string;
   /// `browser`, `set`, … — which ways this service can be authenticated.
   auth_options: string[];
+  /// latchkey's own `auth set` command for this service, which knows
+  /// the credential's shape (`-H "Authorization: …"`, `-u user:pass`).
+  set_example: string | null;
   accounts: StoredAccount[];
   /// Whether latchkey knows this service at all. False means the name
   /// is free — the only state in which the wizard may register it.
@@ -1393,9 +1483,10 @@ export type ServiceRegistration = {
 /// datalib/backend/probe/src/lib.rs, hand-kept in step:
 /// `mailbox` (emails are filed here), `keyword` (a Gmail flag —
 /// downloadable, but never matched by the render-side filter),
-/// `conversation` (one chat thread — a Claude chat, a Slack DM) or
-/// `channel` (a Slack channel).
-export type ProbeItemKind = "mailbox" | "keyword" | "conversation" | "channel" | "calendar";
+/// `conversation` (one chat thread — a Claude chat, a Slack DM),
+/// `channel` (a Slack channel), `calendar` or `address_book`.
+export type ProbeItemKind =
+  "mailbox" | "keyword" | "conversation" | "channel" | "calendar" | "address_book";
 
 /// One row a probe offers a filter field. Mirrors `ProbeItem` in
 /// datalib/backend/probe/src/lib.rs.
@@ -1489,6 +1580,25 @@ export function startLatchkeyConnect(
       register: register ?? null,
       ephemeral_browser: ephemeralBrowser,
     }),
+  });
+}
+
+/// A credential pasted by hand. Mirrors `PastedCredential` in
+/// datalib/backend/http/src/connect.rs.
+export type PastedCredential =
+  { kind: "headers"; headers: string[] } | { kind: "basic"; username: string; password: string };
+
+/// Store a pasted credential with `latchkey auth set`. An empty account
+/// lets latchkey choose, which replaces the one it holds if it holds one.
+export function setLatchkeyCredential(
+  service: string,
+  account: string,
+  credential: PastedCredential,
+): Promise<{ ok: true }> {
+  return quietJson<{ ok: true }>(`/api/latchkey/${encodeURIComponent(service)}/credential`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ account, credential }),
   });
 }
 

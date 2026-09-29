@@ -16,7 +16,7 @@ pub use app_schema::runs::{
 pub use datalib_runtime::build_id::{
     git_hash, git_hash_and_origin, GitHashOrigin, GIT_HASH_ENV, NO_GIT_HASH_ADVICE,
 };
-pub use query::{log_query, LogQuery, QueryError};
+pub use query::{log_query, LogCursor, LogQuery, QueryError};
 pub use store::{
     canonical_labels, close_abandoned_run, last_log_seq, latest_metric, log_after, log_line,
     new_process_id, open_or_create, process, process_log_after, processes, runs, snapshot,
@@ -102,7 +102,7 @@ impl Default for Retention {
 }
 
 /// Bumped whenever the tables change shape. A store carrying another
-/// version is deleted and remade rather than migrated: nothing in it is
+/// version is emptied and remade rather than migrated: nothing in it is
 /// load-bearing, and a migration is code that would exist only to keep
 /// old log lines.
 pub const SCHEMA_VERSION: i32 = 9;

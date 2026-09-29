@@ -1,20 +1,21 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { TOPIC_CONFIG_WRITTEN, type CardCtx } from "./types";
-import type { Column } from "@slickgrid-universal/common";
-import { type ManageResponse, type ManageRow, type ColumnSpec } from "@/api";
+import { UNIFIED_INDEX, type Action, type ManageResponse, type ManageRow } from "@/api";
 import { useApi } from "@/cards/cardApi";
 import {
   listGroups,
   listSteps,
-  appendSource,
-  buildDiffSource,
+  insertEntries,
   removeSteps,
   describeGroup,
   renameGroup,
   replaceSteps,
   sourceStepsOf,
-  fanInNames,
+  removedWith,
+  setQmdSteps,
+  qmdIndexingOf,
+  type QmdIndexing,
   unwireFromFanIns,
   wireIntoFanIns,
   paramsAreRepresentable,
@@ -27,6 +28,8 @@ import {
   type StepPhase,
 } from "@/config/sourceSteps";
 import TableGrid from "./TableGrid.ce.vue";
+import { ACTION_ICONS } from "./typedColumns";
+import { syncAllButton } from "@/config/syncAll";
 import type { TableGridApi } from "./tableGridApi";
 import type { MenuEntry } from "@/grid/menu";
 import { catalogForStep, type CatalogEntry } from "@/config/catalog";
@@ -34,17 +37,27 @@ import { ingestLabel } from "@/config/ingestMethods";
 import { copyToClipboard } from "@/clipboard";
 import { browseColumns, browseName, browseQuery } from "@/config/browsePresets";
 import { logSource } from "./libs/logView";
+import { historySource } from "./libs/historyView";
 import { pushToast } from "@/toasts";
-import { historyRows, truncatedStores, type HistoryRow } from "@/config/commitHistory";
-import { rowMenu, type MenuAction, type MenuTarget } from "@/config/rowMenu";
-import { formatRelative, formatStamp } from "@/config/timeFormat";
+import {
+  RAW_STORE_BROWSE_LABEL,
+  notComparableReason,
+  rowMenu,
+  type MenuAction,
+  type MenuTarget,
+} from "@/config/rowMenu";
 import { changed, subscribeLive } from "@/live";
 import SourceWizard from "@/components/SourceWizard.vue";
-import CompareDialog from "@/components/CompareDialog.vue";
 import ConfirmDialog from "@/components/ConfirmDialog.vue";
 
 const props = defineProps<{ ctx: CardCtx }>();
-import { confirmAction, isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
+import {
+  confirmAction,
+  isDesktopApp,
+  openRawStore,
+  revealActionLabel,
+  revealInFileManager,
+} from "@/desktop";
 
 const {
   fetchConfig,
@@ -53,7 +66,6 @@ const {
   fetchManageRows,
   fetchRequests,
   fetchRuns,
-  fetchTreeHistory,
   openRequest,
   stopRequest,
   turnOffStep,
@@ -71,8 +83,8 @@ its chevron for the <b>steps</b> that do the work — fetch, render, index — a
 disabled and say why.</p>
 <p>Each row says what its step is doing now. <b>Sync</b> on a source fetches what’s
 new, then rebuilds everything downstream: its own steps, and the index every source
-feeds. Each of those rows then shows the sync in its own <b>Status</b> — queued, and
-what it waits for; running; then how it ended — so pressing Sync on one row moves
+feeds. Each of those rows then shows the sync in its own <b>Last update</b> — queued,
+and what it waits for; running; then how it ended — so pressing Sync on one row moves
 others too. Syncs run side by side: a source synced while another syncs starts at
 once.</p>
 <p>On a step that reads another — a render, the index — Sync reruns it on what its
@@ -80,33 +92,46 @@ inputs already hold, then rebuilds everything downstream; nothing upstream runs.
 is offered while that step is out of date: its code, its settings or what it reads
 changed since it last succeeded, as after an upgrade that changes how a source
 renders.</p>
-<p>While a sync wants a row, its Sync button is a <b>Stop</b> that names the sync —
-“Stop the sync of Work Gmail” — and who started it, if not you: a row can be part of
-a sync started on another row, from a terminal or by an agent, and Stop stops all of
-it. The steps in flight checkpoint what they have and exit; until they do the button
-reads Stopping.</p>
+<p>While a row has work left in a sync, its Sync button is a <b>Stop</b> that names
+the sync — “Stop the sync of Work Gmail” — and who started it, if not you. Each source
+syncs on its own, even under Sync everything, so a source’s Stop stops that source.
+The index every source feeds is part of each of their syncs, and its Stop stops all
+of them. The steps in flight checkpoint what they have and exit; until they do the
+button reads Stopping. The button at the top syncs everything, and while anything
+syncs it stops everything.</p>
 <p>The <b>switch</b> at the end of a row says whether it runs in syncs. Turned off,
 every sync skips it, and if it is running it stops; what reads it waits. Turned back
 on, it runs in the next sync — turning it on starts nothing by itself. On a group it
 turns every step under it off or on. Hover it to see who turned it off.</p>
-<p>A group row reads off its steps: <b>Status</b> is running if any step is, off
-if any is, failed if any failed, and otherwise the last step’s in pipeline order;
-while a sync is in flight it draws one segment per step. <b>Last synced</b> and
+<p>A group row reads off its steps: <b>Last update</b> shows the liveliest of them —
+running if any step is, else queued, off, failed or stopped if any is, and otherwise
+the last step’s in pipeline order. <b>Last synced</b> and
 <b>Last success</b> are the fetch step’s. <b>Remove</b> takes the steps and applets
 with it.</p>
-<p><b>Type</b> and <b>Status</b> are icons, and the mark after a step’s name says what
-it does — hover any of them for the word. <b>Double-click a Status</b> to read that
+<p>Rows come in the order <code>config.toml</code> lists them. Click a header to sort by
+that column; a third click puts the config's order back.</p>
+<p><b>Name</b> stays in view while the table scrolls sideways. <b>Last update</b> leads
+with an icon for what the row is doing or did last, then says when it got there. That
+icon, and the mark before a name — the service a source mirrors, or what a step
+does — give their word on hover. Hovering a name shows its id: for a group, the
+folder its data is in.
+<b>Right-click a header</b> to show or hide columns: <b>Last synced</b> and
+<b>Last success</b> start hidden. <b>Double-click a Last update</b> to read that
 step's log — from the run in flight while it runs, else from the run it last took
 part in, with a picker for its other runs — as a grid you can sort, filter and
 search; on a group row, the log of the step its status came from.
+A <b>red or yellow number</b> after a name counts the errors (records dropped) and
+warnings (records kept with something lost) its store holds as of its last run; a row
+with none shows nothing. <b>Double-click the number</b> for the list.
 <b>Activity</b> is what a running step has reported: how much is queued ahead of
 it, what it has counted so far, and how many warnings and errors it has logged.</p>
 <p><b>Browse</b>, <b>Sync</b> and the switch are on the row: they are what a row
-does often. <b>Right-click a row</b> for everything it can do — browse, edit, reveal,
-remove, the log, a rename (on the Name cell), <b>Reset</b>, and its
-<b>commit history</b>: every store under it
-is versioned, and the panel lists each commit — when, what it said, what it did to
-each table, and the run that made it — newest first, updating while a sync runs.
+does often. <b>Right-click a row</b> for everything it can do — sync, edit, rename,
+the log, reveal, <b>Reset</b>, remove — and its <b>commit history</b>: every store
+under it is versioned, and the history opens beside this card with each commit — when,
+what it said, what it did to each table, and the run that made it — newest first,
+updating while a sync runs. On a source, <b>Compare two versions</b> opens it ready to
+compare the last two syncs.
 Right-click inside a selection and the menu acts on all of it; outside one, on that
 row alone, without changing the selection. An entry that doesn’t apply stays, greyed,
 and says why on hover.</p>
@@ -120,11 +145,12 @@ counted over the whole store, not this run, by the render step: on its own row a
 the group above it. It moves while a render runs, each time the step seals what it has
 written. A blank cell means nothing has counted yet; a source that renders no documents
 of its own, like a photo library, counts zero.</p>
-<p><b>Bytes on disk</b> is a directory walk over each row’s tree — a group’s is its
-whole folder, measured on the same walk — plotted over the last few minutes and drawn
-against the largest row, so a row’s height means its size, and its shape means what
-that size has been doing. Hover for the total and the breakdown.</p>
-<p><b>Last synced</b> and <b>Status</b> are per step, read from the runner’s own
+<p><b>Size</b> is bytes on disk, from a directory walk over each row’s tree — a group’s
+is its whole folder, measured on the same walk — plotted over the last few minutes, with
+its change over that time beside it. Each row’s line is scaled to its own range, so a
+jump in a small source shows as plainly as one in a large one: the line is the shape of
+the change, and the numbers are its size. Hover for the breakdown.</p>
+<p><b>Last update</b> and <b>Last synced</b> are per step, read from the runner’s own
 record — so a sync you or an agent start from a terminal shows up here too.
 <b>Last success</b> is when the step last ran without failing: when it is older than
 Last synced, every run since has failed, and a source's mirror is only known to match
@@ -153,28 +179,28 @@ const serverSourceCount = ref(0);
 const configExists = ref(false);
 const loadError = ref<string | null>(null);
 const banner = ref<{ ok: boolean; text: string } | null>(null);
-// The request a banner is about, when it is about one. Such a banner
-// retires once that request has closed, not on the next action.
-const bannerRequest = ref<string | null>(null);
+// The requests a banner is about, when it is about some. Such a banner
+// retires once they have all closed, not on the next action.
+const bannerRequests = ref<string[]>([]);
 
-/// Put up a banner, optionally tying it to a request's lifetime.
-function say(ok: boolean, text: string, requestId: string | null = null) {
+/// Put up a banner, optionally tying it to requests' lifetimes.
+function say(ok: boolean, text: string, requestIds: string[] = []) {
   banner.value = { ok, text };
-  bannerRequest.value = requestId;
+  bannerRequests.value = requestIds;
 }
 
 function clearBanner() {
   banner.value = null;
-  bannerRequest.value = null;
+  bannerRequests.value = [];
 }
 
-/// Take down a request's banner once the request has closed.
+/// Take down a request's banner once its requests have closed.
 async function retireBanner() {
-  const id = bannerRequest.value;
-  if (!id) return;
+  const ids = bannerRequests.value;
+  if (ids.length === 0) return;
   try {
-    const open = (await fetchRequests()).some((r) => r.id === id && r.state === "open");
-    if (!open && bannerRequest.value === id) clearBanner();
+    const open = (await fetchRequests()).some((r) => ids.includes(r.id) && r.state === "open");
+    if (!open && bannerRequests.value === ids) clearBanner();
   } catch {
     // The banner stays until the next action.
   }
@@ -211,7 +237,7 @@ const editing = ref<{
   group: ConfiguredGroup;
   entry: CatalogEntry;
   steps: SourceSteps;
-  qmdIndexed: boolean;
+  qmdIndexing: QmdIndexing;
 } | null>(null);
 
 /// Non-null when the table is empty for a reason worth shouting about
@@ -263,6 +289,9 @@ type Row = ManageRow & {
   /// The card source a Browse of this row opens, or null where the
   /// row's `browse` action says there is nothing to browse.
   browseSource: string | null;
+  /// The raw store Browse opens instead of a card: a download step's,
+  /// in the desktop app, which is the only host that can open one.
+  rawStore: string | null;
 };
 
 /// The tree the grid shows, as the server assembled it, with the
@@ -273,6 +302,8 @@ const rows = computed<Row[]>(() => {
   return all.map((r) => decorate(r, groups));
 });
 
+const syncAll = computed(() => syncAllButton(rows.value));
+
 function decorate(r: ManageRow, groups: Map<string, ManageRow>): Row {
   // `system/` is not a config entry: nothing to edit, and Browse is
   // the run log over every run.
@@ -282,6 +313,7 @@ function decorate(r: ManageRow, groups: Map<string, ManageRow>): Row {
       editBlocked: "Not a config entry.",
       editGroup: null,
       browseSource: browseAction(r)?.enabled ? "logView()" : null,
+      rawStore: null,
     };
   }
   if (r.kind === "group") {
@@ -291,6 +323,7 @@ function decorate(r: ManageRow, groups: Map<string, ManageRow>): Row {
       editBlocked,
       editGroup: editBlocked ? null : r.id,
       browseSource: groupBrowse(r),
+      rawStore: null,
     };
   }
   // Edit: the wizard's one form describes a source — a group and its two
@@ -315,15 +348,33 @@ function decorate(r: ManageRow, groups: Map<string, ManageRow>): Row {
   const group = r.group ? groups.get(r.group) : undefined;
   const ingestLabelled =
     r.group && r.phase === "ingest" ? ingestLabel(r.type?.id ?? null, r.params) : null;
+  const rawStore = canReveal ? r.raw_store_path : null;
   return {
     ...r,
     name: ingestLabelled ? { ...r.name, label: ingestLabelled } : r.name,
+    actions: rawStore
+      ? r.actions.map((a) => (a.id === "browse" ? RAW_STORE_BROWSE : a))
+      : r.actions,
     editBlocked,
     editGroup: editBlocked ? null : r.group,
     // A step's rows are its source's: Browse opens the group's view.
     browseSource: r.kind === "step" && group ? groupBrowse(group) : null,
+    rawStore,
   };
 }
+
+/// Browse on a download step with a raw store: enabled whatever the
+/// group's Browse says, since a source that renders nothing still has
+/// the tables it downloaded.
+const RAW_STORE_BROWSE: Action = {
+  id: "browse",
+  label: RAW_STORE_BROWSE_LABEL,
+  enabled: true,
+  hint:
+    "Open what this step downloaded, read-only: in DB Browser for SQLite when that " +
+    "opens .doltlite_db files here, otherwise in a doltlite shell.",
+  disabled_reason: null,
+};
 
 /// What a Browse of this group opens. Whether it can — the group has a
 /// render step, and is in the pipeline — is the server's word, carried
@@ -388,7 +439,7 @@ const rowActions: Record<string, (row: Row) => void> = {
   browse: (row) => openBrowse(row),
   sync: (row) => void runRow(row),
   stop: (row) => {
-    if (row.stop_request_id) void stopSync(row.stop_request_id);
+    if (row.stop_request_ids.length > 0) void stopSyncs(row.stop_request_ids);
   },
   in_syncs: (row) => {
     const on = row.actions.find((a) => a.id === "in_syncs")?.on;
@@ -423,7 +474,7 @@ function freshest<T>(commit: (value: T) => void) {
   return run as typeof run & { invalidate: () => void };
 }
 
-// ── One step's log. A red Status says *that* a step failed; the next
+// ── One step's log. A red status says *that* a step failed; the next
 // question is always what it was doing. Double-clicking the cell opens
 // the run store's lines for that step, in the run it last took part in
 // — or the one in flight — as a grid that follows the run while it goes.
@@ -479,21 +530,24 @@ function onCellDoubleClicked(data: Row, field: string) {
 }
 
 /// The problems behind a row's count, as a grid over the index's
-/// `problems` table filtered to the row's source. A step's problems are
-/// its group's — the render store is where a source's live — so a step
-/// row opens the same grid as its group. The index group shows every
-/// source's.
+/// `problems` table, its search bar holding the row's source. A step's
+/// problems are its group's — the render store is where a source's
+/// live — so a step row opens the same grid as its group. The index
+/// group shows every source's.
 function openProblems(row: Row) {
   const sourceId = row.kind === "group" ? row.id : (row.group ?? row.id);
   const q = sourceId === "unified_index" ? "" : `source_id:${sourceId}`;
-  const url = `/applet/unified_index/problems?q=${encodeURIComponent(q)}`;
   const source =
     row.kind === "group" ? row : rows.value.find((r) => r.kind === "group" && r.id === sourceId);
-  const title =
+  const name =
     sourceId === "unified_index" ? "Problems" : `Problems: ${source?.name.label ?? sourceId}`;
-  props.ctx.host.openCards(
-    `tableView({ url: ${JSON.stringify(url)}, title: ${JSON.stringify(title)} })`,
-  );
+  const opts = {
+    url: `${UNIFIED_INDEX}/problems`,
+    q,
+    name,
+    placeholder: "search problems…  (try: severity:error, -stage:fetch, after:2026-01-01)",
+  };
+  props.ctx.host.openCards(`gridView(${JSON.stringify(opts)})`);
 }
 
 /// An in-place edit of the Name cell: a group's rename.
@@ -501,78 +555,21 @@ function onCellEdit(row: Row, field: string, value: string) {
   if (field === "name" && row.kind === "group") void renameRow(row, value);
 }
 
-// ── A tree's commit history. Every doltlite store keeps its own log —
-// one commit per sync, checkpoint or render pass — and this is the first
-// place the app shows it: one row per commit, with what it did to each
-// table. Read on demand, and re-read while open whenever the runner's
-// record moves, which is the same push that keeps the size column live.
-
-/// The rows whose history is open — several, when several were
-/// selected — or empty when the panel is closed.
-const historyFor = ref<Row[]>([]);
-const historyLines = ref<HistoryRow[]>([]);
-const historyTruncated = ref<string[]>([]);
-const historyBusy = ref(false);
-const historyError = ref<string | null>(null);
-const loadHistory = freshest<{ rows: HistoryRow[]; truncated: string[] } | Error>((v) => {
-  historyBusy.value = false;
-  if (v instanceof Error) historyError.value = v.message;
-  else {
-    historyError.value = null;
-    historyLines.value = v.rows;
-    historyTruncated.value = v.truncated;
-  }
-});
-
-async function fetchHistoryRows(trees: string[]) {
-  try {
-    const hs = await Promise.all(trees.map((t) => fetchTreeHistory(t)));
-    return { rows: historyRows(hs), truncated: truncatedStores(hs) };
-  } catch (e) {
-    return e as Error;
-  }
-}
-
-function openHistory(targets: Row[]) {
-  historyFor.value = targets;
-  historyLines.value = [];
-  historyTruncated.value = [];
-  historyError.value = null;
-  historyBusy.value = true;
-  loadHistory.invalidate();
-  void loadHistory(() => fetchHistoryRows(targets.map((r) => r.id)));
-}
-
-/// While the panel is open, a step that just committed shows up without
-/// a reopen. Cheap enough to do on every `dag` frame: the walk is
-/// bounded and the answer is small.
-function refreshHistory() {
-  const trees = historyFor.value.map((r) => r.id);
-  if (trees.length === 0) return;
-  void loadHistory(() => fetchHistoryRows(trees));
-}
-
-/// What the panel is titled: one row's name, or the names joined.
-const historyTitle = computed(() => historyFor.value.map((r) => r.name.label).join(", "));
-
-/// Where the open rows' history is kept, for the panel's subtitle.
-const historyStoreNote = computed(() => {
-  const rows = historyFor.value;
-  if (rows.length !== 1) return `every store under ${rows.map((r) => `${r.id}/`).join(", ")}`;
-  const [row] = rows;
-  return row.kind === "group" ? `every store under ${row.id}/` : `the stores in ${row.id}/`;
-});
-
-/// A commit names its run, and that run's log is the "how" behind the
-/// commit's "what" — from the run store, so a run started from a
-/// terminal has one too. Filtered to the step that writes the store,
-/// as the Status double-click does.
-function openRunLog(row: HistoryRow) {
-  if (!row.run) return;
-  const step = rows.value.find((r) => r.kind !== "group" && r.id === row.stepId);
-  if (!step) return;
-  historyFor.value = [];
-  void openStepLog(step, row.run);
+/// Rows' commit history, as a card beside this one. On one source it is
+/// also where two of its versions are compared; `compare` opens it with
+/// the newest two set up.
+function openHistory(targets: Row[], compare: boolean) {
+  const [first] = targets;
+  const source =
+    targets.length === 1 && notComparableReason(menuTarget(first)) === null ? first.id : null;
+  props.ctx.host.openCards(
+    historySource({
+      trees: targets.map((r) => r.id),
+      title: targets.map((r) => r.name.label).join(", "),
+      source,
+      compare: compare && source !== null,
+    }),
+  );
 }
 
 // ── The right-click menu. Every action a row offers, in one place,
@@ -596,22 +593,23 @@ function menuTarget(row: Row): MenuTarget {
     editBlocked: row.editBlocked,
     revealBlocked: row.reveal_blocked,
     browseBlocked: browseAction(row)?.disabled_reason ?? null,
-    stopRequestId: row.stop_request_id,
+    rawStore: row.rawStore !== null,
+    stopRequestIds: row.stop_request_ids,
     turnedOffBy: row.turned_off_by,
     statusFrom: row.status_from,
     revealPath: row.reveal_path,
   };
 }
 
-function contextMenuItems(anchor: Row, targets: Row[], column: string): MenuEntry[] {
+function contextMenuItems(anchor: Row, targets: Row[]): MenuEntry[] {
   if (targets.length === 0) return [];
-  return rowMenu(targets.map(menuTarget), { column, canReveal, revealLabel }).map((entry) =>
+  return rowMenu(targets.map(menuTarget), { canReveal, revealLabel }).map((entry) =>
     entry.separator
       ? { name: "", separator: true }
       : {
           name: entry.name,
           disabled: entry.disabled,
-          danger: ["remove", "reset", "reset_blobs"].includes(entry.action),
+          danger: ["remove", "reset"].includes(entry.action),
           action: () => void runMenuAction(entry.action, targets, anchor),
         },
   );
@@ -626,12 +624,10 @@ async function runMenuAction(action: MenuAction, targets: Row[], anchor: Row) {
     case "sync":
       await runRows(targets);
       return;
-    case "stop": {
+    case "stop":
       // One stop per request: several rows can be wanted by the same one.
-      const ids = new Set(targets.flatMap((t) => (t.stop_request_id ? [t.stop_request_id] : [])));
-      for (const id of ids) await stopSync(id);
+      await stopSyncs([...new Set(targets.flatMap((t) => t.stop_request_ids))]);
       return;
-    }
     case "turn_off":
     case "turn_on":
       await setTurnedOff(targets, action === "turn_off");
@@ -640,7 +636,7 @@ async function runMenuAction(action: MenuAction, targets: Row[], anchor: Row) {
       if (first.editGroup) await openEdit(first.editGroup);
       return;
     case "compare":
-      compareFor.value = { id: first.id, name: first.name.label };
+      openHistory([first], true);
       return;
     case "rename":
       gridApi?.startEditing(anchor, "name");
@@ -665,16 +661,13 @@ async function runMenuAction(action: MenuAction, targets: Row[], anchor: Row) {
       return;
     }
     case "history":
-      openHistory(targets);
+      openHistory(targets, false);
       return;
     case "reveal":
       for (const t of targets) await reveal(t.key);
       return;
     case "reset":
-      await resetRows(targets, false);
-      return;
-    case "reset_blobs":
-      await resetRows(targets, true);
+      await resetRows(targets);
       return;
     case "remove":
       await deleteRows(targets);
@@ -692,148 +685,6 @@ async function renameRow(row: Row, name: string) {
     next,
     name ? `Renamed ${row.id} to ${name}.` : `Cleared the name of ${row.id}.`,
   );
-}
-
-/// The history panel's columns: what each is, by type, and how the
-/// ones a type cannot draw alone are drawn.
-const historyColumns: ColumnSpec[] = [
-  // The tree column: a store, the commits under it, the tables under
-  // each commit. The label is the store's file name, the commit's
-  // message, or the table's name; the level says which it is.
-  { field: "label", header: "Commit", type: "text", default_visible: true, editable: false },
-  // Relative on top, exact underneath — stacked like the size cell,
-  // because a sync commits several times inside one minute and ten
-  // "18 hours ago"s in a row say nothing about their order.
-  { field: "date", header: "When", type: "timestamp", default_visible: true, editable: false },
-  {
-    field: "rows",
-    header: "Rows",
-    type: "count",
-    description: "Rows after this commit — across the data tables, or in the one table",
-    default_visible: true,
-    editable: false,
-  },
-  { field: "added", header: "Added", type: "count", default_visible: true, editable: false },
-  { field: "deleted", header: "Deleted", type: "count", default_visible: true, editable: false },
-  { field: "modified", header: "Modified", type: "count", default_visible: true, editable: false },
-  // The run that made the commit, when the message names one, as the
-  // way to its log: the commit is what the run did, the log is how.
-  { field: "run", header: "Run", type: "text", default_visible: true, editable: false },
-  { field: "hash", header: "Hash", type: "text", default_visible: true, editable: false },
-];
-
-const historyOverrides: Record<string, Partial<Column<HistoryRow>>> = {
-  label: {
-    width: 360,
-    params: {
-      innerFormatter: (_r: number, _c: number, _v: unknown, _col: unknown, row: HistoryRow) => {
-        const wrap = document.createElement("span");
-        wrap.className = `m2-history-label m2-history-${row?.level ?? "commit"}`;
-        wrap.textContent = row?.label ?? "";
-        if (row?.level === "store") {
-          const dir = document.createElement("span");
-          dir.className = "m2-cell-dir";
-          dir.textContent = row.storePath.slice(0, row.storePath.lastIndexOf("/"));
-          wrap.appendChild(dir);
-        }
-        return wrap;
-      },
-    },
-  },
-  date: {
-    width: 170,
-    formatter: (_r, _c, value) => {
-      const wrap = document.createElement("span");
-      if (!value) return wrap;
-      wrap.className = "m2-history-when";
-      const rel = document.createElement("span");
-      rel.textContent = formatRelative(String(value), Date.now());
-      const abs = document.createElement("span");
-      abs.className = "m2-cell-dir";
-      abs.textContent = formatStamp(String(value));
-      wrap.append(rel, abs);
-      return wrap;
-    },
-  },
-  rows: {
-    width: 100,
-    formatter: (_r, _c, value) => formatCount(value as number | null),
-  },
-  added: {
-    width: 90,
-    formatter: (_r, _c, value) => formatDelta(value as number | null, "+"),
-  },
-  deleted: {
-    width: 90,
-    formatter: (_r, _c, value) => formatDelta(value as number | null, "−"),
-  },
-  modified: {
-    width: 96,
-    formatter: (_r, _c, value) => formatDelta(value as number | null, "~"),
-  },
-  run: {
-    width: 120,
-    formatter: (_r, _c, _v, _col, row) => {
-      const wrap = document.createElement("span");
-      if (!row?.run) return wrap;
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "m2-history-run";
-      btn.textContent = row.run.slice(0, 8);
-      btn.title = `Show the log of run ${row.run}`;
-      btn.addEventListener("click", () => void openRunLog(row));
-      wrap.appendChild(btn);
-      return wrap;
-    },
-  },
-  hash: {
-    width: 130,
-    formatter: (_r, _c, value, _col, row) => {
-      const wrap = document.createElement("span");
-      if (row?.level !== "commit" || !value) return { html: wrap, toolTip: "" };
-      const hash = String(value);
-      wrap.className = "m2-history-hash";
-      wrap.textContent = hash.slice(0, 10);
-      wrap.appendChild(copyIdButton(hash, "Copy the commit hash"));
-      return { html: wrap, toolTip: hash };
-    },
-  },
-};
-
-/// The 🆔 button the chat views put beside every uuid, for a commit
-/// hash: the full 40 characters, where the cell shows ten.
-function copyIdButton(id: string, label: string): HTMLButtonElement {
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.className = "m2-copy-id";
-  btn.title = `${label} (${id})`;
-  btn.setAttribute("aria-label", label);
-  btn.textContent = "🆔";
-  btn.addEventListener("click", async (ev) => {
-    ev.preventDefault();
-    ev.stopPropagation();
-    if (await copyToClipboard(id)) {
-      btn.textContent = "✓";
-      btn.classList.add("copied");
-    } else {
-      btn.classList.add("copy-failed");
-    }
-    setTimeout(() => {
-      btn.textContent = "🆔";
-      btn.classList.remove("copied", "copy-failed");
-    }, 900);
-  });
-  return btn;
-}
-
-const COUNT_FMT = new Intl.NumberFormat();
-function formatCount(n: number | null | undefined): string {
-  return typeof n === "number" ? COUNT_FMT.format(n) : "";
-}
-/// A zero reads as nothing rather than as "0": a column of zeros with
-/// the odd number in it is easier to scan than a column of numbers.
-function formatDelta(n: number | null | undefined, sign: string): string {
-  return n ? `${sign}${COUNT_FMT.format(n)}` : "";
 }
 
 // ── Which groups are open. Remembered per browser, so a reload — or
@@ -869,13 +720,6 @@ function onRowGroupOpened(row: Row, expanded: boolean) {
     // Storage refused — private mode, quota — and the chevron still
     // works; only the memory across reloads is lost.
   }
-}
-
-/// Escape closes the commit history, which is what a modal owes its
-/// reader.
-function onWindowKeydown(e: KeyboardEvent) {
-  if (e.key !== "Escape") return;
-  if (historyFor.value.length) historyFor.value = [];
 }
 
 function reparse() {
@@ -989,8 +833,8 @@ async function openEdit(groupId: string) {
   const steps = sourceStepsOf(group.id, sources.value);
   const entry = groupEntry(group, steps);
   if (!entry) return;
-  const qmdIndexed = steps.render ? fanInNames(sources.value, "qmd_index", steps.render.id) : true;
-  editing.value = { group, entry, steps, qmdIndexed };
+  const qmdIndexing = steps.render ? qmdIndexingOf(sources.value, group.id) : "keyword_and_embed";
+  editing.value = { group, entry, steps, qmdIndexing };
   wizardKey.value++;
   wizardOpen.value = true;
 }
@@ -1003,7 +847,7 @@ async function onWizardSubmit(payload: {
   groupBody: string | null;
   stepsBody: string;
   renderId: string | null;
-  qmdIndex: boolean;
+  qmdIndexing: QmdIndexing;
 }) {
   const current = editing.value;
   let next: string;
@@ -1025,7 +869,7 @@ async function onWizardSubmit(payload: {
       next = unwireFromFanIns(next, current.steps.render.id);
     }
   } else {
-    next = appendSource(
+    next = insertEntries(
       configText.value,
       payload.groupBody ? `${payload.groupBody}\n\n${payload.stepsBody}` : payload.stepsBody,
     );
@@ -1033,11 +877,13 @@ async function onWizardSubmit(payload: {
 
   // The fan-ins name their inputs, so a render step added without this
   // renders happily and is never indexed. Idempotent, so re-saving an
-  // edit doesn't duplicate the entry. Semantic search is the one fan-in
-  // the wizard asks about, so it is the one that can be taken back out.
+  // edit doesn't duplicate the entry. Free-text search is the one index
+  // the wizard asks about: the source's own qmd steps, added or taken out.
   if (payload.renderId) {
     next = wireIntoFanIns(next, payload.renderId);
-    if (!payload.qmdIndex) next = unwireFromFanIns(next, payload.renderId, "qmd_index");
+    next = setQmdSteps(next, payload.id, payload.qmdIndexing);
+  } else {
+    next = setQmdSteps(next, payload.id, "none");
   }
 
   // Banners are for a person, so they say the name; the id is what the
@@ -1046,30 +892,6 @@ async function onWizardSubmit(payload: {
   const ok = await writeConfig(next, current ? `Saved ${shown}.` : `Added ${shown}.`);
   if (!ok) return;
   closeWizard();
-}
-
-// ── "Compare two syncs…": a diff group written from a source and two
-// commits of its raw store (docs/dev/plans/completed/diff_renderer.md), wired into
-// the fan-ins like any render step, then its render step synced. Not the
-// source: both commits are already in the store, so a download adds
-// nothing to the diff.
-const compareFor = ref<{ id: string; name: string } | null>(null);
-
-async function onCompareSubmit(payload: {
-  id: string;
-  name: string;
-  source: string;
-  from: string;
-  to: string;
-  maxDocuments: number;
-}) {
-  const built = buildDiffSource(payload);
-  let next = appendSource(configText.value, `${built.groupBody}\n\n${built.stepsBody}`);
-  next = wireIntoFanIns(next, built.renderId);
-  const ok = await writeConfig(next, `Added ${payload.name}.`);
-  if (!ok) return;
-  compareFor.value = null;
-  await queueSync([built.renderId], payload.name);
 }
 
 // ── Removing. A comparison's tree is computed from two commits its
@@ -1135,7 +957,11 @@ async function deleteSource(id: string) {
   // exists, which the loader refuses outright — a whole config broken
   // by a partial delete.
   const sibling = step.phase === "ingest" ? renderSiblingOf(step.id) : undefined;
-  const doomed = sibling ? [step, sibling] : [step];
+  const readers = removedWith([step.id], sources.value).filter((r) => r.id !== sibling?.id);
+  const doomed = [step, ...(sibling ? [sibling] : []), ...readers];
+  const alsoGone = readers.length
+    ? `\n\nThese go with it: ${readers.map((r) => `"${r.name}"`).join(", ")}.`
+    : "";
 
   // A group with nothing left under it goes too: the loader would only
   // warn about it, but a `[[groups]]` entry naming a source that is
@@ -1154,13 +980,14 @@ async function deleteSource(id: string) {
         `serve will stop working until you add it back.`
       : step.phase === "index"
         ? `Remove the "${name}" index step from the config?\n\n` +
-          `Its output stays on disk but stops being refreshed, so search results go stale.`
+          `Its output stays on disk but stops being refreshed, so search results go stale.` +
+          alsoGone
         : sibling
           ? `Remove "${name}" and the render step that reads it ("${sibling.name}")?\n\n` +
             `Both have to go together: a render step whose input is gone is a config ` +
-            `datalib refuses to load.\n\n` +
+            `datalib refuses to load.${alsoGone}\n\n` +
             `The data stays on disk. Re-adding later resumes from what's already there.`
-          : `Remove "${name}" from the config?\n\n` +
+          : `Remove "${name}" from the config?${alsoGone}\n\n` +
             `Its data stays on disk — only this step stops running. Re-adding it later ` +
             `resumes from what's already there.`;
   const purge = await confirmRemoval(what, emptied);
@@ -1170,9 +997,7 @@ async function deleteSource(id: string) {
   // unwiring a fan-in above the source would shift them. Unwiring is a
   // regex over the result, so it needs no offsets.
   let next = removeSteps(configText.value, [...doomed, ...emptied]);
-  for (const d of doomed) {
-    if (d.phase === "render") next = unwireFromFanIns(next, d.id);
-  }
+  for (const d of doomed) next = unwireFromFanIns(next, d.id);
   await removeAndPurge(next, `Removed ${name}.`, purge);
 }
 
@@ -1183,7 +1008,14 @@ async function deleteGroup(id: string) {
   const group = configGroups.value.find((g) => g.id === id);
   if (!group) return;
   const name = group.name ?? group.id;
-  const members = sources.value.filter((s) => s.group === id);
+  const inGroup = sources.value.filter((s) => s.group === id);
+  const members = [
+    ...inGroup,
+    ...removedWith(
+      inGroup.map((m) => m.id),
+      sources.value,
+    ),
+  ];
   const steps = members.filter((s) => s.kind === "step").length;
   const applets = members.filter((s) => s.kind === "applet").length;
   const count = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -1200,9 +1032,7 @@ async function deleteGroup(id: string) {
   if (!purge) return;
 
   let next = removeSteps(configText.value, [...members, group]);
-  for (const m of members) {
-    if (m.phase === "render") next = unwireFromFanIns(next, m.id);
-  }
+  for (const m of members) next = unwireFromFanIns(next, m.id);
   await removeAndPurge(next, `Removed ${name}.`, purge);
 }
 
@@ -1232,6 +1062,7 @@ async function deleteRows(targets: Row[]) {
       if (sibling) doomed.set(sibling.id, sibling);
     }
   }
+  for (const r of removedWith([...doomed.keys()], sources.value)) doomed.set(r.id, r);
   // A group with nothing left under it goes too, as in `deleteSource`.
   for (const g of configGroups.value) {
     if (groups.has(g.id)) continue;
@@ -1252,21 +1083,33 @@ async function deleteRows(targets: Row[]) {
   if (!purge) return;
   let next = removeSteps(configText.value, entries);
   for (const d of entries) {
-    if ("phase" in d && d.phase === "render") next = unwireFromFanIns(next, d.id);
+    if ("phase" in d) next = unwireFromFanIns(next, d.id);
   }
   await removeAndPurge(next, `Removed ${targets.length} entries.`, purge);
 }
 
 /// Leave the Manage screen for this row's data: one card, the grid,
-/// already filtered to the source and carrying its type's columns.
+/// already filtered to the source and carrying its type's columns — or,
+/// for a download step in the app, its raw store in another program.
 ///
 /// A card stack IS the URL (see router/columns.ts), so this is an
 /// ordinary navigation — the card is bookmarkable, shareable, and the
 /// back button returns here.
 function openBrowse(row: Row) {
+  if (row.rawStore) {
+    void browseRawStore(row.rawStore);
+    return;
+  }
   if (!row.browseSource) return;
   // Beside this card, in whatever layout is showing it.
   props.ctx.host.openCards(row.browseSource);
+}
+
+async function browseRawStore(path: string) {
+  const res = await openRawStore(path);
+  banner.value = res.ok
+    ? { ok: true, text: `Opened ${path} read-only in ${res.openedIn}.` }
+    : { ok: false, text: `Could not open ${path}: ${res.reason}` };
 }
 
 async function reveal(key: string) {
@@ -1291,7 +1134,8 @@ function runRow(row: Row) {
   return runRows([row]);
 }
 
-/// Several rows as one request, so their downstream steps run once.
+/// Several rows at once, so their downstream steps run once. The server
+/// opens one request per source among them, each with its own Stop.
 async function runRows(targets: Row[]) {
   const seeds = [...new Set(targets.flatMap((r) => r.seeds))];
   if (seeds.length === 0) return;
@@ -1308,8 +1152,12 @@ async function queueSync(seeds: string[], shown: string) {
   busy.value = true;
   clearBanner();
   try {
-    const request = await openRequest(seeds);
-    say(true, `Queued a sync for ${shown}.`, request.id);
+    const requests = await openRequest(seeds);
+    say(
+      true,
+      `Queued a sync for ${shown}.`,
+      requests.map((r) => r.id),
+    );
     // The loop's record moving refetches too; this is for a page whose
     // stream is down.
     await loadRows();
@@ -1322,9 +1170,9 @@ async function queueSync(seeds: string[], shown: string) {
 
 /// The steps a reset of these rows empties: a step is itself; a group is
 /// its download, what it renders following — or, for a comparison, which
-/// downloads nothing, its render. With `blobs`, a download's blob store
-/// goes with it (`docs/dev/step_protocol.md` § Reset).
-function resetTargets(targets: Row[], blobs: boolean): string[] {
+/// downloads nothing, its render. A download's blob store keeps its
+/// bytes (`docs/dev/step_protocol.md` § Reset).
+function resetTargets(targets: Row[]): string[] {
   const steps = targets.flatMap((t) => {
     if (t.kind !== "group") return [t];
     const under = stepsUnder(t);
@@ -1333,7 +1181,7 @@ function resetTargets(targets: Row[], blobs: boolean): string[] {
   });
   const ids = steps
     .filter((r) => r.function === "ingest" || r.function === "render_markdown")
-    .map((r) => (blobs && r.function === "ingest" ? `${r.id}+blobs` : r.id));
+    .map((r) => r.id);
   return [...new Set(ids)];
 }
 
@@ -1342,24 +1190,20 @@ function resetTargets(targets: Row[], blobs: boolean): string[] {
 /// it catches up, so its documents leave the grid
 /// (`docs/dev/plans/supervisor.md` §2.10). The server runs it once no sync
 /// is running, and refuses it while one is.
-async function resetRows(targets: Row[], blobs: boolean) {
-  const ids = resetTargets(targets, blobs);
+async function resetRows(targets: Row[]) {
+  const ids = resetTargets(targets);
   const shown = targets.map((t) => t.name.label).join(", ");
   if (ids.length === 0) {
     say(false, `Nothing under ${shown} keeps anything to reset.`);
     return;
   }
-  const download = ids.some(
-    (id) => rows.value.find((r) => r.id === id.split("+")[0])?.function === "ingest",
-  );
+  const download = ids.some((id) => rows.value.find((r) => r.id === id)?.function === "ingest");
   const what =
-    `Reset ${shown}${blobs ? ", attachments included" : ""}?\n\n` +
+    `Reset ${shown}?\n\n` +
     `Every row goes, and the history keeps them. ` +
     (download
       ? `Its documents leave the grid, and the next Sync downloads it all again from nothing. ` +
-        (blobs
-          ? `Attachments already downloaded are deleted and fetched again.`
-          : `Attachments already downloaded are kept.`)
+        `Attachments already downloaded are kept.`
       : `Its documents are rendered again from what it has downloaded, now.`);
   if (!(await confirmAction(what))) return;
   busy.value = true;
@@ -1376,13 +1220,18 @@ async function resetRows(targets: Row[], blobs: boolean) {
   }
 }
 
-/// Sync everything the config declares, in one run.
+/// Sync everything the config declares: one request per source, in one
+/// run.
 async function runEverything() {
   busy.value = true;
   clearBanner();
   try {
-    const request = await openRequest([]);
-    say(true, "Queued a sync of everything.", request.id);
+    const requests = await openRequest([]);
+    say(
+      true,
+      "Queued a sync of everything.",
+      requests.map((r) => r.id),
+    );
     await loadRows();
   } catch (e) {
     banner.value = { ok: false, text: (e as Error).message };
@@ -1391,14 +1240,20 @@ async function runEverything() {
   }
 }
 
-/// Stop a request. Its steps checkpoint and exit; the rows say Stopping
+/// Stop requests. Their steps checkpoint and exit; the rows say Stopping
 /// until they have.
-async function stopSync(requestId: string) {
+async function stopSyncs(requestIds: string[]) {
+  if (requestIds.length === 0) return;
   busy.value = true;
   clearBanner();
   try {
-    await stopRequest(requestId);
-    say(true, "Stopping the sync. Steps in flight checkpoint what they have and exit.", requestId);
+    for (const id of requestIds) await stopRequest(id);
+    say(
+      true,
+      `Stopping ${requestIds.length === 1 ? "the sync" : `${requestIds.length} syncs`}. ` +
+        "Steps in flight checkpoint what they have and exit.",
+      requestIds,
+    );
     await loadRows();
   } catch (e) {
     banner.value = { ok: false, text: (e as Error).message };
@@ -1442,7 +1297,6 @@ onMounted(async () => {
   // while a run is in flight, so on an idle root — the usual state —
   // this is the walk that produces the numbers on screen.
   await reloadAll(true);
-  window.addEventListener("keydown", onWindowKeydown);
 
   unsubscribe = subscribeLive(
     {
@@ -1456,10 +1310,7 @@ onMounted(async () => {
         // The loop's record moving is the nearest thing to "a step
         // committed" — nothing watches the stores themselves — and its
         // requests live beside it.
-        if (changed(e, "dag")) {
-          refreshHistory();
-          void retireBanner();
-        }
+        if (changed(e, "dag")) void retireBanner();
         if (e.kind === "config_changed") {
           // Config and record together, for the "Never run" reason above.
           void reloadAll();
@@ -1467,18 +1318,13 @@ onMounted(async () => {
       },
       // A reconnect means we may have slept through a whole run, and the
       // sampler's own last walk with it. Ask for a fresh one.
-      // An open commit history may have slept through commits too.
-      resync: () => {
-        void reloadAll(true);
-        refreshHistory();
-      },
+      resync: () => void reloadAll(true),
     },
     { onScreen: cardEl.value ?? undefined },
   );
 });
 
 onUnmounted(() => {
-  window.removeEventListener("keydown", onWindowKeydown);
   unsubscribe?.();
   unsubscribe = null;
   gridApi = null;
@@ -1503,15 +1349,15 @@ onUnmounted(() => {
       <div class="m2-head-actions">
         <button
           class="m2-btn m2-runall"
-          :disabled="busy || !!parseError || !!configError || rows.length === 0"
-          :title="
-            rows.length === 0
-              ? 'Nothing configured yet.'
-              : 'Run every step the config declares, in one sync.'
-          "
-          @click="runEverything"
+          :class="{ danger: syncAll.glyph === 'stop' }"
+          :disabled="busy || !!parseError || !!configError || !!syncAll.blocked"
+          :title="syncAll.blocked ?? syncAll.label"
+          :aria-label="syncAll.label"
+          @click="syncAll.stops.length > 0 ? stopSyncs(syncAll.stops) : runEverything()"
         >
-          Sync everything
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <path fill="currentColor" :d="ACTION_ICONS[syncAll.glyph]" />
+          </svg>
         </button>
         <button class="m2-add" :disabled="busy || !!parseError || !!configError" @click="openAdd">
           + Data Source
@@ -1535,7 +1381,7 @@ onUnmounted(() => {
     <!-- Entries the loader dropped. Not a whole-config error: the rest
          of the pipeline is running, which is why this is a note above a
          working table rather than a screen in front of it. The per-row
-         Status column carries each reason; this says how many and where
+         Last update column carries each reason; this says how many and where
          to look, because a dropped row is easy to scroll past. -->
     <div v-else-if="droppedRows.length" class="m2-msg bad m2-invalid">
       <b>
@@ -1544,7 +1390,7 @@ onUnmounted(() => {
       </b>
       <span class="m2-invalid-why">
         The rest of this config loaded and still syncs. These are in the file and were not loaded —
-        each one’s Status cell says why. Open the config to fix them, or run
+        each one’s Last update cell says why. Open the config to fix them, or run
         <code>datalib-dag --check {{ configPath }}</code
         >.
       </span>
@@ -1572,6 +1418,7 @@ onUnmounted(() => {
         :menu="contextMenuItems"
         :selectable="true"
         :openByDefault="isGroupOpenByDefault"
+        :pinnedColumns="1"
         @ready="onGridReady"
         @cellDoubleClick="onCellDoubleClicked"
         @edit="onCellEdit"
@@ -1594,53 +1441,6 @@ onUnmounted(() => {
          styles live in the head, and a modal belongs over the whole
          page anyway. -->
     <Teleport to="body">
-      <div v-if="historyFor.length" class="m2-logs-backdrop" @click.self="historyFor = []">
-        <div class="m2-logs m2-history" role="dialog" aria-modal="true" aria-label="Commit history">
-          <header class="m2-logs-head">
-            <div>
-              <h3>{{ historyTitle }} — commit history</h3>
-              <p>
-                Each commit in {{ historyStoreNote }}, newest first; open one for what it did to
-                each table.
-                <span v-if="historyTruncated.length">
-                  Only the newest commits are shown for
-                  <code>{{ historyTruncated.join(", ") }}</code
-                  >.
-                </span>
-                <!-- A failed refresh leaves the log already read in place,
-                     and whatever was opened in it. -->
-                <span v-if="historyError && historyLines.length" class="bad">
-                  The last refresh failed ({{ historyError }}); this is the log as last read.
-                </span>
-              </p>
-            </div>
-            <button class="m2-btn" @click="historyFor = []">Close</button>
-          </header>
-
-          <p v-if="historyBusy && historyLines.length === 0" class="m2-logs-note">
-            Reading the commit log…
-          </p>
-          <p v-else-if="historyError && historyLines.length === 0" class="m2-logs-note bad">
-            {{ historyError }}
-          </p>
-          <p v-else-if="historyLines.length === 0" class="m2-logs-note">
-            No doltlite store under <code>{{ historyStoreNote }}</code> yet. A step that has never
-            run has written nothing, and the QMD index keeps no store of its own.
-          </p>
-          <div v-else class="m2-history-grid">
-            <!-- The stores' commit log as a tree: stores open, commits
-               closed until asked. -->
-            <TableGrid
-              :columns="historyColumns"
-              :rows="historyLines"
-              :tree="true"
-              :openByDefault="(r: HistoryRow) => r.level === 'store'"
-              :columnOverrides="historyOverrides"
-            />
-          </div>
-        </div>
-      </div>
-
       <SourceWizard
         v-if="wizardOpen"
         :key="wizardKey"
@@ -1656,14 +1456,6 @@ onUnmounted(() => {
         :check-label="asking.checkLabel"
         confirm-label="Remove"
         @answer="asking.resolve"
-      />
-      <CompareDialog
-        v-if="compareFor"
-        :key="compareFor.id"
-        :source="compareFor"
-        :taken-ids="takenIds"
-        @close="compareFor = null"
-        @submit="onCompareSubmit"
       />
     </Teleport>
   </section>

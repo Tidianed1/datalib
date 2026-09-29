@@ -8,11 +8,55 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use datalib_columns::{source_catalog, ColumnSpec, ColumnType, Identity};
+use datalib_columns::{
+    source_catalog, ColumnSearch, ColumnSpec, ColumnType, DocumentLink, FreeTextMatch, Identity,
+    RowsSpec,
+};
+use datalib_query::table::{FreeText, SearchTable};
+use datalib_schema::grid_rows::{GridRow, GridRowColumn};
 use datalib_unified_index::db::datalib_source_id;
+use datalib_unified_index::grid_columns::GridColumn;
 use datalib_unified_index::search::SearchRow;
+use datalib_unified_index::view::{self, View};
 
 pub fn columns() -> Vec<ColumnSpec> {
+    searchable::<GridColumn>(declared())
+}
+
+/// A search row opens its document at itself; a row with no document
+/// named opens as one.
+pub fn rows_spec() -> RowsSpec {
+    use GridRowColumn as G;
+    RowsSpec {
+        row_key: G::Uuid.as_str(),
+        document: DocumentLink {
+            fields: &["markdown_uuid", "uuid"],
+            anchor: "uuid",
+        },
+        free_text: free_text_of::<GridRow>(),
+    }
+}
+
+pub fn free_text_of<T: SearchTable>() -> FreeTextMatch {
+    match T::FREE_TEXT {
+        FreeText::Qmd => FreeTextMatch::Qmd,
+        FreeText::Like(_) => FreeTextMatch::Like,
+    }
+}
+
+/// The search bar is a grid's one filter: each column says which of its
+/// keys filters its cells.
+pub fn searchable<V: View>(mut columns: Vec<ColumnSpec>) -> Vec<ColumnSpec> {
+    for c in &mut columns {
+        c.search = view::for_column::<V>(&c.field).map(|(key, field)| ColumnSearch {
+            key: key.into(),
+            field: field.into(),
+        });
+    }
+    columns
+}
+
+fn declared() -> Vec<ColumnSpec> {
     vec![
         ColumnSpec::new("score", "Score", ColumnType::Number).describe(
             "How well the row matched a free-text search. Not comparable across searches.",
@@ -32,10 +76,17 @@ pub fn columns() -> Vec<ColumnSpec> {
             )
             .hidden(),
         ColumnSpec::new("channel", "Channel", ColumnType::Text),
-        ColumnSpec::new("created_at", "Created", ColumnType::Datetime).describe(
-            "When the thing came into being, as the source wrote it: a message's own \
-             stamp; for a document, the earliest moment in it.",
+        ColumnSpec::new("touched_at", "Touched", ColumnType::Datetime).describe(
+            "When it last changed at its source: Modified where the row has one, else \
+             Created. The grid's newest-first order sorts on it.",
         ),
+        ColumnSpec::new("created_at", "Created", ColumnType::Datetime)
+            .describe(
+                "When the thing came into being, as the source wrote it: a message's own \
+                 stamp; for a document, the earliest moment in it; for a calendar event, \
+                 when it happens.",
+            )
+            .hidden(),
         // Off by default in the unified grid, where most rows are
         // messages with nothing here; a Browse of one source names it,
         // and there — one row per thread — it is the column that says
@@ -179,6 +230,25 @@ impl Sources {
 mod tests {
     use super::*;
 
+    /// The search bar is the grid's one filter: every column a person
+    /// might narrow by names its key, and a row field the grid can read
+    /// the term's value from.
+    #[test]
+    fn every_column_but_score_and_contents_says_how_to_search_it() {
+        let row = serde_json::to_value(SearchRow::default()).unwrap();
+        for c in columns() {
+            match (&c.search, c.field.as_str()) {
+                (None, "score" | "snippet") => {}
+                (None, field) => panic!("{field} has no search key"),
+                (Some(s), field) => assert!(
+                    row.get(&s.field).is_some(),
+                    "{field} searches by {}, which a row does not carry",
+                    s.field
+                ),
+            }
+        }
+    }
+
     fn row(provider: &str, source: &str, source_id: &str) -> SearchRow {
         SearchRow {
             provider: provider.into(),
@@ -205,6 +275,7 @@ mod tests {
             sender: "who".into(),
             created_at: Some("2026-06-02T13:00:00-07:00".into()),
             modified_at: Some("2026-06-03T09:30:00-07:00".into()),
+            touched_at: Some("2026-06-03T09:30:00-07:00".into()),
             is_document: true,
             conversation_name: "n".into(),
             project: "p".into(),

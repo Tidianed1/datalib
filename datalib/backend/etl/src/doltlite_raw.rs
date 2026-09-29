@@ -579,7 +579,7 @@ pub enum OnSchemaBreak {
 }
 
 /// [`open`] without the shared download-bookkeeping tables. A *derived*
-/// store — render output, an index, a blob CAS — would otherwise get
+/// store — render output, an index — would otherwise get
 /// `sync_runs` and the scope tables as three empty tables suggesting a
 /// provenance it lacks. `kind` is what its `_datalib_meta` names it.
 /// Always [`OnSchemaBreak::Rebuild`]: every row is a function of some
@@ -698,17 +698,6 @@ pub async fn open_reader(db_path: &Path, commit: Option<&str>) -> Result<Option<
         .await
         .with_context(|| format!("pin {} for reading", db_path.display()))?;
     Ok(Some(Reader { pool, pin }))
-}
-
-/// A read-only connection with no pin, for the blob CAS alone.
-///
-/// Not because the CAS cannot be pinned — it is committed like every
-/// other store, blobs before the entities that name them
-/// (`raw_store::SealState::seal`) — but because nothing has moved it
-/// over yet. `blob_cas::open_cas_reader` has the note. Everything else
-/// reads through [`open_reader`].
-pub(crate) async fn open_reader_unpinned(db_path: &Path) -> Result<SqlitePool> {
-    connect_pool(db_path, Access::ReadOnly, false).await
 }
 
 /// A store somebody else writes, read at one commit. Derefs to its pool,
@@ -1407,18 +1396,27 @@ async fn forget_cursors(pool: &SqlitePool, created: &[String], recreated: &[Stri
     Ok(())
 }
 
-/// Seal a crashed prior run's orphaned working-tree changes into their own
-/// commit, so the next successful commit doesn't fold two runs' work into one
-/// `dolt_log` entry — and so a dirty tree at open gets logged.
+/// Put the working set back at the last commit, dropping whatever a writer
+/// that died left there.
 ///
-/// Errors are swallowed: a stock-libsqlite3 build (CI, no doltlite
-/// extensions) has no `dolt_status` at all.
 /// `dolt_reset --hard`, plus the part it leaves behind: like `git reset
 /// --hard`, it restores tracked tables and ignores an untracked one, and a
 /// writer that died after `CREATE TABLE` and before its first commit leaves
 /// exactly that. `dolt_clean` takes those, the way `git clean` does. Every
 /// commit here is `-Am`, so anything still dirty after this rides into the
 /// schema commit a few lines later — which is why both halves run.
+///
+/// A writer killed during the store's first open leaves only the commit
+/// doltlite makes with the file, "Initialize data repository", and
+/// doltlite's `dolt_reset --hard` refuses that one ("no commit to reset
+/// to"). Every table is untracked there, so `dolt_clean` alone empties the
+/// store.
+///
+/// Except `sqlite_sequence`, SQLite's counter for `AUTOINCREMENT`, made
+/// with the first such table: `dolt_clean` takes the table and cannot take
+/// the counter, which SQLite refuses to drop. It is emptied instead, and
+/// rides into the schema commit as it does on any first open. (After a real
+/// seal, `dolt_reset --hard` restores it with everything else.)
 async fn discard_dirty_working_tree(pool: &SqlitePool, db_path: &Path) -> Result<()> {
     // `dolt_status` is a vtab; stock SQLite errors with "no such table".
     let dirty: std::result::Result<i64, sqlx::Error> =
@@ -1439,20 +1437,54 @@ async fn discard_dirty_working_tree(pool: &SqlitePool, db_path: &Path) -> Result
         "discard_dirty_working_tree: a prior writer left {count} dirty entries; \
          starting from the last commit"
     );
-    sqlx::query("SELECT dolt_reset('--hard')")
-        .execute(pool)
+    let commits: i64 = sqlx::query_scalar("SELECT count(*) FROM dolt_log()")
+        .fetch_one(pool)
         .await
-        .context("dolt_reset --hard")?;
+        .context("count the commits to go back to")?;
+    let sealed_before = commits > 1;
+    if sealed_before {
+        sqlx::query("SELECT dolt_reset('--hard')")
+            .execute(pool)
+            .await
+            .context("dolt_reset --hard")?;
+    }
     sqlx::query("SELECT dolt_clean()")
         .execute(pool)
         .await
         .context("dolt_clean")?;
-    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM dolt_status")
-        .fetch_one(pool)
+    let status = || async {
+        sqlx::query_as::<_, (String, i64, String)>(
+            "SELECT table_name, staged, status FROM dolt_status",
+        )
+        .fetch_all(pool)
         .await
-        .context("re-probe dolt_status")?;
-    if left != 0 {
-        bail!("{left} entries still dirty after dolt_reset --hard and dolt_clean");
+        .context("re-probe dolt_status")
+    };
+    let mut left = status().await?;
+    let stray_counter = |(table, _, state): &(String, i64, String)| {
+        table == "sqlite_sequence" && state == "new table"
+    };
+    if left.iter().any(stray_counter) {
+        sqlx::query("DELETE FROM sqlite_sequence")
+            .execute(pool)
+            .await
+            .context("empty the sqlite_sequence dolt_clean cannot drop")?;
+        left = status().await?;
+        left.retain(|entry| !stray_counter(entry));
+    }
+    if !left.is_empty() {
+        let named: Vec<String> = left
+            .iter()
+            .map(|(table, staged, status)| {
+                let staged = if *staged != 0 { " (staged)" } else { "" };
+                format!("{table}: {status}{staged}")
+            })
+            .collect();
+        bail!(
+            "{} entries still dirty after dolt_reset --hard and dolt_clean: {}",
+            left.len(),
+            named.join(", ")
+        );
     }
     Ok(())
 }
@@ -1632,7 +1664,7 @@ pub async fn content_tables_changed(
 /// downloaded it yet.
 ///
 /// Deliberately not via [`open`], which is the write path: it would create
-/// bookkeeping tables inside a blob CAS and advance HEAD — a version read
+/// bookkeeping tables inside a derived store and advance HEAD — a version read
 /// that changes the version it reads.
 pub async fn head_commit_at_path(db_path: &Path) -> Result<Option<String>> {
     if !db_path.exists() {
@@ -1834,10 +1866,13 @@ async fn record_object_bookkeeping(
 /// config said not to.
 ///
 /// The bookkeeping is a failed attempt's, deliberately: `last_error`
-/// carries what the rule measured, and it is what puts the record in
-/// [`failed_ids`], so raising the limit picks the file up on the next
-/// run. Only the `problems` row differs — nothing went wrong here, and
-/// a person reading the Manage screen should not be told it did.
+/// carries what the rule measured, and keeps the record among the
+/// unfetched ones ([`failed_ids`]). That alone fetches nothing: only a
+/// provider that tries those records again — Slack's attachment retry —
+/// picks the file up once the limit allows it. Only the `problems` row
+/// differs: a warning with the rule's own reason, because nothing
+/// failed, but the mirror is still missing a file a person may want to
+/// know about.
 pub async fn record_object_skipped(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     table: &str,
@@ -1877,8 +1912,8 @@ impl NotFetched<'_> {
 /// successful one. A failure on a record that has never fetched is a
 /// dropped record — an error; one on a record that fetched before
 /// leaves the earlier copy in place, and is a warning: what the reader
-/// sees is stale, not missing. A skip is neither: nothing was lost that
-/// was not meant to be, so it is `Ok` and `Info` whatever came before.
+/// sees is stale, not missing. A skip is `Ok` and a `Warning` whatever
+/// came before: nothing failed, but the file is not in the mirror.
 async fn record_fetch_problem(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     table: &str,
@@ -1926,7 +1961,7 @@ async fn record_fetch_problem(
         .with_context(|| format!("probe {entity_id} for an earlier fetch"))?
         .unwrap_or(false);
     let (outcome, severity, reason) = match not_fetched {
-        NotFetched::Skipped { reason, .. } => (Outcome::Ok, Severity::Info, reason),
+        NotFetched::Skipped { reason, .. } => (Outcome::Ok, Severity::Warning, reason),
         NotFetched::Failed(_) if fetched_before => {
             (Outcome::Ok, Severity::Warning, Reason::FetchFailed)
         }
@@ -2669,15 +2704,15 @@ mod tests {
     #[tokio::test]
     async fn head_commit_at_path_does_not_touch_the_store() {
         let td = tempfile::tempdir().unwrap();
-        let path = td.path().join("blobs.doltlite_db");
+        let path = td.path().join("derived.doltlite_db");
 
-        // As `BlobCas::open` builds it: cas_objects only.
+        // One table and no bookkeeping, as a derived store has.
         let pool = plain_pool(&path).await;
         sqlx::query(crate::blob_cas::CAS_OBJECTS_DDL)
             .execute(&pool)
             .await
             .unwrap();
-        commit_run(&pool, "cas init").await.unwrap();
+        commit_run(&pool, "init").await.unwrap();
         let before = head_commit(&pool).await.unwrap();
         pool.close().await;
         assert!(before.is_some(), "fixture must have a HEAD to compare");
@@ -2837,10 +2872,9 @@ mod tests {
     }
 
     /// A record the config told us not to fetch is not a failure. It
-    /// reads `info` / `ok` with the rule's own reason, where a failure
+    /// reads `warning` / `ok` with the rule's own reason, where a failure
     /// on a never-fetched record reads `error` / `dropped` — and it
-    /// stays in `failed_ids`, which is what picks the file up if the
-    /// limit is raised.
+    /// stays in `failed_ids`, where a provider's retry finds it.
     #[tokio::test]
     async fn a_skip_the_config_asked_for_is_not_a_failed_fetch() {
         use datalib_problems::{Reason, Severity};
@@ -2867,15 +2901,15 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(row.get::<String, _>(0), Severity::Info.as_str());
-        assert_eq!(row.get::<String, _>(1), "ok", "nothing was lost");
+        assert_eq!(row.get::<String, _>(0), Severity::Warning.as_str());
+        assert_eq!(row.get::<String, _>(1), "ok", "nothing failed");
         assert_eq!(row.get::<String, _>(2), Reason::OverSizeLimit.as_str());
         assert_eq!(row.get::<String, _>(3), "size 25107330 > limit 5000000");
 
         assert_eq!(
             failed_ids(&pool, "widgets").await.unwrap(),
             vec!["w1".to_string()],
-            "a skip stays eligible, so raising the limit picks it up"
+            "a skip stays among the unfetched records"
         );
 
         // And a real failure on the same table still reads as one.
@@ -4165,6 +4199,60 @@ mod tests {
             "and nothing is left for the schema commit to sweep"
         );
         b.close().await;
+    }
+
+    /// A writer killed before a store's first seal left a working set with
+    /// only doltlite's initialization commit under it, and
+    /// `dolt_reset --hard` refuses that one; an `AUTOINCREMENT` table also
+    /// leaves `sqlite_sequence`, which `dolt_clean` cannot drop. Either
+    /// failed every later open the same way, so the source could never
+    /// sync again (`tng_fuzz_test`, docs/dev/plans/http_driven_e2e.md).
+    #[tokio::test]
+    async fn a_store_killed_before_its_first_seal_opens_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("killed_early.doltlite_db");
+        let ddl = "CREATE TABLE IF NOT EXISTS runs \
+                   (id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT)";
+        // The first open, up to the moment of the kill: on the writer's
+        // branch, the table made, a row written, nothing committed.
+        let dead = connect_pool(&path, Access::ReadWrite, true).await.unwrap();
+        if !has_dolt_extensions(&dead).await {
+            return;
+        }
+        sqlx::query(ddl).execute(&dead).await.unwrap();
+        sqlx::query("INSERT INTO runs (v) VALUES ('never sealed')")
+            .execute(&dead)
+            .await
+            .unwrap();
+        dead.close().await;
+
+        let b = open(&path, &[ddl])
+            .await
+            .expect("a store that never sealed opens again");
+        assert_clean_and_empty(&b, "runs").await;
+        let next: i64 = sqlx::query_scalar("INSERT INTO runs (v) VALUES ('x') RETURNING id")
+            .fetch_one(&b)
+            .await
+            .unwrap();
+        assert_eq!(next, 1, "the counter starts over with the rows");
+        b.close().await;
+    }
+
+    async fn assert_clean_and_empty(pool: &SqlitePool, table: &str) {
+        let rows: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            // A literal table name from the test above.
+            "SELECT COUNT(*) FROM {table}"
+        )))
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(rows, 0, "what was never sealed is gone");
+        let dirty: Vec<(String, String)> =
+            sqlx::query_as("SELECT table_name, status FROM dolt_status")
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        assert_eq!(dirty, vec![], "and the schema is committed, as on any open");
     }
 
     /// Every store an owner opens says which build wrote it, committed

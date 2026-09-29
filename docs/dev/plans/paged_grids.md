@@ -1,6 +1,6 @@
 # Paged grids: the search grid and the log card load a page, then more
 
-*Proposal (2026-09-25); steps 1 and 2 of "Order of work" are built, the
+*Proposal (2026-09-25); steps 1 to 6 of "Order of work" are built; the
 rest is not. Every number was measured
 on 2026-09-25 against a copy of `~/datalib/stay_alive_1` (74,023
 `grid_rows`, a 1.3 GB index, 238,716 log lines) with the
@@ -51,30 +51,31 @@ grow in both directions:
 
 | | opens at | scrolling away from newest | a live frame |
 |---|---|---|---|
-| search grid | newest row at the **top** | fetch older rows, below | fetch rows newer than the top |
+| search grid, default order | newest row at the **bottom** | fetch older rows, above | read again through the oldest row held |
+| search grid, sorted or ranked | first row at the **top** | fetch later rows, below | the same |
 | log card | newest line at the **bottom** | fetch older lines, above | fetch lines newer than the bottom (the tail, today) |
 
-They are the same machine with the display flipped. That is the
-shared code path.
+They are the same machine; which way up a grid shows it is the card's
+choice. That is the shared code path.
 
-**The contract.** A paged endpoint takes the query, a direction and a
-cursor, and returns rows plus cursors:
+**The contract.** A paged endpoint takes the query and a cursor, and
+returns rows plus the cursor of the next page and what the page was
+read at:
 
 ```
-request:  q, limit, and at most one of  before=<cursor>  after=<cursor>
-          (neither = the newest page)
-response: rows (newest first), older: <cursor>|null, newer: <cursor>|null,
-          at: <commit or seq the page was read at>
+search grid:  q, sort, limit, offset          (no offset = the first page)
+              -> rows, total, next_offset|null, at: <commit>
+log card:     q, limit, before=<seq>|after=<seq>  (neither = the newest page)
+              -> rows (newest first), older|null, newer|null, at: <seq>
 ```
 
-A cursor is the last row's sort key plus its tiebreak, encoded as an
-opaque string: `(touched_at_utc, is_document, uuid)` by default for the grid (the
-sort column's value when someone sorts by another), and `seq` for the
-log. This is *keyset* paging (`WHERE key < ? ORDER BY key DESC LIMIT n`),
-not `OFFSET`, so a page does not shift when rows land at the newest end
-while someone is scrolling. `OFFSET 20000` measured 0.46 s, so offset is
-affordable if a "jump to row N" is ever wanted. It is just not the
-default.
+The two cursors differ because the two lists do. A search's list is
+built once per commit and held (below), so a position in it is stable:
+rows landing at the newest end make a new commit, a new `at` and a new
+list, never a shifted page. The log has no commit to hold, so its
+cursor is the last line's `seq`, *keyset* paging (`WHERE seq < ? ORDER
+BY seq DESC LIMIT n`), which does not shift when lines are appended
+while someone scrolls.
 
 **The UI half** is one module, `ui/src/grid/pagedWindow.ts`, split the
 way `docs/dev/style.md` asks:
@@ -128,7 +129,7 @@ them; every render store also has a `grid_rows` and does not pay:
 - `(touched_at_utc, is_document, uuid)` for the unfiltered grid, a
   document ahead of its rows at the same moment;
 - `(col, touched_at_utc, is_document, uuid)` for each key the search
-  bar filters on: `source_id`, `provider`, `source_label`, `kind`,
+  bar filters on: `source_id`, `source_label`, `kind`,
   `channel`, `conversation_uuid`, `author`, `account`, `project`,
   `notion_page_uuid`, `diff_status`, and `(is_document, touched_at_utc,
   uuid)`.
@@ -137,56 +138,71 @@ them; every render store also has a `grid_rows` and does not pay:
 to *search* an index on its own column. Scanning the newest-first index
 and testing every row also avoids a sort, and is the 38 s walk above;
 the test's first version accepted that, and passed with an index
-deleted, before it was tightened. `before:`/`after:` filter on
+deleted, before it was tightened. It also fails on an index no key
+plans with: step 2 shipped one on `provider`, which the search bar has
+no key for, and step 3 dropped it. `before:`/`after:` filter on
 `created_at_utc` and have no index: a `before:` far back still walks.
 
-**Every column stays sortable,** server-side, in one of two ways:
+**Every column stays sortable, and every page takes one path.** The
+first page of a search lists every row it holds, as uuids in order:
+`SELECT uuid … WHERE <filter> ORDER BY <sort>, uuid`. The list goes in
+the result cache, and every page, the first included, is a slice of it
+plus a lookup of those rows by uuid. The cursor is a position in the
+list, and the commit it was listed at.
 
-- **When an index gives the order**, pages are keyset SQL straight off
-  that index. That covers the default newest-first sort, and any
-  filter plus the default sort. The cursor is the sort key plus `uuid`.
-- **Any other sort goes through the result cache.** The first page
-  runs the sort once, `SELECT uuid … WHERE <filter> ORDER BY <col>, uuid`
-  (about 5 s unfiltered at this size, quick once an indexed filter has
-  narrowed the set), and keeps the ordered uuid list. Every later page
-  is a slice of that list plus a primary-key lookup of those 200 rows,
-  so scrolling does not pay the sort again. The cursor is a position in
-  the list plus the commit it was computed at. The status line says
-  "sorting N rows…" while the first page waits, so the wait reads as
-  expected rather than broken.
+A second path was planned: keyset pages straight off an index when the
+index gives the order, with the cursor the sort key plus `uuid`. Timed
+at full size (74,163 rows, net of about 0.15 s of process start, in a
+read transaction, 2026-09-26), listing is too cheap to be worth it:
 
-**The result cache** lives in the applet. It is keyed by
-`(q, sort, grouping, commit)` and holds ordered uuid lists, group
-lists and counts: whatever took a scan to compute. Everything that
-would otherwise redo a scan per page goes through it: an unindexed
-sort, qmd's ranked hits, the group list below, and the total. It
-evicts least-recently-used entries under a byte budget. A uuid list
-for all 74k rows is about 3 MB. An entry for an old commit is simply
-never asked for again once the UI moves to the new one.
+| listing every uuid | time |
+|---|---|
+| newest first, no filter (the index's order) | about 0.05 s |
+| newest first, the largest source (46,661 rows) | about 0.03 s |
+| by `author`, which no index orders | about 0.5 s |
+| then one 200-row page, by uuid | under 0.01 s |
 
-**Drag-to-group stays, and moves to the server.** Grouping by a column
-is two kinds of request:
+One path means one cursor, a `total` that is simply the list's length,
+and no second set of tests. (The 5 s once quoted for an unindexed sort
+was read through `dolt_at_`, which uses no index at all.)
 
-- **The group list:** `SELECT <col>, count(*) … WHERE <filter> GROUP BY
-  <col>`. Every filterable column has a `(col, touched_at_utc, …)`
-  index, so this is an index-only scan: the equivalent `count(*)` for
-  one provider took 0.08 s. A column without an index scans once and
-  lands in the result cache. The counts in the group headers are true
-  counts for the whole result, not for what happens to be loaded.
-- **An expanded group** is its own paged window over the same query
-  with `<col> = <value>` added. That is exactly an indexed filter, so
-  its rows come newest-first off the composite index, and each group
-  scrolls and loads more on its own. Nested grouping repeats the
-  pattern one level down, with the outer group's value added to the
-  filter.
+**The result cache** lives in the applet
+(`applets/src/unified_index/results.rs`). It is keyed by
+`(q, sort, commit)` and holds the last 16 ordered uuid lists, each with
+qmd's score and matched words for a free-text search. A list for all
+74k rows is about 3 MB. An entry for an old commit is simply never
+asked for again once the UI moves to the new one. Grouping (step 5)
+adds its group lists and counts to the same cache.
 
-In the browser, the draggable-grouping drop zone stays the control.
-The grid stops handing grouping to SlickGrid's DataView, which needs
-every row, and builds the flat list itself: group header rows, the
-loaded rows of each expanded group, and a "loading…" row at the end of
-a group that has more. The log card groups the same way over
-`runs.sqlite`. `log_by_run_step` already serves step and run; level
-and target would each want an index.
+**Drag-to-group stays, and moves to the server.** Grouping is two kinds
+of request:
+
+- **The groups:** `/search/groups?q=…&by=kind,author`. One `SELECT
+  <cols>, count(*), uuid, max(touched_at_utc) … GROUP BY 1, 2` answers
+  every level at once: each innermost group with its count, and its
+  newest row as a sample (a bare column beside the one `max()` takes
+  its value from that row), read in the same snapshot. For free text the
+  groups are over qmd's ranking. The counts in the group rows are true
+  counts for the whole search, not for what happens to be loaded.
+  Measured at full size (74,163 rows): 0.04 s by an indexed column,
+  0.2 s by two columns or by one without an index, so the groups are not
+  cached. At most 10,000 groups come back, and more says so: `channel`
+  has 18,234 values on the measured root.
+- **A group's rows** are `/search` with `within=[["kind","Chat"], …]`: its
+  own paged list of the same query with each column's value added (a
+  missing one is `IS NULL`), in the result cache under its own key.
+  Every sort and group of a free-text search is cut from qmd's ranking,
+  kept once per search, so qmd runs once however many groups open.
+
+In the browser, the draggable-grouping bar stays the control, and
+SlickGrid still draws the groups, their folding and the "Expand /
+collapse all" button (`grid/serverGroups.ts`). What it is handed is
+each group's rows read so far and, while the group has more, a
+placeholder row built from the group's sample, so every grouping column
+files it under the right group. A placeholder on screen reads the
+group's next page, through a `pagedWindow` of its own; a folded group
+hides its placeholder and reads nothing. Group titles take the server's
+count. The log card still groups the lines it holds.
 
 **The indexes live on `main`, and the writer pays for them.** Keeping
 them only on the read branch, so the writer never pays, looked better
@@ -315,62 +331,96 @@ Worth filing upstream anyway (dolthub/doltlite): `dolt_at_` seeking on
 a non-integer primary key, which would at least make pinned lookups by
 uuid cheap.
 
-**The search endpoint** gains `before`/`after` and returns cursors, with
-a default `limit` of 200. The order is already newest first
-(`ORDER BY touched_at_utc DESC, is_document DESC, uuid DESC`, step 2),
-and rows no longer carry whole bodies: #792 replaced `text` with a
-240-character `preview`. The other `/search` callers (dactal's 2000,
-perseus's 200000, `bridge.js`, the e2e specs) keep working unchanged:
-no cursor means the newest page of `limit` rows.
+**The search endpoint** takes `offset` and `sort` (`created_at:desc`;
+a column the grid shows, or `score`), with a default `limit` of 200.
+It answers with `total` (every row the search holds; this replaced
+`total_estimated`), `next_offset` (null on the last page) and `at`. The
+cursor and `at` are in the body because the gateway drops a response's
+headers. The other `/search` callers (dactal's 2000, perseus's 200000,
+`bridge.js`, the e2e specs) keep working unchanged: no offset is the
+first page of `limit` rows.
 
-**Counting** is a separate request (`/search/count`), sent after the
-first page lands and cancelled with it. The status line reads "200
-loaded" until the count arrives, then "200 of 46,566". An indexed
-filter counts in about 0.1 s. Free text is qmd's alone since #792, so its
-count is the number of ranked hits.
+**Counting** needs no request of its own: the list is already built for
+the first page, and `total` is its length.
 
-**Free text via qmd** is already capped at about 1000 ranked hits.
-Those are paged by rank out of the result cache, rather than asking
-qmd again per page. Separately, every
-free-text search loads all of `grid_rows` through `grid_row_refs()` to
-map hits to rows. That becomes a lookup by `qmd_path` over an index.
+**Free text via qmd** ranks up to 1,000 hits once per search. The
+structured terms then filter that ranking in one statement
+(`filter_uuids`), which keeps qmd's order unless a sort replaces it;
+`score:asc` reads the ranking from the bottom. The list is paged out
+of the result cache like any other, rather than asking qmd again per
+page. The old path cut qmd's hits to the page size *before* the
+structured filter, so a filtered free-text search could come back short
+while matching rows sat further down the ranking. Separately, every
+free-text search still loads all of `grid_rows` through
+`grid_row_refs()` to map hits to rows; that becomes a lookup by
+`qmd_path` over an index.
 
 ## Server: the log
 
-`/api/log` gains `before_seq` and newest-first order: `ORDER BY seq
-DESC LIMIT ?`, with the page reversed for display. The card opens on the
-newest 500 lines. Tailing stays `after_seq`, but it loops until caught
-up instead of taking one 5000-line page per frame. No schema change.
-Free-text `msg` search scans (4 s for a word that matches nothing in
-238k lines), which is tolerable for now. FTS5 would be the fix if it
-ever matters.
+`/api/log` reads from a cursor: with none, the newest `limit` lines;
+`after_seq`, the lines after a line (the tail); `before_seq`, the newest
+lines before one (a page back). Every page comes back oldest first, and
+both cursors at once is a 400. No schema change: `seq` is the primary
+key, so each is a seek. Free-text `msg` search scans (4 s for a word that
+matches nothing in 238k lines), which is tolerable for now. FTS5 would
+be the fix if it ever matters.
+
+The panel (`RunLogPanel`) holds the log's newest lines through the same
+`pagedWindow.ts` the search grid does, with `seq` as the cursor where the
+search has an offset. It opens on the newest 500 lines at the bottom,
+reads older pages above as it is scrolled up, holding the line on screen
+in place, and follows the tail a 5000-line page at a time until a page
+comes back short, rather than one page per live frame. Older pages load
+only while the lines are in the log's own order: sorted by another
+column or grouped, the top of the grid is not the oldest line, and the
+sort or the groups cover the lines held.
 
 ## What the grid does in the browser today, and where each goes
 
-Everything below assumes the full row set is loaded, so each needs a
-decision:
+Everything below assumed the full row set was loaded. What step 4 did
+with each, and what is left:
 
-| today, in the browser | proposal |
+| in the browser | now |
 |---|---|
-| sort by any column header | server-side, every column: off an index when one gives the order, otherwise sorted once into the result cache and paged from there |
-| drag a column to group, with counts | server-side: the group list with true counts, then each expanded group as its own paged window (above) |
-| the header filter row (per-column text boxes) | becomes query tokens, as keep/exclude already are |
+| sort by any column header | on the server: a header click asks again with `sort=`, a shift-click adds a column (`sort=kind,created_at:desc`), and every column's comparer keeps the order the server sent. Score, qmd's rank, sorts alone |
+| drag a column to group, with counts | on the server: every group with its true count, and each group's rows read as it is opened and scrolled (step 5) |
+| the header filter row (per-column text boxes) | gone: the search bar is the one filter. A cell's right-click keeps or excludes its value there, and a column header dropped on it adds `key:*`, the rows with any value in that column |
 | adaptive column hiding | computed from the first page |
-| restore the selected row from the URL | seek to it: a page on each side of its key, the same cursor machinery |
-| refetch everything on `index_changed` and diff | re-read the key range the window holds (the sort key `BETWEEN` the oldest and newest held) plus anything newer, and patch that |
-| `qmd_state` for every row in the result | only the loaded rows (see below) |
-| `__fwGridApi.rows()` in e2e | means loaded rows; specs that count everything use the count endpoint |
+| restore the selected row from the URL | the first request asks `through=` the selected row, so the page reaches it |
+| refetch everything on `index_changed` and diff | read the search again `through=` the last row held, and patch that in place |
+| `qmd_state` for every row in the result | only the rows on screen (step 3) |
+| `__fwGridApi.rows()` in e2e | means the rows held; `seek(uuid)` loads through a row, and the row helpers call it |
+
+**The default order is shown the other way up.** Newest first is what
+the server lists, and the grid shows it with the newest row at the
+bottom, where it opens, loading older rows above as it is scrolled up:
+the log card's shape. Shown newest at the top, every row a sync adds
+lands above the ones on screen and renumbers them, and the grid, which
+keeps a row's element by its index, redraws them all; a click aimed at
+one is lost (`data-sources-streaming` guards this). Upside down, a
+sync's rows land below. A sort, or free text's rank, is shown top-down
+and loads below.
+
+**`through=<uuid>` stretches a page to reach a row.** A refresh asks
+through the last row held rather than for as many rows as it holds:
+counting would drop the oldest rows as new ones arrive, or add older
+ones, and either renumbers the rows on screen. The same parameter
+loads a restored selection in one request.
 
 ## `qmd_state`, separately
 
-Its cost barely depends on how many rows the grid holds. Every call
-runs `summary()`, an aggregate over the whole `content_vectors` table,
-and each chunk of 400 hashes repeats the same `GROUP BY`. It also opens
-a new pool per request and hashes every `.md` file it is sent, and past
-2000 documents it truncates and toasts on every call. The fix: send the
-loaded rows' uuids, cache `summary()` against the qmd index's mtime,
-and compute the per-hash aggregate once per call. It is its own PR,
-and it can land first.
+The endpoint behind the Indexed / Embedded columns. Measured on the
+same root's qmd index (18,711 documents, 46,475 vectors, a copy):
+
+| cost, per call | before | after (step 3) |
+|---|---|---|
+| `summary()`, the "N of M documents searchable" totals | 0.41 s, on every call, columns shown or not | once per change to the index files (`SummaryCache`, keyed on the size and time of `index.sqlite` and its `-wal`) |
+| vector counts, per batch of 400 hashes | 0.04 s: every vector in the index grouped, once per batch | 0.01 s: only the batch's own vectors |
+| documents asked about | every one behind the result set, up to the 2,000 cap and a toast past it; 2,000 files read and hashed is about 0.35 s | the ones behind the rows on screen and 50 either side, asked again as the grid scrolls (`ui/src/grid/qmdAsk.ts`) |
+
+The 1.5–5 s calls in the logs overlapped 4–12 s searches, and waited
+behind them on the applet's one connection to the grid index; step 2
+made those searches fast.
 
 ## Every branch earns its keep
 
@@ -401,13 +451,22 @@ Each step is one PR, useful on its own:
    reading in a read transaction.** Default order newest first. The UI
    is unchanged, so it still asks for everything, but the query stops
    scanning to sort.
-3. **`qmd_state` fixes** (independent of the others).
-4. **The page contract, the result cache and `pagedWindow.ts`, and
-   `GridCard` on them,** with server-side sorting.
-5. **Server-side drag-to-group** in `GridCard`: the group list, a
+3. **Done: `qmd_state` fixes**, and the unused `provider` index
+   dropped.
+4. **The page contract.**
+   - **4a, done: the server.** `offset`, `sort`, `total`,
+     `next_offset` and `at` on `/search`, the result cache, and qmd's
+     ranking filtered by the structured terms. The UI still asks for
+     everything in one page.
+   - **4b, done: `pagedWindow.ts` and `GridCard` on it,** with header
+     clicks sorting on the server and `through=` on `/search`. While
+     grouped or filtered, the grid loads everything, until step 5; the
+     header filter row as query terms is left.
+5. **Done: server-side drag-to-group** in `GridCard`: the group list, a
    paged window per expanded group, and nesting.
-5. **`/api/log` newest-first, and `RunLogPanel` on the same module.**
-6. **Problems** (`TableGrid`), only if it grows large enough to need it.
+6. **Done: `/api/log` newest-first, and `RunLogPanel` on the same
+   module.**
+7. **Problems** (`TableGrid`), only if it grows large enough to need it.
 
 ## When the snapshot moves
 

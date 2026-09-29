@@ -20,9 +20,11 @@ use axum::{
     Router,
 };
 use datalib_core::repo::{DynAppRepo, RepoError};
+use datalib_dag::config::{owner_only_options, replace_config};
 use datalib_dag::supervisor::store::RequestRow;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -30,6 +32,7 @@ pub mod applets;
 pub mod auth;
 pub mod binaries;
 pub mod boot;
+pub mod config_upgrade;
 pub mod connect;
 mod embed;
 pub mod frontend;
@@ -155,11 +158,16 @@ pub fn router(state: AppState) -> Router {
         .route("/api/config/scaffold", get(config_scaffold))
         .route("/api/config/init", post(init_config))
         // Credentials and connection testing for the Add-a-source
-        // wizard. See `connect.rs` — all three shell out, deliberately.
+        // wizard. See `connect.rs` — each shells out to latchkey or
+        // datalib-step, deliberately.
         .route("/api/latchkey/{service}", get(connect::get_service))
         .route(
             "/api/latchkey/{service}/connect",
             post(connect::start_connect),
+        )
+        .route(
+            "/api/latchkey/{service}/credential",
+            post(connect::set_credential),
         )
         .route(
             "/api/latchkey/connect/{id}/status",
@@ -922,24 +930,8 @@ async fn put_config(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
     }
-    // One temp name per write, or two PUTs landing together write one
-    // file and the second rename finds it gone. The `.tmp` suffix is what
-    // the root watcher ignores, so it stays.
-    let tmp = path.with_file_name(format!(
-        "config.{}.{}.tmp",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    if let Err(e) = write_owner_only(&tmp, req.text.as_bytes()) {
-        tracing::error!("put_config: write {}: {e}", tmp.display());
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
-    }
-    if let Err(e) = std::fs::rename(&tmp, &path) {
-        let _ = std::fs::remove_file(&tmp);
-        tracing::error!("put_config: rename {}: {e}", path.display());
+    if let Err(e) = replace_config(&path, &req.text) {
+        tracing::error!("put_config: write {}: {e}", path.display());
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
     reload_applets(&s).await;
@@ -1011,30 +1003,6 @@ async fn init_config(State(s): State<AppState>) -> Result<Json<InitConfigRespons
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
-}
-
-/// `OpenOptions` for a file only this user may read. The config holds
-/// every source's credentials, so it is never left at the umask's mercy.
-fn owner_only_options() -> std::fs::OpenOptions {
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    opts
-}
-
-/// Create (or truncate) `path` owner-only and write `bytes` to it. A
-/// file that already exists keeps its mode: `mode` applies at creation.
-fn write_owner_only(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-    let mut f = owner_only_options()
-        .create(true)
-        .truncate(true)
-        .open(path)?;
-    f.write_all(bytes)
 }
 
 async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
@@ -1388,17 +1356,27 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
 /// rendered markdown feeds. Non-empty on purpose — the two index steps
 /// are source-independent and belong in every pipeline. They start with
 /// no inputs, which is a valid graph that indexes nothing; adding a
-/// source appends its render step's id here (the UI's "Add a source"
-/// flow does that for you). `data_root` is omitted: it defaults to this
-/// file's own directory, keeping the root self-contained.
+/// source adds its render step's id here (the UI's "Add a source"
+/// flow does that for you, and writes the source above this block).
+/// `data_root` is omitted: it defaults to this file's own directory,
+/// keeping the root self-contained.
 fn scaffold_toml() -> String {
     "\
 # ── the unified index ──────────────────────────────────────────────────
 # A group is one thing on the Manage screen; its steps are what run.
-# Every source's rendered markdown feeds these two: a step's id is
+# Every source feeds these two — the grid reads its rendered markdown,
+# the qmd aggregator its search steps. A step's id is
 # `<group>/<function>`, the tree it writes, and `inputs` names the
 # steps it reads by that id. A step with no `command` is one of
 # datalib's own.
+#
+# Sources go above this block: a [[groups]] entry with a `type`, then
+# its steps. The file then reads in the order data flows, each step
+# below the steps it reads, which is where the Sources screen writes
+# them and the order it lists them in. The runner follows `inputs`,
+# not the file. Anything above the first [[…]] header is a top-level
+# key (data_root, binary_dir), not part of an entry. See
+# <origin>/agent/config.md.
 
 [[groups]]
 id = \"unified_index\"
@@ -1411,7 +1389,7 @@ inputs = []
 
 [[steps]]
 group = \"unified_index\"
-function = \"qmd_index\"
+function = \"qmd_aggregator\"
 inputs = []
 
 # The applet that serves the grid: the app has no search, no document
@@ -1424,12 +1402,6 @@ inputs = []
 group = \"unified_index\"
 id = \"unified_index\"
 command = \"datalib-applet unified_index\"
-
-# Sources go below: a [[groups]] entry with a `type`, then its steps.
-# Anything you add above the first [[…]] header is a top-level key
-# (data_root, binary_dir), not part of an entry. See
-# <origin>/agent/config.md.
-# ───────────────────────────────────────────────────────────────────────
 "
     .to_string()
 }
@@ -1540,7 +1512,7 @@ struct OpenRequest {
 
 #[derive(Debug, Deserialize)]
 struct ResetRequest {
-    /// Step ids, each optionally `+blobs`.
+    /// Step ids.
     targets: Vec<String>,
     #[serde(default)]
     by: Option<String>,
@@ -1575,12 +1547,14 @@ async fn requests_list(State(s): State<AppState>) -> Result<Json<Vec<RequestView
     Ok(Json(rows.into_iter().map(RequestView::from).collect()))
 }
 
-/// `POST /api/requests` — sync `roots` and everything downstream of them.
-/// Refused, with the reason, when the config cannot run or lacks a root.
+/// `POST /api/requests` — sync `roots` and everything downstream of them,
+/// as one request per group the roots belong to, so each source's sync
+/// can be stopped without stopping the others'. Refused, with the reason,
+/// when the config cannot run or lacks a root.
 async fn request_open(
     State(s): State<AppState>,
     Json(req): Json<OpenRequest>,
-) -> Result<Json<RequestView>, Refusal> {
+) -> Result<Json<Vec<RequestView>>, Refusal> {
     let checked = supervisor::load_config(&s.root).map_err(|e| (StatusCode::CONFLICT, e))?;
     let roots = if req.roots.is_empty() {
         source_ids(&checked)
@@ -1594,45 +1568,70 @@ async fn request_open(
         ));
     }
     let store = mailbox(&s).await?;
-    // A sync of these steps that is already open is this sync: a second
-    // click is not a second run. (A second request from anywhere else
-    // still is: the loop runs its steps once more when the first ends.)
-    let wanted: std::collections::BTreeSet<&str> = roots.iter().map(String::as_str).collect();
-    let open = store.open_requests().await.map_err(internal)?;
-    if let Some(same) = open.into_iter().find(|r| {
-        r.stop_requested_by.is_none()
-            && r.roots
-                .iter()
-                .map(String::as_str)
-                .collect::<std::collections::BTreeSet<_>>()
-                == wanted
-    }) {
-        return Ok(Json(RequestView::from(same)));
-    }
     let by = req.by.unwrap_or_else(|| "ui".to_string());
+    let open = store.open_requests().await.map_err(internal)?;
     let mut listener =
         datalib_dag::supervisor::announce::Listener::new(store, "POST /api/requests");
-    let id = store.open_request(&roots, &by).await.map_err(internal)?;
-    // Answered once the loop has taken it on, so rows read after this
-    // show its steps as wanted. A loop whose config lacks a root leaves
+    let mut answer = Vec::new();
+    let mut opened = Vec::new();
+    for roots in by_group(&checked.graph, roots) {
+        // A sync of these steps that is already open is this sync: a
+        // second click is not a second run. (A second request from
+        // anywhere else still is: the loop runs its steps once more when
+        // the first ends.)
+        let wanted: BTreeSet<&str> = roots.iter().map(String::as_str).collect();
+        let same = open.iter().find(|r| {
+            r.stop_requested_by.is_none()
+                && r.roots.iter().map(String::as_str).collect::<BTreeSet<_>>() == wanted
+        });
+        if let Some(same) = same {
+            answer.push(RequestView::from(same.clone()));
+            continue;
+        }
+        let id = store.open_request(&roots, &by).await.map_err(internal)?;
+        opened.push(id.clone());
+        answer.push(RequestView {
+            id,
+            roots,
+            by: by.clone(),
+            state: "open",
+            stop_requested_by: None,
+            failed_step: None,
+        });
+    }
+    // Answered once the loop has taken them on, so rows read after this
+    // show their steps as wanted. A loop whose config lacks a root leaves
     // it for the next sync, so the wait is bounded.
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
-    while !store.taken_on(&id).await.map_err(internal)? {
-        if tokio::time::timeout_at(deadline, listener.next())
-            .await
-            .is_err()
-        {
-            break;
+    for id in &opened {
+        while !store.taken_on(id).await.map_err(internal)? {
+            if tokio::time::timeout_at(deadline, listener.next())
+                .await
+                .is_err()
+            {
+                break;
+            }
         }
     }
-    Ok(Json(RequestView {
-        id,
-        roots,
-        by,
-        state: "open",
-        stop_requested_by: None,
-        failed_step: None,
-    }))
+    Ok(Json(answer))
+}
+
+/// `roots` split by the group each step belongs to, groups in the order
+/// they first appear.
+fn by_group(graph: &datalib_dag::Graph, roots: Vec<String>) -> Vec<Vec<String>> {
+    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+    for root in roots {
+        let group = graph
+            .by_id
+            .get(&root)
+            .and_then(|&i| graph.steps[i].group.clone())
+            .unwrap_or_else(|| root.clone());
+        match groups.iter_mut().find(|(g, _)| *g == group) {
+            Some((_, of)) => of.push(root),
+            None => groups.push((group, vec![root])),
+        }
+    }
+    groups.into_iter().map(|(_, of)| of).collect()
 }
 
 /// `POST /api/requests/{id}/stop` — asking, not doing: the loop stops the
@@ -1887,44 +1886,52 @@ async fn run_log(
     )
 }
 
+/// A parameter this does not take is refused, not ignored: the run, the
+/// process, the step and the attempt are search terms (`run:`,
+/// `process_id:`, `step:`, `attempt:`), and a caller still sending them
+/// as parameters would otherwise get every line back.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct LogParams {
-    #[serde(default)]
-    run: Option<String>,
-    /// One process's lines, by its id from `/api/processes`.
-    #[serde(default)]
-    process: Option<String>,
-    #[serde(default)]
-    step: Option<String>,
-    /// With `step`: one attempt of it.
-    #[serde(default)]
-    attempt: Option<i64>,
     /// The search bar, in the grammar every grid shares (`datalib_query`):
-    /// `level:warn -target:sqlx "history"`.
+    /// `level:warn -target:sqlx "history"`, and what the panel's pickers
+    /// write there: `run:`, `process_id:`, `step:`, `attempt:`.
     #[serde(default)]
     q: String,
+    /// The lines after this `seq`: how a panel follows the tail.
     #[serde(default)]
     after_seq: Option<i64>,
+    /// The newest lines before this `seq`: how a panel pages back.
+    #[serde(default)]
+    before_seq: Option<i64>,
     #[serde(default)]
     limit: Option<i64>,
 }
 
-/// `GET /api/log?run=…&step=…&q=…` — log lines, oldest first, across
-/// every run the store holds unless `run` narrows it. Tails the same way
-/// `/api/runs/{run}/log` does. A `q` naming a key a log line does not
-/// have is a 400 with the key spelled out.
+/// `GET /api/log?q=…` — log lines across every run the
+/// store holds unless `run` narrows it: the newest `limit` of them, or the
+/// page `after_seq` or `before_seq` names, oldest first either way. A `q`
+/// naming a key a log line does not have is a 400 with the key spelled
+/// out, and so are both cursors at once.
 async fn log_lines(
     State(s): State<AppState>,
     Query(p): Query<LogParams>,
 ) -> Result<Json<Vec<datalib_runs::LogLine>>, (StatusCode, String)> {
     let limit = p.limit.unwrap_or(5000).clamp(1, 50_000);
+    let cursor = match (p.after_seq, p.before_seq) {
+        (None, None) => datalib_runs::LogCursor::Newest,
+        (Some(seq), None) => datalib_runs::LogCursor::After(seq),
+        (None, Some(seq)) => datalib_runs::LogCursor::Before(seq),
+        (Some(_), Some(_)) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "ask for the lines after_seq or before_seq a line, not both".to_string(),
+            ))
+        }
+    };
     let q = datalib_runs::LogQuery {
-        run: p.run.as_deref(),
-        process: p.process.as_deref(),
-        step: p.step.as_deref(),
-        attempt: p.attempt,
         q: &p.q,
-        after_seq: p.after_seq.unwrap_or(0),
+        cursor,
         limit,
     };
     datalib_runs::log_query(&s.root, &q)
@@ -2088,7 +2095,7 @@ mod tests {
         // nothing is a no-op, not an error.
         assert_eq!(
             source_ids(&checked),
-            ["unified_index/grid_index", "unified_index/qmd_index"]
+            ["unified_index/grid_index", "unified_index/qmd_aggregator"]
         );
         // And it declares the applet without which the app has no
         // views at all — the thing `app_ready` reports on.
@@ -2108,7 +2115,7 @@ mod tests {
         let fringe = fringe_of(&scaffold_toml());
         assert_eq!(
             fringe,
-            ["unified_index/grid_index", "unified_index/qmd_index"]
+            ["unified_index/grid_index", "unified_index/qmd_aggregator"]
         );
         assert_eq!(configured_source_count(&fringe), 0);
     }

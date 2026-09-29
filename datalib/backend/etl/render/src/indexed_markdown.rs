@@ -57,6 +57,17 @@ fn store_ddl() -> Vec<&'static str> {
         .collect()
 }
 
+/// Indexes that change no row, so they stay out of [`schema_hash`]:
+/// adding one must not re-render every source. `open` creates them.
+fn lookup_indexes() -> impl Iterator<Item = &'static str> {
+    crate::grid_index::DOCUMENT_LOOKUP_INDEXES
+        .iter()
+        .copied()
+        .chain(std::iter::once(
+            "CREATE INDEX IF NOT EXISTS problems_by_scope ON problems (scope_kind, scope_key)",
+        ))
+}
+
 /// blake3 over this store's DDL: what the render step folds into its
 /// params, so a change to any render-store table re-renders every
 /// source. Nobody has to remember a bump, and a column added to
@@ -148,9 +159,10 @@ impl IndexedMarkdownStore {
         std::fs::create_dir_all(rendered_root)
             .with_context(|| format!("mkdir -p {}", rendered_root.display()))?;
         let path = path_for(rendered_root);
+        let ddl: Vec<&str> = store_ddl().into_iter().chain(lookup_indexes()).collect();
         let pool = blocking(datalib_etl::doltlite_raw::open_derived(
             &path,
-            &store_ddl(),
+            &ddl,
             datalib_etl::doltlite_raw::StoreKind::Render,
         ))
         .with_context(|| format!("open indexed markdown store {}", path.display()))?;
@@ -493,6 +505,31 @@ impl IndexedMarkdownStore {
         })
     }
 
+    /// Which of `uuids` this store holds a `grid_rows` row for.
+    pub fn grid_rows_among(&self, uuids: &[String]) -> Result<HashSet<String>> {
+        blocking(async {
+            let mut guard = self.write_lock.acquire().await?;
+            let mut out = HashSet::new();
+            for chunk in uuids.chunks(datalib_etl::bulk::SQL_CHUNK) {
+                let mut sql = String::from("SELECT uuid FROM grid_rows WHERE uuid IN (");
+                datalib_etl::bulk::push_placeholder_list(&mut sql, chunk.len());
+                sql.push(')');
+                // Audited: a placeholder run sized from the chunk; every
+                // uuid is bound.
+                let mut q = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql));
+                for uuid in chunk {
+                    q = q.bind(uuid);
+                }
+                out.extend(
+                    q.fetch_all(&mut **guard.conn())
+                        .await
+                        .context("look up grid rows by uuid")?,
+                );
+            }
+            Ok(out)
+        })
+    }
+
     /// The newest `items` sample per subject in `source_measurements`:
     /// what the storage report compares its counts against to decide
     /// whether anything moved.
@@ -601,6 +638,26 @@ impl IndexedMarkdownStore {
                 .collect()
         })
     }
+}
+
+// `wanted` is a JSON array of document ids, bound as `?1`.
+async fn group_by_document<T>(
+    pool: &SqlitePool,
+    sql: &'static str,
+    key: &str,
+    wanted: &str,
+) -> Result<HashMap<String, Vec<T>>, sqlx::Error>
+where
+    T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>,
+{
+    use futures::TryStreamExt;
+    let mut by_doc: HashMap<String, Vec<T>> = HashMap::new();
+    let mut rows = sqlx::query(sql).bind(wanted).fetch(pool);
+    while let Some(row) = rows.try_next().await? {
+        let doc: String = row.try_get(key)?;
+        by_doc.entry(doc).or_default().push(T::from_row(&row)?);
+    }
+    Ok(by_doc)
 }
 
 /// Delete a rendered document's file, and the per-document directory it sat
@@ -937,22 +994,41 @@ impl IndexedMarkdownStore {
                     .collect(),
                 None => mds,
             };
+            if mds.is_empty() {
+                return Ok(Vec::new());
+            }
+            // One read per table, never a lookup per document: `dolt_at_`
+            // uses no secondary index, so each lookup is a full scan and a
+            // whole-store read goes quadratic.
+            let wanted = serde_json::to_string(
+                &mds.iter()
+                    .map(|m| m.markdown_uuid.as_str())
+                    .collect::<Vec<_>>(),
+            )?;
+            let mut rows_by_doc = group_by_document::<datalib_schema::grid_rows::GridRow>(
+                &self.pool,
+                "SELECT * FROM pinned_grid_rows grid_rows \
+                  WHERE markdown_uuid IN (SELECT value FROM json_each(?1)) \
+                  ORDER BY markdown_uuid, uuid",
+                "markdown_uuid",
+                &wanted,
+            )
+            .await
+            .context("read grid rows")?;
+            let mut edges_by_doc = group_by_document::<datalib_schema::edges::EdgeRow>(
+                &self.pool,
+                "SELECT * FROM pinned_edges edges \
+                  WHERE src_markdown_uuid IN (SELECT value FROM json_each(?1)) \
+                  ORDER BY src_markdown_uuid, edge_uuid",
+                "src_markdown_uuid",
+                &wanted,
+            )
+            .await
+            .context("read edges")?;
             let mut out = Vec::with_capacity(mds.len());
             for md in mds {
-                let rows: Vec<datalib_schema::grid_rows::GridRow> = sqlx::query_as(
-                    "SELECT * FROM pinned_grid_rows grid_rows WHERE markdown_uuid = ? ORDER BY uuid",
-                )
-                .bind(&md.markdown_uuid)
-                .fetch_all(&self.pool)
-                .await
-                .with_context(|| format!("read rows for {}", md.markdown_uuid))?;
-                let edges: Vec<datalib_schema::edges::EdgeRow> = sqlx::query_as(
-                    "SELECT * FROM pinned_edges edges WHERE src_markdown_uuid = ? ORDER BY edge_uuid",
-                )
-                .bind(&md.markdown_uuid)
-                .fetch_all(&self.pool)
-                .await
-                .with_context(|| format!("read edges for {}", md.markdown_uuid))?;
+                let rows = rows_by_doc.remove(&md.markdown_uuid).unwrap_or_default();
+                let edges = edges_by_doc.remove(&md.markdown_uuid).unwrap_or_default();
                 // `renderer_version` is `"<index>.<render>"`; the render
                 // half is what the renderer declared.
                 let render_version = md
@@ -1054,6 +1130,23 @@ mod tests {
         IndexedMarkdownStore::open(dir).expect("open store")
     }
 
+    /// Every per-document lookup `put_document` makes goes through an
+    /// index: without them a full render is quadratic in the store's size.
+    #[test]
+    fn replacing_a_document_finds_its_old_rows_by_index() {
+        let td = tempfile::tempdir().unwrap();
+        let st = store(td.path());
+        blocking(crate::grid_index::assert_searched_by_index(
+            &st.pool,
+            &[
+                "DELETE FROM grid_rows WHERE markdown_uuid = ?",
+                "DELETE FROM edges WHERE src_markdown_uuid = ?",
+                "DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?",
+            ],
+        ));
+        st.close();
+    }
+
     /// A store call from a thread with no runtime must hand its
     /// connection back to the pool. With a runtime built and dropped per
     /// call, sqlx's return-to-pool task died with the runtime, the pool's
@@ -1078,6 +1171,72 @@ mod tests {
             );
         }
         st.close();
+    }
+
+    /// A store already holding `n` one-row documents, `m0` … `m{n-1}`,
+    /// committed. Filled by copying one seed row in a single statement,
+    /// so the fill costs the same with or without the lookup indexes.
+    fn store_holding(dir: &Path, n: usize) -> IndexedMarkdownStore {
+        let st = store(dir);
+        st.put_document(dir, &doc(dir, "seed", "fp")).unwrap();
+        let (_table, columns) = datalib_schema::grid_rows::COLUMNS[0];
+        let copied: Vec<String> = columns
+            .iter()
+            .map(|c| match *c {
+                "uuid" | "markdown_uuid" | "conversation_uuid" => "'m' || i".to_string(),
+                other => other.to_string(),
+            })
+            .collect();
+        // Audited: column names come from the derive's static list; `n` is
+        // a number.
+        let fill = format!(
+            "WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < {n}) \
+             INSERT INTO grid_rows ({}) SELECT {} FROM grid_rows, k WHERE uuid = 'seed'",
+            columns.join(", "),
+            copied.join(", "),
+        );
+        blocking(sqlx::query(sqlx::AssertSqlSafe(fill)).execute(&st.pool)).unwrap();
+        st.commit("fill").unwrap();
+        st
+    }
+
+    /// Seconds to replace `replaced` of a store's documents in one batch,
+    /// the way the render driver writes them.
+    fn seconds_to_replace(dir: &Path, st: &IndexedMarkdownStore, replaced: usize) -> f64 {
+        let started = std::time::Instant::now();
+        st.begin_batch().unwrap();
+        for i in 0..replaced {
+            st.put_document(dir, &doc(dir, &format!("m{i}"), "fp"))
+                .unwrap();
+        }
+        st.commit_batch().unwrap();
+        started.elapsed().as_secs_f64()
+    }
+
+    /// Replacing a document costs about the same however many documents
+    /// the store holds. Each `put_document` used to scan the whole of
+    /// `grid_rows` for the document's old rows, so a full render was
+    /// quadratic: a 20k-thread mailbox spent minutes there. Compared
+    /// against a small store in the same process, so a slow machine
+    /// slows both sides alike.
+    #[test]
+    fn replacing_a_document_does_not_slow_down_as_the_store_grows() {
+        const REPLACED: usize = 700;
+        const GROWTH: usize = 80;
+        let small_dir = tempfile::tempdir().unwrap();
+        let small = store_holding(small_dir.path(), REPLACED);
+        let big_dir = tempfile::tempdir().unwrap();
+        let big = store_holding(big_dir.path(), GROWTH * REPLACED);
+        let small_s = seconds_to_replace(small_dir.path(), &small, REPLACED);
+        let big_s = seconds_to_replace(big_dir.path(), &big, REPLACED);
+        assert!(
+            big_s < 5.0 * small_s,
+            "{GROWTH}x the documents made replacing {REPLACED} take {:.1}x as long \
+             ({small_s:.3}s → {big_s:.3}s): a per-document lookup is scanning",
+            big_s / small_s
+        );
+        small.close();
+        big.close();
     }
 
     fn row(uuid: &str, markdown_uuid: &str) -> GridRow {
@@ -1118,6 +1277,87 @@ mod tests {
             edges: Vec::new(),
             problems,
         }
+    }
+
+    fn edge(edge_uuid: &str, src: &str, dst: &str) -> datalib_schema::edges::EdgeRow {
+        datalib_schema::edges::EdgeRow {
+            edge_uuid: edge_uuid.into(),
+            src_markdown_uuid: src.into(),
+            src_anchor_uuid: None,
+            dst_markdown_uuid: dst.into(),
+            dst_anchor_uuid: None,
+            label: None,
+        }
+    }
+
+    /// The reader takes each table in one ordered read and groups it in
+    /// memory, where it used to look each document up — a full scan apiece
+    /// under `dolt_at_`, so a 20k-document store took minutes. The grouping
+    /// must still put every row and edge under its own document, in key
+    /// order, and `only` must still drop the rest.
+    #[test]
+    fn a_pinned_read_groups_rows_and_edges_under_their_own_documents() {
+        let td = tempfile::tempdir().unwrap();
+        let st = store(td.path());
+        st.transaction(|| {
+            for id in ["b", "a", "c"] {
+                let mut d = doc(td.path(), id, "fp");
+                for extra in ["z", "m"] {
+                    let mut r = row(&format!("{id}-{extra}"), id);
+                    r.is_document = false;
+                    d.rows.push(r);
+                }
+                d.edges = vec![
+                    edge(&format!("{id}-e2"), id, "a"),
+                    edge(&format!("{id}-e1"), id, "c"),
+                ];
+                st.put_document(td.path(), &d)?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        st.commit("three documents").unwrap();
+        st.close();
+
+        let rd = IndexedMarkdownStore::open_for_reading(td.path(), None)
+            .unwrap()
+            .expect("a committed store is readable");
+        let pin = rd.pin().unwrap().clone();
+        let shape = |docs: Vec<RenderedMarkdown>| -> Vec<(String, Vec<String>, Vec<String>)> {
+            docs.into_iter()
+                .map(|d| {
+                    (
+                        d.markdown_uuid,
+                        d.rows.into_iter().map(|r| r.uuid).collect(),
+                        d.edges.into_iter().map(|e| e.edge_uuid).collect(),
+                    )
+                })
+                .collect()
+        };
+        let expect = |id: &str| {
+            (
+                id.to_string(),
+                vec![id.to_string(), format!("{id}-m"), format!("{id}-z")],
+                vec![format!("{id}-e1"), format!("{id}-e2")],
+            )
+        };
+
+        let whole = rd.documents_matching(td.path(), None, &pin).unwrap();
+        assert_eq!(shape(whole), vec![expect("a"), expect("b"), expect("c")]);
+
+        let only: HashSet<String> = ["c", "gone"].map(String::from).into();
+        let some = rd.documents_matching(td.path(), Some(&only), &pin).unwrap();
+        assert_eq!(
+            shape(some),
+            vec![expect("c")],
+            "an id with no document is absent"
+        );
+
+        let none = rd
+            .documents_matching(td.path(), Some(&HashSet::new()), &pin)
+            .unwrap();
+        assert!(none.is_empty());
+        rd.close();
     }
 
     /// A renderer that forgets to mark its document row, or marks two,

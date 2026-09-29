@@ -58,8 +58,8 @@ merge conflict waiting to happen.
 **Dev workflow**
 
 - [`docs/dev/first_time_dev.md`](docs/dev/first_time_dev.md) — build and run from source.
-- [`docs/dev/style.md`](docs/dev/style.md) — how code is shaped: functional core, imperative shell.
-- [`docs/dev/testing.md`](docs/dev/testing.md) — the test suites, insta `.update` targets; [`coverage.md`](docs/dev/coverage.md).
+- [`docs/dev/style.md`](docs/dev/style.md) — how code is shaped: functional core, imperative shell; how to audit the docs and the code for drift and copies.
+- [`docs/dev/testing.md`](docs/dev/testing.md) — the test suites, insta `.update` targets; [`coverage.md`](docs/dev/coverage.md). Writing or fixing a Playwright spec: read its §"Writing a spec that does not flake" first.
 - [`docs/dev/ci.md`](docs/dev/ci.md) — CI, its caches and BuildBuddy, and reading a run.
 - [`docs/dev/release_steps.md`](docs/dev/release_steps.md) — how a release is assembled, and testing its steps from a mac.
 - [`docs/dev/curl_impersonate.md`](docs/dev/curl_impersonate.md), [`runtime_fetch.md`](docs/dev/runtime_fetch.md), [`docker.md`](docs/dev/docker.md) — what ships beside the binaries: the Chrome-impersonating curl, the Node runtime, the container image.
@@ -86,13 +86,20 @@ saved queries, and an alias costs one line. And say what breaks: a
 change that invalidates a store or a config belongs in the commit
 message.
 
-## Prose can be stale — verify claims against the tree
+## A change keeps the docs true
 
-The docs and this repo's commit messages are detailed and
-well-argued, and that is what makes a wrong one dangerous: a
-well-reasoned paragraph reads as evidence. **Before reporting any "we
-now do X" or "X still needs doing" claim as current fact, verify it
-against the tree or the diff:**
+The reference docs — the ones the doc map lists, and the `README.md`,
+`INGEST.md` and `TRANSLATE.md` files beside the code — say what the
+tree does now. **A change that makes one of them wrong fixes it in the
+same change.** A doc carries no "current as of" date and no "the code
+wins" hedge: it is either right or it gets fixed. How to audit them
+against the tree, and the tree for copies:
+[`style.md`](docs/dev/style.md) §"Auditing the tree for drift and
+repetition".
+
+Plans, audits and commit messages are records of the day they were
+written, not of the tree. Before repeating a "we now do X" or "X still
+needs doing" from one of them as current fact, check it:
 
 ```sh
 git show --stat <sha>                    # did that commit touch what its message says?
@@ -104,9 +111,6 @@ grep -rn <thing-said-to-exist> <subtree> # is the thing there at all?
 one is self-concealing. Treat "now covered by a test" as unverified until
 you have read the assertion — and for a test whose job is to catch a
 silent no-op, until you have watched it fail against the broken behavior.
-
-When prose and the tree disagree, the tree wins. Fix the prose in the
-same change.
 
 ## Write plainspoken
 
@@ -166,12 +170,14 @@ datalib/
                    `datalib_schema` sits here or above.
     etl/timeseries_render/ what the time-series render crates share.
     etl/providers/ <p>/ (ingest) + <p>_render/ (render) + <p>_config/
-                   (config schema) per provider. Ten of the file-backed
-                   ones scan a local tree through etl/src/fsscan.rs
-                   (fsindex has its own walker over etl/src/fswalk.rs);
-                   four mirror a SQLite file through etl/sqlite_mirror/;
-                   two are sensor time series. fsindex, media, lightroom and apple_photos
-                   have no <p>_render.
+                   (config schema) per provider. Twelve of the
+                   file-backed ones scan a local tree through
+                   etl/src/fsscan.rs (claude_code and codex by way of
+                   etl/agent_sessions/; fsindex has its own walker over
+                   etl/src/fswalk.rs); four mirror a SQLite file through
+                   etl/sqlite_mirror/; three render time series
+                   (airvisual, yolink, garmin). fsindex, media, lightroom
+                   and apple_photos have no <p>_render.
     etl/sqlite_mirror/ the table-for-table SQLite→doltlite mirror engine.
     table/         `BulkUpsertable`, alone.
     probe/         the "Test connection" report shape, alone.
@@ -180,13 +186,13 @@ datalib/
     runtime/       the data-root layout, which build this is
                    (`build_id`), the bundled-Node resolver (the `npx`
                    fallback is opt-in and loud) and the qmd model
-                   pins. Has NO dependencies, deliberately: the qmd
-                   indexer links it, and is an input to the fixture's
-                   embedding action, so anything it links re-runs that
-                   embed on CI.
+                   pins. No dependencies, so anything can link it.
+    qmd_indexer/   `Index`: the qmd index's operations — register the
+                   collections, keyword-index or embed one source — over
+                   qmd's SDK. Tested against the real qmd.
     qmd_models/    puts qmd's pinned GGUFs in place, sha256-verified,
                    so qmd never fetches one itself. Linked by the step
-                   and the applet, never by the indexer (see above).
+                   and the applet.
     store_meta/    `_datalib_meta`, the table every store carries naming
                    the build that wrote it and the shape it is in.
     core/          the app stores plus re-exports of `runtime`.
@@ -195,20 +201,23 @@ datalib/
                    them. Linked by datalib-step and datalib-applet —
                    never by datalib-http or datalib-dag.
     applets/       `datalib-applet`: the applet host.
-    history/       a doltlite store's commit log, third-party deps only,
-                   so datalib-http can serve it without linking `etl`.
+    history/       a doltlite store's commit log; its one first-party dep
+                   is `pin`, so datalib-http can serve it without
+                   linking `etl`.
     http/          `datalib-http`: API server + sync loop + UI host +
                    applet gateway. Every route is behind a per-process
                    API token (src/auth.rs): read
                    `<root>/system/api-token`, send
                    `Authorization: Bearer <token>`.
     schema/        `grid_rows`/`edges`/`markdowns` row structs;
-    app_schema/    feedback/usage/runs; both derive DDL via
-                   `#[derive(PortableTable)]`.
+    app_schema/    feedback, disk usage, remote media, runs; both derive
+                   DDL via `#[derive(PortableTable)]`.
   ui/          Vue frontend; every grid is SlickGrid, kept behind a few
                files so it can be swapped (docs/dev/cards.md § The grid).
   tauri/       the desktop shell (out of Bazel).
-tests/fixtures/  TNG-themed source data + the cached `ingested/` artifact.
+tests/fixtures/  the TNG fixture pipeline: it syncs the providers' TNG
+               source data (each kept in its provider's tests/fixtures/)
+               into the cached `ingested/` artifact.
 docs/          dev/ architecture notes; user/ guides; dev/plans/; assets/ images
                only the docs use (the README grid shares the UI's marks).
 third-party/   vendored upstream code.
@@ -216,10 +225,10 @@ third-party/   vendored upstream code.
 
 A provider's config schema is its own crate (`<p>_config`, serde
 structs and nothing else) so anything that needs to *understand* a
-config can link it without the machinery. Those crates are Bazel-only
-by design — no `Cargo.toml` — because a first-party crate with only
-third-party deps needs just a `BUILD.bazel`. The `<p>_render` split is
-the same move (see §"Ingest and render are separate crates").
+config can link it without the machinery. Those crates have no
+`Cargo.toml` (§"Git: prefer merges over rebases" says why). The
+`<p>_render` split is the same move (see §"Ingest and render are
+separate crates").
 
 ## The sync pipeline
 
@@ -231,14 +240,18 @@ tree it writes; `inputs` name steps by that id and are the edges; an
 `[[applets]]` entry is a server the gateway spawns. A built-in step has
 no `command` and runs `datalib-step`.
 
-Each source has an `ingest` step and a `render_markdown` step, and two
-fan-in steps under `unified_index` index every render tree their
-`inputs` name: `grid_index` (the SQL index the grid reads) and
-`qmd_index` (semantic search, one collection per group). A third,
-`embedding_map`, reads only `qmd_index` and lays its embeddings out on a
-plane for the map card (`datalib/backend/embedding_map/README.md`). All
-three are read by the `unified_index` applet; `datalib-http` never opens
-them. A render
+Each source has an `ingest` step and (most) a `render_markdown` step, and
+`grid_index` under `unified_index` reads every render tree its `inputs`
+name into the SQL index the grid reads. A searched source fills its own
+collection of the qmd index (free-text search) with two more steps of
+its own, `keyword_index` and then `embed`, so the slow embedding can be
+turned off or run by hand per source. `qmd_aggregator` reads every
+source's pair: it retires the collection of any source it does not name
+and reports on the whole, and removing it turns search off.
+`embedding_map` reads the aggregator and lays the embeddings out on a
+plane for the map card (`datalib/backend/embedding_map/README.md`).
+All of it is queried by the `unified_index` applet; `datalib-http`
+reads only the stores' commit logs (`history/`), never their rows. A render
 store is readable at every commit: the documents between two checkpoints
 share one transaction. The loop's record — each step's state now, its
 last run and success, each sink's version — is in
@@ -250,10 +263,8 @@ shows `ConfigErrorView`, live in both directions. The http server runs
 the loop `datalib-dag` runs, in-process (`http/src/supervisor.rs`), holding
 `runner-lock` for its life; a sync, a stop, a step turned off is a row it writes
 there (`POST /api/requests`, `/api/steps/<id>/turn_off`); the Manage tab
-edits the config; a
-root with no config gets the launcher and the first-run screen. See
-`docs/dev/step_protocol.md` for writing a step and `docs/dev/applets.md`
-for applets.
+edits the config; a root with no config gets the launcher and the
+first-run screen.
 
 ## Ingest and render are separate crates
 
@@ -261,8 +272,9 @@ A provider is three crates: `datalib_etl_<p>_config`, `datalib_etl_<p>`
 (fetches), and `datalib_etl_<p>_render` (markdown + `grid_rows`). The
 framework splits the same way — `datalib_etl` below, `datalib_etl_render`
 above. **The render schema stops at that line:** `datalib_schema` is
-reachable from render crates and from nothing on the ingest side, which
-Rust's acyclic crate graph enforces by itself.
+reachable from render crates and from nothing on the ingest side.
+Nothing in the build refuses an ingest crate that takes it; the
+measurement below is what notices.
 
 - **Anything an ingest needs lives on the ingest side.** The uuid recipes
   are minted during download and read again during render, so they
@@ -277,17 +289,16 @@ The measurement that checks it:
 bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/schema:datalib_schema))'
 ```
 
-77 at the last count. If that number climbs, something took a dependency
+73 at the last count. If that number climbs, something took a dependency
 it should not have.
 
 ## The grid_rows union table
 
-The grid is backed by one denormalized table, `grid_rows`, populated by
-the `grid_index` step from every source's render store, and read by the
-`unified_index` applet with one SELECT — no per-provider branches in the
-query path. The schema is the `GridRow` struct in
-`datalib/backend/schema/src/grid_rows.rs`; `docs/dev/grid_rows.md` has
-the architecture and the checklist for adding a column.
+The grid is one denormalized table, `grid_rows` (the `GridRow` struct in
+`datalib/backend/schema/src/grid_rows.rs`), which `grid_index` fills
+from every source's render store and the `unified_index` applet reads
+with one SELECT — no per-provider branches in the query path.
+`docs/dev/grid_rows.md` has the checklist for adding a column.
 
 ## QMDs are write-only
 
@@ -324,13 +335,12 @@ The rules, none optional; the reasons and measurements are in
   second one a branch of its own does not rescue it — the two then
   contend for the file instead (measured; `etl/README.md`). The
   `grid_index` step owns the index; `datalib-http`
-  owns feedback, jobs and usage; the applet only reads. A download takes
+  owns feedback, usage and remote media; the applet only reads. A download takes
   its store as an input (`FetchOptions.db: RawDb`) and never opens one.
 - **A writer works on `datalib_writer`, never on `main`**, and
   fast-forwards `main` when it seals, so a reader never sees a
   half-written batch or a half-built schema. `commit_run` is the seal —
-  a bare `dolt_commit` publishes nothing and reaches no reader; use
-  `commit_all` for a handle that carries a blob CAS.
+  a bare `dolt_commit` publishes nothing and reaches no reader.
 - **Every pool is `max_connections(1)`** with recycling off, and there is
   one open per file per pass. `close().await` before the next open, on
   the error path too — dropping the handle only schedules the close.
@@ -344,9 +354,8 @@ The rules, none optional; the reasons and measurements are in
   the real one's seals (`etl/README.md`).
 - **A statement a reader adds is presumed guilty until
   `doltlite_two_process_test` has run with it.** Looking like a read is
-  not enough: `dolt_status` from a read-only connection failed the
-  writer's commit and lost its rows until doltlite 0.50.10 (#400); the
-  test now holds it safe. The allowlist is in `etl/README.md`.
+  not enough; `etl/README.md` has the allowlist and the statement that
+  once lost a writer's rows.
 - **Never run a store call on a runtime you are about to drop**;
   `indexed_markdown::blocking` keeps one process-wide runtime for that.
 
@@ -468,7 +477,9 @@ sleep that is long enough on a warm mac is short on a loaded CI runner
 (the one on `2cbcc398` was), and a sleep that is long enough on CI
 makes every local run slower than it needs to be. Poll the row, the
 file, the endpoint — with a deadline, so a hang is a failure that
-names what never arrived rather than a timeout with no message.
+names what never arrived rather than a timeout with no message. In the
+Playwright suite, where most of our flakes have been, the rules are in
+[`testing.md`](docs/dev/testing.md) §"Writing a spec that does not flake".
 
 Three neighbours of the same mistake:
 
@@ -614,7 +625,9 @@ log when it fires.
 
 **An error or a warning about a record goes through `problems`, never
 only to the log.** A record a download could not fetch goes through
-`record_object_attempt` / `record_object_error`; a configured entry
+`record_object_attempt` / `record_object_error`, or through
+`download_problems::report_records` when it failed before we had a row
+for it; a configured entry
 upstream does not have goes through `download_problems::report`, and
 a listing or phase the run could not do as a whole through
 `download_problems::report_run`; a record render could not fully

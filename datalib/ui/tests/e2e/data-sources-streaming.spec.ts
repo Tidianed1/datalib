@@ -24,7 +24,7 @@
 // Both are states to wait for, not frames to catch: nothing upstream can
 // finish while the hold is in place.
 //
-// `qmd_index` is deliberately not in this config: its sink is an FTS
+// The qmd steps are deliberately not in this config: their sink is an FTS
 // index rewritten in place, which cannot be read mid-write, so it is a
 // barrier by design and says nothing about streaming — and its model
 // load is the slowest thing in the suite.
@@ -32,8 +32,10 @@
 import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { rmSync, writeFileSync } from "node:fs";
 import {
+  savedConfig,
   expandGroup,
   pipelineRow,
+  readRow,
   searchAndSettle,
   settleRow,
   settleRunner,
@@ -100,12 +102,12 @@ async function writeConfig(page: Page, text: string) {
 /// One reading of the Pipeline rows this spec watches — each row's
 /// status word and its Activity text — so "at once" means one reading.
 async function readRows(page: Page, ids: readonly string[]) {
-  const status: Record<string, string | null> = {};
+  const status: Record<string, string> = {};
   const activity: Record<string, string> = {};
   for (const id of ids) {
-    status[id] = await statusOf(page, id);
-    const chips = pipelineRow(page, id).locator('[col-id="activity"] .tg-chips');
-    activity[id] = (await chips.count()) ? ((await chips.first().getAttribute("title")) ?? "") : "";
+    const drawn = await readRow(page, id);
+    status[id] = drawn.status;
+    activity[id] = drawn.activity;
   }
   return { status, activity };
 }
@@ -153,7 +155,7 @@ let original = "";
 test.beforeEach(async ({ page, request }) => {
   dataRoot = await resolveDataRoot(request);
   await openManager(page);
-  original = await page.locator(".m2-editor").inputValue();
+  original = await savedConfig(request);
 });
 
 test.afterEach(async ({ page }) => {
@@ -443,10 +445,10 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
 
     // Newest first, so the rows the rest of the download brings land
     // above the ones already there.
-    const created = searchHeader(grid, "created_at");
+    const touched = searchHeader(grid, "touched_at");
     await expect(async () => {
-      if (!(await created.locator(".slick-sort-indicator-desc").count())) await created.click();
-      await expect(created.locator(".slick-sort-indicator-desc")).toHaveCount(1, { timeout: 500 });
+      if (!(await touched.locator(".slick-sort-indicator-desc").count())) await touched.click();
+      await expect(touched.locator(".slick-sort-indicator-desc")).toHaveCount(1, { timeout: 500 });
     }).toPass({ timeout: 10_000 });
 
     const picked = (await grid.evaluate(() =>

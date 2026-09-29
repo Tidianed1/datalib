@@ -1,5 +1,6 @@
 //! End-to-end integration test for the doltlite backend.
 
+use datalib_query::table::SearchTable;
 use datalib_schema::grid_rows::{GridRow, DDL as GRID_DDL, INDEXES as GRID_INDEXES};
 use datalib_schema::markdowns::DDL as MARKDOWNS_DDL;
 use datalib_schema::problems::{
@@ -7,9 +8,13 @@ use datalib_schema::problems::{
 };
 use datalib_schema::providers::Provider;
 use datalib_table::BulkUpsertable;
-use datalib_unified_index::dolt_repo::{search_sql, DoltRepo};
-use datalib_unified_index::query::{parse_query, Field};
-use datalib_unified_index::repo::IndexRepo;
+use datalib_unified_index::dolt_repo::{listing_sql, DoltRepo};
+use datalib_unified_index::grid_columns::GridColumn;
+use datalib_unified_index::problems::ProblemsQuery;
+use datalib_unified_index::query::parse_query;
+use datalib_unified_index::repo::{IndexRepo, LocatedProblem};
+use datalib_unified_index::sort::Sort;
+use datalib_unified_index::view;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -67,13 +72,17 @@ async fn insert_rows(writer: &sqlx::SqlitePool, rows: &[GridRow]) {
 
 /// A document row: a chat, filed under the path's first segment.
 fn chat_row(uuid: &str, qmd_path: &str) -> GridRow {
+    chat_row_at(uuid, qmd_path, "2026-04-01T10:00:00+00:00")
+}
+
+fn chat_row_at(uuid: &str, qmd_path: &str, created_at: &str) -> GridRow {
     GridRow::builder()
         .uuid(uuid)
         .provider(Provider::Claude)
         .kind("Chat")
         .source_label("Claude")
         .is_document(true)
-        .created_at(Some("2026-04-01T10:00:00+00:00".to_string()))
+        .created_at(Some(created_at.to_string()))
         .account(Some("acct-a".to_string()))
         .conversation_name(Some("Test conv".to_string()))
         .conversation_uuid(uuid)
@@ -84,6 +93,10 @@ fn chat_row(uuid: &str, qmd_path: &str) -> GridRow {
         .markdown_uuid(Some(uuid.to_string()))
         .build()
         .expect("a valid chat row")
+}
+
+fn order(spelled: &str) -> Vec<Sort> {
+    view::order::<GridColumn>(spelled).unwrap()
 }
 
 fn unique_db_path() -> PathBuf {
@@ -109,11 +122,19 @@ async fn dolt_repo_databaseless_root_reads_as_empty() {
     // No GRID_DDL / MARKDOWNS_DDL: this is the pre-first-sync state.
     let rows = repo.search(&parse_query(""), 100).await.unwrap();
     assert!(rows.is_empty(), "expected no rows, got {rows:?}");
-    let rows = repo
-        .search_by_uuids(&parse_query(""), &["c-1".into()], 100)
+    let listing = repo
+        .filter_uuids(&parse_query(""), &["c-1".into()], &[], &[])
         .await
         .unwrap();
-    assert!(rows.is_empty(), "expected no rows, got {rows:?}");
+    assert!(
+        listing.uuids.is_empty(),
+        "expected no rows, got {listing:?}"
+    );
+    assert!(repo
+        .rows_by_uuids(&["c-1".into()])
+        .await
+        .unwrap()
+        .is_empty());
     assert!(repo.grid_row_refs().await.unwrap().is_empty());
     assert!(repo.chat_meta("c-1").await.unwrap().is_none());
     assert!(repo.qmd_path_for_markdown("c-1").await.unwrap().is_none());
@@ -238,6 +259,88 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
         .unwrap();
     assert_eq!(batch.len(), 1, "unknown uuid should be absent: {batch:?}");
     assert_eq!(batch.get("c-1"), Some(&qmd));
+
+    drop(repo);
+    let _ = std::fs::remove_file(&db_path);
+}
+
+/// A search's rows are listed once, as uuids, and every page is read by
+/// uuid: the listing is in the order asked for, a qmd ranking keeps its
+/// own order unless a sort replaces it, and the rows come back in the
+/// order they were asked for, whatever order the table holds them in.
+#[tokio::test]
+async fn a_listing_orders_filters_and_reads_back_by_uuid() {
+    let db_path = unique_db_path();
+    let root = Arc::new(db_path.parent().unwrap().to_path_buf());
+    let writer = writer(&root).await;
+    create_grid_tables(&writer).await;
+    insert_rows(
+        &writer,
+        &[
+            chat_row_at("c-old", "enterprise/a.md", "2026-01-01T09:00:00+00:00"),
+            chat_row_at("c-new", "enterprise/b.md", "2026-03-01T09:00:00+00:00"),
+            chat_row_at("c-mid", "enterprise/c.md", "2026-02-01T09:00:00+00:00"),
+            chat_row_at("v-1", "voyager/d.md", "2026-02-15T09:00:00+00:00"),
+        ],
+    )
+    .await;
+    commit(&writer, "rows").await;
+    let repo = DoltRepo::open(root.clone()).await.unwrap();
+    let head = repo
+        .head()
+        .await
+        .unwrap()
+        .expect("a committed index has a head");
+
+    let newest_first = repo
+        .ordered_uuids(&parse_query(""), &[], &[])
+        .await
+        .unwrap();
+    assert_eq!(newest_first.uuids, ["c-new", "v-1", "c-mid", "c-old"]);
+    assert_eq!(newest_first.at.as_deref(), Some(head.as_str()));
+
+    let enterprise = parse_query("source_id:enterprise");
+    let oldest_first = repo
+        .ordered_uuids(&enterprise, &order("created_at:asc"), &[])
+        .await
+        .unwrap();
+    assert_eq!(oldest_first.uuids, ["c-old", "c-mid", "c-new"]);
+
+    // A qmd ranking, with a row from another source and one the index
+    // does not have.
+    let ranked: Vec<String> = ["c-mid", "v-1", "gone", "c-old", "c-new"]
+        .map(String::from)
+        .into();
+    let in_rank_order = repo
+        .filter_uuids(&enterprise, &ranked, &[], &[])
+        .await
+        .unwrap();
+    assert_eq!(in_rank_order.uuids, ["c-mid", "c-old", "c-new"]);
+    let (desc, asc) = (order("score:desc"), order("score:asc"));
+    let by_score = |o| repo.filter_uuids(&enterprise, &ranked, o, &[]);
+    assert_eq!(by_score(&desc).await.unwrap(), in_rank_order);
+    assert_eq!(
+        by_score(&asc).await.unwrap().uuids,
+        ["c-new", "c-old", "c-mid"]
+    );
+    let resorted = repo
+        .filter_uuids(&enterprise, &ranked, &order("created_at:desc"), &[])
+        .await
+        .unwrap();
+    assert_eq!(resorted.uuids, ["c-new", "c-mid", "c-old"]);
+
+    let asked: Vec<String> = ["c-old", "gone", "v-1"].map(String::from).into();
+    let rows = repo.rows_by_uuids(&asked).await.unwrap();
+    let got: Vec<&str> = rows.iter().map(|r| r.uuid.as_str()).collect();
+    assert_eq!(got, ["c-old", "v-1"]);
+
+    insert_rows(&writer, &[chat_row("c-later", "enterprise/e.md")]).await;
+    commit(&writer, "more rows").await;
+    assert_ne!(
+        repo.head().await.unwrap().as_deref(),
+        Some(head.as_str()),
+        "a seal moves the head, so a cached listing is not reused past it"
+    );
 
     drop(repo);
     let _ = std::fs::remove_file(&db_path);
@@ -484,35 +587,28 @@ async fn every_wire_field_survives_the_round_trip() {
     drop(repo);
 }
 
-/// The query that exercises a filter key, or `None` for a key no index
-/// can serve in newest-first order. Exhaustive, so a new key does not
-/// compile until it says which it is.
-fn query_for(field: &Field) -> Option<&'static str> {
-    match field {
-        Field::Source => Some("source:Claude"),
-        Field::SourceId => Some("source_id:slack"),
-        Field::Kind => Some("kind:Chat"),
-        Field::Channel => Some("channel:bridge"),
-        Field::Is => Some("is:document"),
-        Field::Convo => Some("convo:00000000-0000-8000-8000-000000000001"),
-        Field::Author => Some("author:picard"),
-        Field::Account => Some("account:acct-1701"),
-        Field::Project => Some("project:proj-1701"),
-        Field::NotionPage => Some("notion_page:00000000-0000-8000-8000-000000000002"),
-        Field::Change => Some("change:added"),
-        // Ranges on `created_at_utc`, which cannot share an index with a
-        // newest-first order: a `before:` far back walks the sort index.
-        Field::Before | Field::After => None,
-        // Not filters: free text goes to qmd, an unknown key matches nothing.
-        Field::Subj | Field::Other(_) => None,
-    }
-}
+/// The keys the search has no index for: each filters by walking the
+/// newest-first index and testing every row. Measured at full size
+/// (74,163 rows, 2026-09-27): 0.25 s for the whole listing, against 0.01
+/// s for an indexed key, which the result cache then pays once per
+/// search. Columns people rarely narrow by; one that turns out common
+/// earns an index, and leaves this list.
+const SCANS: &[&str] = &[
+    "created_at",
+    "modified_at",
+    "touched_at",
+    "org_name",
+    "byte_size",
+    "item_count",
+    "diff_changed_columns",
+];
 
-/// A filter the search bar offers must be served by an index in the
-/// order the grid sorts by. Without one, a filter that matches few rows
-/// walks the whole newest-first index row by row: 38 s for one row among
-/// 74k (`docs/dev/plans/paged_grids.md`). Fails naming the query whose
-/// plan scans the table or sorts it in a temporary B-tree.
+/// A key the search bar offers must be served by an index in the order
+/// the grid sorts by, or be one of [`SCANS`]: a new key does not pass
+/// until someone decides which. Fails naming the query whose plan does
+/// neither, a key in `SCANS` that no longer scans, and an index no query
+/// uses. `before:`/`after:` are ranges on `created_at_utc`, which cannot
+/// share an index with a newest-first order.
 #[tokio::test]
 async fn every_filter_key_is_served_by_an_index() {
     let db_path = unique_db_path();
@@ -521,38 +617,30 @@ async fn every_filter_key_is_served_by_an_index() {
     for (_t, ddl) in GRID_DDL.iter().chain(GRID_INDEXES.iter()) {
         sqlx::query(*ddl).execute(&writer).await.expect("create");
     }
-    let every_field = [
-        Field::Before,
-        Field::After,
-        Field::Subj,
-        Field::Source,
-        Field::SourceId,
-        Field::Kind,
-        Field::Channel,
-        Field::Is,
-        Field::Convo,
-        Field::Author,
-        Field::Account,
-        Field::Project,
-        Field::NotionPage,
-        Field::Change,
-        Field::Other(String::new()),
-    ];
-    let queries = every_field
+    let key_queries: Vec<(String, bool)> = GridRow::KEYS
         .iter()
-        .filter_map(query_for)
-        // The unfiltered grid, its inverse, and what a Browse card asks.
-        .chain(["", "-is:document", "source_id:slack is:document"]);
+        .map(|k| (format!("{}:x", k.key), SCANS.contains(&k.key)))
+        .collect();
+    let queries = key_queries
+        .iter()
+        .map(|(q, scans)| (q.as_str(), *scans))
+        // The unfiltered grid, `is:`, its inverse, and a Browse card.
+        .chain([
+            ("", false),
+            ("is:document", false),
+            ("-is:document", false),
+            ("source_id:slack is:document", false),
+        ]);
     let mut unserved: Vec<String> = Vec::new();
-    for q in queries {
-        let (sql, params) = search_sql(&parse_query(q));
+    let mut used: std::collections::BTreeSet<String> = Default::default();
+    for (q, scans) in queries {
+        let (sql, params) = listing_sql(&parse_query(q), &[], &[]);
         let explain = format!("EXPLAIN QUERY PLAN {sql}");
         let mut query = sqlx::query(sqlx::AssertSqlSafe(explain));
         for p in &params {
             query = query.bind(p.clone());
         }
         let plan: Vec<String> = query
-            .bind(200_i64)
             .fetch_all(&writer)
             .await
             .expect("explain")
@@ -573,13 +661,34 @@ async fn every_filter_key_is_served_by_an_index() {
             })
         };
         let sorts = plan.iter().any(|d| d.contains("TEMP B-TREE"));
-        if !served || sorts {
-            unserved.push(format!("{q:?}: {plan:?}"));
+        if served == scans || sorts {
+            let why = if scans {
+                "listed in SCANS but served"
+            } else {
+                "not served"
+            };
+            unserved.push(format!("{q:?} ({why}): {plan:?}"));
+        }
+        for detail in &plan {
+            if let Some(rest) = detail.split("INDEX ").nth(1) {
+                used.insert(rest.split_whitespace().next().unwrap_or("").to_string());
+            }
         }
     }
+    // The other direction: an index no query plans with is a cost every
+    // write pays for nothing.
+    let unused: Vec<&str> = GRID_INDEXES
+        .iter()
+        .filter_map(|(_t, ddl)| ddl.split_whitespace().nth(5))
+        .filter(|name| !used.contains(*name))
+        .collect();
+    assert!(
+        unused.is_empty(),
+        "no filter key plans with these: {unused:?}"
+    );
     assert!(
         unserved.is_empty(),
-        "no index serves these in newest-first order:\n{}",
+        "these keys are not what the test expects of them:\n{}",
         unserved.join("\n")
     );
 }
@@ -605,6 +714,26 @@ async fn a_committed_problem_is_read_back_by_query_and_by_document() {
         Problem::field("created_at", Reason::CoercionFailed, "yesterday"),
         Some(1),
     );
+    insert_problems(&writer, std::slice::from_ref(&row)).await;
+    commit(&writer, "problems").await;
+
+    let listing = repo
+        .problem_keys(&ProblemsQuery::parse(""), &[], &[])
+        .await
+        .unwrap();
+    let all = repo.problems_by_keys(&listing.uuids).await.unwrap();
+    assert_eq!(
+        all,
+        vec![LocatedProblem {
+            row: row.clone(),
+            markdown_uuid: Some("md-1".into())
+        }]
+    );
+    assert_eq!(repo.document_problems("md-1").await.unwrap(), vec![row]);
+    assert!(repo.document_problems("md-2").await.unwrap().is_empty());
+}
+
+async fn insert_problems(writer: &sqlx::SqlitePool, rows: &[ProblemRow]) {
     let columns = std::iter::once(ProblemRow::ID_COLUMN)
         .chain(ProblemRow::TYPED_COLUMNS.iter().copied())
         .collect::<Vec<_>>();
@@ -613,17 +742,62 @@ async fn a_committed_problem_is_read_back_by_query_and_by_document() {
         columns.join(", "),
         vec!["?"; columns.len()].join(", ")
     );
-    row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
-        .execute(&writer)
-        .await
+    for row in rows {
+        row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql.clone())))
+            .execute(writer)
+            .await
+            .unwrap();
+    }
+}
+
+/// A download's problem knows only its raw entity; the one whose item is
+/// a row of a document is located at that document, in the table and in
+/// the document's banner, and one whose item the index lacks is at none.
+#[tokio::test]
+async fn an_entity_problem_is_located_at_its_items_document() {
+    let db_path = unique_db_path();
+    let root = Arc::new(db_path.parent().unwrap().to_path_buf());
+    let repo = DoltRepo::open(root.clone()).await.unwrap();
+    let writer = writer(&root).await;
+    for (_t, ddl) in GRID_DDL.iter().chain(PROBLEMS_DDL.iter()) {
+        sqlx::query(*ddl).execute(&writer).await.unwrap();
+    }
+    let message = GridRow::builder()
+        .uuid("msg-2")
+        .provider(Provider::Slack)
+        .kind("Slack Message")
+        .source_label("Slack")
+        .conversation_uuid("md-2")
+        .entire_chat("/chat/md-2")
+        .body("a file")
+        .markdown_uuid(Some("md-2".to_string()))
+        .build()
         .unwrap();
+    insert_rows(&writer, &[chat_row("md-2", "slack/md-2.md"), message]).await;
+    let fetch_failed = |key: &str, item: &str| {
+        ProblemRow::new(
+            "slack",
+            Stage::Fetch,
+            Scope::Entity(key),
+            Some(item),
+            Outcome::Ok,
+            Problem::record(Reason::FetchFailed, "curl: (22) 403"),
+            None,
+        )
+    };
+    let located = fetch_failed("slack_attachments:T1#C1#1.1#F1", "msg-2");
+    let lost = fetch_failed("slack_attachments:T1#C1#2.2#F2", "not-in-the-index");
+    insert_problems(&writer, &[located.clone(), lost.clone()]).await;
     commit(&writer, "problems").await;
 
-    let all = repo
-        .problems(&datalib_unified_index::problems::parse(""), 10)
+    let keys = [located.problem_uuid.clone(), lost.problem_uuid.clone()];
+    let documents: Vec<Option<String>> = repo
+        .problems_by_keys(&keys)
         .await
-        .unwrap();
-    assert_eq!(all, vec![row.clone()]);
-    assert_eq!(repo.document_problems("md-1").await.unwrap(), vec![row]);
-    assert!(repo.document_problems("md-2").await.unwrap().is_empty());
+        .unwrap()
+        .into_iter()
+        .map(|p| p.markdown_uuid)
+        .collect();
+    assert_eq!(documents, [Some("md-2".to_string()), None]);
+    assert_eq!(repo.document_problems("md-2").await.unwrap(), vec![located]);
 }

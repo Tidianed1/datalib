@@ -84,7 +84,7 @@ test("a broken entry costs that entry, and nothing else", async ({ page, request
 
   // The dropped entry is on its own row, saying why — not missing, and
   // not wearing a status from some earlier run.
-  const row = page.locator('.tg-grid .slick-row[data-key="broken/ingest"]');
+  const row = page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="broken/ingest"]');
   await expect(row).toBeVisible();
   await expect(row.locator('[col-id="status"] .tg-status')).toHaveAttribute(
     "title",
@@ -106,7 +106,7 @@ test("a step naming a group the config lacks says so on its Edit button", async 
   await expect(gate(page)).toHaveCount(0);
   const edit = await rowMenuEntry(
     page,
-    page.locator('.tg-grid .slick-row[data-key="ghost/ingest"]'),
+    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="ghost/ingest"]'),
     "Edit settings…",
   ).open();
   await expect(edit).toHaveClass(MENU_DISABLED);
@@ -153,9 +153,10 @@ test("a file that is not a config blocks the app, and unblocks it live", async (
   await page.locator("#cfg-editor").fill(original);
   await page.getByRole("button", { name: "Save config" }).click();
 
-  // The gate lifts by itself — no reload. This direction is the one
-  // that is easy to get wrong, and the one an agent fixing the config
-  // depends on.
+  // The gate lifts by itself — no reload — on the save's own refetch,
+  // which does not wait for the file watcher to report the write. This
+  // direction is the one that is easy to get wrong: the cards behind the
+  // gate have to come back as they were.
   await expect(gate(page)).toHaveCount(0);
   await expect(tabs(page)).toBeVisible();
   await expect(

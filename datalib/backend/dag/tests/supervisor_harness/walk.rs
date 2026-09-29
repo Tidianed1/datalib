@@ -1,18 +1,31 @@
 //! A seeded random walk over everything the scenarios do one at a time:
 //! sources `a` and `b`, a consumer `c` of `a`, a fan-in `d` of both, and
-//! syncs, stops, steps turned
+//! syncs (one at a time, or one per source at once, as Sync everything
+//! opens them), stops, steps turned
 //! off and on, and every way a step can end, in any order. The invariants are
 //! checked as it goes (one process per step, on every start) and after
 //! each episode. `HARNESS_SEED=<n>` replays one walk; `HARNESS_SEEDS=<n>`
 //! runs that many.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Write;
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use datalib_dag::supervisor::store::RequestOutcome;
+use datalib_dag::supervisor::tick::StateKind;
 
-use crate::harness::{reads, source, Clocks, Harness, Seen};
+use crate::harness::{reads, source, Clocks, Harness, Progress, Seen};
 
+/// At most this many walks at once, which the target's `cpu:4` tag
+/// claims: more than the cores it is given is a test of the scheduler
+/// under overload, where a writer descheduled between its commit and its
+/// announcement for two backstops reads as a miss.
+const AT_ONCE: usize = 4;
+/// All the walks together, well inside the target's 60 s: past it, the
+/// watchdog names every walk still running and what it is waiting for,
+/// rather than leaving a bare TIMEOUT.
+const BUDGET: Duration = Duration::from_secs(40);
 const EPISODES: usize = 4;
 const ACTIONS: usize = 12;
 const STEPS: [&str; 4] = ["a", "b", "c", "d"];
@@ -94,6 +107,17 @@ impl Walk {
 
     async fn sync(&mut self) {
         let roots: &[&str] = self.rng.pick(&[&["a"][..], &["b"], &["a", "b"], &["c"]]);
+        self.open_sync(roots).await;
+    }
+
+    /// What Sync everything opens: a sync of each source, at once.
+    async fn sync_everything(&mut self) {
+        for source in ["a", "b"] {
+            self.open_sync(&[source]).await;
+        }
+    }
+
+    async fn open_sync(&mut self, roots: &[&'static str]) {
         for r in roots {
             if let Some(n) = self.allowed.get_mut(r) {
                 *n += 1;
@@ -201,9 +225,9 @@ impl Walk {
             format!("did {instruction}")
         };
         let what = format!("{step} [{pid}] to do {instruction:?} or be stopped");
-        let (w, p) = self
+        let answer = self
             .h
-            .wait(&what, |s| match s {
+            .wait_while_alive(pid, &what, |s| match s {
                 Seen::Ack {
                     step: st,
                     pid: p,
@@ -214,7 +238,47 @@ impl Walk {
                 _ => None,
             })
             .await;
-        self.absorb(step, p, &w);
+        match answer {
+            Some((w, p)) => self.absorb(step, p, &w),
+            // Killed before it could say so; the instruction waits in its
+            // pipe for the step's next process.
+            None => {
+                if let Some(puppet) = self.puppets.get_mut(step) {
+                    puppet.listening = None;
+                }
+            }
+        }
+    }
+
+    /// A step names only requests still open, and only while it has work
+    /// left in them: running, waiting, or up to date with something above
+    /// it still moving. The requests are read before the record, since
+    /// the loop saves a step's record before it closes a request.
+    async fn check_served(&mut self) {
+        let requests = self.h.state().await.requests;
+        let record = self.h.state().await.record;
+        for (step, st) in &record.steps {
+            if st.requests.is_empty() {
+                continue;
+            }
+            let working = matches!(
+                st.state,
+                Some(StateKind::Running | StateKind::Waiting | StateKind::Fresh)
+            );
+            if !working {
+                self.h.fail(&format!(
+                    "{step} reads {:?} and still names {:?}",
+                    st.state, st.requests
+                ));
+            }
+            for id in &st.requests {
+                let closed = requests.iter().any(|r| &r.id == id && r.closed.is_some());
+                if closed {
+                    self.h
+                        .fail(&format!("{step} names {id}, which had already closed"));
+                }
+            }
+        }
     }
 
     /// Stop everything and wait for the loop to be at rest; then check.
@@ -228,11 +292,15 @@ impl Walk {
         }
         let requests = self.requests.clone();
         self.h
-            .until("every request closed and every invocation ended", |s| {
-                let closed = requests.iter().all(|id| s.outcome(id).is_some());
-                let ended = s.invocations.iter().all(|(_, end)| end.is_some());
-                (closed && ended).then_some(())
-            })
+            .until(
+                "every request closed, every invocation ended, and no step naming a request",
+                |s| {
+                    let closed = requests.iter().all(|id| s.outcome(id).is_some());
+                    let ended = s.invocations.iter().all(|(_, end)| end.is_some());
+                    let named = s.record.steps.values().any(|st| !st.requests.is_empty());
+                    (closed && ended && !named).then_some(())
+                },
+            )
             .await;
         let state = self.h.state().await;
         for id in &self.requests {
@@ -278,7 +346,11 @@ impl Walk {
     }
 }
 
-async fn walk(seed: u64) {
+/// Each walk still running, and its harness's progress once it has one.
+type Running = Arc<Mutex<BTreeMap<u64, Option<Arc<Mutex<Progress>>>>>>;
+
+async fn walk(seed: u64, running: Running) {
+    running.lock().unwrap().insert(seed, None);
     let clocks = Clocks {
         stop_grace: Duration::from_millis(20),
         backoff: Duration::ZERO,
@@ -292,6 +364,7 @@ async fn walk(seed: u64) {
     ];
     let mut h = Harness::with(&steps, clocks).await;
     h.context = format!("walk seed {seed} (replay: HARNESS_SEED={seed}): ");
+    running.lock().unwrap().insert(seed, Some(h.progress()));
     let mut w = Walk {
         h,
         rng: Rng(seed),
@@ -307,17 +380,20 @@ async fn walk(seed: u64) {
     for episode in 0..EPISODES {
         w.h.say(format!("walk: episode {episode}"));
         for _ in 0..ACTIONS {
-            match w.rng.below(10) {
+            match w.rng.below(11) {
                 0..=2 => w.sync().await,
-                3 => w.stop().await,
-                4 => w.turn_off().await,
-                5 => w.turn_on().await,
+                3 => w.sync_everything().await,
+                4 => w.stop().await,
+                5 => w.turn_off().await,
+                6 => w.turn_on().await,
                 _ => w.tell().await,
             }
+            w.check_served().await;
         }
         w.quiesce().await;
     }
     w.h.finish().await;
+    running.lock().unwrap().remove(&seed);
 }
 
 fn seeds() -> Vec<u64> {
@@ -330,16 +406,15 @@ fn seeds() -> Vec<u64> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn random_walks_keep_every_invariant() {
-    // As many walks at once as the machine has cores: more is a test of
-    // the scheduler under overload, where a writer descheduled between its
-    // commit and its announcement for two backstops reads as a miss.
-    let at_once = std::thread::available_parallelism().map_or(4, |n| n.get());
+    let at_once = std::thread::available_parallelism().map_or(AT_ONCE, |n| n.get().min(AT_ONCE));
+    let running = Running::default();
+    let _watching = watchdog(running.clone());
     let mut set = tokio::task::JoinSet::new();
     for seed in seeds() {
         if set.len() == at_once {
             joined(set.join_next().await);
         }
-        set.spawn(walk(seed));
+        set.spawn(walk(seed, running.clone()));
     }
     while let Some(done) = set.join_next().await {
         joined(Some(done));
@@ -350,4 +425,32 @@ fn joined(done: Option<Result<(), tokio::task::JoinError>>) {
     if let Some(Err(e)) = done {
         std::panic::resume_unwind(e.into_panic());
     }
+}
+
+/// A thread of its own, so it fires even if the walks have wedged the
+/// runtime. It writes to stderr directly, since libtest holds back what a
+/// test prints until the test ends, and a stuck one never does. Dropping
+/// what it returns calls it off.
+fn watchdog(running: Running) -> mpsc::Sender<()> {
+    let (tx, rx) = mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        if rx.recv_timeout(BUDGET) != Err(mpsc::RecvTimeoutError::Timeout) {
+            return;
+        }
+        let running = running.lock().unwrap_or_else(|e| e.into_inner());
+        let mut out = format!(
+            "the walks outlived their {BUDGET:?} budget; {} still running\n",
+            running.len()
+        );
+        for (seed, progress) in running.iter() {
+            let report = match progress {
+                Some(p) => p.lock().unwrap_or_else(|e| e.into_inner()).report(),
+                None => "setting up its harness".to_string(),
+            };
+            out += &format!("\n=== walk seed {seed} (replay: HARNESS_SEED={seed}) ===\n{report}\n");
+        }
+        let _ = std::io::stderr().write_all(out.as_bytes());
+        std::process::exit(1);
+    });
+    tx
 }

@@ -52,8 +52,9 @@ pub enum ColumnType {
     /// by whoever serves the row, shown as icon + label with the id on
     /// hover.
     Identity,
-    /// A [`Status`]: a glyph for the word, the reason on hover, and a
-    /// bar while it moves.
+    /// A [`Status`]: a glyph for the word, when it got there (relative,
+    /// like a `Timestamp`), the reason on hover, and a bar while it
+    /// moves. Sorts on when.
     Status,
     /// A row of [`Chip`]s.
     Chips,
@@ -91,6 +92,51 @@ pub struct ColumnSpec {
     /// decides what an edit does.
     #[serde(default)]
     pub editable: bool,
+    /// How the producer's search bar filters on this column, where it
+    /// can: a cell's value becomes a term the viewer writes into it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search: Option<ColumnSearch>,
+    /// On an [`Identity`] column: the row field holding [`Chip`]s the
+    /// cell draws after the label, as bare counts. A double-click on
+    /// them reaches the viewer as a double-click on that field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub badges: Option<String>,
+}
+
+/// The key a term on this column starts with (`author:`), and the row
+/// field whose value the term names: the uuid behind a name, the id
+/// behind a label.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ColumnSearch {
+    pub key: String,
+    pub field: String,
+}
+
+/// What a paged grid reads of its rows beyond their columns: the field
+/// that names a row, the document a selected row opens, and what free
+/// text in its search bar matches.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RowsSpec {
+    pub row_key: &'static str,
+    pub document: DocumentLink,
+    pub free_text: FreeTextMatch,
+}
+
+/// The document a row opens: the first of `fields` the row has a value
+/// in, at the section `anchor` names.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct DocumentLink {
+    pub fields: &'static [&'static str],
+    pub anchor: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FreeTextMatch {
+    /// qmd ranks the rows: they come in its order, best first.
+    Qmd,
+    /// A substring of some of the columns; the rows keep their order.
+    Like,
 }
 
 fn yes() -> bool {
@@ -106,6 +152,8 @@ impl ColumnSpec {
             description: None,
             default_visible: true,
             editable: false,
+            search: None,
+            badges: None,
         }
     }
     pub fn describe(mut self, description: &str) -> Self {
@@ -118,6 +166,10 @@ impl ColumnSpec {
     }
     pub fn editable(mut self) -> Self {
         self.editable = true;
+        self
+    }
+    pub fn badges(mut self, field: &str) -> Self {
+        self.badges = Some(field.into());
         self
     }
 }
@@ -159,15 +211,6 @@ pub struct Timeseries {
     pub detail: Option<String>,
 }
 
-/// One segment of a status bar: a part of the whole and the status it
-/// is in.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Segment {
-    pub id: String,
-    pub key: String,
-    pub label: String,
-}
-
 /// One row's status, reduced to a vocabulary a Status column can draw.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Status {
@@ -184,14 +227,6 @@ pub struct Status {
     pub last_success_at: Option<String>,
     /// Why it is that word — the failure, what it is waiting on.
     pub detail: Option<String>,
-    /// How far along, in `[0, 1]`, when the thing said how much is ahead
-    /// of it. Drawn only while `key` is `running`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fraction: Option<f64>,
-    /// For a status that aggregates several things in flight: one
-    /// segment each, drawn as a bar instead of the glyph.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub segments: Option<Vec<Segment>>,
 }
 
 #[derive(

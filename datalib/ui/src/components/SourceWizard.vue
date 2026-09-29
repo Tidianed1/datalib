@@ -16,7 +16,8 @@
 
 // A descriptor with a `credentialService` also gets a **Connection**
 // block: which latchkey account to use, "Latchkey auth", which runs
-// latchkey's browser login, and "Test connection", which calls the
+// latchkey's browser login, "Paste a credential", which stores a token
+// or app password with `latchkey auth set`, and "Test connection", which calls the
 // provider's own probe (`datalib-step probe <type>`). What comes back is not just a
 // green tick — it names the account actually reached, and it fills
 // every `probe:` field's checklist, the render step's included. A
@@ -43,11 +44,13 @@ import {
   suggestId,
   type ConfiguredGroup,
   type FieldValues,
+  type QmdIndexing,
   type SourceSteps,
 } from "@/config/sourceSteps";
 import { type ProbeItem, type ProbeItemKind, type ProbeReport, type StoredAccount } from "@/api";
 import { useApi } from "@/cards/cardApi";
 import { iconUrl } from "@/config/icons";
+import { SECRET, credentialShape, pastedCredential } from "@/config/credentialShape";
 import { ingestReach } from "@/config/ingestMethods";
 import { isDesktopApp, pickPath } from "@/desktop";
 import {
@@ -61,7 +64,13 @@ import {
 import ProbeItemPicker from "@/components/ProbeItemPicker.vue";
 import { STATUS_GLYPHS } from "@/config/glyphs";
 
-const { latchkeyService, probeSource, startLatchkeyConnect, latchkeyConnectStatus } = useApi();
+const {
+  latchkeyService,
+  probeSource,
+  setLatchkeyCredential,
+  startLatchkeyConnect,
+  latchkeyConnectStatus,
+} = useApi();
 
 const props = defineProps<{
   /// Group ids already in the config, plus the id of every step outside
@@ -74,10 +83,9 @@ const props = defineProps<{
     group: ConfiguredGroup;
     entry: CatalogEntry;
     steps: SourceSteps;
-    /// Whether `unified_index/qmd_index` names this source's render
-    /// step today — the config's way of saying "semantic search covers
-    /// this source".
-    qmdIndexed: boolean;
+    /// Which of its own qmd steps this source has today — the config's
+    /// way of saying how free-text search reaches it.
+    qmdIndexing: QmdIndexing;
   } | null;
 }>();
 
@@ -103,10 +111,10 @@ const emit = defineEmits<{
       /// The render step's composed id, for the caller to wire into the
       /// fan-ins. Null for a provider that renders nothing.
       renderId: string | null;
-      /// Whether the render step belongs in `unified_index/qmd_index`'s
-      /// inputs. False leaves the markdown out of semantic search; the
-      /// grid index is not a choice.
-      qmdIndex: boolean;
+      /// Which of its `keyword_index` and `embed` steps the source gets.
+      /// `none` leaves the markdown out of free-text search; the grid
+      /// index is not a choice.
+      qmdIndexing: QmdIndexing;
     },
   ): void;
 }>();
@@ -150,16 +158,19 @@ const renderWanted = ref(props.editing ? !!props.editing.steps.render : true);
 /// source asked for it.
 const renders = computed(() => providerRenders.value && renderWanted.value);
 
-/// Whether this source's markdown goes into the qmd index. On by
-/// default, for the same reason rendering is: a source nobody can
-/// search semantically is a surprise, not a saving. Editing seeds it
-/// from the fan-in's inputs. Embedding is the slow part of a sync, so
-/// off is a real choice for a source whose value is its rows.
-const qmdWanted = ref(props.editing ? props.editing.qmdIndexed : true);
+/// Whether this source's markdown gets a keyword index, and embeddings
+/// on top of it. Both on by default, for the same reason rendering is: a
+/// source nobody can search is a surprise, not a saving. Editing seeds
+/// them from the qmd steps the source has.
+const keywordWanted = ref(props.editing ? props.editing.qmdIndexing !== "none" : true);
+const embedWanted = ref(props.editing ? props.editing.qmdIndexing === "keyword_and_embed" : true);
 
-/// Does this source reach the qmd index — there is markdown to index,
-/// and this source asked for it.
-const qmdIndexes = computed(() => renders.value && qmdWanted.value);
+/// How far into qmd this source goes: only as far as there is markdown to
+/// index, and embeddings only on top of a keyword index.
+const qmdIndexing = computed<QmdIndexing>(() => {
+  if (!renders.value || !keywordWanted.value) return "none";
+  return embedWanted.value ? "keyword_and_embed" : "keyword";
+});
 
 /// The fields the form shows for one phase: the descriptor's, less any
 /// whose gate is shut.
@@ -503,10 +514,13 @@ async function loadAccounts() {
     const info = await latchkeyService(name);
     accounts.value = info.accounts;
     authOptions.value = info.auth_options;
+    setExample.value = info.set_example ?? null;
     serviceRegistered.value = info.registered;
     latchkeyCli.value = info.cli;
     gateway.value = info.gateway;
     accountsError.value = info.error;
+    // Where pasting is the only way in, the form is the next step.
+    if (setOnlyService.value && !pasteOpen.value) openPaste();
   } catch (e) {
     accounts.value = [];
     accountsError.value = String(e);
@@ -537,6 +551,93 @@ const canConnect = computed(
 const setOnlyService = computed(
   () => !gateway.value && serviceRegistered.value && !authOptions.value.includes("browser"),
 );
+
+/// latchkey's example for this service knows the credential's shape —
+/// `fastmail-dav` takes `-u user:password`, not a header. A service
+/// registered by hand may have none, and gets the generic header form.
+const setExample = ref<string | null>(null);
+const setCommand = computed(() => {
+  const example = setExample.value ?? `latchkey auth set ${service.value} -H "…"`;
+  return example.replace(/^latchkey /, `${latchkeyCli.value} `);
+});
+
+// Pasting a credential
+
+/// Offered wherever latchkey takes a credential by hand — every service
+/// the wizard names — except under a gateway, which refuses `auth set`.
+const canPaste = computed(() => !gateway.value && authOptions.value.includes("set"));
+const pasteShape = computed(() =>
+  credentialShape(setExample.value, chosen.value?.credentialPaste?.headers),
+);
+/// Open from the start where pasting is the only way in.
+const pasteOpen = ref(false);
+const pasteUsername = ref("");
+const pasteSecret = ref("");
+const pasteAccount = ref("");
+const paste = ref<{ state: "idle" | "saving" | "ok" | "failed"; message: string }>({
+  state: "idle",
+  message: "",
+});
+function openPaste() {
+  pasteOpen.value = true;
+  pasteAccount.value = accountValue.value;
+  if (!pasteUsername.value && accountValue.value.includes("@"))
+    pasteUsername.value = accountValue.value;
+}
+
+/// latchkey's own word for the secret: "Token", "App password".
+const pasteSecretLabel = computed(() => {
+  const label = pasteShape.value.secretLabel;
+  return label.charAt(0).toUpperCase() + label.slice(1);
+});
+
+const pasted = computed(() =>
+  pastedCredential(pasteShape.value, pasteUsername.value, pasteSecret.value),
+);
+
+/// The header the secret is sent in, shown with the secret elided so a
+/// person can see it is the kind of thing they have.
+const pasteHeaderHint = computed(() =>
+  pasteShape.value.kind === "headers" && pasteShape.value.headers[0] !== SECRET
+    ? pasteShape.value.headers.map((h) => h.replace(SECRET, "…")).join("  ")
+    : "",
+);
+
+/// latchkey files a credential stored with no account over the one it
+/// already holds, if it holds exactly one, and refuses if it holds
+/// several. Both are said before the button is pressed.
+const pasteReplaces = computed(() => {
+  const list = accounts.value ?? [];
+  const named = pasteAccount.value.trim();
+  if (named) return list.some((a) => a.account === named) ? named : null;
+  return list.length === 1 ? list[0]!.account || "latchkey’s default account" : null;
+});
+const pasteAmbiguous = computed(
+  () => !pasteAccount.value.trim() && (accounts.value?.length ?? 0) > 1,
+);
+
+async function savePasted() {
+  const name = service.value;
+  const credential = pasted.value;
+  if (!name || !credential || paste.value.state === "saving") return;
+  const account = accountField.value ? pasteAccount.value.trim() : "";
+  paste.value = { state: "saving", message: "" };
+  try {
+    await setLatchkeyCredential(name, account, credential);
+  } catch (e) {
+    paste.value = { state: "failed", message: String(e) };
+    return;
+  }
+  pasteSecret.value = "";
+  const field = accountField.value;
+  if (field && account) values.value[field.target] = account;
+  paste.value = { state: "ok", message: "Stored in latchkey." };
+  await loadAccounts();
+  // The credential is only a guess until something uses it; the probe is
+  // the cheapest thing that does.
+  probe.value = { state: "idle", message: "", report: null };
+  if (canProbe.value) await testConnection();
+}
 
 /// Set by the button on a service latchkey holds without a browser
 /// login: converting one means taking it apart and putting it back,
@@ -618,6 +719,10 @@ async function connectViaLatchkey() {
         const landed = status.account;
         const field = accountField.value;
         if (landed && field) values.value[field.target] = landed;
+        // A failure from before the login is about a credential that
+        // has just been replaced.
+        if (probe.value.state === "failed")
+          probe.value = { state: "idle", message: "", report: null };
         connect.value = {
           state: "ok",
           message: landed
@@ -702,6 +807,7 @@ const PROBE_KINDS: Record<ProbeNoun, ProbeItemKind[]> = {
   conversations: ["conversation"],
   channels: ["channel"],
   calendars: ["calendar"],
+  addressbooks: ["address_book"],
 };
 
 /// What a `probe:` field should offer, given what came back.
@@ -753,6 +859,7 @@ function unknownValues(field: Field): string[] {
 /// account has conversations and a Slack workspace channels.
 function probeNoun(probe: ProbeNoun): string {
   if (probe === "labels" || probe === "mailboxes") return chosen.value?.mailboxNoun ?? "folders";
+  if (probe === "addressbooks") return "address books";
   return probe;
 }
 
@@ -763,6 +870,7 @@ const KIND_NOUNS: Record<ProbeItemKind, ProbeNoun> = {
   conversation: "conversations",
   channel: "channels",
   calendar: "calendars",
+  address_book: "addressbooks",
 };
 
 /// What the probe came back with, counted by kind: "3 channels, 2
@@ -785,6 +893,10 @@ const probeSummary = computed(() => {
 watch(
   service,
   (name) => {
+    // A half-typed secret belongs to the service it was typed for.
+    pasteOpen.value = false;
+    pasteSecret.value = "";
+    paste.value = { state: "idle", message: "" };
     if (name) void loadAccounts();
   },
   { immediate: true },
@@ -800,7 +912,7 @@ function submit() {
     groupBody: source.value.groupBody,
     stepsBody: source.value.stepsBody,
     renderId: source.value.renderId,
-    qmdIndex: qmdIndexes.value,
+    qmdIndexing: qmdIndexing.value,
   });
 }
 </script>
@@ -942,6 +1054,14 @@ function submit() {
               {{ connect.state === "running" ? "Waiting for the browser…" : "Latchkey auth" }}
             </button>
             <button
+              v-if="canPaste && !pasteOpen"
+              type="button"
+              class="btn ghost"
+              @click="openPaste"
+            >
+              Paste a credential
+            </button>
+            <button
               v-if="canProbe"
               type="button"
               class="btn ghost"
@@ -984,9 +1104,73 @@ function submit() {
           <!-- Only where the button cannot help: a service its owner
                registered without a browser login. -->
           <p v-if="setOnlyService" class="wiz-help wiz-conn-note">
-            <code>{{ service }}</code> has no browser login, so its credential is pasted:
-            <code>latchkey auth set {{ service }} -H "…"</code>
+            <code>{{ service }}</code> has no browser login, so its credential is pasted — below, or
+            from a terminal: <code>{{ setCommand }}</code>
           </p>
+          <!-- latchkey's `auth set`, run by the server. The secret is
+               sent once and never kept in the form after it is stored. -->
+          <div v-if="canPaste && pasteOpen" class="wiz-conn-note wiz-paste">
+            <p v-if="chosen.credentialPaste?.help" class="wiz-help">
+              {{ chosen.credentialPaste.help }}
+            </p>
+            <label v-if="pasteShape.kind === 'basic'" class="wiz-field">
+              <span class="wiz-label">Username</span>
+              <input
+                v-model="pasteUsername"
+                class="wiz-input"
+                :placeholder="pasteShape.userHint"
+                autocomplete="off"
+                spellcheck="false"
+              />
+            </label>
+            <label class="wiz-field">
+              <span class="wiz-label">{{ pasteSecretLabel }}</span>
+              <input
+                v-model="pasteSecret"
+                class="wiz-input"
+                type="password"
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <small v-if="pasteHeaderHint" class="wiz-help">
+                Sent as <code>{{ pasteHeaderHint }}</code>
+              </small>
+            </label>
+            <label v-if="accountField" class="wiz-field">
+              <span class="wiz-label">Store under account</span>
+              <input
+                v-model="pasteAccount"
+                class="wiz-input"
+                placeholder="latchkey’s default account"
+                spellcheck="false"
+              />
+              <small v-if="pasteAmbiguous" class="wiz-help">
+                latchkey holds several <code>{{ service }}</code> credentials; name the one to store
+                this under.
+              </small>
+              <small v-else-if="pasteReplaces" class="wiz-help">
+                This replaces the credential stored for <code>{{ pasteReplaces }}</code
+                >. Name a new account to keep it.
+              </small>
+            </label>
+            <div class="wiz-conn-actions">
+              <button
+                type="button"
+                class="btn"
+                :disabled="!pasted || pasteAmbiguous || paste.state === 'saving'"
+                @click="savePasted"
+              >
+                {{ paste.state === "saving" ? "Storing…" : "Store in latchkey" }}
+              </button>
+            </div>
+            <p
+              v-if="paste.message"
+              class="wiz-help"
+              :class="{ 'wiz-error': paste.state === 'failed' }"
+            >
+              {{ paste.message }}
+            </p>
+          </div>
           <p v-if="connect.state !== 'idle'" class="wiz-help wiz-conn-note">
             {{ connect.message }}
           </p>
@@ -1002,6 +1186,13 @@ function submit() {
                 <path :d="STATUS_GLYPHS.failed" fill="currentColor" />
               </svg>
               {{ probeHeadline }}
+            </p>
+            <!-- The usual cause is a sign-in that expired, and the fix
+                 is the button above rather than the terminal command
+                 the probe's own recipe names. -->
+            <p v-if="canConnect" class="wiz-help">
+              If the sign-in has expired, press <b>Latchkey auth</b> to sign in again, then
+              <b>Test connection</b>.
             </p>
             <details v-if="probeDetail">
               <summary class="wiz-help">How to fix it</summary>
@@ -1122,20 +1313,37 @@ function submit() {
               </small>
             </label>
             <label class="wiz-field wiz-inline">
-              <span class="wiz-label">Index the markdown for semantic search</span>
+              <span class="wiz-label">Keyword-index the markdown</span>
               <input
-                v-model="qmdWanted"
+                v-model="keywordWanted"
                 type="checkbox"
                 class="wiz-bool"
                 :disabled="!renderWanted"
               />
               <small class="wiz-help">
-                Names this source in <code>unified_index/qmd_index</code>, the index every free-text
-                search goes to: it embeds this source's markdown so a search matches on meaning as
-                well as on words. Embedding is the slow part of a sync. Turn it off and the source
-                keeps its rows, its columns and its filters in the grid, but typing words into the
-                search bar will not find it.<template v-if="!renderWanted">
+                A step of its own, <code>{{ `${groupId || "…"}/keyword_index` }}</code
+                >, puts this source's markdown into the index every free-text search goes to, so
+                typing words into the search bar finds it. Turn it off and the source keeps its
+                rows, its columns and its filters in the grid, but the search bar will not find
+                it.<template v-if="!renderWanted">
                   Nothing to index while rendering is off.</template
+                >
+              </small>
+            </label>
+            <label class="wiz-field wiz-inline">
+              <span class="wiz-label">Embed it for search by meaning</span>
+              <input
+                v-model="embedWanted"
+                type="checkbox"
+                class="wiz-bool"
+                :disabled="!renderWanted || !keywordWanted"
+              />
+              <small class="wiz-help">
+                Another step, <code>{{ `${groupId || "…"}/embed` }}</code
+                >, computes vectors so a search matches on meaning as well as on words, and places
+                the source on the map. Embedding is the slow part of a sync. Turn it off and keyword
+                search still finds the source.<template v-if="renderWanted && !keywordWanted">
+                  It reads the keyword index, so it needs that on.</template
                 >
               </small>
             </label>
@@ -1534,6 +1742,17 @@ function submit() {
   padding-left: 10px;
 }
 .wiz-convert-head {
+  margin: 0;
+}
+.wiz-paste {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-left: 3px solid var(--datalib-border);
+  padding-left: 10px;
+}
+.wiz-paste p,
+.wiz-paste .wiz-field {
   margin: 0;
 }
 .wiz-req {

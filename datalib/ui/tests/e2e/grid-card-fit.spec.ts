@@ -8,7 +8,7 @@
 // growing worked even then.
 
 import { test, expect, type Page } from "@playwright/test";
-import { SEARCH_ROWS, searchGrid, type GridApi } from "./grid-helpers";
+import { gridSettled, SEARCH_ROWS, searchGrid, type GridApi } from "./grid-helpers";
 
 async function openGrid(page: Page) {
   await page.goto("/");
@@ -46,44 +46,16 @@ test("the grid follows the card's width, wider and narrower", async ({ page }) =
   await expect.poll(() => gridWidth(page), { timeout: 5_000 }).toBeLessThan(before + 40);
 });
 
-test("the filter row narrows the rows to the typed value", async ({ page }) => {
-  await openGrid(page);
-  const rowCount = () =>
-    searchGrid(page)
-      .first()
-      .evaluate((el) => Number(el.getAttribute("aria-rowcount")));
-  const all = await rowCount();
-  expect(all).toBeGreaterThan(30);
-
-  // Key by key: the filter listens for keyup, as a person's typing
-  // produces it, and `fill` would set the value without one.
-  const sourceFilter = page.locator(".grid-box input.filter-source_ref");
-  await sourceFilter.click();
-  await sourceFilter.pressSequentially("slack");
-  await expect.poll(rowCount, { timeout: 5_000 }).toBeLessThan(all);
-  await expect.poll(rowCount).toBeGreaterThan(0);
-
-  // Every row left names the typed value in its Source cell — read off
-  // the grid's filtered rows, not the few painted. The filter is a
-  // substring match, so the fixture's `slack-diff` group stays too.
-  const sources = await page.evaluate(() => [
-    ...new Set(
-      (window as unknown as { __fwGridApi: GridApi }).__fwGridApi
-        .filteredRows()
-        .map((r) => (r.source_ref as { label: string }).label),
-    ),
-  ]);
-  expect(sources).toContain("slack");
-  expect(sources.filter((s) => !s.includes("slack"))).toEqual([]);
-});
-
 test("clicking a group header folds the group and opens nothing", async ({ page }) => {
   await openGrid(page);
-  await page.evaluate(() => {
-    const api = (window as unknown as { __fwGridApi: GridApi }).__fwGridApi;
-    api.groupBy(["kind"]);
-    api.scrollToRow(0);
-  });
+  await page.evaluate(() =>
+    (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.groupBy(["kind"]),
+  );
+  await page.evaluate(() =>
+    (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.scrollToRow(0),
+  );
+  // The groups on screen have read their rows; nothing is still arriving.
+  await gridSettled(page);
   const group = page.locator(".grid-box .slick-row.slick-group").first();
   await expect(group).toBeVisible();
   const title = (await group.textContent())!.trim();

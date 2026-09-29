@@ -6,13 +6,8 @@
 // no grid. `TableGrid.ce.vue` mounts one over these for the simple
 // hosts; a card with a grid of its own (`GridCard`) calls this and
 // keeps driving its grid itself.
-import type {
-  Column,
-  Formatter,
-  GridOption,
-  GroupingFormatterItem,
-} from "@slickgrid-universal/common";
-import { Editors, Filters } from "@slickgrid-universal/common";
+import type { Column, Formatter, GroupingFormatterItem } from "@slickgrid-universal/common";
+import { Editors } from "@slickgrid-universal/common";
 import type { Action, ColumnSpec, Identity, StatusView, Chip, Timeseries } from "@/api";
 import {
   WIDTH,
@@ -22,15 +17,10 @@ import {
   renderTimeseries,
   renderTimestamp,
 } from "./cellRenderers";
-import { calibrationMax } from "@/config/sparkline";
 import { compareStamps, formatStamp } from "@/config/timeFormat";
 import { formatBytes } from "@/config/bytes";
 
 export type SlickColumnOptions<T> = {
-  /// The rows the columns will draw, read when a cell needs the whole
-  /// column — a `timeseries` sparkline is calibrated against the
-  /// largest value any row reaches.
-  rows: () => T[];
   /// How far back a `timeseries` cell's samples reach, in seconds.
   windowSecs?: number;
   /// The rows form a tree; the tree column (`treeColumnField`) carries
@@ -44,35 +34,9 @@ export type SlickColumnOptions<T> = {
   /// Every column can be dragged into the grouping bar. Off, no column
   /// carries a `grouping`, and the bar accepts none.
   groupable?: boolean;
-  /// Every column gets a box in the grid's filter row, with the grid's
-  /// operator shorthand (`>5`, `a*`, `<>x`). The grid must have
-  /// `enableFiltering` on, or it refuses the columns.
-  filterable?: boolean;
   /// Per-field refinements a type cannot know — a width, a hover, a
   /// formatter — merged over the typed definition.
   overrides?: Record<string, Partial<Column<T>>>;
-};
-
-/// Grid options a grid drawing `filterable` columns must carry. The
-/// compound number filter's operator dropdown pads each operator to
-/// three characters with `&nbsp;` entities and then, with
-/// `enableHtmlRendering` off, sets them as text — so its blank first
-/// option read `&nbsp;&nbsp;&nbsp;`. Naming every operator already
-/// padded, with no-break spaces, leaves it nothing to add.
-const NBSP = "\u00a0";
-const pad = (op: string) => ({ operatorAlt: op.padEnd(3, NBSP) });
-export const FILTER_GRID_OPTIONS: Pick<GridOption, "compoundOperatorAltTexts"> = {
-  compoundOperatorAltTexts: {
-    numeric: {
-      "": pad(NBSP),
-      "=": pad("="),
-      "<": pad("<"),
-      "<=": pad("<="),
-      ">": pad(">"),
-      ">=": pad(">="),
-      "<>": pad("<>"),
-    },
-  },
 };
 
 /// A group row's title: the column, the value and how many rows share
@@ -143,7 +107,7 @@ function treeCell<T extends Record<string, unknown>>(inner: Formatter<T>): Forma
 /// 24×24 Material-ish glyphs for the action ids the viewer knows a
 /// picture for, drawn in `currentColor`. An action carrying `on` draws
 /// a switch; any other id draws its label.
-const ACTION_ICONS: Record<string, string> = {
+export const ACTION_ICONS: Record<string, string> = {
   // A table: what Browse opens is this row's data as rows and columns.
   browse: "M3 5h18v4H3V5zm0 6h8v8H3v-8zm10 0h8v8h-8v-8z",
   sync: "M8 5v14l11-7z",
@@ -247,10 +211,6 @@ export function typedColumns<T extends Record<string, unknown>>(
   opts: SlickColumnOptions<T>,
 ): Column<T>[] {
   const windowSecs = opts.windowSecs ?? 300;
-  const ceilingOf = (field: string) =>
-    calibrationMax(
-      opts.rows().map((r) => (r[field] as Timeseries | undefined) ?? { value: null, samples: [] }),
-    );
 
   const Actions = actionsFormatter<T>(opts.actions ?? {});
   const treeField = treeColumnField(specs);
@@ -273,7 +233,6 @@ export function typedColumns<T extends Record<string, unknown>>(
       // column it is in.
       cellAttrs: { "col-id": f },
       headerCellAttrs: { "col-id": f },
-      ...(opts.filterable ? { filterable: true, filter: { model: Filters.input } } : {}),
       formatter: plain,
       sortComparer: (a, b, dir) => compareText(a, b, dir ?? 1),
       ...(spec.editable && spec.type !== "identity" ? { editor: { model: Editors.text } } : {}),
@@ -285,8 +244,13 @@ export function typedColumns<T extends Record<string, unknown>>(
       switch (spec.type) {
         case "identity": {
           const label = (v: unknown) => (v as Identity | null)?.label ?? "";
+          const badges = spec.badges;
           const inner: Formatter<T> = (_r, _c, _v, _col, row) =>
-            renderIdentity(row?.[f] as Identity | null, isTreeColumn, !!row?.__hasChildren);
+            renderIdentity(
+              row?.[f] as Identity | null,
+              !!row?.__hasChildren,
+              badges ? { field: badges, chips: (row?.[badges] as Chip[] | null) ?? [] } : null,
+            );
           return {
             // The cell's value is the label: what sorting, filtering and
             // an in-place edit see. The object is read off the row.
@@ -315,12 +279,12 @@ export function typedColumns<T extends Record<string, unknown>>(
         case "status":
           return {
             formatter: (_r, _c, value) => renderStatus(value as StatusView | null),
+            // By when, which is what the cell reads as.
             sortComparer: (a, b, dir) =>
-              compareText(
-                (a as StatusView | null)?.label,
-                (b as StatusView | null)?.label,
-                dir ?? 1,
-              ),
+              compareStamps(
+                (a as StatusView | null)?.at ?? null,
+                (b as StatusView | null)?.at ?? null,
+              ) * (dir ?? 1),
           };
         case "chips":
           return {
@@ -347,8 +311,7 @@ export function typedColumns<T extends Record<string, unknown>>(
           };
         case "timeseries":
           return {
-            formatter: (_r, _c, value) =>
-              renderTimeseries(value as Timeseries | null, ceilingOf(f), windowSecs),
+            formatter: (_r, _c, value) => renderTimeseries(value as Timeseries | null, windowSecs),
             sortComparer: (a, b, dir) =>
               compareNumber(
                 (a as Timeseries | null)?.value,
@@ -360,7 +323,6 @@ export function typedColumns<T extends Record<string, unknown>>(
           return {
             cssClass: "tg-right",
             type: "number",
-            ...(opts.filterable ? { filter: { model: Filters.compoundInputNumber } } : {}),
             formatter: (_r, _c, value) => ({
               text: typeof value === "number" ? formatBytes(value) : "",
               toolTip: typeof value === "number" ? `${value.toLocaleString()} bytes` : "",
@@ -371,7 +333,6 @@ export function typedColumns<T extends Record<string, unknown>>(
           return {
             cssClass: "tg-right",
             type: "number",
-            ...(opts.filterable ? { filter: { model: Filters.compoundInputNumber } } : {}),
             formatter: (_r, _c, value) => ({
               text: typeof value === "number" ? value.toLocaleString() : "",
             }),
@@ -381,7 +342,6 @@ export function typedColumns<T extends Record<string, unknown>>(
           return {
             cssClass: "tg-right",
             type: "number",
-            ...(opts.filterable ? { filter: { model: Filters.compoundInputNumber } } : {}),
             formatter: (_r, _c, value) => ({
               text:
                 typeof value === "number"

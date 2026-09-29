@@ -321,14 +321,14 @@ pub fn serve(port: u16, params: &serde_json::Value) -> Result<()> {
         .context("read the bound address")?
         .port();
     let gate = crate::gate::Gate::from_env(bound)?;
-    eprintln!("datalib-applet slack: listening on 127.0.0.1:{bound}, tree {tree}");
+    tracing::info!(port = bound, tree = %tree, "listening");
     // Written and bound, in that order — now the gateway may look.
     crate::announce_port(bound);
 
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
         if let Err(e) = handle(stream, &tree_path, &workspace, &gate) {
-            eprintln!("datalib-applet slack: request failed: {e:#}");
+            tracing::error!(error = %format!("{e:#}"), "a request failed");
         }
     }
     Ok(())
@@ -421,7 +421,7 @@ fn header_value<'a>(head: &'a str, name: &str) -> Option<&'a str> {
 
 fn warn(warnings: &[String]) {
     for w in warnings {
-        eprintln!("datalib-applet slack: unreadable: {w}");
+        tracing::warn!(detail = %w, "part of the Slack tree is unreadable");
     }
 }
 
@@ -469,9 +469,34 @@ mod tests {
     use super::*;
     use datalib_schema::providers::Provider;
 
-    fn write_thread(dir: &Path, md: &str, channel: &str, when: &str, msgs: &[(&str, &str)]) {
+    fn put_thread(dir: &Path, md: &str, rows: Vec<datalib_schema::grid_rows::GridRow>) {
         use datalib_etl_render::grid_index::RenderedMarkdown;
         use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
+
+        let store = IndexedMarkdownStore::open(dir).unwrap();
+        store
+            .put_document(
+                dir,
+                &RenderedMarkdown {
+                    markdown_uuid: md.to_string(),
+                    source_id: "slack".into(),
+                    upstream_cursor: None,
+                    bucket_key: None,
+                    md_path: dir.join(format!("{md}.md")),
+                    render_version: 1,
+                    rows,
+                    sections: Vec::new(),
+                    edges: Vec::new(),
+                    problems: Vec::new(),
+                },
+            )
+            .unwrap();
+        // The applet reads at HEAD, as the render step leaves it.
+        store.commit("test").unwrap();
+        store.close();
+    }
+
+    fn write_thread(dir: &Path, md: &str, channel: &str, when: &str, msgs: &[(&str, &str)]) {
         use datalib_schema::grid_rows::GridRow;
 
         let row = |uuid: &str, index: Option<i64>, author: &str, text: &str| {
@@ -502,27 +527,7 @@ mod tests {
             rows.push(row(&format!("{md}-m{i}"), Some(i as i64), author, text));
         }
 
-        let store = IndexedMarkdownStore::open(dir).unwrap();
-        store
-            .put_document(
-                dir,
-                &RenderedMarkdown {
-                    markdown_uuid: md.to_string(),
-                    source_id: "slack".into(),
-                    upstream_cursor: None,
-                    bucket_key: None,
-                    md_path: dir.join(format!("{md}.md")),
-                    render_version: 1,
-                    rows,
-                    sections: Vec::new(),
-                    edges: Vec::new(),
-                    problems: Vec::new(),
-                },
-            )
-            .unwrap();
-        // The applet reads at HEAD, as the render step leaves it.
-        store.commit("test").unwrap();
-        store.close();
+        put_thread(dir, md, rows);
     }
 
     /// Like [`write_thread`], but the caller supplies each message's
@@ -530,8 +535,6 @@ mod tests {
     /// thread row the store requires is written first, stamped with the
     /// first message's time.
     fn write_thread_rows(dir: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str)]) {
-        use datalib_etl_render::grid_index::RenderedMarkdown;
-        use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
         use datalib_schema::grid_rows::GridRow;
 
         let thread = GridRow::builder()
@@ -568,27 +571,7 @@ mod tests {
             }))
             .collect();
 
-        let store = IndexedMarkdownStore::open(dir).unwrap();
-        store
-            .put_document(
-                dir,
-                &RenderedMarkdown {
-                    markdown_uuid: md.to_string(),
-                    source_id: "slack".into(),
-                    upstream_cursor: None,
-                    bucket_key: None,
-                    md_path: dir.join(format!("{md}.md")),
-                    render_version: 1,
-                    rows,
-                    sections: Vec::new(),
-                    edges: Vec::new(),
-                    problems: Vec::new(),
-                },
-            )
-            .unwrap();
-        // The applet reads at HEAD, as the render step leaves it.
-        store.commit("test").unwrap();
-        store.close();
+        put_thread(dir, md, rows);
     }
 
     /// The namespace is read off the directory, and it lands in

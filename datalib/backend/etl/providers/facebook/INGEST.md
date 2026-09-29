@@ -10,8 +10,8 @@ records, and JSON is the one a program can trust.
 The ingest crate is `datalib_etl_facebook` (this directory); the render
 crate is `datalib_etl_facebook_render`; the config schema is
 `datalib_etl_facebook_config`. The shapes below were read off a real
-export requested on 2026-06-19, and the TNG fixture under
-`tests/fixtures/facebook_tng/` reproduces them file for file.
+export; the TNG fixture under `tests/fixtures/facebook_tng/` reproduces
+every file render reads, in the same shapes and at the same paths.
 
 ## What the export looks like
 
@@ -96,7 +96,7 @@ run's, never an emptied one — the rule in `docs/dev/plans/one_mode.md`.
 There is no cursor for a reset to clear.
 
 After the rows are committed, every `uri` in every record is read off
-disk once and stored in the sibling `blobs.doltlite_db`, with one
+disk once and stored in the sibling `blobs.sqlite`, with one
 `media_blobs` edge per `(record, uri)` — a photo an album and a post both
 reference is stored once and reached twice. Bytes already in the CAS are
 found through the edge table's `blake3` and not re-read; a `uri` no file

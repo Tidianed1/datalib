@@ -3,7 +3,7 @@ load("//tools:insta.bzl", "insta_update")
 
 # `datalib-step` — the built-in step program for the DAG runner
 # (//datalib/backend/dag:datalib_dag_bin). Reads its function (ingest /
-# render_markdown / grid_index / qmd_index / embedding_map) and its
+# render_markdown / grid_index / qmd_aggregator / embedding_map) and its
 # group's type from the environment the runner sets, and honors the DAG
 # step contract (NDJSON events on stdout, final outcome line).
 #
@@ -143,6 +143,7 @@ rust_test(
         "//docs/user/config_examples:all_sources.toml",
         "//docs/user/config_examples:claude_only.toml",
         "//docs/user/config_examples:sample_config.toml",
+        "//datalib/backend/http:src/agent_config_guide.md",
         # The UI's copy of the ingest-method declarations, which
         # `methods.rs` checks is generated from the config crates.
         "//datalib/ui:src/config/ingestMethods.json",
@@ -193,6 +194,7 @@ rust_test(
         "@datalib_crates//:sha2",
         "@datalib_crates//:tar",
         "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
     ],
 )
 

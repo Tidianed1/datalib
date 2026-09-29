@@ -19,16 +19,19 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import {
+  savedConfig,
+  nameCell,
   expandGroup,
-  groupRow,
   pickRowMenu,
   pipelineRow as row,
+  readRow,
   rowMenuEntry,
   settleRow,
   settleRunner,
   stampOf,
   stampsBefore,
   statusOf,
+  syncAllButton,
   MANAGE_WITH_CONFIG,
 } from "./grid-helpers";
 
@@ -82,7 +85,7 @@ async function resolveDataRoot(request: APIRequestContext): Promise<string> {
 
 async function openManager(page: Page) {
   await page.goto(MANAGE_WITH_CONFIG);
-  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
+  await expect(syncAllButton(page)).toBeVisible();
 }
 
 async function writeConfig(page: Page, text: string) {
@@ -126,10 +129,17 @@ const stoppingBtn = (page: Page, rowId: string) =>
 
 /// Start a source from its group's row, and wait for its request to have
 /// been written: `click()` resolves when the event is dispatched, not
-/// when the POST behind it returns.
+/// when the POST behind it returns. Waits on the POST itself, not on the
+/// "Queued a sync for" banner, which comes down when the request closes:
+/// a sync nothing holds (the PDF folder, a released tape) can close
+/// before a check for the banner first looks.
 async function start(page: Page, s: Source) {
+  const written = page.waitForResponse(
+    (r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/api/requests",
+  );
   await syncBtn(page, `group:${s.id}`).click();
-  await expect(page.getByText(/Queued a sync for/)).toBeVisible();
+  const response = await written;
+  expect(response.ok(), `the sync request for ${s.id}: ${response.status()}`).toBe(true);
 }
 
 /// A row's status icon reading `word`, as a locator to wait on.
@@ -155,9 +165,9 @@ async function untilStarted(page: Page, id: string, before: string | null, timeo
   await expect
     .poll(
       async () => {
-        const status = await statusOf(page, id);
+        const { status, lastSynced } = await readRow(page, id);
         if (status === "Running") return "started";
-        const finished = status === "Succeeded" && (await stampOf(page, id)) !== before;
+        const finished = status === "Succeeded" && lastSynced !== before;
         return finished ? "started" : status;
       },
       { timeout, intervals: [200], message: `${id} never started` },
@@ -241,7 +251,7 @@ test.beforeEach(async ({ page, request }) => {
   hold();
   dataRoot = await resolveDataRoot(request);
   await openManager(page);
-  original = await page.locator(".m2-editor").inputValue();
+  original = await savedConfig(request);
 });
 
 test.afterEach(async ({ page }) => {
@@ -496,7 +506,7 @@ test.describe("sources run independently", () => {
     // finishes, picking up from the checkpoint the stop left.
     const renamed = "chatgpt (narrowed)";
     await writeConfigAndOpen(page, [CHATGPT, CLAUDE], { [CHATGPT.id]: renamed });
-    await expect(groupRow(page, CHATGPT.id)).toContainText(renamed);
+    await expect(nameCell(page, `group:${CHATGPT.id}`)).toContainText(renamed);
     const again = await stampsBefore(page, [ingestOf(CHATGPT), renderOf(CHATGPT), INDEX]);
     await start(page, CHATGPT);
     // Released, the restart is over in well under a second — too quick
@@ -535,6 +545,51 @@ test.describe("steering one source among several", () => {
     const when = await currentStates(request);
     expect(when[ingestOf(CHATGPT)], `runner: ${JSON.stringify(when)}`).toBe("running");
     expect(when[ingestOf(CLAUDE)], `runner: ${JSON.stringify(when)}`).toBe("running");
+  });
+
+  /// Sync everything once opened one request over every source, so a
+  /// Stop on any row stopped them all. Now each source has its own: a
+  /// Stop on one step's row, then on another source's group row, each
+  /// stops that source and nothing else.
+  test("after Sync everything, a Stop on one row stops that source alone", async ({
+    page,
+    request,
+  }) => {
+    await writeConfigAndOpen(page, [CHATGPT, CLAUDE]);
+    const written = page.waitForResponse(
+      (r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/api/requests",
+    );
+    await page.getByRole("button", { name: "Sync everything" }).click();
+    const opened = (await (await written).json()) as SyncRequest[];
+    const idOf = (s: Source) => opened.find((r) => r.roots.join() === ingestOf(s))?.id;
+    expect(opened.map((r) => r.roots.join()).sort(), "one sync per source").toEqual(
+      [ingestOf(CHATGPT), ingestOf(CLAUDE)].sort(),
+    );
+    const stateOf = async (s: Source) =>
+      (await requests(request)).find((r) => r.id === idOf(s))?.state;
+    await untilRunning(page, ingestOf(CHATGPT));
+    await untilRunning(page, ingestOf(CLAUDE));
+    await expect(page.getByRole("button", { name: "Stop everything" })).toBeVisible();
+
+    // ── a step's row ─────────────────────────────────────────────────
+    await stopBtn(page, ingestOf(CHATGPT)).click();
+    await expect
+      .poll(() => stateOf(CHATGPT), { timeout: 45_000, intervals: [200] })
+      .toBe("stopped");
+    expect(await stateOf(CLAUDE), `${CLAUDE.id}'s sync after one row's Stop`).toBe("open");
+    await expect
+      .poll(() => statusOf(page, ingestOf(CHATGPT)), { timeout: 45_000, intervals: [200] })
+      .toBe("Stopped");
+    expect(await statusOf(page, ingestOf(CLAUDE))).toBe("Running");
+    await expect(syncBtn(page, ingestOf(CHATGPT))).toBeVisible();
+    await expect(page.getByRole("button", { name: "Stop everything" })).toBeVisible();
+
+    // ── a group's row ────────────────────────────────────────────────
+    await stopBtn(page, `group:${CLAUDE.id}`).click();
+    await expect.poll(() => stateOf(CLAUDE), { timeout: 45_000, intervals: [200] }).toBe("stopped");
+    await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible({
+      timeout: 45_000,
+    });
   });
 
   test("a backlogged step can be turned off, and turned back on", async ({ page }) => {

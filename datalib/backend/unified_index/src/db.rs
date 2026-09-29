@@ -3,6 +3,7 @@
 //! [`crate::dolt_repo::DoltRepo`].
 
 use crate::query::{extract_uuid_suffix, Field, ParsedQuery};
+use datalib_query::table::{Column, FreeText, SearchTable};
 use datalib_schema::providers::Provider;
 
 /// The source id datalib's own rows are filed under — the storage
@@ -32,37 +33,21 @@ pub struct ChatMeta {
     pub source_url: Option<String>,
 }
 
-/// Map a query [`Field`] to the underlying `grid_rows` column it
-/// constrains, or `None` for fields that aren't single-column equality
-/// filters (Before/After are range, Is sets `documents`, Subj/Other have
-/// no column yet).
-fn column_for_field(f: &Field) -> Option<&'static str> {
-    match f {
-        Field::Source => Some("source_label"),
-        // Derived at index time: the path's first segment, or `datalib`
-        // for a storage row (`GridRow::derived_source_id`).
-        Field::SourceId => Some("source_id"),
-        Field::Kind => Some("kind"),
-        Field::Channel => Some("channel"),
-        Field::Convo => Some("conversation_uuid"),
-        Field::Author => Some("author"),
-        Field::Account => Some("account"),
-        Field::Project => Some("project"),
-        Field::NotionPage => Some("notion_page_uuid"),
-        Field::Change => Some("diff_status"),
-        Field::Before | Field::After | Field::Is | Field::Subj | Field::Other(_) => None,
-    }
-}
+/// A term's value that stands for any value at all: `author:*`.
+pub const ANY_VALUE: &str = "*";
 
 /// Build the SQL `WHERE` clause (with a leading space) and the matching
-/// parameter list for a parsed query's structured terms. Free text is not
-/// here: it goes to qmd.
-pub fn build_where(q: &ParsedQuery) -> (String, Vec<String>) {
+/// parameter list for a parsed query's terms, and for its free text when
+/// the table matches free text with `LIKE`; a qmd table's free text is
+/// qmd's.
+pub fn build_where<C: Column>(q: &ParsedQuery<C>) -> (String, Vec<String>) {
     let mut clauses: Vec<String> = Vec::new();
     let mut params: Vec<String> = Vec::new();
 
-    if let Some(documents) = q.documents {
-        clauses.push(format!("is_document = {}", i32::from(documents)));
+    for (_, column) in <C::Table as SearchTable>::FLAGS {
+        if let Some(on) = q.flag(*column) {
+            clauses.push(format!("{} = {}", column.as_str(), i32::from(on)));
+        }
     }
 
     // Per-term AND filters. Each occurrence is its own clause —
@@ -70,9 +55,21 @@ pub fn build_where(q: &ParsedQuery) -> (String, Vec<String>) {
     // result, which matches the "keep only X then keep only Y"
     // tree-zoom UX.
     for term in &q.terms {
-        let Some(col) = column_for_field(&term.field) else {
+        // Before/after are a range, below; `is:` is a flag, above.
+        let Field::Column(key) = term.field else {
             continue;
         };
+        let col = key.column.as_str();
+        // `author:*` is the rows with an author, `-author:*` the rows with
+        // none; an empty value is none, as the grid shows it.
+        if term.value == ANY_VALUE {
+            clauses.push(if term.negate {
+                format!("({col} IS NULL OR {col} = '')")
+            } else {
+                format!("({col} IS NOT NULL AND {col} != '')")
+            });
+            continue;
+        }
         if term.negate {
             // Nullable columns: NULL would pass `col != ?` as unknown
             // and be dropped, which surprises users who didn't ask to
@@ -81,7 +78,7 @@ pub fn build_where(q: &ParsedQuery) -> (String, Vec<String>) {
         } else {
             clauses.push(format!("{col} = ?"));
         }
-        let bound = if term.field.is_uuid_bearing() {
+        let bound = if key.uuid {
             extract_uuid_suffix(&term.value).to_string()
         } else {
             term.value.clone()
@@ -89,29 +86,33 @@ pub fn build_where(q: &ParsedQuery) -> (String, Vec<String>) {
         params.push(bound);
     }
 
-    // Filter on the UTC-normalized index column, the same one the grid
-    // sorts on, so before:/after: bounds agree with display order across
-    // rows recorded in different local offsets. The user-typed bound is
-    // normalized to UTC first (datalib_time): a naive value means
-    // local machine time, so it lands on the same basis as created_at_utc.
+    // The range column is a UTC stamp, the one the grid sorts on, so
+    // before:/after: bounds agree with display order across rows recorded
+    // in different local offsets. The user-typed bound is normalized to
+    // UTC first (datalib_time): a naive value means local machine time.
     // An unparseable bound drops the filter rather than compare garbage.
-    if let Some(v) = q
-        .filters
-        .get(&Field::Before)
-        .and_then(|vals| vals.first())
-        .and_then(|v| datalib_time::normalize_user_time_to_utc(v))
-    {
-        clauses.push("created_at_utc < ?".into());
-        params.push(v);
+    if let Some(range) = <C::Table as SearchTable>::RANGE {
+        for (field, op) in [(Field::Before, "<"), (Field::After, ">")] {
+            if let Some(v) = q
+                .bound(field)
+                .and_then(datalib_time::normalize_user_time_to_utc)
+            {
+                clauses.push(format!("{} {op} ?", range.as_str()));
+                params.push(v);
+            }
+        }
     }
-    if let Some(v) = q
-        .filters
-        .get(&Field::After)
-        .and_then(|vals| vals.first())
-        .and_then(|v| datalib_time::normalize_user_time_to_utc(v))
+
+    if let (FreeText::Like(columns), false) =
+        (<C::Table as SearchTable>::FREE_TEXT, q.free_text.is_empty())
     {
-        clauses.push("created_at_utc > ?".into());
-        params.push(v);
+        let needle = format!("%{}%", q.free_text.to_lowercase());
+        let any: Vec<String> = columns
+            .iter()
+            .map(|c| format!("LOWER(COALESCE({}, '')) LIKE ?", c.as_str()))
+            .collect();
+        clauses.push(format!("({})", any.join(" OR ")));
+        params.extend(columns.iter().map(|_| needle.clone()));
     }
 
     let where_sql = if clauses.is_empty() {
@@ -127,6 +128,66 @@ mod tests {
     use super::*;
     use crate::query::parse_query;
 
+    /// A table the tests declare, shaped like the problems table: free
+    /// text is a substring of its columns, and it has no range and no
+    /// flags.
+    mod log {
+        #[allow(dead_code)]
+        #[derive(datalib_etl_macros::PortableTable)]
+        #[portable_table(table = "log", primary_key = "seq", search(order = "seq desc"))]
+        pub struct Entry {
+            #[col(sql = "INTEGER")]
+            pub seq: i64,
+            #[col(sql = "VARCHAR(32)", search = "who", alias = "officer", like)]
+            pub author: Option<String>,
+            #[col(sql = "TEXT", like)]
+            pub body: String,
+        }
+    }
+    use log::EntryColumn;
+
+    #[test]
+    fn a_like_table_matches_free_text_in_its_columns() {
+        let q = ParsedQuery::<EntryColumn>::parse("officer:worf Klingon");
+        assert_eq!(q.refusal(), None);
+        let (sql, params) = build_where(&q);
+        assert_eq!(
+            sql,
+            " WHERE author = ? AND \
+             (LOWER(COALESCE(author, '')) LIKE ? OR LOWER(COALESCE(body, '')) LIKE ?)"
+        );
+        assert_eq!(params, ["worf", "%klingon%", "%klingon%"]);
+        assert_eq!(crate::sort::default_order::<log::Entry>(), "seq DESC");
+    }
+
+    /// What a table does not have is refused by name: a range, a flag,
+    /// and qmd's predicates on a table qmd does not index.
+    #[test]
+    fn a_table_refuses_the_keys_it_lacks() {
+        for q in ["before:2025-01-01", "is:document", "qmd:tea", "author:worf"] {
+            let why = ParsedQuery::<EntryColumn>::parse(q).refusal();
+            let key = q.split(':').next().unwrap();
+            assert!(
+                why.as_deref()
+                    .is_some_and(|w| w.contains(&format!("`{key}:`"))),
+                "{q}: {why:?}"
+            );
+        }
+    }
+
+    /// `before:` and `after:` compare the UTC twin of `created_at`, the
+    /// column the grid sorts by, with the bound normalized to UTC.
+    #[test]
+    fn before_and_after_bound_the_utc_stamp() {
+        let (sql, params) = build_where(&parse_query(
+            "after:2025-01-01T00:00:00Z before:2025-02-01T00:00:00Z",
+        ));
+        assert_eq!(sql, " WHERE created_at_utc < ? AND created_at_utc > ?");
+        assert_eq!(params.len(), 2);
+        assert!(params[0].starts_with("2025-02-01"), "{params:?}");
+        assert!(params[1].starts_with("2025-01-01"), "{params:?}");
+    }
+
     #[test]
     fn empty_query_produces_no_where() {
         let (sql, params) = build_where(&parse_query(""));
@@ -141,6 +202,18 @@ mod tests {
         assert!(params.is_empty());
         let (sql, _) = build_where(&parse_query("-is:document"));
         assert_eq!(sql, " WHERE is_document = 0");
+    }
+
+    /// `author:*` keeps the rows with an author and `-author:*` the rows
+    /// with none, an empty one included; nothing is bound.
+    #[test]
+    fn a_star_is_any_value_and_its_negation_none() {
+        let (sql, params) = build_where(&parse_query("author:* -channel:*"));
+        assert_eq!(
+            sql,
+            " WHERE (author IS NOT NULL AND author != '') AND (channel IS NULL OR channel = '')"
+        );
+        assert!(params.is_empty(), "{params:?}");
     }
 
     #[test]

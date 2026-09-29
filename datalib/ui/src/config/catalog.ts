@@ -85,7 +85,8 @@ export type Field =
 /// What a `probe:` field is a picker *of*: which of the probe's items
 /// it takes. The wizard says `labels` and `mailboxes` in the source's
 /// own word for them (`CatalogEntry.mailboxNoun`), the rest as written.
-export type ProbeNoun = "labels" | "mailboxes" | "conversations" | "channels" | "calendars";
+export type ProbeNoun =
+  "labels" | "mailboxes" | "conversations" | "channels" | "calendars" | "addressbooks";
 
 export type CatalogEntry = {
   /// The group's `type`: the thing mirrored (`slack`, `email`, …).
@@ -146,6 +147,11 @@ export type CatalogEntry = {
   /// Shown beside the Connect button, when connecting this way costs
   /// something the person should decide about before clicking.
   credentialConnectWarning?: string;
+  /// The "Paste a credential" form. `help` says where the credential
+  /// comes from; `headers` replaces the shape latchkey's own example
+  /// gives, for a service whose example is wrong — `{secret}` marks
+  /// where the pasted value goes (see `credentialShape.ts`).
+  credentialPaste?: { help?: string; headers?: string[] };
   /// Dotted params path whose presence identifies this entry among the
   /// several that share one `type`. Undefined on a type with only one
   /// entry, which is nearly all of them.
@@ -297,6 +303,14 @@ export const CATALOG: CatalogEntry[] = [
     // cost, not the history of how we found out (2026-08-31, the
     // captured cookie and the everyday browser evicting each other).
     credentialConnectWarning: "Signing in again may log out your other claude.ai session.",
+    // latchkey offers a service it did not ship the generic Bearer
+    // example; claude.ai's credential is the cookie.
+    credentialPaste: {
+      headers: ["Cookie: sessionKey={secret}"],
+      help:
+        "The sessionKey cookie from a signed-in claude.ai tab: DevTools → Application → " +
+        "Cookies → https://claude.ai → sessionKey → Value.",
+    },
     canProbe: true,
     fields: [
       {
@@ -523,6 +537,14 @@ export const CATALOG: CatalogEntry[] = [
     wizard: true,
     canProbe: true,
     credentialService: "fastmail",
+    // Fastmail has no read-only OAuth scope, so the browser login can
+    // read, change and send mail; a hand-made token is the way to less.
+    credentialPaste: {
+      help:
+        "For read-only access, make an API token at app.fastmail.com → Settings → Privacy & " +
+        "Security → Integrations → API tokens, with Read-only access ticked, and paste it " +
+        "here. Latchkey auth signs in with full read and write access instead.",
+    },
     preset: [
       // The JMAP server. A preset rather than a field because this
       // entry *is* Fastmail — a different host is a different service
@@ -664,6 +686,11 @@ export const CATALOG: CatalogEntry[] = [
     // CalDAV takes an app password, which is its own latchkey service,
     // not the OAuth login the `fastmail` mail entry uses.
     credentialService: "fastmail-dav",
+    credentialPaste: {
+      help:
+        "Your Fastmail address and an app password from app.fastmail.com → Settings → " +
+        "Privacy & Security → Integrations → App passwords, with calendar access.",
+    },
     canProbe: true,
     fields: [
       {
@@ -785,16 +812,127 @@ export const CATALOG: CatalogEntry[] = [
       },
     ],
   },
+  // ── the `contacts` variants ───────────────────────────────────────
+  //
+  // Like `calendar`: one type, an entry per way in, keyed on its method
+  // table, and a form for each, so no catch-all.
   {
     type: "contacts",
-    label: "Contacts",
-    blurb: "Mirror contacts from a CardDAV server or .vcf files.",
-    keywords: ["contacts", "carddav", "vcard", "address book"],
+    variantKey: "fastmail",
+    method: "fastmail",
+    label: "Fastmail Contacts",
+    blurb: "Mirror a Fastmail account's address books over CardDAV.",
+    keywords: ["fastmail", "contacts", "carddav", "vcard", "address book"],
+    kind: "api",
+    icon: "fastmail",
+    defaultName: "fastmail_contacts",
+    nameHint: "Personal contacts",
+    wizard: true,
+    // The app password Fastmail Calendar uses too: DAV refuses the OAuth
+    // login the `fastmail` mail entry holds.
+    credentialService: "fastmail-dav",
+    credentialPaste: {
+      help:
+        "Your Fastmail address and an app password from app.fastmail.com → Settings → " +
+        "Privacy & Security → Integrations → App passwords, with contacts access.",
+    },
+    canProbe: true,
+    fields: [
+      {
+        kind: "text",
+        latchkey: true,
+        target: "latchkey_settings.account",
+        label: "Fastmail account",
+        help: "Which stored Fastmail app password to use. Leave it empty if latchkey holds only one.",
+      },
+      {
+        kind: "string_list",
+        probe: "addressbooks",
+        target: "fastmail.addressbooks",
+        label: "Only these address books",
+        help:
+          "Address book names exactly as Fastmail shows them, comma-separated. Empty mirrors " +
+          "every address book on the account.",
+      },
+    ],
+  },
+  {
+    type: "contacts",
+    variantKey: "carddav",
+    label: "CardDAV contacts",
+    blurb: "Mirror the address books on any CardDAV server: iCloud, Nextcloud, Radicale, ….",
+    keywords: ["contacts", "carddav", "icloud", "nextcloud", "vcard", "address book"],
     kind: "api",
     icon: "contacts",
     defaultName: "contacts",
     nameHint: "Phone contacts",
-    wizard: false,
+    wizard: true,
+    // No `credentialService`, for the reason CalDAV has none: latchkey
+    // keys the login by the server's host, and registering one takes an
+    // app password, which the Connect flow cannot do.
+    canProbe: true,
+    fields: [
+      {
+        kind: "text",
+        required: true,
+        target: "carddav.server_url",
+        label: "Server URL",
+        help:
+          "Where the server's CardDAV starts, e.g. https://contacts.icloud.com/. The host " +
+          "alone is usually enough: discovery tries /.well-known/carddav when it does not " +
+          "answer. The login is latchkey's: `latchkey services register` a service for this " +
+          'host, then `latchkey auth set <service> -u "you@example.com:<app password>"`.',
+      },
+      {
+        kind: "text",
+        target: "latchkey_settings.account",
+        label: "Latchkey account",
+        help: "Which stored login to use, when latchkey holds more than one for this host.",
+      },
+      {
+        kind: "string_list",
+        probe: "addressbooks",
+        target: "carddav.addressbooks",
+        label: "Only these address books",
+        help:
+          "Address book names exactly as the server shows them, comma-separated. Empty " +
+          "mirrors every address book on the account.",
+      },
+    ],
+  },
+  {
+    type: "contacts",
+    variantKey: "vcf",
+    label: "Contact files (.vcf)",
+    blurb: "A folder of .vcf exports, from Google Contacts, iCloud or a phone.",
+    keywords: ["contacts", "vcf", "vcard", "export", "address book"],
+    kind: "export",
+    icon: "contacts",
+    defaultName: "vcf-contacts",
+    nameHint: "Old address book",
+    wizard: true,
+    fields: [
+      {
+        kind: "path",
+        picks: "dir",
+        pickTitle: "Choose the folder of .vcf files",
+        required: true,
+        target: "vcf.path",
+        label: "Folder",
+        help:
+          "A folder of .vcf files, read recursively — ~/Downloads/contacts say. A file may " +
+          "hold one contact or a whole address book.",
+      },
+      {
+        kind: "bool",
+        target: "common.always_clear_before_ingest",
+        label: "Treat the folder as the whole address book",
+        default: true,
+        help:
+          "Each sync rewrites the mirror from the files in the folder now, so a contact " +
+          "whose file is gone drops out (the store's history keeps it).",
+      },
+    ],
   },
   {
     type: "garmin",
@@ -960,7 +1098,96 @@ export const CATALOG: CatalogEntry[] = [
     icon: "google_takeout",
     defaultName: "google-takeout",
     nameHint: "My Google Takeout",
-    wizard: false,
+    wizard: true,
+    // Every feed defaults off, here as in the provider: an export holds
+    // whatever was asked of Google, so each feed is ticked on purpose
+    // (providers/google_takeout/INGEST.md).
+    fields: [
+      {
+        kind: "path",
+        picks: "dir",
+        pickTitle: "Choose your unzipped Google Takeout folder",
+        required: true,
+        target: "export.path",
+        label: "Takeout folder",
+        help:
+          "The unzipped export — the Takeout folder holding Google Chat/, Voice/, " +
+          "YouTube and YouTube Music/ and the rest, ~/Downloads/Takeout say. Gmail is not " +
+          "read here: its .mbox is an email source of its own.",
+      },
+      {
+        kind: "bool",
+        target: "export.google_chat",
+        label: "Google Chat",
+        default: false,
+        help: "Direct messages and spaces, with their attachments. Rendered as conversations.",
+      },
+      {
+        kind: "bool",
+        target: "export.google_voice",
+        label: "Google Voice",
+        default: false,
+        help: "Texts, voicemails, calls and bills. Rendered as conversations.",
+      },
+      {
+        kind: "bool",
+        target: "export.google_voice_include_spam",
+        requires: "export.google_voice",
+        label: "Include Voice spam",
+        default: false,
+        help: "Also read Voice/Spam/. Bulky, and rarely worth searching.",
+      },
+      {
+        kind: "bool",
+        target: "export.youtube_watch_history",
+        label: "YouTube watch history",
+        default: false,
+        help:
+          "Kept in this source's own store; not rendered into pages yet. The same is true " +
+          "of every feed below.",
+      },
+      {
+        kind: "bool",
+        target: "export.youtube_subscriptions",
+        label: "YouTube subscriptions",
+        default: false,
+      },
+      {
+        kind: "bool",
+        target: "export.maps_reviews",
+        label: "Maps reviews",
+        default: false,
+      },
+      {
+        kind: "bool",
+        target: "export.maps_saved_places",
+        label: "Maps saved places",
+        default: false,
+      },
+      {
+        kind: "bool",
+        target: "export.maps_photos",
+        label: "Maps photos and videos",
+        default: false,
+      },
+      {
+        kind: "bool",
+        target: "export.gemini_apps",
+        label: "Gemini activity",
+        default: false,
+      },
+      {
+        kind: "bool",
+        target: "common.always_clear_before_ingest",
+        label: "Treat each export as complete",
+        default: true,
+        help:
+          "Each sync rewrites the mirror from the export as it is now, so what a newer " +
+          "export no longer holds drops out (the store's history keeps it). Only for a " +
+          "full export: pointed at one you requested a single product from, it would drop " +
+          "everything that export simply doesn't mention.",
+      },
+    ],
   },
   {
     type: "facebook",
@@ -997,7 +1224,41 @@ export const CATALOG: CatalogEntry[] = [
     icon: "linkedin",
     defaultName: "linkedin",
     nameHint: "My LinkedIn",
-    wizard: false,
+    wizard: true,
+    fields: [
+      {
+        kind: "path",
+        picks: "dir",
+        pickTitle: "Choose your unzipped LinkedIn export folder",
+        required: true,
+        target: "export.path",
+        label: "Export folder",
+        help:
+          'The unzipped "Get a copy of your data" export — the folder of CSVs, ' +
+          "~/Downloads/LinkedInDataExport say. Every CSV in it is read.",
+      },
+      {
+        kind: "bool",
+        target: "export.fetch_photos",
+        label: "Fetch connections' profile photos",
+        default: false,
+        help:
+          "The export has no photos. On, each connection's public profile photo is fetched " +
+          "from linkedin.com, once per connection — the one part of this source that goes " +
+          "online. No login is needed.",
+      },
+      {
+        kind: "bool",
+        target: "common.always_clear_before_ingest",
+        label: "Treat each export as complete",
+        default: true,
+        help:
+          "Each sync rewrites the mirror from the export as it is now, so a message or " +
+          "connection a newer export no longer holds drops out (the store's history keeps " +
+          "it). Off, a CSV LinkedIn stops including keeps its rows from the last export " +
+          "that had it.",
+      },
+    ],
   },
   {
     type: "signal",
@@ -1087,7 +1348,31 @@ export const CATALOG: CatalogEntry[] = [
     icon: "sms",
     defaultName: "sms",
     nameHint: "Texts and calls",
-    wizard: false,
+    wizard: true,
+    fields: [
+      {
+        kind: "path",
+        picks: "dir",
+        pickTitle: "Choose your SMS Backup & Restore folder",
+        required: true,
+        target: "backup.path",
+        label: "Backup folder",
+        help:
+          "The folder the Android app SMS Backup & Restore writes its sms-*.xml and " +
+          "calls-*.xml files to, copied off the phone — ~/Documents/SMSBackupRestore say. " +
+          "A single .xml file typed in here works too.",
+      },
+      {
+        kind: "bool",
+        target: "common.always_clear_before_ingest",
+        label: "Treat the folder as the whole archive",
+        default: true,
+        help:
+          "Each sync rewrites the mirror from the backups in the folder now, so a message " +
+          "no longer in any of them drops out (the store's history keeps it). Leave it off " +
+          "if old backups get pruned from the folder.",
+      },
+    ],
   },
   {
     type: "beeper",

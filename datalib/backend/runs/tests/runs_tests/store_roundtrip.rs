@@ -3,8 +3,9 @@
 //! hold.
 
 use datalib_runs::{
-    log_after, log_query, process_log_after, processes, runs, snapshot, versions, LogQuery, LogRow,
-    MetricRow, Process, ProcessLogWriter, Retention, RunWriter, StepRunRow, StorePart,
+    log_after, log_query, process_log_after, processes, runs, snapshot, versions, LogCursor,
+    LogQuery, LogRow, MetricRow, Process, ProcessLogWriter, Retention, RunWriter, StepRunRow,
+    StorePart,
 };
 
 const T0: &str = "2026-08-31T10:00:00+01:00";
@@ -179,6 +180,48 @@ async fn log_after_resumes_from_a_sequence_number() {
     assert_eq!(rest[0].msg, "line 4");
 }
 
+/// A panel opens on the newest lines and pages back from the oldest one it
+/// holds; every page reads oldest first, and the first line of the log
+/// has nothing before it.
+#[tokio::test]
+async fn the_newest_lines_come_first_and_pages_read_back_from_them() {
+    let td = tempfile::tempdir().unwrap();
+    let keep = Retention {
+        max_runs: 100,
+        max_age_days: 36500,
+        ..Retention::default()
+    };
+    let w = RunWriter::start(td.path(), "run-1", "run-1", None, keep).unwrap();
+    for msg in ["one", "two", "three", "four", "five"] {
+        w.log(line("a", "info", msg));
+    }
+    // Dropping the writer flushes it.
+    drop(w);
+    let read = |cursor: LogCursor| {
+        let root = td.path().to_path_buf();
+        async move {
+            let q = LogQuery {
+                q: "",
+                cursor,
+                limit: 2,
+            };
+            let lines = log_query(&root, &q).await.unwrap();
+            (
+                lines.iter().map(|l| l.msg.clone()).collect::<Vec<_>>(),
+                lines.first().map(|l| l.seq),
+            )
+        }
+    };
+    let (newest, oldest_held) = read(LogCursor::Newest).await;
+    assert_eq!(newest, ["four", "five"]);
+    let (before, first) = read(LogCursor::Before(oldest_held.unwrap())).await;
+    assert_eq!(before, ["two", "three"]);
+    let (earlier, first) = read(LogCursor::Before(first.unwrap())).await;
+    assert_eq!(earlier, ["one"]);
+    let (nothing, _) = read(LogCursor::Before(first.unwrap())).await;
+    assert!(nothing.is_empty());
+}
+
 /// One step's lines across runs come back in run order with the run each
 /// line belongs to, the same `seq` cursor tails them, and a `-run:` term
 /// drops one run's lines.
@@ -191,12 +234,8 @@ async fn log_query_spans_runs_and_reads_terms() {
                 log_query(
                     &root,
                     &LogQuery {
-                        run: None,
-                        process: None,
-                        step: Some(step),
-                        attempt: None,
-                        q: "",
-                        after_seq,
+                        q: &format!("step:{step}"),
+                        cursor: LogCursor::After(after_seq),
                         limit,
                     },
                 )
@@ -229,12 +268,8 @@ async fn log_query_spans_runs_and_reads_terms() {
     let not_first = log_query(
         td.path(),
         &LogQuery {
-            run: None,
-            process: None,
-            step: Some("a"),
-            attempt: None,
-            q: "-run:run-1 sec",
-            after_seq: 0,
+            q: "step:a -run:run-1 sec",
+            cursor: LogCursor::After(0),
             limit: 100,
         },
     )
@@ -245,12 +280,8 @@ async fn log_query_spans_runs_and_reads_terms() {
     let refused = log_query(
         td.path(),
         &LogQuery {
-            run: None,
-            process: None,
-            step: None,
-            attempt: None,
             q: "author:thad",
-            after_seq: 0,
+            cursor: LogCursor::After(0),
             limit: 100,
         },
     )
@@ -471,6 +502,24 @@ async fn a_corrupt_store_is_replaced() {
     assert_eq!(log_after(td.path(), "run-1", None, 0, 10).await.len(), 1);
 }
 
+/// A store that will not open is `None` from `start`, where the caller
+/// says nothing will be recorded. It used to be a writer that took every
+/// line and kept none, with one WARN on its own thread to say so.
+#[test]
+fn a_store_that_will_not_open_starts_no_writer() {
+    let td = tempfile::tempdir().unwrap();
+    let dir = datalib_runs::runs_path(td.path())
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    std::fs::create_dir_all(dir.parent().unwrap()).unwrap();
+    std::fs::write(&dir, b"a file where the store's directory goes").unwrap();
+    assert!(RunWriter::start(td.path(), "run-1", "run-1", None, Retention::default()).is_none());
+    assert!(
+        ProcessLogWriter::start(td.path(), Process::Http, None, Retention::default()).is_none()
+    );
+}
+
 /// A store written by another schema version is remade, not migrated
 /// and not fatal — the same trade as a corrupt file.
 #[tokio::test]
@@ -658,12 +707,8 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
     let all = log_query(
         td.path(),
         &LogQuery {
-            run: None,
-            process: None,
-            step: None,
-            attempt: None,
             q: "",
-            after_seq: 0,
+            cursor: LogCursor::After(0),
             limit: 100,
         },
     )
@@ -711,12 +756,8 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
     let servers_only = log_query(
         td.path(),
         &LogQuery {
-            run: None,
-            process: None,
-            step: None,
-            attempt: None,
             q: "process:http",
-            after_seq: 0,
+            cursor: LogCursor::After(0),
             limit: 100,
         },
     )
@@ -729,12 +770,8 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
     let loud = log_query(
         td.path(),
         &LogQuery {
-            run: None,
-            process: None,
-            step: None,
-            attempt: None,
             q: "min_level:warn",
-            after_seq: 0,
+            cursor: LogCursor::After(0),
             limit: 100,
         },
     )
@@ -749,12 +786,8 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
     let one_build = log_query(
         td.path(),
         &LogQuery {
-            run: None,
-            process: None,
-            step: None,
-            attempt: None,
             q: "commit:f2068",
-            after_seq: 0,
+            cursor: LogCursor::After(0),
             limit: 100,
         },
     )
@@ -800,12 +833,8 @@ async fn old_process_lines_age_out_when_a_writer_opens() {
     let all = log_query(
         td.path(),
         &LogQuery {
-            run: None,
-            process: None,
-            step: None,
-            attempt: None,
             q: "process:http",
-            after_seq: 0,
+            cursor: LogCursor::After(0),
             limit: 100,
         },
     )
@@ -893,12 +922,8 @@ async fn process_lines_past_the_cap_go_oldest_first() {
     let all = log_query(
         td.path(),
         &LogQuery {
-            run: None,
-            process: None,
-            step: None,
-            attempt: None,
             q: "process:http",
-            after_seq: 0,
+            cursor: LogCursor::After(0),
             limit: 100,
         },
     )

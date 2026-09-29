@@ -17,7 +17,7 @@ use datalib_unified_index::repo::MapDocRow;
 use datalib_unified_index::search::SearchRow;
 use serde::{Deserialize, Serialize};
 
-use super::{columns, run_qmd_search, Index};
+use super::{columns, qmd_rows, Index};
 
 /// How many qmd hits a free-text filter lights up. Retrieval is ranked,
 /// so this is "the best matches", not "every document that mentions it".
@@ -123,10 +123,14 @@ pub async fn matches_handler(
 /// nothing and says why.
 async fn matching(s: &Index, q: &str, errors: &mut Vec<String>) -> HashSet<String> {
     let parsed = parse_query(q);
+    if let Some(why) = parsed.refusal() {
+        errors.push(why);
+        return HashSet::new();
+    }
     let found = if parsed.free_text.is_empty() {
         s.repo.matching_documents(&parsed).await
     } else {
-        match run_qmd_search(&s.root, &s.repo, &s.qmd, &parsed, FREE_TEXT_HITS).await {
+        match qmd_rows(&s.root, &s.repo, &s.qmd, &parsed, FREE_TEXT_HITS).await {
             Ok(rows) => Ok(markdowns(rows)),
             Err(e) => {
                 errors.push(format!("free-text search failed: {e:#}"));
