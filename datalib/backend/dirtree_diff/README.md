@@ -56,19 +56,11 @@ there is no CLI to locate and no subprocess per query.
 
 ## Can doltlite's prolly diff work across two separate files?
 
-**No, not directly — and it fails in two different ways.** Measured
-against the Bazel-built doltlite shell:
-
-| attempt | result |
-|---|---|
-| `ATTACH` the second file, `SELECT` and `JOIN` across it | **works** — ordinary SQL crosses files fine |
-| `dolt_diff_files('<hash-from-B>', '<hash-from-A>')` after `ATTACH` | `ref not found: <hash-from-B>` |
-| `other.dolt_diff_files(…)`, qualified to the attached db | `dolt_diff_files is only available in the main database` |
-| `dolt_at_files('<hash-from-B>')` from A | `ref not found` |
-
-So two separate limits stack. The diff table-valued function is bound to
-the connection's *main* database, and commit hashes resolve only against
-that database's own chunk store. `ATTACH` extends neither.
+**No, not directly.** Ordinary SQL crosses an `ATTACH` fine, but a
+diff reads only the connection's main database and resolves commit
+hashes only against its own chunk store: a hash from the attached file
+is `ref not found`, and `other.dolt_diff_files(…)` is refused
+([diffs](/docs/dev/doltlite.md#diffs)).
 
 **But the files can be unified without rescanning anything.** A
 `.doltlite_db` works as a `file://` remote for another one:
@@ -143,21 +135,12 @@ from its config entry and outlives any particular path.
 
 The checkout is fsindex's `RawDb::checkout_branch`
 (`etl/providers/fsindex/src/ingest/db.rs`), covered by fsindex's
-`tests/fsindex_tests/branch_scan.rs`. Three facts about doltlite it
-rests on:
-
-- **The dolt procedures are functions.** `SELECT dolt_checkout(…)`;
-  MySQL's `CALL DOLT_CHECKOUT(?)` is a syntax error to doltlite's parser.
-- **Order matters in both directions.** A plain checkout of a missing
-  branch errors `no such branch or table`; `-b` on an existing one
-  errors `branch already exists`. Neither call is idempotent, so the
-  try-then-create order is load-bearing, and the active branch is read
-  back afterwards.
-- **The active branch is per-connection, not per-file.** A fresh
-  connection starts on `main`. sqlx's stock pool would retire the one
-  connection carrying the checkout after 30 minutes and silently
-  continue on `main`, so `doltlite_raw`'s pools disable `idle_timeout`
-  and `max_lifetime` beside `max_connections(1)`.
+`tests/fsindex_tests/branch_scan.rs`. Checking out a missing branch
+errors and `-b` on an existing one errors too, so it tries the checkout
+and creates on failure, then reads the active branch back. The branch
+is per connection, so the pool keeps its one connection for good
+([branches, HEAD and the working set](/docs/dev/doltlite.md#branches-head-and-the-working-set);
+`etl/README.md` §"Every pool is size 1 and never recycled").
 
 ## How moves are detected
 
@@ -194,8 +177,8 @@ top-level rename (warm):
 | `files` diff, explained interiors skipped | 0 | **0.27 s** end to end |
 
 The skip is a `WHERE` clause on the key ranges, and it saves only the
-transfer: doltlite pushes no predicate into `dolt_diff_<t>`, so the
-engine walks the same chunks either way (0.22 s here). Excluded
+transfer: the engine walks the same chunks either way (0.22 s here;
+[diffs](/docs/dev/doltlite.md#diffs)). Excluded
 prefixes are bound parameters, capped at 100 moves plus 100 copies per
 side so the statement stays under sqlite's expression-depth limit; past
 the cap, the remaining interiors are fetched and rolled up the ordinary
@@ -377,10 +360,11 @@ prove: that two independent files unify and diff across each other.
 
 ### Fetching and reading share a connection
 
-Doltlite registers `dolt_diff_<table>` and `dolt_at_<table>` the first
-time a statement names them, so the connection that fetched both scans
-into the empty scratch store can read `files` straight away, and
-`store::unify` hands it back. `store_test.rs` pins that.
+The connection that fetched both scans into the empty scratch store can
+read `files` straight away, because doltlite registers the per-table
+modules on first use
+([what a read-only connection may do](/docs/dev/doltlite.md#what-a-read-only-connection-may-do)),
+so `store::unify` hands it back. `store_test.rs` pins that.
 
 ## What a subtree move costs, and why
 
@@ -403,10 +387,11 @@ was renamed and nothing else changed:
 Linear in the files, and constant in the directories — which is why
 directories have their own table and why this tool reads that table
 first (§"Directories first"). The alternative —
-an index on `kind` — would not have helped: doltlite pushes no
-predicate into `dolt_diff_<t>` or `dolt_at_<t>`, so a filter saves
-transfer and never the walk, and a secondary index on a TEXT-keyed
-table re-stores the path per row.
+an index on `kind` — would not have helped: a diff pushes no predicate
+down and `dolt_at_<t>` seeks only a primary-key equality
+([query plans](/docs/dev/doltlite.md#query-plans-and-indexes)), so a
+filter on `kind` saves transfer and never the walk, and a secondary
+index on a TEXT-keyed table re-stores the path per row.
 
 Keying on path components instead (parent id + name) would turn the
 100 000-row diff into a single changed row. It would also cost the

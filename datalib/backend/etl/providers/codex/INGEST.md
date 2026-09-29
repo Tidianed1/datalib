@@ -95,8 +95,8 @@ the parent's title in its display name, not a section of the parent.
 ## What the store holds
 
 Two tables, no bookkeeping sidecar (a live thread's file is re-read
-whole on every sync, and unchanged rows are free under doltlite's
-content addressing):
+whole on every sync, and an unchanged row is no change;
+[doltlite.md § Diffs](/docs/dev/doltlite.md#diffs)):
 
 - `transcripts` — one row per rollout. `id` is the thread id. The
   payload is what the file says about the thread as a whole: the

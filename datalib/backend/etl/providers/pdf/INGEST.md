@@ -206,8 +206,8 @@ The consequence is that deleting the last copy of a document leaves an
 unreferenced `pdf_documents` row, deliberately: the row is cheap, it preserves the record that the document was once here, and the
 render side ignores it (its join against `pdf_paths` finds nothing).
 Reaping them is a `DELETE … WHERE blake3 NOT IN (SELECT blake3 FROM
-pdf_paths)` whenever we decide we want it — but note that doing so
-discards history a `dolt_diff` would otherwise still show.
+pdf_paths)` whenever we decide we want it. The rows stay in earlier
+commits, but HEAD stops recording that the document was once here.
 
 ## Inspecting a scan
 
@@ -217,37 +217,37 @@ dl=bazel-bin/third-party/doltlite/doltlite
 db=<root>/pdfs/ingest/entities.doltlite_db
 
 # How much of the corpus is out of reach without OCR?
-$dl $db "SELECT pdf_type, needs_ocr, COUNT(*) FROM pdf_documents
+$dl -readonly $db "SELECT pdf_type, needs_ocr, COUNT(*) FROM pdf_documents
          GROUP BY pdf_type, needs_ocr;"
 
 # Pages, not documents: what an OCR engine would actually have to read,
 # and how much we are already getting out of the same files.
-$dl $db "SELECT SUM(ocr_page_count) unreadable,
+$dl -readonly $db "SELECT SUM(ocr_page_count) unreadable,
                 SUM(page_count - ocr_page_count) readable
            FROM pdf_documents;"
 
 # Documents that render nothing at all, and why.
-$dl $db "SELECT pdf_type, has_encoding_issues, COUNT(*) FROM pdf_documents
+$dl -readonly $db "SELECT pdf_type, has_encoding_issues, COUNT(*) FROM pdf_documents
           WHERE has_encoding_issues = 1 OR page_count <= ocr_page_count
           GROUP BY pdf_type, has_encoding_issues;"
 
 # Duplicates: one document, many locations.
-$dl $db "SELECT blake3, COUNT(*) c, GROUP_CONCAT(id) FROM pdf_paths
+$dl -readonly $db "SELECT blake3, COUNT(*) c, GROUP_CONCAT(id) FROM pdf_paths
          GROUP BY blake3 HAVING c > 1;"
 
 # Ship of Theseus: every revision of one conceptual document.
-$dl $db "SELECT blake3, title, doc_modified_at
+$dl -readonly $db "SELECT blake3, title, doc_modified_at
            FROM pdf_documents
           WHERE content_blake3 = (SELECT content_blake3 FROM pdf_documents
                                    WHERE blake3 = '…')
           ORDER BY doc_modified_at;"
 
 # Which documents in the corpus are metadata-only variants of each other?
-$dl $db "SELECT content_blake3, COUNT(*) c, GROUP_CONCAT(title) FROM pdf_documents
+$dl -readonly $db "SELECT content_blake3, COUNT(*) c, GROUP_CONCAT(title) FROM pdf_documents
          GROUP BY content_blake3 HAVING c > 1;"
 
 # The producer-supplied lineage, when the file happens to carry it.
-$dl $db "SELECT blake3, title, doc_modified_at, xmp_instance_id
+$dl -readonly $db "SELECT blake3, title, doc_modified_at, xmp_instance_id
            FROM pdf_documents
           WHERE xmp_document_id = 'uuid:…' ORDER BY doc_modified_at;"
 ```

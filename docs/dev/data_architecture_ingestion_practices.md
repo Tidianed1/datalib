@@ -111,14 +111,12 @@ source's render store on its next run.
 
 ### Key a table for what one run writes together
 
-A doltlite table is a tree sorted by primary key, and a write rewrites
-every leaf page its keys fall in — the changed rows and their unchanged
-neighbours together. So the cost of a run is not how many rows it
-writes but **how many leaves those rows are spread across**, and that
-is decided by the key. Rows that arrive together and sort together
-touch a leaf or two; rows that arrive together and sort randomly touch
-one leaf each. The measurement is
-[`etl/README.md` § "What a write costs"](../../datalib/backend/etl/README.md#what-a-write-costs-the-transaction-is-the-unit-and-the-key-decides-the-size).
+A doltlite write rewrites every page its keys fall in, so the cost of a
+run is not how many rows it writes but **how many pages those rows are
+spread across**, and the key decides that
+([what a write costs](doltlite.md#what-a-write-costs)). Rows that
+arrive together and sort together touch a page or two; rows that arrive
+together and sort randomly touch one page each.
 
 The raw-store rule stands — the PK is the upstream id, whatever shape
 it has — so this is about the tables whose key is ours. Where you get

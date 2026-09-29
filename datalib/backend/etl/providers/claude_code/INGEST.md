@@ -83,7 +83,8 @@ ordinary case for a session that is open right now.
 `fsscan` over the root for `*.jsonl`, with `file_checkpoint` holding
 each file's hash under the `claude_code/sessions` scope. A file whose
 hash moved is re-read whole and every row upserted; a row whose payload
-did not change is a no-op to doltlite's content-addressed storage, so
+did not change is no change to doltlite
+([doltlite.md § Diffs](/docs/dev/doltlite.md#diffs)), so
 `dolt_diff_records` names only the lines that are actually new, and
 render re-draws only the transcripts they belong to. A file the host
 cache can vouch for costs a `stat`.

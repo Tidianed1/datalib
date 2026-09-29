@@ -91,7 +91,7 @@ filegroup(
 # pipeline (ingest -> render) against the checked-in TNG-themed source
 # JSON and emits four outputs:
 #
-#   * backend_index.doltlite_db -- the doltlite (SQLite-compatible) file the backend reads.
+#   * backend_index.doltlite_db -- the doltlite store the backend reads.
 #   * qmd.tar    -- the rendered conversation tree (markdown, each
 #                   source's indexed_markdown.doltlite_db, render
 #                   cursors, attachment blobs).
@@ -258,7 +258,7 @@ genrule(
             # The server every sync goes through (arg 30).
             "$(execpath //datalib/backend/http:datalib_http_bin)",
         ]),
-        # Copy the doltlite (SQLite-compatible) file out of the workspace.
+        # Copy the grid index store out of the workspace.
         # It lives under the `unified_index/` tree the index steps own
         # (see core::layout).
         "cp $(RULEDIR)/sync_workspace/unified_index/grid_index/db.doltlite_db $(execpath ingested/backend_index.doltlite_db)",

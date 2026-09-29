@@ -57,8 +57,9 @@ two stores; `render_markdown` owns its render store; `grid_index` owns
 the index; `datalib-http` owns feedback, usage and remote media;
 the applet only reads, each request inside one read transaction on a
 read-only connection, which holds one commit (`DoltRepo::pinned` in
-`unified_index/src/dolt_repo.rs`) — so a `grid_index` pass in flight is
-never served. `runs.sqlite` is the exception because it is not doltlite: plain
+`unified_index/src/dolt_repo.rs`;
+[`doltlite.md`](doltlite.md#three-ways-to-read-one-commit)) — so a
+`grid_index` pass in flight is never served. `runs.sqlite` is the exception because it is not doltlite: plain
 SQLite in rollback-journal mode, written by whoever runs the loop (its
 runs) and the server (its own log) — one process while the server is
 up, two while a `datalib-dag` runs the loop — which SQLite's own locking
@@ -82,8 +83,9 @@ producer-side types and DOM breadcrumb walker are in
 `SELECT dolt_commit('-Am', 'feedback: <uuid>')` on the same pooled
 connection, so the commit covers exactly the row just written. What
 makes that true is the **file**, not the connection: `-Am` commits
-whatever else is dirty in the same file, which is why feedback has a
-file of its own with one writer. The row's `git_hash` is the build's
+whatever else is dirty on the branch in that file, from any process
+([`doltlite.md`](doltlite.md#branches-head-and-the-working-set)), which
+is why feedback has a file of its own with one writer. The row's `git_hash` is the build's
 commit as `datalib_runtime::build_id::git_hash` finds it at run time
 ([`logging.md`](logging.md) § "Every line has an author").
 

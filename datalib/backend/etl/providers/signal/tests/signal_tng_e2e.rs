@@ -109,8 +109,8 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
 
     // A temp cache: tests must never touch this host's real one.
     let cache = FingerprintCache::open(&tmp.path().join("fingerprints.sqlite")).await?;
-    // One handle for the whole pass: a second live connection to the
-    // same store makes one of the two `dolt_commit`s fail.
+    // One handle for the whole pass: the file takes one writer at
+    // a time.
     let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(&raw_db_path)).await?;
     let summary = ingest::fetch(FetchOptions {
         db: db.clone(),

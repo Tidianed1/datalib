@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 
 /// DB Browser for SQLite's bundle id. The stock build shares it but
 /// does not claim `.doltlite_db`, so as that file's handler it is
-/// DoltHub's doltlite build, which reads our stores and takes `-R`.
+/// the doltlite-patched build docs/dev/doltlite.md points to, which reads
+/// our stores and takes `-R`.
 pub const DB_BROWSER_BUNDLE_ID: &str = "net.sourceforge.sqlitebrowser";
 
 const STORE_EXTENSION: &str = "doltlite_db";

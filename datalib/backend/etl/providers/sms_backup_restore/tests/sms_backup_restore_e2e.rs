@@ -34,7 +34,7 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
     rt.block_on(async {
         // ── download ──────────────────────────────────────────────
         // The test owns the store: one connection for both downloads and
-        // the assertions, because two is what breaks a doltlite file.
+        // the assertions, because the file takes one writer at a time.
         let db = RawDb::open(&db_path_for(&raw_dir)).await?;
         let summary = ingest::fetch(FetchOptions {
             db: db.clone(),

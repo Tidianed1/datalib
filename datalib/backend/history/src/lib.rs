@@ -405,9 +405,8 @@ mod tests {
         assert!(h.commits[3].tables.is_empty());
     }
 
-    /// Doltlite's working set lives in the file, so a plain `SELECT`
-    /// from the history reader sees rows a sync has written and not yet
-    /// committed. HEAD's counts must be HEAD's: what a sync is
+    /// A plain `SELECT` on the writer's branch sees rows a sync has
+    /// written and not yet committed. HEAD's counts must be HEAD's: what a sync is
     /// mid-writing is not history yet, and a count that included it
     /// would put the same rows into every older commit's total too.
     #[tokio::test]

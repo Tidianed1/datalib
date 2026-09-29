@@ -203,10 +203,8 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    // Use the canonical `open()` helper (with a tempdir-backed file)
-    // instead of `sqlite::memory:` — doltlite's libsqlite3 fork rejects
-    // `:memory:` (the prolly storage engine needs a real path), but
-    // stock libsqlite3-sys accepts it. A tempfile works under both.
+    // Through the canonical `open()` on a tempdir-backed file, so the test
+    // takes the same path a download does.
     async fn fresh_pool() -> (SqlitePool, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("extract_run_test.doltlite_db");
@@ -339,14 +337,9 @@ mod tests {
 
     #[tokio::test]
     async fn new_table_first_run_reports_added_rows_not_dropped_delta() {
-        // Repro for the `dolt_diff_<table> read failed; delta dropped`
-        // warning seen on every provider's *first* sync. A table created
-        // during a run but not yet committed shows up in `dolt_status` as
-        // "new table", but doltlite hasn't materialized its
-        // `dolt_diff_<table>` virtual table yet (it only exists for tables
-        // present at HEAD). The diff query in `compute_deltas` then errors
-        // with "no such table: dolt_diff_<table>" and the row delta is
-        // silently dropped.
+        // A table created during a run and not yet committed must still
+        // report its rows as added, not drop its delta with a warning, on
+        // every provider's first sync.
         const NEW_TABLE_DDL: &str =
             "CREATE TABLE IF NOT EXISTS discussions (id TEXT PRIMARY KEY, payload TEXT)";
         let dir = tempfile::tempdir().unwrap();

@@ -7,12 +7,10 @@
 //! (`hack/read_transaction_at_scale/`).
 //!
 //! It is a separate binary because the question under test is what happens
-//! *between processes* — doltlite's working set and its chunk-store lock are
-//! per file, not per connection, so two pools inside one process cannot
-//! stand in for it. The test process itself never opens a store: doltlite
-//! takes its chunk-store lock with BSD `flock`, which a spawned child
-//! inherits (`hack/doltlite_fork_bug/README.md`), so a coordinator that held
-//! a connection while spawning would be measuring that instead.
+//! *between processes*: doltlite's working set lives in the file, and its
+//! lock is SQLite's file lock on a sidecar, which one process's connections
+//! share, so two pools inside one process cannot stand in for it
+//! (`docs/dev/doltlite.md` § "Locks and writers").
 //!
 //! Each role writes one JSON report to `--out` and exits; nothing is printed
 //! to stdout, so a crashed child is distinguishable from a slow one.

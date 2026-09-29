@@ -201,12 +201,11 @@ impl AppStore {
 #[async_trait]
 impl AppRepo for AppStore {
     async fn insert_feedback(&self, row: FeedbackRow) -> Result<(), RepoError> {
-        // The INSERT and the `dolt_commit` ride the same connection so
-        // the commit covers exactly the row we just wrote, with no
-        // chance of a concurrent writer's INSERT slipping into the same
-        // dolt_log entry. (The pool may hand a different connection to
-        // a sibling task, which is fine — doltlite's working set is
-        // per-file, not per-connection.)
+        // The INSERT and the `dolt_commit` ride one acquired connection,
+        // the pool's only one, so no sibling task's INSERT can land
+        // between them: doltlite's working set belongs to the branch,
+        // not the connection, and `-Am` would sweep it into this commit
+        // (docs/dev/doltlite.md#branches-head-and-the-working-set).
         let mut conn = self
             .feedback_pool
             .acquire()

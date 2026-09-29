@@ -129,19 +129,21 @@ Our workspace links `sqlx` against **doltlite**, and Cargo's
 `links = "sqlite3"` rule allows only one SQLite-linking crate in a
 graph, so a second, stock SQLite (`rusqlite` with `bundled`) cannot be
 added beside it. Measured against `BeeperTexts/index.db`'s `threads`
-through our doltlite-linked binary:
+through our doltlite-linked binary, on doltlite 0.11.2:
 
 | Column     | stock SQLite (`sqlite3` CLI) | our doltlite-linked binary |
 |------------|------------------------------|----------------------------|
 | `accountID` | `"slackgo.TSTHRQ7MY-U06LVPXQD9B"` (text) | `"4374"` (integer — actually `length(thread)`) |
 | `thread`   | full JSON (text)              | `NULL` |
 
-`CAST(accountID AS TEXT)` does not help, and neither does checkpointing
-the WAL on a private copy: the record decoding differs on the main
-btree pages. The `sqlite_mirror` engine behind `apple_messages`,
-`apple_photos`, `lightroom` and `whatsapp` reads other apps' SQLite
-files through the same sqlx, so whether this still reproduces with the
-current doltlite is worth re-measuring before relying on it.
+`CAST(accountID AS TEXT)` did not help, and neither did checkpointing
+the WAL on a private copy. That measurement predates doltlite 0.11.53's
+fix for values read from plain SQLite files
+([doltlite.md § Versions](/docs/dev/doltlite.md#versions-the-storage-format-and-what-each-pin-brought)),
+and a synthetic table of the same shape (WAL, JSON over 4 KB) reads
+correctly on 0.50.13; the `sqlite_mirror` sources read other apps'
+SQLite files through the same sqlx. Re-measure against a real
+`index.db` before dropping the `sqlite3` subprocess.
 
 So both readers run the system `sqlite3` CLI (or `BEEPER_SQLITE3`) as
 `sqlite3 -json -readonly <path>`, with the SQL on stdin. They open the

@@ -44,8 +44,9 @@ phone.** Measured on two real backups a week apart, joining `jid`, `chat` and `m
 keys: `_id` differed for 0 of 13, 0 of 4 and 0 of 10 rows. The tables
 are `AUTOINCREMENT`, and a restore copies the database file rather than
 re-importing it. The events that would renumber — a schema migration
-that rebuilds a table, a phone-to-phone transfer — read as one full
-"removed, added" commit, which is the honest record of what happened.
+that rebuilds a table, a phone-to-phone transfer — read as one commit
+that rewrites every renumbered row, which is the honest record of what
+happened.
 
 The one table that *does* renumber is `props`, which WhatsApp rewrites
 wholesale, and it is excluded by default (below).

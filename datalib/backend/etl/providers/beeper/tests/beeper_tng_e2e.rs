@@ -69,8 +69,8 @@ async fn run_extract(
     sources: Vec<&str>,
 ) -> Result<FetchSummary> {
     // One handle for the whole pass, the way the processor's
-    // `RawStoreSession` holds one: a second live connection to the same
-    // store makes one of the two `dolt_commit`s fail.
+    // `RawStoreSession` holds one: the file takes one writer
+    // at a time.
     let db = ingest::RawDb::open(&ingest::db_path_for(&db_path)).await?;
     let summary = ingest::fetch(FetchOptions {
         db: db.clone(),

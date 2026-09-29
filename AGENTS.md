@@ -45,7 +45,7 @@ merge conflict waiting to happen.
 - [`docs/dev/email_download_modes.md`](docs/dev/email_download_modes.md) — JMAP, Gmail API, mbox.
 - [`docs/dev/grid_rows.md`](docs/dev/grid_rows.md) — the `grid_rows` union table and how to add a column.
 - [`docs/dev/edges.md`](docs/dev/edges.md), [`docs/dev/entity_ids.md`](docs/dev/entity_ids.md) — cross-document edges; the one rule for minting a uuid (read before any `*_uuid` recipe).
-- [`docs/dev/doltlite.md`](docs/dev/doltlite.md) — inspecting `.doltlite_db` files, exporting to plain SQLite; tutorial in [`doltlite_codelab.md`](docs/dev/doltlite_codelab.md).
+- [`docs/dev/doltlite.md`](docs/dev/doltlite.md) — what the engine does (branches, locks, reads, diffs, plans, write cost, gc), inspecting `.doltlite_db` files, exporting to plain SQLite; tutorial in [`doltlite_codelab.md`](docs/dev/doltlite_codelab.md).
 - [`docs/dev/app_stores.md`](docs/dev/app_stores.md) — the stores `datalib-http` owns and where every store lives under a data root.
 
 **UI**
@@ -323,39 +323,45 @@ datalib-doltlite -readonly <store>.doltlite_db .dump | sqlite3 out.sqlite
 
 In a checkout use `bazelisk build //third-party/doltlite:doltlite`, a
 sqlite3-shell drop-in version-locked to the tree; from a test take it as
-a `data` dep. `docs/dev/doltlite.md` has the recipes, `docs/dev/app_stores.md`
-the map of which store lives where and who owns it.
+a `data` dep. [`docs/dev/doltlite.md`](docs/dev/doltlite.md) is the one
+place for what the engine does, with the recipes;
+`docs/dev/app_stores.md` maps which store lives where and who owns it.
+Every fact there is a test in `//datalib/backend/doltlite_facts:doltlite_facts_test`
+or `//datalib/backend/etl:doltlite_two_process_test`, so a doltlite bump
+that moves one fails by name.
 
-The rules, none optional; the reasons and measurements are in
+The rules, none optional. How our code enforces them is in
 `datalib/backend/etl/README.md` §"Connection pools":
 
-- **One writer per file.** Doltlite's working set lives in the *file*,
-  per branch, shared across processes; two writers land on one branch
-  and each `-Am` commit captures the other's in-flight rows. Giving the
-  second one a branch of its own does not rescue it — the two then
-  contend for the file instead (measured; `etl/README.md`). The
-  `grid_index` step owns the index; `datalib-http`
-  owns feedback, usage and remote media; the applet only reads. A download takes
-  its store as an input (`FetchOptions.db: RawDb`) and never opens one.
+- **One writer per file.** Doltlite keeps uncommitted rows per branch
+  *in the file*, so two writers on one branch commit each other's
+  half-written rows, and doltlite itself only makes a second writer
+  wait its turn, never refuses it
+  ([locks and writers](docs/dev/doltlite.md#locks-and-writers)). Our
+  per-file lock refuses it. The `grid_index` step owns the index;
+  `datalib-http` owns feedback, usage and remote media; the applet only
+  reads. A download takes its store as an input
+  (`FetchOptions.db: RawDb`) and never opens one.
 - **A writer works on `datalib_writer`, never on `main`**, and
   fast-forwards `main` when it seals, so a reader never sees a
   half-written batch or a half-built schema. `commit_run` is the seal —
-  a bare `dolt_commit` publishes nothing and reaches no reader.
+  a bare `dolt_commit` publishes nothing and reaches no reader. `main`
+  moves only by that force-move, which is right only while one process
+  moves it.
 - **Every pool is `max_connections(1)`** with recycling off, and there is
   one open per file per pass. `close().await` before the next open, on
   the error path too — dropping the handle only schedules the close.
-- **A reader opens read-only and pins a commit** (`open_reader`, then
-  `pin`, then `pinned_<t>` views). Render reads its raw store that way and
-  `grid_index` reads every render store that way. `dolt_at_` uses no
-  secondary index, so a reader that needs one — the search applet —
-  pins with a read transaction on its read-only connection instead
-  (`DoltRepo::pinned`); it costs the writer nothing, measured at full
-  size. A second process that *moves a ref* is a writer, and refuses
-  the real one's seals (`etl/README.md`).
+- **A reader opens read-only and reads one commit**, one of
+  [three ways](docs/dev/doltlite.md#three-ways-to-read-one-commit):
+  `dolt_at_<t>('<hash>')`, a held read transaction, or a detached
+  read-only open of `<file>@<hash>`. The tree uses the first two:
+  render and `grid_index` read `open_reader`'s `pinned_<t>` views over
+  `dolt_at_`; the search applet, which needs secondary indexes, holds a
+  transaction (`DoltRepo::pinned`). A process that *moves a ref*, even
+  on its own branch, is a writer.
 - **A statement a reader adds is presumed guilty until
   `doltlite_two_process_test` has run with it.** Looking like a read is
-  not enough; `etl/README.md` has the allowlist and the statement that
-  once lost a writer's rows.
+  not enough; `etl/README.md` has the allowlist.
 - **Never run a store call on a runtime you are about to drop**;
   `indexed_markdown::blocking` keeps one process-wide runtime for that.
 

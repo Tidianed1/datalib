@@ -235,12 +235,13 @@ bazelisk build //third-party/doltlite:doltlite
 dl=bazel-bin/third-party/doltlite/doltlite
 db=<data_root>/garmin/ingest/entities.doltlite_db
 
-$dl $db "SELECT metric, COUNT(*), SUM(json(payload) <> 'null') FROM garmin_daily GROUP BY metric;"
-$dl $db "SELECT calendar_date, weight_g/1000.0 AS kg, source_type FROM garmin_weigh_ins ORDER BY timestamp_gmt DESC LIMIT 10;"
-$dl $db "SELECT activity_type, COUNT(*) FROM garmin_activities GROUP BY 1;"
-$dl $db "SELECT scope, last_seen_at_utc FROM sync_scope_state WHERE scope LIKE 'garmin:%';"
-$dl $db "SELECT json_extract(json(payload), '$.sleepScores.overall.value') FROM garmin_daily WHERE metric = 'sleep' AND calendar_date = '2026-09-13';"
+$dl -readonly $db "SELECT metric, COUNT(*), SUM(json(payload) <> 'null') FROM garmin_daily GROUP BY metric;"
+$dl -readonly $db "SELECT calendar_date, weight_g/1000.0 AS kg, source_type FROM garmin_weigh_ins ORDER BY timestamp_gmt DESC LIMIT 10;"
+$dl -readonly $db "SELECT activity_type, COUNT(*) FROM garmin_activities GROUP BY 1;"
+$dl -readonly $db "SELECT scope, last_seen_at_utc FROM sync_scope_state WHERE scope LIKE 'garmin:%';"
+$dl -readonly $db "SELECT json_extract(json(payload), '$.sleepScores.overall.value') FROM garmin_daily WHERE metric = 'sleep' AND calendar_date = '2026-09-13';"
 ```
 
-Stock `sqlite3` cannot open the file; to get a plain SQLite copy,
-`datalib-doltlite -readonly $db .dump | sqlite3 out.sqlite`.
+Stock `sqlite3` cannot open the file;
+[`docs/dev/doltlite.md`](/docs/dev/doltlite.md#getting-the-data-out-export-to-plain-sqlite)
+has the one-pipe export.

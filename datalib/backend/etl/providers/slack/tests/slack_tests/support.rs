@@ -50,8 +50,8 @@ pub fn serve(api: &Path, playback: &Path) -> usize {
 
 /// One download into `out`, every channel from the default `since`, no
 /// refresh window and no media, with `adjust` applied on top. The store
-/// is opened here and closed before anything reads it back: a second live
-/// connection to one file makes the `dolt_commit`s inside `open` fail.
+/// is opened here and closed before anything reads it back: the file takes
+/// one writer at a time.
 pub async fn fetch_into(
     out: &Path,
     adjust: impl FnOnce(FetchOptions) -> FetchOptions,

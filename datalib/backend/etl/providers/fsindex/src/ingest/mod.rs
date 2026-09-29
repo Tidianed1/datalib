@@ -45,9 +45,9 @@ const PROGRESS_INTERVAL_MS: u64 = 500;
 
 pub struct FetchOptions {
     /// The store this run writes into, opened and closed by the caller.
-    /// A download never opens a store of its own: two live connections to
-    /// one `.doltlite_db` make each other's `dolt_commit` fail. See
-    /// `datalib/backend/etl/README.md`.
+    /// A download never opens a store of its own: one writer per file
+    /// (`datalib/backend/etl/README.md` § "One writer per file, by
+    /// construction").
     pub db: RawDb,
     pub source_id: String,
     pub root: PathBuf,
@@ -298,14 +298,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         warn!(event = "fsindex_entry_error", id = %err.id, error = %err.message, "an entry could not be recorded");
     }
 
-    // NB: the commit + gc happen in the ORCHESTRATOR (the standalone
-    // binary), not here. Order is load-bearing: `dolt_commit` must run
-    // BEFORE `dolt_gc` on a given connection. Running gc first and then
-    // committing on the same sqlx connection fails with "failed to
-    // flush" at scale (reproduced at 1M rows; fine at 100k). Committing
-    // first records the working set; gc then reclaims the per-batch
-    // chunk novelty against the committed tree. `fetch` stays
-    // commit-free per the framework's commit-lifecycle rule.
+    // The commit and gc happen in the standalone binary, not here:
+    // `fetch` stays commit-free per the framework's commit-lifecycle rule.
 
     let total_elapsed = total_start.elapsed();
 
@@ -383,15 +377,10 @@ async fn streaming_pipeline(
     let stop_progress = Arc::new(AtomicBool::new(false));
 
     // ── Writer task ──────────────────────────────────────────────────
-    // One sqlite transaction PER BATCH. We deliberately do NOT fold the
-    // whole scan into a single transaction: doltlite buffers an open
-    // transaction's working-set delta in memory, and a single tx over a
-    // multi-million-row tree OOMs (confirmed at 4.5M rows × the table
-    // set). Per-batch flushing bounds that buffer. The cost is
-    // write-amplification (each sqlite COMMIT lays down fresh prolly
-    // chunk novelty), reclaimed by the `dolt_gc` the orchestrator runs
-    // after the single `dolt_commit`. `BATCH_SIZE` (see walker) is the
-    // knob that trades memory against amplification.
+    // One SQL transaction per batch, so our own batch buffers stay
+    // bounded. Each transaction rewrites the pages it touches
+    // (docs/dev/doltlite.md § "What a write costs"); the gc after the
+    // scan's single `dolt_commit` reclaims them.
     let writer_db = db.clone();
     let writer_cache = cache.clone();
     let writer_now = now.clone();

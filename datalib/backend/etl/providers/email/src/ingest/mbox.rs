@@ -31,7 +31,7 @@ use super::schema_raw::{AccountRow, EmailKeywordRow, EmailMailboxRow, EmlBlobRow
 
 /// Maximum emails accumulated in memory before we flush a bulk batch
 /// to disk. Keeps peak RSS bounded while still amortizing doltlite's
-/// per-transaction manifest-mutation cost across many rows.
+/// per-transaction page rewrite across many rows.
 const FLUSH_BATCH: usize = 2000;
 
 /// Account-row data the orchestrator pipes in from the source YAML.
@@ -46,9 +46,9 @@ pub struct MboxAccountConfig {
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
     /// The store this run writes into, opened and closed by the caller.
-    /// A download never opens a store of its own: two live connections to
-    /// one `.doltlite_db` make each other's `dolt_commit` fail. See
-    /// `datalib/backend/etl/README.md`.
+    /// A download never opens a store of its own: one writer per file
+    /// (`datalib/backend/etl/README.md` § "One writer per file, by
+    /// construction").
     pub db: RawDb,
     /// `.mbox` file (or directory containing `*.mbox` files).
     pub input_path: PathBuf,
@@ -693,8 +693,9 @@ impl Accumulator {
 
 /// Everything the next flush will hand to doltlite. Accumulating in memory
 /// and flushing as one entity-pool transaction plus one CAS-pool transaction
-/// is dramatically cheaper than per-row writes: doltlite charges a prolly-tree
-/// manifest mutation per `BEGIN … COMMIT`.
+/// is dramatically cheaper than per-row writes: doltlite rewrites every page a
+/// transaction touched at each `COMMIT` (docs/dev/doltlite.md § "What a write
+/// costs").
 #[derive(Default)]
 struct PendingBatch {
     emails: Vec<EmailRow>,

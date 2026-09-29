@@ -31,19 +31,17 @@ of every descendant — a 50 000-file subtree move is 100 000 rows in
 `dolt_diff_files`. In `dolt_diff_dirs` it is one row per directory
 under it, and those rows already tell the whole story: `top3` gone,
 `renamed3` arrived with the same digest, 50 010 entries and 438 900
-bytes inside. Measured on a 500 000-file scan:
+bytes inside. Measured on a 500 000-file scan (doltlite 0.50.3):
 
 | | rows | wall |
 |---|---|---|
 | `dolt_diff_dirs` | 23 | 0.00 s |
 | `dolt_diff_files` | 100 000 | 0.22 s to walk, 0.38 s to materialize |
 
-There is no cheaper way to get that summary out of a single table.
-Doltlite pushes **no** predicate into `dolt_diff_<t>` or
-`dolt_at_<t>` — a `WHERE kind = 'dir'`, a primary-key range, even a
-primary-key equality all cost the same full walk as no filter at all
-(same measurement: `dolt_at_files … WHERE id = '<one path>'` takes
-0.18 s against 0.09 s for an unfiltered `COUNT(*)`). A secondary index
+There is no cheaper way to get that summary out of a single table: a
+`WHERE kind = 'dir'` on `dolt_diff_files` costs the whole walk, because
+no column predicate reaches the diff
+([doltlite.md § Diffs](/docs/dev/doltlite.md#diffs)). A secondary index
 on `kind` would not help the diff either, and would re-store the full
 path per row (`STORAGE_NOTES.md` §2). A separate table is the one
 arrangement in which "just the directories" is a small walk.
@@ -93,12 +91,10 @@ works:
    from the table. No separate reconciliation pass
    ("DELETE FROM files WHERE id NOT IN (this scan's ids)") to
    maintain and forget to call.
-2. **Doltlite's prolly-tree dedup makes the rewrite nearly free.**
-   Rows with identical `(id, kind, size, blake3, …)` align on the
-   same prolly-tree leaves across commits. The diff between two
-   commits is exactly "what changed semantically" — re-inserting
-   the same row for an unchanged file is a no-op at the storage
-   layer.
+2. **The rewrite is free.** Re-inserting the same row for an
+   unchanged file is no change
+   ([doltlite.md § Diffs](/docs/dev/doltlite.md#diffs)), so the diff
+   between two scans is exactly what changed on disk.
 
 The fast-rescan cache is not in the store, so the truncate does not
 touch it: the scan loads this host's prior fingerprints for the root —
@@ -236,37 +232,22 @@ Each scan is one `dolt_commit`, so "what did this scan change?" is a
 diff between the last two commits. Ask `dolt_diff_dirs` first: it is a
 few percent of the rows and names every directory anything changed
 under, with the subtree's size and entry count on the row. Then
-`dolt_diff_files` for the file-level detail — a prolly-tree diff only
-descends into changed subtrees, so it stays fast even on a
-million-entry tree (≈10 s on a 1.7 M-entry index):
+`dolt_diff_files` for the file-level detail; a diff costs what changed,
+not the tree's size (one changed file in a 1M-row `files` diffs in
+under 0.01 s on doltlite 0.50.13):
 
 ```sh
 db=<data_root>/<group>/ingest/entities.doltlite_db
 doltlite -readonly -box $db \
   "SELECT diff_type, from_id, to_id, to_entries, to_size
-     FROM dolt_diff_dirs
-    WHERE from_ref = 'HEAD^1' AND to_ref = 'HEAD'
-      AND diff_type != 'unchanged';"
+     FROM dolt_diff_dirs('HEAD^1', 'HEAD');"
 doltlite -readonly -box $db \
   "SELECT diff_type, from_id, to_id, hex(to_blake3) AS to_blake3
-     FROM dolt_diff_files
-    WHERE from_ref = 'HEAD^1' AND to_ref = 'HEAD'
-      AND diff_type != 'unchanged';"
+     FROM dolt_diff_files('HEAD^1', 'HEAD');"
 ```
 
-Filter the diff vtabs with `from_ref` / `to_ref` (branch names,
-`HEAD`, `HEAD^1`, `HEAD~N`, or commit hashes all work) — **not**
-`from_commit` / `to_commit`, even though the result columns are
-`from_*` / `to_*`. Related:
-
-- `SELECT * FROM dolt_diff_stat WHERE from_ref = 'HEAD^1' AND to_ref =
-  'HEAD';` — added/modified/removed counts for every table that changed.
-  The 3-arg form, `dolt_diff_stat('HEAD^1', 'HEAD', 'files')`, answers
-  for one named table.
-- `SELECT * FROM dolt_log();` — the commit history (one row per scan).
-
-See [`docs/dev/doltlite.md`](/docs/dev/doltlite.md) for the full set
-of history/diff system tables.
+Per-table counts, the commit log and the other ref spellings are in
+[`docs/dev/doltlite.md`](/docs/dev/doltlite.md#what-changed-between-two-commits).
 
 ## Options file
 

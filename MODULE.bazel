@@ -47,57 +47,16 @@ bazel_dep(name = "platforms", version = "1.1.0")
 # what the root module can *see*, not what the build uses.
 bazel_dep(name = "bazel_skylib", version = "1.9.0")
 
-# doltlite amalgamation — a single-translation-unit `doltlite.c` that
-# bundles the SQLite core, the prolly-tree storage engine, the
-# `dolt_commit`/`dolt_log`/… version-control SQL surface, and embedded
-# blake3. Pinned to a sha so the fetch is one-time-per-pin; consumed
-# by `//third-party/doltlite:sqlite3`.
+# doltlite v0.50.13: the amalgamation, a single-file `doltlite.c` with the
+# SQLite core, the prolly-tree engine and the `dolt_*` SQL surface, built
+# by `//third-party/doltlite:sqlite3` into every binary.
 #
-# Prior to v0.11.4 the amalgamation zip was broken — it built stock
-# SQLite without the prolly hooks — so we used to pull the autoconf
-# source tarball and compile every `src/*.c` individually (see git
-# history of //third-party/doltlite/amalgamation.BUILD for the
-# ~300-line file-curation that took). v0.11.4 fixed the amalgamation
-# pipeline, so we're back to the trivial single-file build.
+# An exception to the 7-day burn-in: it was a day old when pinned. It
+# carries dolthub/doltlite#3231, which lets a read-only `<store>@<commit>`
+# open work on our `.doltlite_db` names.
 #
-# v0.50.13 is an exception to the 7-day burn-in above (it was a day old
-# when pinned). It carries dolthub/doltlite#3231's fix: a read-only open
-# of `<store>@<commit>` is a detached snapshot, and before it doltlite
-# split the revision off only when the file's name held `.db` or
-# `.sqlite`, which `.doltlite_db` does not. The etl two-process tests
-# `detached_readers_*` check it on our names.
-#
-# v0.50.12 was an exception too (five days old when pinned). What we
-# needed from it arrived in v0.50.10:
-# dolthub/doltlite#2837, which stops `dolt_status` on a read-only
-# connection from failing a concurrent writer's `dolt_commit` and
-# losing its rows (dolthub/doltlite#2832). The etl two-process test
-# `a_reader_asking_dolt_status_never_makes_the_writers_commit_fail`
-# checks it.
-#
-# v0.50.3 was an exception too (published the day it was pinned), and
-# so was v0.11.53, which carried dolthub/doltlite#2329, the fix for
-# the silent large-value corruption we hit building the lightroom
-# mirror (dolthub/doltlite#2327 — every value past the source file's
-# local payload limit collapsed onto the first row's bytes when read
-# out of a plain SQLite file). `hack/doltlite_blob_bug/run.sh` is
-# still the check for that one: 1 distinct blob against the v0.11.52
-# CLI, 3 against v0.11.53 and later.
-#
-# The 0.11.57 → 0.50.0 jump is a renumbering, not 39 minor versions of
-# churn: upstream's own release note for 0.50.0 says "There are no code
-# changes from 0.11.57". What it marks is DoltLite Beta, whose headline
-# claim is storage-format stability — which is the property this repo
-# cares about most, since every `.doltlite_db` under a user's data root
-# has to stay readable. Taking it now rather than in a week is the
-# point: the sooner the data roots are written by a format-stable
-# release, the smaller the set of files written by a pre-Beta one.
-#
-# 0.11.54 through 0.11.57 are real fixes and come along for the ride:
-# index corruption during merges and reverts (including keyless
-# tables), secondary-index corruption when merging tables with explicit
-# integer-PK index terms, and `VACUUM INTO`. `grid_index` merges on
-# every run, so those are ours.
+# What each earlier pin was taken for: docs/dev/doltlite.md § Versions.
+# How to bump: third-party/doltlite/README.md § Upgrading doltlite.
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 http_archive(
     name = "doltlite_amalgamation",
@@ -118,9 +77,8 @@ http_archive(
 # file out of it; the rest of the tarball is never compiled.
 #
 # MUST move in lockstep with `doltlite_amalgamation` above: `shell.c`
-# is generated against a specific doltlite version and reports it via
-# `-DDOLTLITE_VERSION`. `//third-party/doltlite:cli_version_test`
-# fails the build if the two pins drift.
+# is generated against a specific doltlite version.
+# `//tools:version_pins_test` fails if the two pins drift.
 http_archive(
     name = "doltlite_autoconf",
     urls = ["https://github.com/dolthub/doltlite/releases/download/v0.50.13/doltlite-autoconf-0.50.13.tar.gz"],

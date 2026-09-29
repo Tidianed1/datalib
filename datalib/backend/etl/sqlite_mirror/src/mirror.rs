@@ -469,7 +469,7 @@ pub fn build_spec(
     } else {
         // Either the source table is keyless, or its key was filtered
         // out. Keyless is a legitimate mirror shape: doltlite still
-        // diffs the table, by row multiset rather than by key.
+        // diffs the table, by position rather than by key.
         (Vec::new(), KeyOrigin::Keyless)
     };
 

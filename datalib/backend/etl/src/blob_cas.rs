@@ -512,7 +512,8 @@ impl BlobBundle {
 
     /// A bundle for each key that names at least one ref. Every key's refs
     /// go into one query: the edge table is read through a `pinned_*` view,
-    /// which uses no index, so a query per bucket is a full scan per bucket.
+    /// which uses no secondary index, so a query per bucket is a full scan
+    /// per bucket.
     pub async fn load_many<K, R>(
         refs_pool: &SqlitePool,
         cas_pool: &SqlitePool,

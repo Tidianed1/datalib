@@ -90,7 +90,7 @@ Because dropping the `jsonb()` wrapper silently falls back to text storage with 
 
 ### More details
 
-**Fields derivable from the payload** (`updated_at`, `state`, `name`, `html_url`, `display_name`) — even when we want to query or index them — should **not** be duplicated as stored columns. Use either a `CREATE INDEX … ON t(payload->>'$.path')` expression index or a `VIRTUAL` generated column plus an index over it. Both produced COVERING index plans when measured on doltlite 0.11.9 (the pin is now 0.50.12; not re-measured); the VIRTUAL+index variant additionally restores `SELECT col FROM t` ergonomics. Either way, `ALTER TABLE ADD COLUMN … VIRTUAL` (or a new expression index) is a no-refetch additive change against existing user data. See [Schema evolution](/docs/dev/data_architecture_ingestion_practices.md#schema-evolution).
+**Fields derivable from the payload** (`updated_at`, `state`, `name`, `html_url`, `display_name`) — even when we want to query or index them — should **not** be duplicated as stored columns. Use either a `CREATE INDEX … ON t(payload->>'$.path')` expression index or a `VIRTUAL` generated column plus an index over it. Neither scans the table ([query plans](/docs/dev/doltlite.md#query-plans-and-indexes)); the VIRTUAL+index variant also restores `SELECT col FROM t`. Either way, `ALTER TABLE ADD COLUMN … VIRTUAL` (or a new expression index) is a no-refetch additive change against existing user data. See [Schema evolution](/docs/dev/data_architecture_ingestion_practices.md#schema-evolution).
 
 ### Events vs bookkeeping: where each column lives
 Every entity table `<t>` is paired with a sidecar `<t>_bookkeeping`. The split is load-bearing — three buckets to think about when adding a column:
@@ -110,7 +110,7 @@ Attachment bytes are split out of the entity database into a sibling content-add
 
 - `dolt diff` over the entity db stays small and human-grep-able. A re-fetch that picks up one new attachment doesn't drown the commit in a many-MB BLOB row.
 - The CAS by nature is append-only.
-- Attachments can be big, and Dolt DBs are (purposefully) difficult to erase from. Even garbage collecting unused attachments wouldn't delete them from the doltlite DB storage.
+- Attachments can be big, and a doltlite store is (purposefully) difficult to erase from: a deleted row stays reachable from the commits before it, so even `dolt_gc()` keeps it ([disk space](/docs/dev/doltlite.md#disk-space-and-dolt_gc)).
 - Someday we might want to share a BLOB store across multiple data sources (Perkeep-style).
 
 A source with attachments has both `<group>/ingest/entities.doltlite_db` (entities + a per-provider edge table mapping `(owning, ref) → blake3`, e.g. `slack_attachments`) and `<group>/ingest/blobs.sqlite` (`cas_objects` keyed by blake3). The code is [`blob_cas.rs`](/datalib/backend/etl/src/blob_cas.rs); why the bytes always commit before the rows naming them is in [`etl/README.md` §"Blob CAS and per-provider edge tables"](/datalib/backend/etl/README.md).
@@ -153,7 +153,7 @@ defined. This is distinct from a file-backed method's `path`
 We use doltlite because:
 
 - At the API level, it effectively "is-a" sqlite, supporting all sqlite behavior (JSONB, etc.)
-    - Except it has its own binary format and thus needs a differently compiled sqlite binary ([`doltlite.md`](doltlite.md)).
+    - Except it has its own binary format and thus needs a differently compiled sqlite binary ([`doltlite.md`](doltlite.md), which is also where everything the engine does is written down).
 - It supports data versioning (commit, branch, merge, tag, etc.)
     - Different versions of the data are stored space-efficiently.
     - SQL operations (even DROP TABLE) do not actually delete anything.
@@ -302,7 +302,8 @@ point of the project: the reason to keep your own copy is that the
 provider's copy is not under your control.
 
 It is also the good side of a property we criticize elsewhere.
-"doltlite never deletes anything" is a real cost for
+That a commit keeps every row it ever reached
+([disk space](/docs/dev/doltlite.md#disk-space-and-dolt_gc)) is a real cost for
 [derived intermediates](plans/data_lib_as_a_library/toolchain_for_agents.md),
 which we could always rebuild. On the raw store it is the feature.
 

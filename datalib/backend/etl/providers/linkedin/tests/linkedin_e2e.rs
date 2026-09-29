@@ -129,8 +129,8 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
     rt.block_on(async {
         // ── download ──────────────────────────────────────────────
         // The test owns each store: one connection for the download and
-        // the assertions both, because two is what breaks a doltlite
-        // file.
+        // the assertions both, because the file takes one writer at a
+        // time.
         let db = RawDb::open(&db_path_for(&raw_dir)).await?;
         let summary = ingest::fetch(FetchOptions {
             db: db.clone(),

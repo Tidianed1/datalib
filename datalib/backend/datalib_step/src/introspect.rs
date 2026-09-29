@@ -11,11 +11,11 @@
 //! and commit — growing the store it just measured, forever, on a
 //! pipeline where nothing upstream changed.
 //!
-//! **A `Table` row carries no byte size.** doltlite is a
-//! content-addressed chunk store with no page layout — `dbstat` refuses
-//! outright — and chunks are shared between tables and between commits,
-//! so no honest per-table number exists to report. Row counts are exact
-//! and cheap; file sizes are exact and free. Those are what this emits.
+//! **A `Table` row carries no byte size.** Doltlite has no `dbstat` and
+//! shares chunks between tables and commits, so no honest per-table number
+//! exists (docs/dev/doltlite.md#query-plans-and-indexes). Row counts are
+//! exact and cheap; file sizes are exact and free. Those are what this
+//! emits.
 //!
 //! **What re-renders the report is a count, never a byte.** Both of the
 //! numbers that move on their own live on the storage side rather than
@@ -456,12 +456,10 @@ pub fn plan(
 /// subjects, each with the same count. `previous` is the newest sample
 /// per subject in `source_measurements`.
 ///
-/// **Counts, never bytes.** A doltlite store's size is not reproducible:
-/// rebuilding the TNG fixture from byte-identical inputs moves six of
-/// its sixteen sources by 1-22 bytes, in a different direction each
-/// time, and a bookkeeping mutation rewrites chunks with no row added.
-/// Comparing bytes would rewrite a report nothing asked for on every
-/// run, and hand `grid_index` a diff to read forever.
+/// **Counts, never bytes**, for the reason in the module header: a store's
+/// size moves when no row did. Comparing bytes would rewrite a report
+/// nothing asked for on every run, and hand `grid_index` a diff to read
+/// forever.
 pub fn counts_unchanged(
     previous: &std::collections::HashMap<String, Option<i64>>,
     samples: &[SourceMeasurementRow],
@@ -723,7 +721,8 @@ mod tests {
             .expect("a tree row");
         assert_eq!(tree.path, "src/ingest");
         // Two, not one: doltlite leaves a zero-byte
-        // `.<name>.doltlite_db-lock` sidecar beside every store, and the
+        // `.<name>.doltlite_db-lock` sidecar beside every store it has
+        // written, and the
         // tree total counts what is actually on disk rather than only
         // the files we think of as ours.
         assert_eq!(tree.items, Some(2), "the store plus its lock sidecar");

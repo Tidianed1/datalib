@@ -59,7 +59,7 @@ probe of an early window, repeated later, would settle it.
   the shell built below):
 
   ```sh
-  $dl <data_root>/<group>/ingest/entities.doltlite_db \
+  $dl -readonly <data_root>/<group>/ingest/entities.doltlite_db \
     "SELECT device_name, datetime(MAX(ts_ms)/1000,'unixepoch') AS last_seen
        FROM yolink_readings GROUP BY device_name ORDER BY last_seen;"
   ```
@@ -70,17 +70,13 @@ Because history expires upstream, an old raw store from a previous
 machine or a retired group can hold readings that no longer exist
 anywhere else. Merging one in is a two-table upsert.
 
-Everything below uses the Bazel-built shell, which links the same
-doltlite amalgamation the pipeline writes with:
+Everything below uses the doltlite shell as `$dl`
+([`docs/dev/doltlite.md`](/docs/dev/doltlite.md) has where to get it):
 
 ```sh
 bazelisk build //third-party/doltlite:doltlite
 dl=bazel-bin/third-party/doltlite/doltlite
 ```
-
-**Stock `sqlite3` cannot open these files.** Prefer the Bazel target over
-a host `/usr/local/bin/doltlite` so the CLI can't silently disagree with
-`MODULE.bazel`'s pin.
 
 ### Check what you actually have first
 
@@ -91,7 +87,7 @@ id rework. Confirm that the backup's ids follow the same recipe:
 
 ```sh
 # every id in the source matches the current recipe?
-$dl <backup>/ingest/entities.doltlite_db \
+$dl -readonly <backup>/ingest/entities.doltlite_db \
   "SELECT COUNT(*) AS total,
           SUM(id = device_name || '#' || ts_ms || '#' || metric) AS matching
      FROM yolink_readings;"
@@ -101,7 +97,7 @@ Then check what the merge would gain and whether the overlap agrees.
 `ATTACH` works, so this is one query:
 
 ```sh
-$dl <data_root>/<group>/ingest/entities.doltlite_db "
+$dl -readonly <data_root>/<group>/ingest/entities.doltlite_db "
 ATTACH DATABASE '<backup>/ingest/entities.doltlite_db' AS src;
 SELECT 'gained', COUNT(*) FROM src.yolink_readings s
   WHERE NOT EXISTS (SELECT 1 FROM yolink_readings c WHERE c.id = s.id);
@@ -216,8 +212,9 @@ and the data is more valuable than the tidiness.
    same data as one row per (device, ts) with a `REAL` column per
    metric measured at about a tenth of the size on airvisual's data.
 2. **One transaction per device**, not per fetched window. A full
-   re-walk here is cheap and idempotent, and every SQL commit rewrites
-   the store's tree.
+   re-walk here is cheap and idempotent, and every SQL transaction
+   rewrites the pages it touches
+   ([doltlite.md § What a write costs](/docs/dev/doltlite.md#what-a-write-costs)).
 3. **A device has an `id` and a `name`.** `devices[].name` here is
    both the display label and the row key, so renaming a device
    orphans its history (the config doc says so). The step id does not

@@ -25,9 +25,9 @@ const DELETE_CHUNK: usize = 400;
 #[derive(Debug, Clone)]
 pub struct IngestOptions {
     /// The store this run writes into, opened and closed by the caller.
-    /// A download never opens a store of its own: two live connections to
-    /// one `.doltlite_db` make each other's `dolt_commit` fail. See
-    /// `datalib/backend/etl/README.md`.
+    /// A download never opens a store of its own: one writer per file
+    /// (`datalib/backend/etl/README.md` § "One writer per file, by
+    /// construction").
     pub db: RawDb,
     /// The unpacked export directory (`common.input_path`).
     pub input_path: PathBuf,
@@ -382,8 +382,7 @@ mod tests {
     }
 
     /// One store per test, opened once and handed to every `ingest`
-    /// call: a second live connection to the same file would make one
-    /// of the two `dolt_commit`s fail.
+    /// call: the file takes one writer at a time.
     async fn open_raw(raw: &Path) -> RawDb {
         RawDb::open(&db_path_for(raw)).await.unwrap()
     }

@@ -64,11 +64,13 @@ The first run's `Mailbox/get` lands in the `mailboxes` table:
 
 ```sh
 bazelisk build //third-party/doltlite:doltlite
-bazel-bin/third-party/doltlite/doltlite ~/backups/fastmail/entities.doltlite_db \
+bazel-bin/third-party/doltlite/doltlite -readonly ~/backups/fastmail/entities.doltlite_db \
     "SELECT id, name, role FROM mailboxes ORDER BY name"
 ```
 
-Stock `sqlite3` cannot open the file.
+Stock `sqlite3` cannot open the file;
+[`docs/dev/doltlite.md`](/docs/dev/doltlite.md#getting-the-data-out-export-to-plain-sqlite)
+has the one-pipe export.
 
 ## API surface used
 

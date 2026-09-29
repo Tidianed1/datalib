@@ -2,19 +2,18 @@
 //! commit while a writer holds the store open and keeps committing, in either
 //! order of opening?
 //!
-//! This is the premise the streaming-steps design rests on
-//! (`docs/dev/plans/completed/streaming_steps_plan.md`), and it cannot be checked from inside
-//! one process. Doltlite's working set lives in the *file* and is shared
-//! across processes, and its chunk-store lock is a BSD `flock` on that file,
-//! so two pools in one process share state that two processes do not. The
-//! sibling unit tests in `etl/src/pin.rs` cover what pinning means; these
-//! cover that it survives a second process writing underneath it.
+//! This is the premise streaming rests on (P2 in
+//! `datalib/backend/dag/README.md` § "What a sink owes its consumers"), and it cannot be checked from inside
+//! one process. Doltlite's working set lives in the *file*, and its lock is
+//! SQLite's file lock on a sidecar, which one process's connections share, so
+//! two pools in one process share state that two processes do not
+//! (`docs/dev/doltlite.md` § "Locks and writers"). The sibling unit tests in
+//! `etl/src/pin.rs` cover what pinning means; these cover that it survives a
+//! second process writing underneath it.
 //!
 //! Each side runs as `//datalib/backend/etl:doltlite_two_process`, which
-//! reports what it saw as JSON. This process opens no store of its own — a
-//! coordinator holding a doltlite connection while it spawns would leak the
-//! chunk-store flock into its children (`hack/doltlite_fork_bug/README.md`)
-//! and the test would be measuring that instead.
+//! reports what it saw as JSON. This process opens no store of its own, so
+//! the only doltlite state in play is the children's.
 
 use std::path::PathBuf;
 use std::process::{Child, Command};
@@ -508,11 +507,11 @@ struct BranchRun {
 }
 
 /// A reader with a branch of its own, fast-forwarded to `main` on each
-/// refresh, beside the real `commit_run` writer. On doltlite 0.50.3 this
-/// refused 1-2 of 300 seals at 100 ms refreshes and once hung the writer at
-/// 20 ms (`docs/dev/plans/paged_grids.md`). Returns the writer's report and
-/// each reader's, after checking nobody saw an error and every reader read
-/// only sealed commits, one commit per refresh.
+/// refresh, beside the real `commit_run` writer. Guards the writer's seals
+/// against a ref-moving reader, which refused some of them on doltlite 0.50.3
+/// (`docs/dev/doltlite.md` § "Locks and writers"). Returns the writer's
+/// report and each reader's, after checking nobody saw an error and every
+/// reader read only sealed commits, one commit per refresh.
 // The timings go to the test log; there is no progress bar to corrupt here.
 #[allow(clippy::disallowed_macros)]
 fn branch_readers_beside_a_sealing_writer(run: BranchRun) -> Option<(Value, Vec<Value>)> {

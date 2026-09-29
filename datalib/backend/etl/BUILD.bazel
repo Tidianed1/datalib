@@ -61,8 +61,9 @@ rust_test(
 
 # One side of the two-process doltlite concurrency test below: a writer, a
 # pinned reader, or a probe. It is a binary rather than a second pool inside
-# the test because doltlite's working set and chunk-store lock are per *file*
-# and shared across processes — two pools in one process do not exercise them.
+# the test because doltlite's working set and write lock belong to the file,
+# shared across processes (docs/dev/doltlite.md § Locks and writers) — two
+# pools in one process do not exercise them.
 # `testonly` and under `tests/`: nothing shipped may link it, and cargo does
 # not pick it up as a bin of this crate.
 rust_binary(

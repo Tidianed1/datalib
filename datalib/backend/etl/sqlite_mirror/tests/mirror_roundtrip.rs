@@ -215,10 +215,8 @@ async fn indexes_and_triggers_are_not_mirrored() -> Result<()> {
     f.ingest().await?;
 
     // `sqlite_autoindex_*` rows are excluded because they are the storage
-    // engine's, not the source catalog's: doltlite 0.50 reports an
-    // implicit index for every non-INTEGER primary key, the way stock
-    // SQLite always has. It did not before 0.11.54's SQLite-compatibility
-    // work, so this assertion used to be able to say "zero of anything".
+    // engine's, not the source catalog's: doltlite reports an implicit
+    // index for every non-INTEGER primary key, as stock SQLite does.
     const NAMED_INDEXES_AND_TRIGGERS: &str = "SELECT COUNT(*) FROM sqlite_master \
            WHERE type IN ('index', 'trigger') \
              AND name NOT GLOB 'sqlite_autoindex_*'";
@@ -439,8 +437,7 @@ async fn insert_update_and_delete_are_reflected_in_the_mirror() -> Result<()> {
 #[tokio::test]
 async fn edits_to_a_keyless_table_are_reflected() -> Result<()> {
     // `AgOzSpaceIds` has no primary key and no unique index. doltlite
-    // still versions it, by row multiset rather than by key — the honest
-    // representation of a source table that has no identity either.
+    // still versions it, by hidden rowid — so by position, not content.
     let f = Fixture::new();
     f.ingest().await?;
     f.edit_catalog(&[

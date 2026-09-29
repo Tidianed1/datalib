@@ -44,10 +44,9 @@ pub struct TableSpec {
     /// Mirrored columns, in source order, minus any the column filter
     /// dropped.
     pub columns: Vec<ColumnSpec>,
-    /// The mirror's primary key. Empty means keyless — doltlite accepts
-    /// keyless tables and still diffs them (by row multiset), which is
-    /// the honest representation of a source table that has no key
-    /// either.
+    /// The mirror's primary key. Empty means keyless, as the source is:
+    /// doltlite then diffs the table by hidden rowid, i.e. by position
+    /// (docs/dev/doltlite.md § "Diffs").
     pub pk: Vec<String>,
     /// Source columns the filter dropped, for the run summary.
     pub dropped_columns: Vec<String>,

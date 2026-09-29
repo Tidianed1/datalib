@@ -1,11 +1,10 @@
 //! Reading a doltlite store at one commit.
 //!
-//! A plain `SELECT` reads doltlite's working set, which lives in the file
-//! and is shared across processes, so it returns rows the writer has
-//! `COMMIT`ed at the SQL level but not yet committed to doltlite
-//! (`doltlite_two_process_test` measures exactly that window). Anything
-//! reading a store some other process writes reads committed state
-//! instead: `dolt_at_<table>('<hash>')`, for a hash it resolved once.
+//! A plain `SELECT` on a branch reads that branch's working set, rows the
+//! writer has not committed to doltlite included. Anything reading a store
+//! some other process writes reads one commit instead, here
+//! `dolt_at_<table>('<hash>')` for a hash it resolved once
+//! (docs/dev/doltlite.md#three-ways-to-read-one-commit).
 //!
 //! This crate is the part of that discipline with no dependencies: the
 //! hash as a type, HEAD, and the read-only open. `datalib_etl::pin` builds
@@ -65,10 +64,10 @@ impl Pin {
 /// commits yet, or a build without the dolt extensions, which read the
 /// same: nothing to pin.
 pub async fn head(pool: &SqlitePool) -> Result<Option<Pin>> {
-    // A scalar function answers from the session's last view of the
-    // store; it is a table read that reloads the root from the file. So
-    // one first, or a connection held across a writer's commit keeps
-    // reporting the HEAD it opened at (`a_pinned_read_names_one_commit`).
+    // A table read first: a bare `dolt_hashof` answers from the session's
+    // last view, so a connection held across a writer's commit would keep
+    // reporting the HEAD it opened at (`a_pinned_read_names_one_commit`;
+    // docs/dev/doltlite.md#what-a-read-only-connection-may-do).
     let _: i64 = sqlx::query_scalar("SELECT count(*) FROM sqlite_master")
         .fetch_one(pool)
         .await?;
@@ -106,7 +105,7 @@ pub fn is_missing_table(e: &sqlx::Error, table: &str) -> bool {
 /// than an intention; never creates the file, because a root that has
 /// not synced has none and the reader must not be what makes it. One
 /// connection, never recycled: doltlite's session state is per
-/// connection, and a replacement starts on `main` with a clean tree. The
+/// connection, and a replacement starts on the default branch. The
 /// acquire timeout is [`acquire_timeout`].
 /// How long a pool waits for its one connection before giving up. Far past
 /// sqlx's 30s default because a cold open of a multi-GB store legitimately

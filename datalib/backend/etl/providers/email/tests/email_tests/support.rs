@@ -45,8 +45,8 @@ impl Mirror {
         out
     }
 
-    /// Opens the store for `read` alone. A second live pool on one store
-    /// makes each other's `dolt_commit` fail, so nothing else may hold it.
+    /// Opens the store for `read` alone. The file takes one writer at a
+    /// time, so nothing else may hold it.
     pub async fn read<T, F>(&self, read: impl FnOnce(RawDb) -> F) -> T
     where
         F: Future<Output = T>,

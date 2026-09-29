@@ -64,10 +64,9 @@ An id is RFC 9562's version 8: the leading 48 bits are the record's
 bits of a v5 hash over the five-part recipe. Every store here is a
 doltlite prolly tree sorted by primary key, and a write rewrites every
 leaf its keys fall in, so keys that scatter (a plain hash) cost one leaf
-per row and keys that sort by time cost one leaf per batch —
-[`etl/README.md` § "What a write costs"](../../datalib/backend/etl/README.md#what-a-write-costs-the-transaction-is-the-unit-and-the-key-decides-the-size)
-has the measurement (500 rows with random keys write ~2 MB, with
-adjacent keys ~10 KB). A sync's new
+per row and keys that sort by time cost one leaf per batch
+([`doltlite.md` § What a write costs](doltlite.md#what-a-write-costs)
+has the measurement). A sync's new
 messages are the newest things in the store, so they land together at
 its right edge. An id with no stamp starts `00000000-0000-8…` and sorts
 to the left edge beside every other unstamped row.
