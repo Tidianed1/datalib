@@ -45,6 +45,10 @@ async function withCounts(page: Page, source: string) {
   });
 }
 
+// A rewrite still waiting on its `route.fetch()` when the page closes
+// throws outside any test and takes the worker down with it.
+test.afterEach(({ page }) => page.unrouteAll({ behavior: "ignoreErrors" }));
+
 /// The counts after a row's name.
 const counts = (page: Page, source: string) =>
   nameCell(page, `group:${source}`).locator(".tg-badges");
