@@ -45,7 +45,7 @@ impl RawDb {
     }
 
     pub async fn load_self_identity(&self) -> Result<Option<Value>> {
-        load_self_identity(self.pool(), self.reads()).await
+        load_self_identity(self.pool()).await
     }
 
     // ── merge_requests ──────────────────────────────────────────────
@@ -76,7 +76,7 @@ impl RawDb {
         let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT id, project_full_path, mr_iid, json(payload) AS payload
              FROM {} WHERE payload IS NOT NULL ORDER BY id",
-            self.reads().table("merge_requests")
+            "merge_requests"
         )))
         .fetch_all(self.pool())
         .await
@@ -101,7 +101,7 @@ impl RawDb {
         let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT id, project_full_path, mr_iid, discussion_id, json(payload) AS payload
              FROM {} WHERE payload IS NOT NULL ORDER BY id",
-            self.reads().table("discussions")
+            "discussions"
         )))
         .fetch_all(self.pool())
         .await

@@ -25,7 +25,7 @@ use super::{ts_to_iso, Channel, Message, User, Workspace};
 const ATTACHMENTS_PROJECTION_SQL: &str = "
     SELECT file_id AS ref_id, MAX(blake3) AS blake3,
            NULL AS content_type, NULL AS upstream_name
-      FROM pinned_slack_attachments slack_attachments
+      FROM slack_attachments
      WHERE file_id IN ({placeholders}) AND blake3 IS NOT NULL
      GROUP BY file_id";
 
@@ -275,7 +275,7 @@ const CHANGED_MESSAGES_SQL: &str = "
     UNION
     SELECT m.thread_root_uuid
       FROM dolt_diff_slack_attachments d
-      JOIN pinned_messages m ON m.id = coalesce(d.to_message_uuid, d.from_message_uuid)
+      JOIN messages m ON m.id = coalesce(d.to_message_uuid, d.from_message_uuid)
      WHERE d.from_ref = ?1 AND d.to_ref = ?2 AND d.diff_type != 'unchanged'";
 
 /// Followed threads whose own `last_read` moved. The bookkeeping row
@@ -283,7 +283,7 @@ const CHANGED_MESSAGES_SQL: &str = "
 const MOVED_THREAD_MARKS_SQL: &str = "
     SELECT m.thread_root_uuid
       FROM dolt_diff_messages_bookkeeping d
-      JOIN pinned_messages m ON m.id = coalesce(d.to_id, d.from_id)
+      JOIN messages m ON m.id = coalesce(d.to_id, d.from_id)
      WHERE d.from_ref = ?1 AND d.to_ref = ?2 AND d.diff_type != 'unchanged'
        AND json_extract(d.from_volatile_payload, '$.last_read')
            IS NOT json_extract(d.to_volatile_payload, '$.last_read')";
@@ -300,7 +300,7 @@ const MOVED_CHANNEL_MARKS_SQL: &str = "
                    CAST(json_extract(to_volatile_payload, '$.last_read') AS REAL) AS now
               FROM dolt_diff_channel_read_states_bookkeeping
              WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged') d
-      JOIN pinned_messages m ON m.channel_id = d.channel_id AND m.is_thread_root = 1
+      JOIN messages m ON m.channel_id = d.channel_id AND m.is_thread_root = 1
      WHERE d.was IS NOT d.now
        AND CAST(m.ts AS REAL) >= min(coalesce(d.was, d.now), coalesce(d.now, d.was))
        AND (d.was IS NULL OR d.now IS NULL OR CAST(m.ts AS REAL) <= max(d.was, d.now))";
@@ -364,8 +364,8 @@ async fn load_read_marks(pool: &SqlitePool, has_read_states: bool) -> Result<Rea
         pairs(
             sqlx::query_as(
                 "SELECT r.id, json_extract(b.volatile_payload, '$.last_read')
-                   FROM pinned_channel_read_states r
-                   JOIN pinned_channel_read_states_bookkeeping b ON b.id = r.id",
+                   FROM channel_read_states r
+                   JOIN channel_read_states_bookkeeping b ON b.id = r.id",
             )
             .fetch_all(pool)
             .await
@@ -378,8 +378,8 @@ async fn load_read_marks(pool: &SqlitePool, has_read_states: bool) -> Result<Rea
     let threads = pairs(
         sqlx::query_as(
             "SELECT m.thread_root_uuid, json_extract(b.volatile_payload, '$.last_read')
-               FROM pinned_messages m
-               JOIN pinned_messages_bookkeeping b ON b.id = m.id
+               FROM messages m
+               JOIN messages_bookkeeping b ON b.id = m.id
               WHERE m.is_thread_root = 1
                 AND json_extract(b.volatile_payload, '$.last_read') IS NOT NULL",
         )
@@ -392,7 +392,7 @@ async fn load_read_marks(pool: &SqlitePool, has_read_states: bool) -> Result<Rea
 
 async fn load_thread_keys(pool: &SqlitePool) -> Result<Vec<String>> {
     sqlx::query_scalar::<_, String>(
-        "SELECT DISTINCT thread_root_uuid FROM pinned_messages messages WHERE payload IS NOT NULL",
+        "SELECT DISTINCT thread_root_uuid FROM messages WHERE payload IS NOT NULL",
     )
     .fetch_all(pool)
     .await
@@ -400,12 +400,11 @@ async fn load_thread_keys(pool: &SqlitePool) -> Result<Vec<String>> {
 }
 
 async fn load_workspace(pool: &SqlitePool) -> Result<Option<Workspace>> {
-    let row = sqlx::query(
-        "SELECT id, json(payload) AS payload FROM pinned_workspaces workspaces ORDER BY id LIMIT 1",
-    )
-    .fetch_optional(pool)
-    .await
-    .context("select workspace")?;
+    let row =
+        sqlx::query("SELECT id, json(payload) AS payload FROM workspaces ORDER BY id LIMIT 1")
+            .fetch_optional(pool)
+            .await
+            .context("select workspace")?;
     let Some(row) = row else { return Ok(None) };
     let Ok(s): Result<String, _> = row.try_get("payload") else {
         return Ok(None);
@@ -430,7 +429,7 @@ async fn load_users(
     pool: &SqlitePool,
     unparsed: &mut Vec<Unparsed>,
 ) -> Result<BTreeMap<String, User>> {
-    let rows = sqlx::query("SELECT id, team_id, json(payload) AS payload FROM pinned_users")
+    let rows = sqlx::query("SELECT id, team_id, json(payload) AS payload FROM users")
         .fetch_all(pool)
         .await
         .context("select users")?;
@@ -484,9 +483,9 @@ async fn load_channels(pool: &SqlitePool) -> Result<BTreeMap<String, Channel>> {
         .await?
         && datalib_etl::doltlite_raw::column_exists(pool, "channels", "dm_user_ids").await?;
     let sql = if has_dm_columns {
-        "SELECT id, name, is_dm, dm_user_ids FROM pinned_channels"
+        "SELECT id, name, is_dm, dm_user_ids FROM channels"
     } else {
-        "SELECT id, name FROM pinned_channels"
+        "SELECT id, name FROM channels"
     };
     let rows = sqlx::query(sql)
         .fetch_all(pool)
@@ -533,7 +532,7 @@ struct LoadedMessageWithThread {
 
 async fn thread_count(pool: &SqlitePool) -> Result<usize> {
     let row = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(DISTINCT thread_root_uuid) FROM pinned_messages messages WHERE payload IS NOT NULL",
+        "SELECT COUNT(DISTINCT thread_root_uuid) FROM messages WHERE payload IS NOT NULL",
     )
     .fetch_one(pool)
     .await
@@ -548,7 +547,7 @@ async fn load_all_messages(
     let rows = sqlx::query(
         "SELECT id, team_id, channel_id, ts, thread_ts, is_thread_root, user_id,
                 json(payload) AS payload, thread_root_uuid
-           FROM pinned_messages messages
+           FROM messages
           WHERE payload IS NOT NULL
           ORDER BY thread_root_uuid, ts",
     )
@@ -576,7 +575,7 @@ async fn load_messages_for_threads(
         let sql = format!(
             "SELECT id, team_id, channel_id, ts, thread_ts, is_thread_root, user_id,
                     json(payload) AS payload, thread_root_uuid
-               FROM pinned_messages messages
+               FROM messages
               WHERE payload IS NOT NULL AND thread_root_uuid IN ({placeholders})
               ORDER BY thread_root_uuid, ts"
         );
@@ -985,19 +984,18 @@ mod legacy_schema_tests {
             .await
             .unwrap();
 
-        // Read it the way render does: committed, pinned, through the views.
-        // The store still lacks the DM columns, which is what this guards —
-        // pinning does not conjure a column the store never had.
+        // Read it the way render does: committed, through a reader at that
+        // commit. The store still lacks the DM columns, which is what this
+        // guards — a reader does not conjure a column the store never had.
         datalib_etl::doltlite_raw::commit_run(&pool, "legacy store")
             .await
             .unwrap();
-        let pin = datalib_etl::pin::head(&pool)
+        let reader = datalib_etl::doltlite_raw::open_reader(&path, None)
             .await
             .unwrap()
             .expect("the legacy store has a commit now");
-        datalib_etl::pin::install_views(&pool, &pin).await.unwrap();
 
-        let channels = load_channels(&pool)
+        let channels = load_channels(&reader)
             .await
             .expect("must not fail to prepare");
         let c = channels.get("C1").expect("C1");

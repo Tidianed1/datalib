@@ -90,15 +90,6 @@ impl RawDb {
         self.pin.as_ref()
     }
 
-    /// How this handle reads content. Every content query goes through
-    /// it, so a reader cannot accidentally read the working set.
-    fn reads(&self) -> datalib_etl::pin::Reads<'_> {
-        match self.pin.as_ref() {
-            Some(p) => datalib_etl::pin::Reads::At(p),
-            None => datalib_etl::pin::Reads::Own,
-        }
-    }
-
     pub async fn open(db_path: &Path) -> Result<Self> {
         let owned = full_ddl();
         let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
@@ -342,8 +333,7 @@ impl RawDb {
              FROM {} c
              LEFT JOIN {} a ON a.id = c.addressbook_id
              ORDER BY c.addressbook_id, c.id",
-            self.reads().table("contacts"),
-            self.reads().table("addressbooks")
+            "contacts", "addressbooks"
         )))
         .fetch_all(&self.pool)
         .await

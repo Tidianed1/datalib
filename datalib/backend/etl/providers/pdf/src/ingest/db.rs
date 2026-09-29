@@ -109,7 +109,7 @@ impl RawDb {
         // -- a literal, or that literal behind `pinned_`.
         let row = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT id, abs_root FROM {} ORDER BY id LIMIT 1",
-            self.reads().table("pdf_scan_meta")
+            "pdf_scan_meta"
         )))
         .fetch_optional(self.pool())
         .await
@@ -161,8 +161,7 @@ impl RawDb {
                 AND d.page_count > d.ocr_page_count
               GROUP BY d.blake3
               ORDER BY d.blake3",
-            self.reads().table("pdf_documents"),
-            self.reads().table("pdf_paths")
+            "pdf_documents", "pdf_paths"
         )))
         .fetch_all(self.pool())
         .await

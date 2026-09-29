@@ -222,7 +222,7 @@ impl RawDb {
         // Audited: the interpolation is a table name this handle chose.
         let row = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT id, method, server_url, login FROM {} ORDER BY id LIMIT 1",
-            self.reads().table("accounts")
+            "accounts"
         )))
         .fetch_optional(self.pool())
         .await
@@ -239,7 +239,7 @@ impl RawDb {
         // Audited: the interpolation is a table name this handle chose.
         let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT id, display_name, time_zone FROM {} ORDER BY id",
-            self.reads().table("calendars")
+            "calendars"
         )))
         .fetch_all(self.pool())
         .await
@@ -262,7 +262,7 @@ impl RawDb {
         let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT id, calendar_id, uid, json_extract(payload, '$.ics') AS ics
              FROM {} ORDER BY id",
-            self.reads().table("ics_objects")
+            "ics_objects"
         )))
         .fetch_all(self.pool())
         .await
@@ -284,7 +284,7 @@ impl RawDb {
         // Audited: the interpolation is a table name this handle chose.
         let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT id, calendar_id, json(payload) AS payload FROM {} ORDER BY id",
-            self.reads().table("google_events")
+            "google_events"
         )))
         .fetch_all(self.pool())
         .await

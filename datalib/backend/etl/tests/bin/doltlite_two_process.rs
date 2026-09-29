@@ -171,7 +171,7 @@ async fn read(args: &Args) -> Result<Value> {
     let mut samples: Vec<Value> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
     for _ in 0..args.num("samples", 12) {
-        match sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM pinned_entities")
+        match sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM entities")
             .fetch_one(pool)
             .await
         {
@@ -289,7 +289,7 @@ async fn history(args: &Args) -> Result<Value> {
 async fn one_pinned_pass(reader: &doltlite_raw::Reader, cursor: Option<&str>) -> Result<String> {
     let pool = reader.pool();
     let pin = reader.pin();
-    let _rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pinned_entities")
+    let _rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM entities")
         .fetch_one(pool)
         .await?;
     let _changed: i64 = sqlx::query_scalar(

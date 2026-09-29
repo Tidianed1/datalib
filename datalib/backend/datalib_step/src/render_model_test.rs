@@ -16,7 +16,6 @@ use std::sync::Mutex;
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use datalib_etl::doltlite_raw::{self, DiffScanSpec};
-use datalib_etl::pin::Reads;
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::{build_grid_index, init_schema, RenderedMarkdown};
 use datalib_etl_render::indexed_markdown::{blocking, IndexedMarkdownStore};
@@ -239,7 +238,7 @@ impl RenderProcessor for SynthRender {
                 ",
             },
         ))?;
-        let model = blocking(load_model(&pool, Reads::At(&pin)))?;
+        let model = blocking(load_model(&pool))?;
         blocking(pool.close());
         let unparsed = self.unparsed.lock().unwrap().clone();
         ctx.report_unparsed(
@@ -297,12 +296,9 @@ impl RenderProcessor for SynthRender {
     }
 }
 
-async fn load_model(pool: &SqlitePool, reads: Reads<'_>) -> Result<Model> {
+async fn load_model(pool: &SqlitePool) -> Result<Model> {
     let mut model = Model::default();
-    let sql = format!(
-        "SELECT id, title, author_id FROM {}",
-        reads.table("parents")
-    );
+    let sql = format!("SELECT id, title, author_id FROM {}", "parents");
     // Audited: the table name is a literal through `Reads::table`.
     for r in sqlx::query(sqlx::AssertSqlSafe(sql))
         .fetch_all(pool)
@@ -316,10 +312,7 @@ async fn load_model(pool: &SqlitePool, reads: Reads<'_>) -> Result<Model> {
             },
         );
     }
-    let sql = format!(
-        "SELECT id, parent_id, body, seq FROM {}",
-        reads.table("children")
-    );
+    let sql = format!("SELECT id, parent_id, body, seq FROM {}", "children");
     for r in sqlx::query(sqlx::AssertSqlSafe(sql))
         .fetch_all(pool)
         .await?
@@ -333,7 +326,7 @@ async fn load_model(pool: &SqlitePool, reads: Reads<'_>) -> Result<Model> {
             },
         );
     }
-    let sql = format!("SELECT id, name FROM {}", reads.table("authors"));
+    let sql = format!("SELECT id, name FROM {}", "authors");
     for r in sqlx::query(sqlx::AssertSqlSafe(sql))
         .fetch_all(pool)
         .await?

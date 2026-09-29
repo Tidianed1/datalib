@@ -37,7 +37,7 @@ pub const RENDER_VERSION: u32 = 3;
 /// falls back to `cas_objects`.
 const SMS_BLOB_PROJECTION: &str = "SELECT ref_name AS ref_id, blake3, \
             NULL AS content_type, NULL AS upstream_name \
-     FROM pinned_sms_attachments sms_attachments \
+     FROM sms_attachments \
      WHERE ref_name IN ({placeholders}) AND blake3 IS NOT NULL";
 
 fn profile() -> RenderProfile {
@@ -79,18 +79,12 @@ pub fn render(
             };
             let pin = db.pin().expect("a reader is pinned at open").clone();
             let loaded = async {
-                let messages = datalib_etl::doltlite_raw::load_payloads_with_id(
-                    db.pool(),
-                    datalib_etl::pin::Reads::At(&pin),
-                    "sms_messages",
-                )
-                .await?;
-                let calls = datalib_etl::doltlite_raw::load_payloads_with_id(
-                    db.pool(),
-                    datalib_etl::pin::Reads::At(&pin),
-                    "sms_calls",
-                )
-                .await?;
+                let messages =
+                    datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), "sms_messages")
+                        .await?;
+                let calls =
+                    datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), "sms_calls")
+                        .await?;
                 let blobs = load_blobs(&db, &messages).await?;
                 let scan = scan_diff(db.pool(), range.cursor, &pin).await?;
                 anyhow::Ok((messages, calls, blobs, scan))

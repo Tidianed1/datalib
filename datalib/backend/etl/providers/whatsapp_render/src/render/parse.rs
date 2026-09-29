@@ -34,7 +34,7 @@ const ATTACHMENTS_PROJECTION_SQL: &str = "
     SELECT blake3 AS ref_id, blake3,
            mime_type AS content_type,
            relative_path AS upstream_name
-      FROM pinned_wa_media_files wa_media_files
+      FROM wa_media_files
      WHERE blake3 IN ({placeholders})";
 
 /// What `parse` returns to render: the chat tree plus a per-chat `BlobBundle`
@@ -107,9 +107,9 @@ async fn parse_async(
     let has_read_mark =
         datalib_etl::doltlite_raw::column_exists(&pool, "chat", "last_read_message_row_id").await?;
     let chat_sql = if has_read_mark {
-        "SELECT _id, jid_row_id, subject, last_read_message_row_id FROM pinned_chat chat ORDER BY _id"
+        "SELECT _id, jid_row_id, subject, last_read_message_row_id FROM chat ORDER BY _id"
     } else {
-        "SELECT _id, jid_row_id, subject, NULL AS last_read_message_row_id FROM pinned_chat chat ORDER BY _id"
+        "SELECT _id, jid_row_id, subject, NULL AS last_read_message_row_id FROM chat ORDER BY _id"
     };
     let chat_rows = sqlx::query(chat_sql)
         .fetch_all(&pool)
@@ -151,7 +151,7 @@ async fn parse_async(
     let msg_rows = sqlx::query(
         "SELECT _id, chat_row_id, key_id, from_me, sender_jid_row_id, timestamp, \
                 message_type, text_data \
-         FROM pinned_message message ORDER BY chat_row_id, sort_id, timestamp, key_id",
+         FROM message ORDER BY chat_row_id, sort_id, timestamp, key_id",
     )
     .fetch_all(&pool)
     .await
@@ -207,8 +207,8 @@ async fn parse_async(
     let media_rows = sqlx::query(
         "SELECT m.message_row_id, m.file_path, m.mime_type, m.file_size, \
                 m.media_caption, m.media_name, f.blake3 \
-         FROM pinned_message_media m \
-         LEFT JOIN pinned_wa_media_files f ON f.relative_path = m.file_path",
+         FROM message_media m \
+         LEFT JOIN wa_media_files f ON f.relative_path = m.file_path",
     )
     .fetch_all(&pool)
     .await
@@ -281,8 +281,8 @@ async fn parse_async(
     let react_rows = sqlx::query(
         "SELECT a._id, a.chat_row_id, a.key_id, a.from_me, a.sender_jid_row_id, \
                 a.parent_message_row_id, a.timestamp, r.reaction \
-         FROM pinned_message_add_on a \
-         JOIN pinned_message_add_on_reaction r ON r.message_add_on_row_id = a._id \
+         FROM message_add_on a \
+         JOIN message_add_on_reaction r ON r.message_add_on_row_id = a._id \
          WHERE a.parent_message_row_id IS NOT NULL",
     )
     .fetch_all(&pool)
@@ -534,12 +534,11 @@ struct ChatHeader {
 /// `jid._id -> raw_string`. A few seed rows carry a NULL `raw_string`;
 /// `user@server` is spelled for those so a row still has a key.
 async fn load_jids(pool: &SqlitePool) -> Result<HashMap<i64, String>> {
-    let rows = sqlx::query(
-        "SELECT _id, coalesce(raw_string, user || '@' || server) AS jid FROM pinned_jid jid",
-    )
-    .fetch_all(pool)
-    .await
-    .context("select jid")?;
+    let rows =
+        sqlx::query("SELECT _id, coalesce(raw_string, user || '@' || server) AS jid FROM jid")
+            .fetch_all(pool)
+            .await
+            .context("select jid")?;
     Ok(rows
         .iter()
         .map(|r| (r.get::<i64, _>("_id"), r.get::<String, _>("jid")))
@@ -589,12 +588,10 @@ impl JidNames {
             out.row_id.entry(jid.clone()).or_insert(*rowid);
         }
         if has_table(pool, "lid_display_name").await? {
-            let rows = sqlx::query(
-                "SELECT lid_row_id, display_name FROM pinned_lid_display_name lid_display_name",
-            )
-            .fetch_all(pool)
-            .await
-            .context("select lid_display_name")?;
+            let rows = sqlx::query("SELECT lid_row_id, display_name FROM lid_display_name")
+                .fetch_all(pool)
+                .await
+                .context("select lid_display_name")?;
             for r in &rows {
                 let name: String = r.get("display_name");
                 if let Some(lid) = jids.get(&r.get::<i64, _>("lid_row_id")) {
@@ -607,7 +604,7 @@ impl JidNames {
         if has_table(pool, "wa_db_contacts").await? {
             out.has_contacts = true;
             let rows: Vec<(String, String)> =
-                sqlx::query_as("SELECT jid, rows FROM pinned_wa_db_contacts wa_db_contacts")
+                sqlx::query_as("SELECT jid, rows FROM wa_db_contacts")
                     .fetch_all(pool)
                     .await
                     .context("select wa_db_contacts")?;
@@ -631,7 +628,7 @@ impl JidNames {
             }
         }
         if has_table(pool, "jid_map").await? {
-            let rows = sqlx::query("SELECT lid_row_id, jid_row_id FROM pinned_jid_map jid_map")
+            let rows = sqlx::query("SELECT lid_row_id, jid_row_id FROM jid_map")
                 .fetch_all(pool)
                 .await
                 .context("select jid_map")?;

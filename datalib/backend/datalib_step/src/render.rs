@@ -707,13 +707,13 @@ fn fetch_problems_of(
     };
     let pool = reader.pool().clone();
     let result = blocking(async {
-        let rows = match sqlx::query("SELECT * FROM pinned_problems WHERE stage = ?")
+        let rows = match sqlx::query("SELECT * FROM problems WHERE stage = ?")
             .bind(Stage::Fetch.as_str())
             .fetch_all(&pool)
             .await
         {
             Ok(rows) => rows,
-            Err(e) if datalib_etl::pin::is_missing_table(&e, "pinned_problems") => Vec::new(),
+            Err(e) if datalib_etl::pin::is_missing_table(&e, "problems") => Vec::new(),
             Err(e) => return Err(e).context("read the raw store's problems"),
         };
         rows.iter()

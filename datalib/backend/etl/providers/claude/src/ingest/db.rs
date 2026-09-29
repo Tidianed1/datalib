@@ -57,15 +57,15 @@ impl RawDb {
     /// The `orgs` rows we already have, as raw payloads — what a warm
     /// [`Self::sweep_age`] hit serves instead of re-listing upstream.
     pub async fn load_orgs(&self) -> Result<Vec<Value>> {
-        dr::load_payloads(self.pool(), datalib_etl::pin::Reads::Own, "orgs").await
+        dr::load_payloads(self.pool(), "orgs").await
     }
 
     pub async fn load_users(&self) -> Result<Vec<Value>> {
-        dr::load_payloads(self.pool(), datalib_etl::pin::Reads::Own, "users").await
+        dr::load_payloads(self.pool(), "users").await
     }
 
     pub async fn first_user_uuid(&self) -> Result<Option<String>> {
-        first_user_uuid_from(self.pool(), datalib_etl::pin::Reads::Own).await
+        first_user_uuid_from(self.pool()).await
     }
 
     // ── conversations: listing skip-check ──────────────────────────
@@ -129,11 +129,11 @@ impl RawDb {
     }
 
     pub async fn load_projects(&self) -> Result<Vec<LoadedProject>> {
-        load_projects_from(self.pool(), datalib_etl::pin::Reads::Own).await
+        load_projects_from(self.pool()).await
     }
 
     pub async fn load_project_docs(&self) -> Result<Vec<LoadedProjectDoc>> {
-        load_project_docs_from(self.pool(), datalib_etl::pin::Reads::Own).await
+        load_project_docs_from(self.pool()).await
     }
 
     /// Delete this org's conversations that a **complete** listing of that
@@ -218,7 +218,7 @@ impl RawDb {
     }
 
     pub async fn load_conversations(&self) -> Result<Vec<LoadedConversation>> {
-        load_conversations_from(self.pool(), datalib_etl::pin::Reads::Own).await
+        load_conversations_from(self.pool()).await
     }
 
     /// Snapshot `(file_uuid → blake3)` for every attachment whose
@@ -249,15 +249,12 @@ pub struct LoadedProjectDoc {
     pub payload: Value,
 }
 
-pub async fn load_conversations_from(
-    pool: &SqlitePool,
-    reads: datalib_etl::pin::Reads<'_>,
-) -> Result<Vec<LoadedConversation>> {
+pub async fn load_conversations_from(pool: &SqlitePool) -> Result<Vec<LoadedConversation>> {
     // Audited: as `first_user_uuid_from`.
     let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT id, org_uuid, org_name, json(payload) AS payload FROM {} \
           WHERE payload IS NOT NULL ORDER BY id",
-        reads.table("conversations")
+        "conversations"
     )))
     .fetch_all(pool)
     .await
@@ -279,15 +276,12 @@ pub async fn load_conversations_from(
     Ok(out)
 }
 
-pub async fn first_user_uuid_from(
-    pool: &SqlitePool,
-    reads: datalib_etl::pin::Reads<'_>,
-) -> Result<Option<String>> {
+pub async fn first_user_uuid_from(pool: &SqlitePool) -> Result<Option<String>> {
     // Audited: the only interpolation is a table name the caller chose --
     // a literal, or that literal behind `pinned_`.
     let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT id FROM {} ORDER BY id LIMIT 1",
-        reads.table("users")
+        "users"
     )))
     .fetch_optional(pool)
     .await
@@ -295,15 +289,12 @@ pub async fn first_user_uuid_from(
     Ok(row.and_then(|r| r.try_get::<String, _>("id").ok()))
 }
 
-pub async fn load_projects_from(
-    pool: &SqlitePool,
-    reads: datalib_etl::pin::Reads<'_>,
-) -> Result<Vec<LoadedProject>> {
+pub async fn load_projects_from(pool: &SqlitePool) -> Result<Vec<LoadedProject>> {
     // Audited: as `first_user_uuid_from`.
     let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT id, org_uuid, org_name, json(payload) AS payload FROM {} \
           WHERE payload IS NOT NULL ORDER BY id",
-        reads.table("projects")
+        "projects"
     )))
     .fetch_all(pool)
     .await
@@ -323,15 +314,12 @@ pub async fn load_projects_from(
     Ok(out)
 }
 
-pub async fn load_project_docs_from(
-    pool: &SqlitePool,
-    reads: datalib_etl::pin::Reads<'_>,
-) -> Result<Vec<LoadedProjectDoc>> {
+pub async fn load_project_docs_from(pool: &SqlitePool) -> Result<Vec<LoadedProjectDoc>> {
     // Audited: as `first_user_uuid_from`.
     let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT id, project_uuid, json(payload) AS payload FROM {} \
           WHERE payload IS NOT NULL AND project_uuid IS NOT NULL ORDER BY project_uuid, id",
-        reads.table("project_docs")
+        "project_docs"
     )))
     .fetch_all(pool)
     .await

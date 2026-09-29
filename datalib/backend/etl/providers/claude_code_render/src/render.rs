@@ -70,18 +70,11 @@ pub fn render(
             };
             let pin = db.pin().expect("a reader is pinned at open").clone();
             let loaded = async {
-                let transcripts = datalib_etl::doltlite_raw::load_payloads_with_id(
-                    db.pool(),
-                    datalib_etl::pin::Reads::At(&pin),
-                    "transcripts",
-                )
-                .await?;
-                let records = datalib_etl::doltlite_raw::load_payloads_with_id(
-                    db.pool(),
-                    datalib_etl::pin::Reads::At(&pin),
-                    "records",
-                )
-                .await?;
+                let transcripts =
+                    datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), "transcripts")
+                        .await?;
+                let records =
+                    datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), "records").await?;
                 let scan = scan_diff(db.pool(), range.cursor, &pin).await?;
                 anyhow::Ok((transcripts, records, scan))
             }

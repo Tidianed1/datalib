@@ -984,7 +984,7 @@ impl IndexedMarkdownStore {
         let _ = pin; // the views were installed at `open_for_reading`
         blocking(async {
             let mds: Vec<datalib_schema::markdowns::MarkdownRow> =
-                sqlx::query_as("SELECT * FROM pinned_markdowns markdowns ORDER BY markdown_uuid")
+                sqlx::query_as("SELECT * FROM markdowns ORDER BY markdown_uuid")
                     .fetch_all(&self.pool)
                     .await
                     .context("read markdowns")?;
@@ -1008,7 +1008,7 @@ impl IndexedMarkdownStore {
             )?;
             let mut rows_by_doc = group_by_document::<datalib_schema::grid_rows::GridRow>(
                 &self.pool,
-                "SELECT * FROM pinned_grid_rows grid_rows \
+                "SELECT * FROM grid_rows \
                   WHERE markdown_uuid IN (SELECT value FROM json_each(?1)) \
                   ORDER BY markdown_uuid, uuid",
                 "markdown_uuid",
@@ -1018,7 +1018,7 @@ impl IndexedMarkdownStore {
             .context("read grid rows")?;
             let mut edges_by_doc = group_by_document::<datalib_schema::edges::EdgeRow>(
                 &self.pool,
-                "SELECT * FROM pinned_edges edges \
+                "SELECT * FROM edges \
                   WHERE src_markdown_uuid IN (SELECT value FROM json_each(?1)) \
                   ORDER BY src_markdown_uuid, edge_uuid",
                 "src_markdown_uuid",
@@ -1066,12 +1066,12 @@ impl IndexedMarkdownStore {
     pub fn problems_at_pin(&self) -> Result<Vec<ProblemRow>> {
         assert!(self.pin.is_some(), "problems_at_pin is a reader's call");
         blocking(async {
-            let rows = match sqlx::query("SELECT * FROM pinned_problems ORDER BY problem_uuid")
+            let rows = match sqlx::query("SELECT * FROM problems ORDER BY problem_uuid")
                 .fetch_all(&self.pool)
                 .await
             {
                 Ok(rows) => rows,
-                Err(e) if datalib_etl::pin::is_missing_table(&e, "pinned_problems") => {
+                Err(e) if datalib_etl::pin::is_missing_table(&e, "problems") => {
                     tracing::warn!(
                         store = %self.path.display(),
                         "this render store predates the problems table; reading it as clean"

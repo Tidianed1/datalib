@@ -19,7 +19,7 @@ use sqlx::Row;
 const ATTACHMENTS_PROJECTION_SQL: &str = "
     SELECT ref_id, blake3,
            NULL AS content_type, NULL AS upstream_name
-      FROM pinned_chat_item_attachments chat_item_attachments
+      FROM chat_item_attachments
      WHERE ref_id IN ({placeholders}) AND blake3 IS NOT NULL";
 
 /// Result of the dolt_diff scan: the chats we need to re-render, the
@@ -267,7 +267,7 @@ async fn parse_async(
 
 async fn load_recipients(pool: &sqlx::SqlitePool) -> Result<HashMap<String, ParsedRecipient>> {
     let mut recipients: HashMap<String, ParsedRecipient> = HashMap::new();
-    let rrows = sqlx::query("SELECT id, identifier, display_name FROM pinned_recipients")
+    let rrows = sqlx::query("SELECT id, identifier, display_name FROM recipients")
         .fetch_all(pool)
         .await
         .context("read recipients")?;
@@ -288,7 +288,7 @@ async fn load_recipients(pool: &sqlx::SqlitePool) -> Result<HashMap<String, Pars
 }
 
 async fn load_chats(pool: &sqlx::SqlitePool) -> Result<HashMap<String, ParsedChat>> {
-    let crows = sqlx::query("SELECT id, recipient_id FROM pinned_chats chats ORDER BY id")
+    let crows = sqlx::query("SELECT id, recipient_id FROM chats ORDER BY id")
         .fetch_all(pool)
         .await
         .context("read chats")?;
@@ -308,7 +308,7 @@ async fn load_chats(pool: &sqlx::SqlitePool) -> Result<HashMap<String, ParsedCha
 }
 
 async fn load_all_chat_ids(pool: &sqlx::SqlitePool) -> Result<HashSet<String>> {
-    let rows = sqlx::query("SELECT DISTINCT chat_id FROM pinned_chat_items")
+    let rows = sqlx::query("SELECT DISTINCT chat_id FROM chat_items")
         .fetch_all(pool)
         .await
         .context("load all chat_ids")?;
@@ -350,7 +350,7 @@ async fn scan_diff(
                     -- surrounding diff queries are projecting to).
                     SELECT chat_items.chat_id
                       FROM dolt_diff_chat_item_attachments ca
-                      JOIN pinned_chat_items chat_items
+                      JOIN chat_items
                         ON chat_items.id = coalesce(ca.to_chat_item_id, ca.from_chat_item_id)
                      WHERE ca.from_ref = ?1 AND ca.to_ref = ?2
                        AND ca.diff_type != 'unchanged'
@@ -415,7 +415,7 @@ async fn load_buckets(
                 date_sent,
                 {period_key_expr} AS period_key,
                 json(payload) AS payload
-           FROM pinned_chat_items chat_items
+           FROM chat_items
           WHERE chat_id IN ({placeholders})
           ORDER BY chat_id, period_key, date_sent"
     );

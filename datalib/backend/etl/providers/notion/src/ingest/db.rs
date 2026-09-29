@@ -280,7 +280,7 @@ impl RawDb {
         // Audited: as `load_comment_anchors`.
         let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT id, name FROM {} WHERE name IS NOT NULL",
-            self.reads().table("users")
+            "users"
         )))
         .fetch_all(self.pool())
         .await
@@ -350,7 +350,7 @@ impl RawDb {
         // chose -- a literal, or that literal behind `pinned_`.
         let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT id, plain_text FROM {} WHERE plain_text IS NOT NULL AND plain_text <> ''",
-            self.reads().table("comment_anchors")
+            "comment_anchors"
         )))
         .fetch_all(self.pool())
         .await
@@ -383,7 +383,7 @@ impl RawDb {
     }
 
     pub async fn load_pages(&self) -> Result<Vec<Value>> {
-        dr::load_payloads(self.pool(), self.reads(), "pages").await
+        dr::load_payloads(self.pool(), "pages").await
     }
 
     /// Child pages linked from `page_id`'s stored body.
@@ -410,7 +410,7 @@ impl RawDb {
         // Audited: as `load_comment_anchors`.
         let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT id, markdown FROM {} ORDER BY id",
-            self.reads().table("page_markdown")
+            "page_markdown"
         )))
         .fetch_all(self.pool())
         .await
@@ -432,7 +432,7 @@ impl RawDb {
         // Audited: as `load_comment_anchors`.
         let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT json(payload) AS payload, page_id FROM {} WHERE payload IS NOT NULL ORDER BY id",
-            self.reads().table("comments")
+            "comments"
         )))
         .fetch_all(self.pool())
         .await
@@ -457,7 +457,7 @@ impl RawDb {
         // Audited: as `load_comment_anchors`.
         let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT id, page_id, ref_id, blake3 FROM {} ORDER BY page_id, ref_id",
-            self.reads().table("notion_attachments")
+            "notion_attachments"
         )))
         .fetch_all(self.pool())
         .await

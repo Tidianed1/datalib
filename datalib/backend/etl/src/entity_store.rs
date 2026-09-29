@@ -14,16 +14,15 @@ use sqlx::sqlite::SqlitePool;
 
 use crate::blob_cas::{self, BlobCas};
 use crate::doltlite_raw as dr;
-use crate::pin::{Pin, Reads};
+use crate::pin::Pin;
 use crate::store_handle::RawStoreHandle;
 
 /// A provider's entity store, and the commit a reader is pinned at.
 #[derive(Clone, Debug, RawStoreHandle)]
 pub struct EntityStore {
     pool: SqlitePool,
-    /// The commit every content read resolves against, or `None` for the
-    /// download step reading back what it just wrote. Set once, at open:
-    /// the `pinned_<table>` views it installs live on that connection.
+    /// The commit a reader's connection reads, or `None` for the download
+    /// step reading back what it just wrote. Set once, at open.
     pin: Option<Pin>,
 }
 
@@ -68,33 +67,20 @@ impl EntityStore {
         self.pin.as_ref()
     }
 
-    /// How a content read names its tables: at the pin for a reader, the
-    /// working set for the writer.
-    pub fn reads(&self) -> Reads<'_> {
-        match &self.pin {
-            Some(p) => Reads::At(p),
-            None => Reads::Own,
-        }
-    }
-
     /// Release every store this handle opened, and wait for the
     /// connections to go away. Dropping only schedules that.
     pub async fn close(&self) {
         self.close_all().await;
     }
 
-    pub async fn load_payloads(&self, reads: Reads<'_>, table: &str) -> Result<Vec<Value>> {
-        dr::load_payloads(&self.pool, reads, table).await
+    pub async fn load_payloads(&self, table: &str) -> Result<Vec<Value>> {
+        dr::load_payloads(&self.pool, table).await
     }
 
     /// Like [`Self::load_payloads`], but yields `(id, payload)` so the
     /// caller can join a row against a sibling table.
-    pub async fn load_payloads_with_id(
-        &self,
-        reads: Reads<'_>,
-        table: &str,
-    ) -> Result<Vec<(String, Value)>> {
-        dr::load_payloads_with_id(&self.pool, reads, table).await
+    pub async fn load_payloads_with_id(&self, table: &str) -> Result<Vec<(String, Value)>> {
+        dr::load_payloads_with_id(&self.pool, table).await
     }
 }
 

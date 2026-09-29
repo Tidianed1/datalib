@@ -28,7 +28,7 @@ use datalib_etl_chatgpt::ingest::schema_raw::ConversationAttachmentRow;
 const ATTACHMENTS_PROJECTION_SQL: &str = "
     SELECT file_id AS ref_id, blake3,
            NULL AS content_type, NULL AS upstream_name
-      FROM pinned_chatgpt_attachments chatgpt_attachments
+      FROM chatgpt_attachments
      WHERE file_id IN ({placeholders}) AND blake3 IS NOT NULL";
 
 #[derive(Debug, Clone)]
@@ -640,11 +640,10 @@ fn collect_attachment_ref_ids(payload: &Value) -> Vec<String> {
 
 /// The `me` row's primary key and payload, or neither.
 async fn load_me_payload(pool: &SqlitePool) -> Result<(Option<String>, Option<Value>)> {
-    let row =
-        sqlx::query("SELECT id, json(payload) AS payload FROM pinned_me me ORDER BY id LIMIT 1")
-            .fetch_optional(pool)
-            .await
-            .context("select me")?;
+    let row = sqlx::query("SELECT id, json(payload) AS payload FROM me ORDER BY id LIMIT 1")
+        .fetch_optional(pool)
+        .await
+        .context("select me")?;
     let Some(row) = row else {
         return Ok((None, None));
     };
@@ -659,8 +658,8 @@ async fn load_conversations(
 ) -> Result<Vec<LoadedConversation>> {
     let rows = sqlx::query(
         "SELECT c.id, json(c.payload) AS payload, b.fetched_at_utc
-           FROM pinned_conversations c
-           LEFT JOIN pinned_conversations_bookkeeping b ON b.id = c.id
+           FROM conversations c
+           LEFT JOIN conversations_bookkeeping b ON b.id = c.id
           WHERE c.payload IS NOT NULL
           ORDER BY c.id",
     )

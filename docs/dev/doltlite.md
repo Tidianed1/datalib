@@ -507,6 +507,13 @@ came out byte-identical to the writer's alone.
   pinned even if a peer moves or deletes the ref. `dolt_diff_<table>`,
   `dolt_log()` and `dolt_hashof('HEAD')` work there.
 - **A missing revision fails the open**: `branch or revision "x" not found`.
+- **A detached open refuses any query that needs an ephemeral table** —
+  an `IN` list or subquery, `DISTINCT` — with `attempt to write a
+  readonly database` (dolthub/doltlite#3392, 0.50.13). Joins, `UNION`,
+  `ORDER BY` and `GROUP BY` work, and a read-only open of a *branch*
+  runs all of it.
+  `revision_by_path::a_detached_open_refuses_a_query_that_needs_an_ephemeral_table`
+  holds it, so a fix shows up as that test failing.
 
 Doltlite decides where the file name ends by looking for the longest
 prefix that is a doltlite store. Before 0.50.13 it looked only at
