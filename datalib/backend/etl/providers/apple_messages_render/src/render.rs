@@ -35,7 +35,7 @@ use crate::typedstream::attributed_body_text;
 
 /// v2: every id carries its row's `created_at` in its leading bits
 ///     (`datalib_id`'s v8 layout).
-pub const RENDER_VERSION: u32 = 2;
+pub const RENDER_VERSION: u32 = 3;
 
 pub const STAMP_PRECISION: RecordStampPrecision = RecordStampPrecision::Seconds;
 
@@ -334,6 +334,7 @@ async fn load(
             kind,
             attachments,
             reactions: Vec::new(),
+            labels: Vec::new(),
             system_note,
             source_url: None,
             kind_label: None,

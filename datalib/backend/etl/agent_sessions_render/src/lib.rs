@@ -42,6 +42,7 @@ pub fn item(
         kind: ItemKind::Text,
         attachments: Vec::new(),
         reactions: Vec::new(),
+        labels: Vec::new(),
         system_note: None,
         source_url: None,
         kind_label: Some(kind_label.to_string()),

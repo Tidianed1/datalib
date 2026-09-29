@@ -77,6 +77,7 @@ fn text(uuid: &str, author: &str, at: i64, body: &str) -> NormalizedChatItem {
         kind: ItemKind::Text,
         attachments: vec![],
         reactions: vec![],
+        labels: Vec::new(),
         system_note: None,
         source_url: None,
         kind_label: None,

@@ -519,11 +519,19 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
         }
     }
 
+    let labelled = |text: &str| {
+        if item.labels.is_empty() {
+            text.to_string()
+        } else {
+            format!("🏷 {}\n\n{text}", item.labels.join(" · "))
+        }
+    };
     match item.kind {
         ItemKind::Text => {
-            if let Some(text) = item.text.as_deref().filter(|t| !t.is_empty()) {
+            let text = labelled(item.text.as_deref().unwrap_or(""));
+            if !text.is_empty() {
                 s.push('\n');
-                s.push_str(text);
+                s.push_str(&text);
                 s.push('\n');
             }
         }
@@ -699,11 +707,16 @@ fn build_grid_rows(
             .conversation_name(conversation_name.clone())
             .conversation_uuid(chat.chat_uuid.clone())
             .entire_chat(entire_chat.clone())
+            // What was said: no system events, and none of the asides — a
+            // tool call, a harness's injected preamble — that the page
+            // folds away.
             .body(
                 doc.items
                     .iter()
-                    .filter(|i| !matches!(i.kind, ItemKind::System))
-                    .filter_map(|i| i.text.clone())
+                    .zip(&bodies)
+                    .filter(|(i, _)| !matches!(i.kind, ItemKind::System) && !i.is_aside)
+                    .map(|(_, body)| body.as_str())
+                    .filter(|body| !body.is_empty())
                     .collect::<Vec<_>>()
                     .join("\n"),
             )
@@ -976,6 +989,7 @@ mod tests {
                         date_ms: Some(12442118410000),
                         source_ref: None,
                     }],
+                    labels: Vec::new(),
                     system_note: None,
                     source_url: None,
                     kind_label: None,
@@ -1145,6 +1159,7 @@ mod tests {
             kind: ItemKind::System,
             attachments: vec![],
             reactions: vec![],
+            labels: Vec::new(),
             system_note: Some("Worf joined 🖖".to_string()),
             source_url: None,
             kind_label: None,
@@ -1295,6 +1310,7 @@ mod tests {
             kind: ItemKind::Text,
             attachments: vec![],
             reactions: vec![],
+            labels: Vec::new(),
             system_note: None,
             source_url: None,
             kind_label: Some("Tool Call".to_string()),

@@ -5,7 +5,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-83ab-b990-357eea87eda5 ===
 {
   "edges": [],
-  "render_version": 8,
+  "render_version": 9,
   "rows": [
     {
       "account": "jlpicard@enterprise.starfleet.test",
@@ -135,7 +135,7 @@ expression: docs_bundle(&docs)
       "notion_page_uuid": null,
       "org_name": "USS Enterprise",
       "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
-      "preview": "# Charting conventions  Bearings are given from the ship's current heading, not from galactic north.  - Sector designations use the Federation catalogue number, never the local name. - An extrapolated position is written in parentheses. ",
+      "preview": "Charting conventions Bearings are given from the ship's current heading, not from galactic north. - Sector designations use the Federation catalogue number, never the local name. - An extrapolated position is written in parentheses.",
       "project": "Stellar Cartography",
       "provider": "claude",
       "qmd_path": "claude_export/render_markdown/00000000-0000-83ab-b990-357eea87eda5/all.md",
@@ -152,7 +152,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-84d9-a07c-75bb3c93c654 ===
 {
   "edges": [],
-  "render_version": 8,
+  "render_version": 9,
   "rows": [
     {
       "account": "jlpicard@enterprise.starfleet.test",
@@ -264,14 +264,14 @@ expression: docs_bundle(&docs)
 === 00000000-0000-856b-944c-412bf8dca640 ===
 {
   "edges": [],
-  "render_version": 8,
+  "render_version": 9,
   "rows": [
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": null,
       "byte_size": 1299,
       "channel": "Klingon Diplomatic Greeting Drafting",
-      "content_hash": "953fa7ef94bfc2e3a1f06d9fdc33c19996e6f1fa7c6a1f3960f341419ad4d547",
+      "content_hash": "a22c6d06dba17cd6106731422cfe86e9ae72e66a7305c252630413f13b18631d",
       "conversation_name": "Klingon Diplomatic Greeting Drafting",
       "conversation_uuid": "00000000-0000-856b-944c-412bf8dca640",
       "created_at": "2369-04-14T10:00:00+00:00",
@@ -289,7 +289,7 @@ expression: docs_bundle(&docs)
       "notion_page_uuid": null,
       "org_name": "USS Enterprise",
       "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
-      "preview": "Look up the Klingon greeting \"nuqneH\" and propose a respectful opening line for a diplomatic dispatch to Chancellor K'mpec. <details><summary>Thinking</summary>  > \"nuqneH\" literally means \"what do you want\" — it's blunt by Federation stand…",
+      "preview": "Look up the Klingon greeting \"nuqneH\" and propose a respectful opening line for a diplomatic dispatch to Chancellor K'mpec. For a dispatch to Chancellor K'mpec, open with \"qaleghneS, Chancellor — nuqneH?\" (\"I am honored to see you — what do…",
       "project": "Bridge Operations",
       "provider": "claude",
       "qmd_path": "claude_export/render_markdown/00000000-0000-856b-944c-412bf8dca640/all.md",
@@ -359,7 +359,7 @@ expression: docs_bundle(&docs)
       "notion_page_uuid": null,
       "org_name": "USS Enterprise",
       "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
-      "preview": "<details><summary>Thinking</summary>  > \"nuqneH\" literally means \"what do you want\" — it's blunt by Federation standards but standard among Klingons. I should fetch a phrasebook to confirm register before recommending an opening.  </details…",
+      "preview": "Thinking \"nuqneH\" literally means \"what do you want\" — it's blunt by Federation standards but standard among Klingons. I should fetch a phrasebook to confirm register before recommending an opening.",
       "project": "Bridge Operations",
       "provider": "claude",
       "qmd_path": "claude_export/render_markdown/00000000-0000-856b-944c-412bf8dca640/all.md",
@@ -394,7 +394,7 @@ expression: docs_bundle(&docs)
       "notion_page_uuid": null,
       "org_name": "USS Enterprise",
       "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
-      "preview": "<details><summary>Tool use: web_fetch — Fetching: Klingon language reference</summary>  ```json {   \"url\": \"https://memory-alpha.test/wiki/Klingon_language\" } ``` </details>",
+      "preview": "Tool use: web_fetch — Fetching: Klingon language reference { \"url\": \"https://memory-alpha.test/wiki/Klingon_language\" }",
       "project": "Bridge Operations",
       "provider": "claude",
       "qmd_path": "claude_export/render_markdown/00000000-0000-856b-944c-412bf8dca640/all.md",
@@ -464,7 +464,7 @@ expression: docs_bundle(&docs)
       "notion_page_uuid": null,
       "org_name": "USS Enterprise",
       "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
-      "preview": "<details><summary>Tool result: web_fetch</summary>  ```json {   \"is_missing\": false,   \"metadata\": {     \"site_domain\": \"memory-alpha.test\"   },   \"text\": \"nuqneH (lit. \\\"what do you want\\\") is the standard Klingon greeting. In formal diplo…",
+      "preview": "Tool result: web_fetch { \"is_missing\": false, \"metadata\": { \"site_domain\": \"memory-alpha.test\" }, \"text\": \"nuqneH (lit. \"what do you want\") is the standard Klingon greeting. In formal diplomatic contexts it is paired with the honorific \"qal…",
       "project": "Bridge Operations",
       "provider": "claude",
       "qmd_path": "claude_export/render_markdown/00000000-0000-856b-944c-412bf8dca640/all.md",
@@ -516,14 +516,14 @@ expression: docs_bundle(&docs)
 === 00000000-0000-882d-b21e-5e54f3f20dbb ===
 {
   "edges": [],
-  "render_version": 8,
+  "render_version": 9,
   "rows": [
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": null,
       "byte_size": 1069,
       "channel": "Borg Encryption Signature Lookup",
-      "content_hash": "1c9a378ae62274cfa510af1b0d926bc10f6012e6ac40bd3568c78e57b4191ef0",
+      "content_hash": "f779dbe41451fb058b15bebe3513d22b33976a5b5131eee65b9f47c681cc62c2",
       "conversation_name": "Borg Encryption Signature Lookup",
       "conversation_uuid": "00000000-0000-882d-b21e-5e54f3f20dbb",
       "created_at": "2369-04-16T09:00:00+00:00",
@@ -541,7 +541,7 @@ expression: docs_bundle(&docs)
       "notion_page_uuid": null,
       "org_name": "USS Enterprise",
       "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
-      "preview": "Look up the Borg adaptive-shield signature 7-of-9-alpha and tell me if we have a counter on file. <details><summary>Tool use: starfleet_db_query — Querying Starfleet tactical DB</summary>  ```json {   \"signature\": \"7-of-9-alpha\",   \"table\":…",
+      "preview": "Look up the Borg adaptive-shield signature 7-of-9-alpha and tell me if we have a counter on file. Yes — we have a counter on file. Rotating phaser modulation at 257.4 MHz (±0.6) gives roughly two effective rounds before the Borg re-adapt. R…",
       "project": null,
       "provider": "claude",
       "qmd_path": "claude_export/render_markdown/00000000-0000-882d-b21e-5e54f3f20dbb/all.md",
@@ -611,7 +611,7 @@ expression: docs_bundle(&docs)
       "notion_page_uuid": null,
       "org_name": "USS Enterprise",
       "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
-      "preview": "<details><summary>Tool use: starfleet_db_query — Querying Starfleet tactical DB</summary>  ```json {   \"signature\": \"7-of-9-alpha\",   \"table\": \"borg_shield_signatures\" } ``` </details>",
+      "preview": "Tool use: starfleet_db_query — Querying Starfleet tactical DB { \"signature\": \"7-of-9-alpha\", \"table\": \"borg_shield_signatures\" }",
       "project": null,
       "provider": "claude",
       "qmd_path": "claude_export/render_markdown/00000000-0000-882d-b21e-5e54f3f20dbb/all.md",
@@ -646,7 +646,7 @@ expression: docs_bundle(&docs)
       "notion_page_uuid": null,
       "org_name": "USS Enterprise",
       "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
-      "preview": "<details><summary>Tool use: starfleet_db_query — Retrying via backup relay</summary>  ```json {   \"relay\": \"backup-2\",   \"signature\": \"7-of-9-alpha\",   \"table\": \"borg_shield_signatures\" } ``` </details>",
+      "preview": "Tool use: starfleet_db_query — Retrying via backup relay { \"relay\": \"backup-2\", \"signature\": \"7-of-9-alpha\", \"table\": \"borg_shield_signatures\" }",
       "project": null,
       "provider": "claude",
       "qmd_path": "claude_export/render_markdown/00000000-0000-882d-b21e-5e54f3f20dbb/all.md",
@@ -716,7 +716,7 @@ expression: docs_bundle(&docs)
       "notion_page_uuid": null,
       "org_name": "USS Enterprise",
       "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
-      "preview": "<details><summary>Tool result: starfleet_db_query (error)</summary>  ``` ERROR: connection to tactical-db.sf.test refused (subspace relay 4 offline) ``` </details>",
+      "preview": "Tool result: starfleet_db_query (error) ERROR: connection to tactical-db.sf.test refused (subspace relay 4 offline)",
       "project": null,
       "provider": "claude",
       "qmd_path": "claude_export/render_markdown/00000000-0000-882d-b21e-5e54f3f20dbb/all.md",
@@ -751,7 +751,7 @@ expression: docs_bundle(&docs)
       "notion_page_uuid": null,
       "org_name": "USS Enterprise",
       "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
-      "preview": "<details><summary>Tool result: starfleet_db_query</summary>  Signature 7-of-9-alpha registered 2368-11-02. Counter: rotating phaser modulation 257.4 MHz ± 0.6. Effective rounds: 2 before re-adaptation.  </details>",
+      "preview": "Tool result: starfleet_db_query Signature 7-of-9-alpha registered 2368-11-02. Counter: rotating phaser modulation 257.4 MHz ± 0.6. Effective rounds: 2 before re-adaptation.",
       "project": null,
       "provider": "claude",
       "qmd_path": "claude_export/render_markdown/00000000-0000-882d-b21e-5e54f3f20dbb/all.md",
@@ -768,7 +768,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-8b06-828d-f59d39f6190d ===
 {
   "edges": [],
-  "render_version": 8,
+  "render_version": 9,
   "rows": [
     {
       "account": "bcrusher@enterprise.starfleet.test",
@@ -880,7 +880,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-8da1-84c9-7ed998e5bd85 ===
 {
   "edges": [],
-  "render_version": 8,
+  "render_version": 9,
   "rows": [
     {
       "account": "jlpicard@enterprise.starfleet.test",
@@ -1010,7 +1010,7 @@ expression: docs_bundle(&docs)
       "notion_page_uuid": null,
       "org_name": "USS Enterprise",
       "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
-      "preview": "# Hailing frequencies  Open on subspace band 3 unless the target is cloaked.  - Klingon vessels: lead with rank, then ship name. - Romulan vessels: do not open first. ",
+      "preview": "Hailing frequencies Open on subspace band 3 unless the target is cloaked. - Klingon vessels: lead with rank, then ship name. - Romulan vessels: do not open first.",
       "project": "Bridge Operations",
       "provider": "claude",
       "qmd_path": "claude_export/render_markdown/00000000-0000-8da1-84c9-7ed998e5bd85/all.md",
@@ -1045,7 +1045,7 @@ expression: docs_bundle(&docs)
       "notion_page_uuid": null,
       "org_name": "USS Enterprise",
       "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
-      "preview": "Ops -> Tactical (Worf) -> First Officer (Riker) -> Captain (Picard). Medical emergencies route directly to Sickbay (Crusher). ",
+      "preview": "Ops -> Tactical (Worf) -> First Officer (Riker) -> Captain (Picard). Medical emergencies route directly to Sickbay (Crusher).",
       "project": "Bridge Operations",
       "provider": "claude",
       "qmd_path": "claude_export/render_markdown/00000000-0000-8da1-84c9-7ed998e5bd85/all.md",

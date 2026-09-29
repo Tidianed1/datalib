@@ -35,7 +35,7 @@ use mail_parser::{Address, MessageParser, MimeHeaders, PartType};
 ///     every row carries its backpointer, and an email's id carries its
 ///     `received_at` in its leading bits (`datalib_id`'s v8 layout).
 ///     Every uuid moved, `chat_uuid` among them.
-pub const RENDER_VERSION: u32 = 8;
+pub const RENDER_VERSION: u32 = 9;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
 /// `datalib_core::config::EmailOutlink`; the orchestrator maps the
@@ -368,13 +368,10 @@ fn build_chat(
             .unwrap_or_default();
         let (fresh, quoted) = split_quoted(&body);
 
-        let mut text = String::new();
-        // Label chips: which mailboxes this email is filed under.
+        // Which mailboxes this email is filed under: drawn above the body,
+        // and kept out of the row's Contents.
         let labels = labels_for_email(em, bucket, mailbox_name);
-        if !labels.is_empty() {
-            text.push_str(&format!("🏷 {}\n\n", labels.join(" · ")));
-        }
-        text.push_str(fresh.trim_end());
+        let mut text = fresh.trim_end().to_string();
         if let Some(q) = quoted {
             text.push_str("\n\n");
             text.push_str(&q);
@@ -448,6 +445,7 @@ fn build_chat(
             kind: ItemKind::Text,
             attachments: Vec::new(),
             reactions: Vec::new(),
+            labels: labels.clone(),
             system_note: None,
             // Per-email `↗` outlink into the source webmail.
             source_url: email_outlink(outlink, em, &labels),
