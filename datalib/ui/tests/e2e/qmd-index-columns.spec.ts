@@ -157,13 +157,20 @@ test.describe("the search coverage line", () => {
       state.index_present = false;
       state.summary = { documents: 0, embedded: 0 };
     });
+    // Free text is answered as the applet does with no index, from the
+    // unfiltered search's answer: asking the fixture's real qmd would
+    // make this wait on a ranking it throws away.
     await page.route("**/applet/unified_index/search?**", async (route) => {
-      const q = new URL(route.request().url()).searchParams.get("q") ?? "";
+      const url = new URL(route.request().url());
+      const q = url.searchParams.get("q") ?? "";
       if (q === "") return route.fallback();
-      const response = await route.fetch();
+      url.searchParams.delete("q");
+      const response = await route.fetch({ url: url.toString() });
       const body = await response.json();
       body.rows = [];
       body.total = 0;
+      body.next_offset = null;
+      body.query_echo.free_text = q;
       body.query_echo.qmd_index_missing = true;
       await route.fulfill({ response, json: body });
     });
