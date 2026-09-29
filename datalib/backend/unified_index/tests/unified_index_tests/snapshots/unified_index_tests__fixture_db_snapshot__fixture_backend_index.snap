@@ -185,6 +185,18 @@ expression: snapshot
       "title": "Bridge"
     },
     {
+      "bucket_key": "00000000-0000-819d-aad9-cb628fc3bec0",
+      "created_at": null,
+      "kind": "chat",
+      "markdown_uuid": "00000000-0000-819d-aad9-cb628fc3bec0",
+      "md_path": "tng_contacts-diff/render_markdown/00000000-0000-819d-aad9-cb628fc3bec0/index.md",
+      "modified_at": null,
+      "provider": "contacts",
+      "renderer_version": "rust-v1.5",
+      "source_id": "tng_contacts-diff",
+      "title": "Maquis"
+    },
+    {
       "bucket_key": "00000000-0000-81a3-9b5c-946dc4b441a8",
       "created_at": "2026-10-05T14:00:00-07:00",
       "kind": "chat",
@@ -411,6 +423,18 @@ expression: snapshot
       "renderer_version": "rust-v1.10",
       "source_id": "whatsapp",
       "title": "William Riker"
+    },
+    {
+      "bucket_key": "00000000-0000-8429-b938-7d1e51384182",
+      "created_at": null,
+      "kind": "chat",
+      "markdown_uuid": "00000000-0000-8429-b938-7d1e51384182",
+      "md_path": "tng_contacts-diff/render_markdown/00000000-0000-8429-b938-7d1e51384182/index.md",
+      "modified_at": null,
+      "provider": "contacts",
+      "renderer_version": "rust-v1.5",
+      "source_id": "tng_contacts-diff",
+      "title": "Maquis"
     },
     {
       "bucket_key": "00000000-0000-8470-8240-1b4ee2c9889a",
@@ -1585,7 +1609,7 @@ expression: snapshot
       "message": "schema: grid index"
     },
     {
-      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=136 markdowns_read=136 markdowns_removed=1 rows_inserted=584"
+      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=141 markdowns_read=141 markdowns_removed=3 rows_inserted=597"
     }
   ],
   "grid_rows": [
@@ -1978,6 +2002,36 @@ expression: snapshot
       "upstream_entity_kind": "contact",
       "upstream_id": "Bridge#tng-worf",
       "uuid": "00000000-0000-8195-8ee2-d14cb601f004"
+    },
+    {
+      "account": null,
+      "author": "Kalita",
+      "byte_size": null,
+      "channel": "Maquis",
+      "content_hash": "709d213ca2b67fc2",
+      "conversation_name": "Maquis",
+      "conversation_uuid": "00000000-0000-8324-adcb-e60ce88a3265",
+      "created_at": null,
+      "entire_chat": "/contact/00000000-0000-819d-aad9-cb628fc3bec0",
+      "git_sha": null,
+      "item_count": null,
+      "kind": "Contact",
+      "markdown_uuid": "00000000-0000-819d-aad9-cb628fc3bec0",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview_len": 35,
+      "project": null,
+      "provider": "contacts",
+      "qmd_path": "tng_contacts-diff/render_markdown/00000000-0000-819d-aad9-cb628fc3bec0/index.md",
+      "source_label": "Tng Contacts Diff Contacts",
+      "source_url": null,
+      "upstream_account": null,
+      "upstream_entity_kind": "contact",
+      "upstream_id": "Maquis#tng-kalita",
+      "uuid": "00000000-0000-819d-aad9-cb628fc3bec0"
     },
     {
       "account": null,
@@ -2518,6 +2572,36 @@ expression: snapshot
       "upstream_entity_kind": "chat_period",
       "upstream_id": "17015550102@s.whatsapp.net#2364-04",
       "uuid": "00000000-0000-841f-8f79-b06ed948a94a"
+    },
+    {
+      "account": null,
+      "author": "Ro Laren",
+      "byte_size": null,
+      "channel": "Maquis",
+      "content_hash": "10e49cfbc283fa94",
+      "conversation_name": "Maquis",
+      "conversation_uuid": "00000000-0000-8324-adcb-e60ce88a3265",
+      "created_at": null,
+      "entire_chat": "/contact/00000000-0000-8429-b938-7d1e51384182",
+      "git_sha": null,
+      "item_count": null,
+      "kind": "Contact",
+      "markdown_uuid": "00000000-0000-8429-b938-7d1e51384182",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview_len": 104,
+      "project": null,
+      "provider": "contacts",
+      "qmd_path": "tng_contacts-diff/render_markdown/00000000-0000-8429-b938-7d1e51384182/index.md",
+      "source_label": "Tng Contacts Diff Contacts",
+      "source_url": null,
+      "upstream_account": null,
+      "upstream_entity_kind": "contact",
+      "upstream_id": "Maquis#tng-ro",
+      "uuid": "00000000-0000-8429-b938-7d1e51384182"
     },
     {
       "account": null,
@@ -12231,9 +12315,9 @@ expression: snapshot
     }
   ],
   "summary": {
-    "documents_count": 131,
+    "documents_count": 133,
     "dolt_log_count": 3,
-    "grid_rows_count": 354,
+    "grid_rows_count": 356,
     "storage_rows_count": 206
   }
 }

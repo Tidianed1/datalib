@@ -342,8 +342,7 @@ for a provider that deletes on absence.
 ### Snapshot inputs: `always_clear_before_ingest`
 
 A source whose input is a *complete* snapshot — a Takeout export, a
-phone backup, a directory of `.vcf` files — gets deletion detection for
-free by not being clever: set `common.always_clear_before_ingest = true`
+phone backup — gets deletion detection for free by not being clever: set `common.always_clear_before_ingest = true`
 and the download empties the source's entity tables and cursors before
 each ingest, then rewrites them from what the input holds now. Anything
 the input dropped is simply not written back. The old rows stay in
@@ -360,6 +359,11 @@ cached here," and the wipe destroys real history — which is why
 [`beeper`](/datalib/backend/etl/providers/beeper/INGEST.md) must not
 use it. A partial export of a normally-complete source is the same trap.
 
+A folder of `.vcf` or `.ics` files does not need it: each file is one
+address book or calendar, so a file that is gone takes its rows with it
+on an ordinary sync
+([`etl/README.md`](/datalib/backend/etl/README.md#answering-did-it-change-for-a-file-backed-source)).
+
 ### What limits it
 
 **Detection needs a re-enumeration.** What each source re-enumerates, and
@@ -370,6 +374,7 @@ therefore what it can see:
 | `email` (JMAP) | `Email/changes` / `Mailbox/changes` tombstones | emails, mailboxes, and the label joins |
 | `email` (Gmail) | `history.list` deletions; a full walk when the cursor ages out | emails, via the same cascade |
 | `contacts` (CardDAV) | RFC 6578 sync-collection `404`/`410` | contacts |
+| `contacts` (`.vcf` folder), `calendar` (`.ics` folder) | the folder's scan, and each re-read file | a gone file's address book or calendar; cards or events a re-read file dropped. Nothing is deleted when the walk reported an error |
 | `slack` | the trailing `refresh_window_days` re-walk, and each `conversations.replies` thread | messages inside the walked range; replies on a re-fetched thread |
 | `github` / `gitlab` | every PR's / MR's whole child list, per fetch | deleted comments, reviews, discussions |
 | `claude` (`api`) | `/chat_conversations`, one org at a time | that org's conversations |

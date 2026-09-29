@@ -48,11 +48,35 @@ pub struct Commit {
 #[derive(Debug, Clone, Serialize)]
 pub struct TableState {
     pub table: String,
+    /// [`holds_records`]: the source's data rather than datalib's own
+    /// bookkeeping. What the totals a person reads are summed over.
+    pub records: bool,
     /// Rows after this commit.
     pub rows: i64,
     pub added: i64,
     pub deleted: i64,
     pub modified: i64,
+}
+
+/// The tables every raw store has that are datalib's, not the source's:
+/// `datalib_etl::doltlite_raw::SHARED_TABLES` and the file-scan cursor
+/// `ingested_files`. Listed here because this crate cannot link the
+/// ingest framework; a test there keeps the two in step.
+const DATALIB_TABLES: &[&str] = &[
+    "_datalib_meta",
+    "sync_runs",
+    "sync_scope_state",
+    "sync_scope_config",
+    "problems",
+    "ingested_files",
+];
+
+/// Whether a table holds the source's records: every table but
+/// [`DATALIB_TABLES`] and the `<table>_bookkeeping` sidecars, which hold
+/// one row of fetch stamps per record and so would count each change
+/// twice.
+pub fn holds_records(table: &str) -> bool {
+    !table.ends_with("_bookkeeping") && !DATALIB_TABLES.contains(&table)
 }
 
 pub async fn read(db_path: &Path, limit: usize) -> Result<StoreHistory> {
@@ -122,6 +146,7 @@ async fn read_from(pool: &SqlitePool, limit: usize) -> Result<StoreHistory> {
                 let (added, deleted, modified) = changes.get(table).copied().unwrap_or((0, 0, 0));
                 TableState {
                     table: table.clone(),
+                    records: holds_records(table),
                     rows: *rows,
                     added,
                     deleted,
@@ -478,6 +503,58 @@ mod tests {
         assert_eq!(h.commits.len(), 2);
         assert_eq!(h.commits[0].message, "two");
         assert_eq!(table(&h.commits[0], "t").rows, 1);
+    }
+
+    async fn exec(pool: &SqlitePool, sql: &'static str) {
+        sqlx::query(sql).execute(pool).await.unwrap();
+    }
+
+    /// Every table is listed, and each says whether it holds records:
+    /// the History card sums only those.
+    #[tokio::test]
+    async fn each_table_says_whether_it_holds_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.doltlite_db");
+        let pool = writer(&path).await;
+        if !is_doltlite(&pool).await {
+            return;
+        }
+        exec(&pool, "CREATE TABLE contacts (id INTEGER PRIMARY KEY)").await;
+        exec(
+            &pool,
+            "CREATE TABLE contacts_bookkeeping (id INTEGER PRIMARY KEY)",
+        )
+        .await;
+        exec(&pool, "CREATE TABLE ingested_files (path TEXT PRIMARY KEY)").await;
+        exec(&pool, "INSERT INTO contacts VALUES (1)").await;
+        exec(&pool, "INSERT INTO contacts_bookkeeping VALUES (1)").await;
+        exec(&pool, "INSERT INTO ingested_files VALUES ('x.vcf')").await;
+        commit(&pool, "load").await;
+        pool.close().await;
+
+        let h = read(&path, 100).await.unwrap();
+        let top = &h.commits[0];
+        assert!(table(top, "contacts").records);
+        assert!(!table(top, "contacts_bookkeeping").records);
+        assert!(!table(top, "ingested_files").records);
+    }
+
+    #[test]
+    fn records_are_every_table_but_datalibs_own_and_the_sidecars() {
+        for t in ["contacts", "messages", "bookkeeping_notes"] {
+            assert!(holds_records(t), "{t}");
+        }
+        for t in [
+            "contacts_bookkeeping",
+            "_datalib_meta",
+            "sync_runs",
+            "sync_scope_state",
+            "sync_scope_config",
+            "problems",
+            "ingested_files",
+        ] {
+            assert!(!holds_records(t), "{t}");
+        }
     }
 
     #[test]

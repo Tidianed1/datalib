@@ -134,8 +134,14 @@ impl DataProcessor for ContactsIngest {
                 })
                 .await?;
                 format!(
-                    "addressbooks={} new={} updated={} files_skipped={} errors={}",
-                    s.addressbooks, s.contacts_new, s.contacts_updated, s.files_skipped, s.errors,
+                    "addressbooks={} new={} updated={} deleted={} files_skipped={} files_removed={} errors={}",
+                    s.addressbooks,
+                    s.contacts_new,
+                    s.contacts_updated,
+                    s.contacts_deleted,
+                    s.files_skipped,
+                    s.files_removed,
+                    s.errors,
                 )
             }
         };

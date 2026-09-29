@@ -1094,6 +1094,9 @@ export function fetchTable(url: string, signal?: AbortSignal): Promise<TableResp
 /// `datalib_history::TableState`.
 export type HistoryTable = {
   table: string;
+  /// The source's records rather than datalib's own bookkeeping
+  /// (`datalib_history::holds_records`): what a commit's totals count.
+  records: boolean;
   /// Rows after the commit.
   rows: number;
   added: number;

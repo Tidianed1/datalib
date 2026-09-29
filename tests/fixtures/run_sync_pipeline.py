@@ -691,10 +691,11 @@ def _run_pipeline_twice_and_diff(
     """Give two raw stores a second commit, then a diff group for each.
 
     The first pipeline run has ingested `carddav_tng` and replayed
-    `slack_api`. Lay `carddav_tng_v2` over the contacts working copy,
-    point playback at the tree synthesized from `slack_api_v2`, and sync
-    both chains again: the contacts ingest re-reads the changed file (one
-    card added, one removed, one edited) and the Slack ingest replays the
+    `slack_api`. Make the contacts working copy `carddav_tng_v2`, point
+    playback at the tree synthesized from `slack_api_v2`, and sync both
+    chains again: the contacts ingest re-reads the changed file (one card
+    added, one removed, one edited) and drops the deleted `Maquis.vcf`'s
+    two, and the Slack ingest replays the
     second capture (a message added, one edited with a reaction, a thread
     grown by a reply). Then write a diff group per source with its two
     commits and sync the chains once more, so the render trees are there
@@ -710,6 +711,12 @@ def _run_pipeline_twice_and_diff(
         print("[run_sync_pipeline] diff groups already rendered", flush=True)
         return
     before = {s: _ingest_commit(workspace, s) for s in DIFF_GROUPS}
+    # The second address books are the whole folder: a book v2 does not
+    # have (`Maquis.vcf`) is deleted, and its contacts must leave the
+    # store (#898).
+    for f in carddav_work.glob("*.vcf"):
+        if not (carddav_v2 / f.name).exists():
+            f.unlink()
     for f in carddav_v2.glob("*.vcf"):
         shutil.copy(f, carddav_work / f.name)
     chains = [f"{s}/ingest" for s in DIFF_GROUPS]

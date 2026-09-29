@@ -809,6 +809,130 @@ command = "datalib-applet unified_index"
     expect(wired).toContain('inputs = ["pdfs/render_markdown"]');
     expect(listSteps(wired).find((s) => s.kind === "applet")!.inputs).toEqual([]);
   });
+
+  const gridIndex = (inputs: string) => `[[steps]]
+group = "unified_index"
+function = "grid_index"
+inputs = ${inputs}
+
+[[steps]]
+group = "unified_index"
+function = "qmd_aggregator"
+inputs = ["bridge/keyword_index"]
+`;
+
+  /// #897: wiring rewrote a hand-written one-id-per-line array onto one
+  /// line, so adding a comparison reflowed every fan-in in the file.
+  it("keeps a one-id-per-line array one id per line", () => {
+    const before = gridIndex(`[
+    "bridge/render_markdown",
+    "sickbay/render_markdown",
+]`);
+    const wired = wireIntoFanIns(before, "holodeck/render_markdown");
+    expect(wired).toBe(
+      gridIndex(`[
+    "bridge/render_markdown",
+    "sickbay/render_markdown",
+    "holodeck/render_markdown",
+]`),
+    );
+    expect(unwireFromFanIns(wired, "holodeck/render_markdown")).toBe(before);
+    expect(unwireFromFanIns(before, "bridge/render_markdown", "grid_index")).toBe(
+      gridIndex(`[
+    "sickbay/render_markdown",
+]`),
+    );
+  });
+
+  it("keeps an array without a trailing comma without one", () => {
+    const before = gridIndex(`[
+  "bridge/render_markdown",
+  "sickbay/render_markdown"
+]`);
+    const wired = wireIntoFanIns(before, "holodeck/render_markdown");
+    expect(wired).toBe(
+      gridIndex(`[
+  "bridge/render_markdown",
+  "sickbay/render_markdown",
+  "holodeck/render_markdown"
+]`),
+    );
+    expect(unwireFromFanIns(wired, "holodeck/render_markdown")).toBe(before);
+  });
+
+  /// The old comma split read a comment as part of the id after it, and
+  /// a `]` inside one ended the array early.
+  it("keeps the comments and blank lines inside an array", () => {
+    const before = gridIndex(`[ # every render step
+  # the crew's own records
+  "bridge/render_markdown", # logs [stardate order]
+
+  "sickbay/render_markdown",
+  # "holodeck/render_markdown",
+]`);
+    const wired = wireIntoFanIns(before, "cargo_bay/render_markdown");
+    expect(wired).toBe(
+      gridIndex(`[ # every render step
+  # the crew's own records
+  "bridge/render_markdown", # logs [stardate order]
+
+  "sickbay/render_markdown",
+  # "holodeck/render_markdown",
+  "cargo_bay/render_markdown",
+]`),
+    );
+    expect(unwireFromFanIns(wired, "cargo_bay/render_markdown")).toBe(before);
+    expect(unwireFromFanIns(before, "bridge/render_markdown")).toBe(
+      gridIndex(`[ # every render step
+  # the crew's own records
+
+  "sickbay/render_markdown",
+  # "holodeck/render_markdown",
+]`),
+    );
+    expect(
+      listSteps(unwireFromFanIns(before, "sickbay/render_markdown")).find(
+        (s) => s.id === "unified_index/grid_index",
+      )!.inputs,
+    ).toEqual(["bridge/render_markdown"]);
+  });
+
+  it("keeps a one-line array on one line", () => {
+    const before = gridIndex(`["bridge/render_markdown", "sickbay/render_markdown"]`);
+    expect(wireIntoFanIns(before, "holodeck/render_markdown")).toBe(
+      gridIndex(
+        `["bridge/render_markdown", "sickbay/render_markdown", "holodeck/render_markdown"]`,
+      ),
+    );
+    expect(unwireFromFanIns(before, "bridge/render_markdown", "grid_index")).toBe(
+      gridIndex(`["sickbay/render_markdown"]`),
+    );
+  });
+
+  /// An id is matched by the string it spells, not by how it is quoted.
+  it("unwires an id written as a literal string", () => {
+    const before = gridIndex(`['bridge/render_markdown', "sickbay/render_markdown"]`);
+    expect(unwireFromFanIns(before, "bridge/render_markdown", "grid_index")).toBe(
+      gridIndex(`["sickbay/render_markdown"]`),
+    );
+    expect(wireIntoFanIns(before, "bridge/render_markdown")).toBe(before);
+  });
+
+  /// An array the edit cannot lay out is refused rather than written.
+  it("refuses to edit an array holding something other than strings", () => {
+    const nested = gridIndex(`["bridge/render_markdown", ["sickbay/render_markdown"]]`);
+    expect(() => wireIntoFanIns(nested, "holodeck/render_markdown")).toThrow(
+      /in an array of strings/,
+    );
+  });
+
+  /// A multi-line array with nothing in it yet takes the indentation of
+  /// its `]`, one step in.
+  it("wires into an empty multi-line array", () => {
+    expect(wireIntoFanIns(gridIndex(`[\n]`), "bridge/render_markdown")).toBe(
+      gridIndex(`[\n  "bridge/render_markdown",\n]`),
+    );
+  });
 });
 
 describe("what Test connection is sent", () => {

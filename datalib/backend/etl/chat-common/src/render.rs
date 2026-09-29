@@ -22,7 +22,7 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// `datalib_step`'s render step checks that every version stored on
 /// disk is one its processors declare, so this must not be mixed into
 /// the stored value.
-pub const LAYOUT_VERSION: u32 = 5;
+pub const LAYOUT_VERSION: u32 = 6;
 
 /// What every chat-common provider declares through
 /// `RenderProcessor::render_params`, merged with its own knobs: the
@@ -44,6 +44,7 @@ pub fn layout_params_with(own: serde_json::Value) -> serde_json::Value {
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
+use datalib_etl::periodize::Period;
 use datalib_etl::progress::Progress;
 use datalib_etl::title::Title;
 use datalib_etl_render::grid_index::RenderedMarkdown;
@@ -233,9 +234,7 @@ fn render_one(
             disp = chat.display
         ),
     };
-    let doc_title = format!("{chat_title} ({})", doc.period_key);
-
-    let sections = render_markdown(profile, chat, doc, &chat_title, &doc_title);
+    let sections = render_markdown(profile, chat, doc, &chat_title);
     fs::write(&md_path, join(&sections)).with_context(|| format!("write {}", md_path.display()))?;
 
     let md_rel = md_path
@@ -337,16 +336,23 @@ fn output_paths(
 
 // Markdown
 
+/// `(2024-03)` for a time bucket; nothing for the one bucket that holds
+/// the whole chat, where "(all)" would tell the reader nothing.
+fn period_suffix(period_key: &str) -> Option<String> {
+    (period_key != Period::key_for_all()).then(|| format!("({period_key})"))
+}
+
 fn render_markdown(
     profile: &RenderProfile,
     chat: &NormalizedChat,
     doc: &NormalizedDoc,
-    // `chat_title` is the chat's own name and `title` the composed
-    // "name (period)". The frontmatter wants the composed one; the
-    // heading takes them apart, so a clamp cannot eat the period.
     chat_title: &str,
-    title: &str,
 ) -> Vec<Section> {
+    let period = period_suffix(&doc.period_key);
+    let title = match &period {
+        Some(p) => format!("{chat_title} {p}"),
+        None => chat_title.to_string(),
+    };
     let mut s = String::with_capacity(1024);
     s.push_str("---\n");
     s.push_str(&format!("title: \"{}\"\n", title.replace('"', "\\\"")));
@@ -374,11 +380,10 @@ fn render_markdown(
     // The chat's name and the period go in separately: a long title is
     // clamped, and `(2024-03)` — which says *which slice of the
     // conversation this file is* — must survive that.
-    let period = format!("({})", doc.period_key);
     s.push_str(
         &Title {
             text: chat_title,
-            suffix: Some(&period),
+            suffix: period.as_deref(),
             markdown_uuid: Some(&doc.markdown_uuid),
             // Public per-chat URL when the provider has one (LinkedIn
             // post, Slack permalink, …); None for backup-based providers.
@@ -1203,7 +1208,6 @@ mod tests {
             &chat,
             &chat.buckets[0],
             "Test · Bridge Crew",
-            "Test · Bridge Crew (2364-04)",
         ));
         assert!(md.contains("Make it so."));
         assert!(md.contains("🫡 Will Riker"));
@@ -1223,7 +1227,6 @@ mod tests {
             &chat,
             &chat.buckets[0],
             "Test · Bridge Crew",
-            "Test · Bridge Crew (2364-04)",
         ));
         assert!(
             md.contains("## <span class=\"msg-author\">Picard</span> "),
@@ -1247,7 +1250,6 @@ mod tests {
             &chat,
             &chat.buckets[0],
             "Test · Bridge Crew",
-            "Test · Bridge Crew (2364-04)",
         ));
         assert!(
             md.contains("&lt;script&gt;x&lt;/script&gt; &amp; co"),
@@ -1282,7 +1284,6 @@ mod tests {
             &chat,
             &chat.buckets[0],
             "Test \u{b7} Bridge Crew",
-            "Test \u{b7} Bridge Crew (2364-04)",
         ));
 
         assert!(
@@ -1338,7 +1339,6 @@ mod tests {
             &chat,
             &chat.buckets[0],
             "Test · Bridge Crew",
-            "Test · Bridge Crew (2364-04)",
         ));
 
         assert_eq!(
@@ -1377,7 +1377,6 @@ mod tests {
             &chat,
             &chat.buckets[0],
             "Test · Bridge Crew",
-            "Test · Bridge Crew (2364-04)",
         ));
 
         let class_of = |uuid: &str| {
@@ -1421,7 +1420,6 @@ mod tests {
             &chat,
             &chat.buckets[0],
             "Test · Bridge Crew",
-            "Test · Bridge Crew (2364-04)",
         );
         let keys: Vec<Option<&str>> = sections.iter().map(|s| s.uuid.as_deref()).collect();
         assert_eq!(
@@ -1482,13 +1480,7 @@ mod tests {
             stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
         };
-        let md = join(&render_markdown(
-            &profile,
-            &chat,
-            &chat.buckets[0],
-            "Test",
-            "Test (2364-04)",
-        ));
+        let md = join(&render_markdown(&profile, &chat, &chat.buckets[0], "Test"));
         assert!(md.contains("not yet fetched"));
         assert!(md.contains("https://example/vscapture"));
     }
@@ -1509,13 +1501,7 @@ mod tests {
         chat.source_url = Some("https://example.com/post/42".to_string());
 
         // Title gets the `↗` source link.
-        let md = join(&render_markdown(
-            &profile,
-            &chat,
-            &chat.buckets[0],
-            "Test",
-            "Test (2364-04)",
-        ));
+        let md = join(&render_markdown(&profile, &chat, &chat.buckets[0], "Test"));
         assert!(
             md.contains("class=\"source-link\"") && md.contains("https://example.com/post/42"),
             "title carries the source linkout: {md}"
@@ -1555,6 +1541,37 @@ mod tests {
         assert_eq!(chat_title, "#bridge: Make it so.");
     }
 
+    /// An unbucketed chat's title read "Bridge Crew (all)" (#902); a
+    /// monthly bucket keeps its "(2364-04)".
+    #[test]
+    fn only_a_real_time_bucket_suffixes_the_title() {
+        let profile = test_profile();
+        let mut chat = mk_chat();
+
+        let monthly = join(&render_markdown(
+            &profile,
+            &chat,
+            &chat.buckets[0],
+            "Bridge Crew",
+        ));
+        assert!(
+            monthly.contains("title: \"Bridge Crew (2364-04)\"\n"),
+            "{monthly}"
+        );
+        assert!(monthly.contains(">Bridge Crew (2364-04)</h1>"), "{monthly}");
+
+        chat.buckets[0].period_key = Period::key_for_all().to_string();
+        let whole = join(&render_markdown(
+            &profile,
+            &chat,
+            &chat.buckets[0],
+            "Bridge Crew",
+        ));
+        assert!(whole.contains("title: \"Bridge Crew\"\n"), "{whole}");
+        assert!(whole.contains(">Bridge Crew</h1>"), "{whole}");
+        assert!(!whole.contains("(all)"), "{whole}");
+    }
+
     #[test]
     fn per_message_source_url_surfaces_in_header_and_grid_row() {
         let profile = RenderProfile {
@@ -1571,13 +1588,7 @@ mod tests {
         chat.buckets[0].items[0].source_url = Some("https://slack.example/p123".to_string());
 
         // Message header carries a `↗` linkout.
-        let md = join(&render_markdown(
-            &profile,
-            &chat,
-            &chat.buckets[0],
-            "Test",
-            "Test (2364-04)",
-        ));
+        let md = join(&render_markdown(&profile, &chat, &chat.buckets[0], "Test"));
         assert!(
             md.contains("class=\"source-link\"") && md.contains("https://slack.example/p123"),
             "message header carries the per-message linkout: {md}"
@@ -1727,13 +1738,7 @@ mod tests {
         let profile = test_profile();
         let mut chat = mk_chat();
         chat.buckets[0].items[0].date_ms = None;
-        let md = join(&render_markdown(
-            &profile,
-            &chat,
-            &chat.buckets[0],
-            "Test",
-            "Test (2364-04)",
-        ));
+        let md = join(&render_markdown(&profile, &chat, &chat.buckets[0], "Test"));
         assert!(md.contains("(no timestamp)"), "{md}");
         assert!(!md.contains("1970"), "{md}");
     }
