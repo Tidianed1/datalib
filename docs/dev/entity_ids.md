@@ -92,7 +92,7 @@ URL and every feedback row filed against it. Documents are also
 rewritten every sync their chat is touched, wherever their first message
 fell, so a time prefix buys them no adjacency — clustering at the left
 edge does. The same goes for a page datalib composes (a source's
-timeseries, a storage report) and for a device row whose stamp is its
+timeseries or summary, a storage report) and for a device row whose stamp is its
 latest reading. What carries a stamp is the record with a stamp of its
 own: a message, a comment, a PR, a page Notion dated, a PDF whose Info
 dictionary dated it.
@@ -279,6 +279,7 @@ back by render as the natural key.
 |---|---|---|
 | airvisual | none — the page keyed on the source id, a device on its serial | none — a device's stamp is its latest reading |
 | apple_messages | none — `message.guid` is a UUID Messages mints | messages, tapbacks |
+| apple_photos | none — one summary page, keyed on the source id | none — a page's stamp would be its earliest item, which moves |
 | beeper | none — `rooms.account_id` is nullable; keys are Matrix ids | events, at millisecond precision |
 | calendar | none — keyed on `{calendar}#{UID}` (iCalendar) or `{calendar}#{event id}` (Google); a changed iCalendar occurrence adds its `RECURRENCE-ID` as a UTC instant | none — an event's start moves when it is rescheduled |
 | chatgpt | none — keys are OpenAI's conversation and message ids | messages |
@@ -288,10 +289,13 @@ back by render as the natural key.
 | contacts | none — keyed on `addressbook#uid` | none — a card has no creation event |
 | email | `account_id` — the JMAP account, the Gmail address, or the mbox's configured id | emails |
 | facebook | none — keyed on the raw row id (`fbid` where the record has one, else a hash of it) | posts, comments, reactions, photos |
+| fsindex | none — one summary page, keyed on the source id | none — a page's stamp would be its earliest item, which moves |
 | garmin | none — the page keyed on the source id, a device on Garmin's id | none |
 | github, gitlab | none — the repository / project leads the key: `{repo}#{number}` | PRs, MRs, comments, reviews, notes — the record's own `created_at` |
 | google_takeout | none — a Chat message id names its space, a Voice row id is the ingest's | messages |
+| lightroom | none — one summary page, keyed on the source id | none — a page's stamp would be its earliest item, which moves |
 | linkedin | none — keyed on the profile URL, the post link, the raw row id | messages, shares, comments |
+| media | none — one summary page, keyed on the source id | none — a page's stamp would be its earliest item, which moves |
 | notion | none — page, discussion and comment ids are Notion UUIDs, the backpointer rather than the key; `notion_page_uuid` holds the page's datalib id | pages, comments — Notion's `created_time` |
 | pdf | none — keyed on the blake3, so two copies within a source are one row | documents and pages, when the Info dictionary dates the file |
 | perseus | none — keyed on the CTS locator and edition | none — a classical text has no stamp of its own |

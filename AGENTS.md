@@ -169,6 +169,8 @@ datalib/
                    unified-index load, `RenderCtx`. Everything that knows
                    `datalib_schema` sits here or above.
     etl/timeseries_render/ what the time-series render crates share.
+    etl/summary_render/ the one summary page a file-tree or photo-library
+                   source renders to.
     etl/providers/ <p>/ (ingest) + <p>_render/ (render) + <p>_config/
                    (config schema) per provider. Twelve of the
                    file-backed ones scan a local tree through
@@ -176,8 +178,8 @@ datalib/
                    etl/agent_sessions/; fsindex has its own walker over
                    etl/src/fswalk.rs); four mirror a SQLite file through
                    etl/sqlite_mirror/; three render time series
-                   (airvisual, yolink, garmin). fsindex, media, lightroom
-                   and apple_photos have no <p>_render.
+                   (airvisual, yolink, garmin); fsindex, media, lightroom
+                   and apple_photos render one summary page each.
     etl/sqlite_mirror/ the table-for-table SQLite→doltlite mirror engine.
     table/         `BulkUpsertable`, alone.
     probe/         the "Test connection" report shape, alone.
@@ -280,8 +282,10 @@ measurement below is what notices.
   are minted during download and read again during render, so they
   belong in `ingest/schema_raw.rs` and the render crate names them
   through the download crate.
-- **A source that renders nothing has no `_render` crate.** `ingest_only!`
-  in `datalib_step/src/dispatch.rs` says so once.
+- **Every source renders something.** Data that is not documents — a
+  file tree, a photo library — renders one summary page
+  (`etl/summary_render/`), so its Browse and its Items count are
+  never empty.
 
 The measurement that checks it:
 
@@ -289,7 +293,7 @@ The measurement that checks it:
 bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/schema:datalib_schema))'
 ```
 
-73 at the last count. If that number climbs, something took a dependency
+84 at the last count. If that number climbs, something took a dependency
 it should not have.
 
 ## The grid_rows union table

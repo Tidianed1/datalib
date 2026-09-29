@@ -4,8 +4,8 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use datalib_etl::processor::PlanContext;
+use datalib_etl_render::one_page::skip_if_current;
 use datalib_etl_render::processor::{plan_source_render, RenderCtx, RenderProcessor, SourceRender};
-use datalib_etl_timeseries_render::page::skip_if_current;
 use datalib_etl_yolink_config::YolinkRenderConfig;
 use std::path::Path;
 

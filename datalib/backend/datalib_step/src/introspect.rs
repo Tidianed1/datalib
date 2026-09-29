@@ -34,6 +34,7 @@ use anyhow::{Context, Result};
 use sqlx::{Row, SqlitePool};
 
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::text::human_bytes;
 use datalib_id::{entity_id_str, IdNamespace};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::measurements::{MeasurementKind, SourceMeasurementRow};
@@ -120,22 +121,6 @@ fn plural(n: i64, unit: &str) -> String {
         format!("1 {unit}")
     } else {
         format!("{n} {unit}s")
-    }
-}
-
-/// Binary units, because the thing being described is a file on disk.
-fn human_bytes(n: i64) -> String {
-    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
-    let mut v = n as f64;
-    let mut u = 0;
-    while v >= 1024.0 && u + 1 < UNITS.len() {
-        v /= 1024.0;
-        u += 1;
-    }
-    if u == 0 {
-        format!("{n} {}", UNITS[0])
-    } else {
-        format!("{v:.1} {}", UNITS[u])
     }
 }
 
@@ -1082,13 +1067,5 @@ mod tests {
                 s.path
             );
         }
-    }
-
-    #[test]
-    fn bytes_read_in_the_units_a_person_thinks_in() {
-        assert_eq!(human_bytes(0), "0 B");
-        assert_eq!(human_bytes(512), "512 B");
-        assert_eq!(human_bytes(2048), "2.0 KiB");
-        assert_eq!(human_bytes(3 * 1024 * 1024), "3.0 MiB");
     }
 }

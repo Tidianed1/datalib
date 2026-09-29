@@ -1,0 +1,65 @@
+---
+source: datalib/backend/etl/providers/media_render/tests/render_e2e.rs
+expression: md
+---
+---
+markdown_uuid: 00000000-0000-8964-a1a9-30671b571d7e
+source_id: media
+provider: media
+title: Media — media
+---
+
+<h1 class="page-title" data-page-title-uuid="00000000-0000-8964-a1a9-30671b571d7e">Media — media</h1>
+
+19 media files, 23.6 KiB in all. Photos and videos taken 2364-04-13 to 2364-04-13.
+
+| | |
+| --- | --- |
+| Scanned | datalib/backend/etl/providers/media/tests/fixtures/media_tng |
+| Files | 19 |
+| Distinct contents | 18 (a copy in two places counts once) |
+| Size | 23.6 KiB |
+| Playlists | 2 |
+
+## By kind
+
+| Kind | Files | Size |
+| --- | ---: | ---: |
+| audio | 10 | 15.1 KiB |
+| image | 7 | 6.4 KiB |
+| video | 2 | 2.2 KiB |
+
+## By format
+
+| Format | Files | Size |
+| --- | ---: | ---: |
+| mp3 | 5 | 6.9 KiB |
+| jpeg | 3 | 2.6 KiB |
+| bmff | 2 | 3.0 KiB |
+| flac | 2 | 3.1 KiB |
+| png | 2 | 232 B |
+| tiff | 2 | 3.6 KiB |
+| wav | 2 | 4.1 KiB |
+| unknown | 1 | 86 B |
+
+## Photos and videos by year taken
+
+| Year | Files |
+| --- | ---: |
+| 2364 | 4 |
+
+## Cameras
+
+| Camera | Files |
+| --- | ---: |
+| Starfleet Optical Tricorder Mk VII | 2 |
+
+## Artists
+
+| Artist | Files |
+| --- | ---: |
+| USS Enterprise Ensemble | 3 |
+| Engineering | 2 |
+| Data | 1 |
+| Reginald Barclay | 1 |
+| Replicator | 1 |

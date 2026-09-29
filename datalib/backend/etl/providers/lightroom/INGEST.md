@@ -16,8 +16,8 @@ differs there.
 
 The result is an incremental, versioned backup that costs one pass over
 the catalog per run and stores only what actually changed, with every
-prior state still queryable. There is no render step; see
-[What render will need](#what-render-will-need).
+prior state still queryable. The render step writes one summary page;
+see [Render](#render).
 
 ## The model
 
@@ -416,10 +416,23 @@ Peak memory is about twice the rows copied
 A multi-hundred-GB database would want the copy chunked by primary-key
 range; a Lightroom catalog (tens of MB) is nowhere near that.
 
-## What render will need
+## Render
 
-Render is not built: a photo is not chat-shaped and the projection is
-its own design question. What it would need:
+The render step (`lightroom_render`) writes one summary page per
+catalog: photos by year captured, file format, rating, flag, keyword
+and camera. Its `item_count` is the rows of `Adobe_images`, virtual
+copies included, as Lightroom's own "All Photographs" counts them.
+
+It reads each table through `dolt_at_<table>` with one `GROUP BY`
+apiece and joins the grouped counts in Rust (a keyword's name, a
+camera's): a `dolt_at_` read uses no secondary index, so a SQL join
+between two of them would be a nested loop over the catalog. A table
+the mirror lacks — a trimmed catalog, an `exclude_tables` — leaves its
+section off the page; a mirror with no `Adobe_images` says so on the
+page and in a problem row.
+
+A row per image is not built: a photo is not chat-shaped and the
+projection is its own design question. What it would need:
 
 - **One `grid_rows` row per image.** This join runs against a mirrored
   catalog today and yields absolute on-disk paths:

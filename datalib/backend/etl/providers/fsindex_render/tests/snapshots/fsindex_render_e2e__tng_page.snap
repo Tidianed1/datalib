@@ -1,0 +1,34 @@
+---
+source: datalib/backend/etl/providers/fsindex_render/tests/render_e2e.rs
+expression: md
+---
+---
+markdown_uuid: 00000000-0000-825e-9b18-76aa56409f58
+source_id: fsindex
+provider: fsindex
+title: Files — fsindex
+---
+
+<h1 class="page-title" data-page-title-uuid="00000000-0000-825e-9b18-76aa56409f58">Files — fsindex</h1>
+
+4 files in 2 folders, 520 B in all.
+
+| | |
+| --- | --- |
+| Scanned | <scan root> |
+| Files | 4 |
+| Folders | 2 |
+| Size | 520 B |
+
+## By extension
+
+| Extension | Files | Size |
+| --- | ---: | ---: |
+| .txt | 4 | 520 B |
+
+## Top-level folders
+
+| Folder | Entries | Size |
+| --- | ---: | ---: |
+| bridge/ | 1 | 92 B |
+| holodeck/ | 1 | 81 B |

@@ -14,5 +14,7 @@ pub mod html;
 pub mod indexed_markdown;
 pub mod inputs;
 pub mod message;
+pub mod one_page;
 pub mod processor;
 pub mod section;
+pub mod text;

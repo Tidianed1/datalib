@@ -241,13 +241,14 @@ describe("buildSource", () => {
     expect(listSteps(text).map((s) => s.id)).toEqual(["slack/ingest", "slack/render_markdown"]);
   });
 
-  it("writes no group when editing, and no render step for a provider that renders nothing", () => {
+  it("writes no group when editing, and no render step when rendering is off", () => {
     const out = buildSource({
       entry: LIGHTROOM,
       group: "photos",
       name: "",
       values: { "catalog.path": "~/cat.lrcat" },
       withGroup: false,
+      renders: false,
     });
     expect(out.groupBody).toBeNull();
     expect(out.stepsBody).not.toContain("render_markdown");
@@ -364,9 +365,9 @@ describe("buildStep", () => {
   });
 
   // The Photos form is the Lightroom form with a different method table
-  // and preset: one bundle path, download-only, and the same shape on
-  // disk that `apple_photos_config`'s `deny_unknown_fields` accepts.
-  it("writes an Apple Photos source as one ingest step under its library table", () => {
+  // and preset: one bundle path, and the same shape on disk that
+  // `apple_photos_config`'s `deny_unknown_fields` accepts.
+  it("writes an Apple Photos source as an ingest step under its library table, then its render", () => {
     const out = buildSource({
       entry: APPLE_PHOTOS,
       group: "apple_photos",
@@ -378,7 +379,6 @@ describe("buildStep", () => {
       withGroup: true,
     });
     expect(out.groupBody).toContain('type = "apple_photos"');
-    expect(out.stepsBody).not.toContain("render_markdown");
     expect(out.stepsBody).toContain("skip_history = false");
     expect(out.stepsBody).toContain(
       '[steps.params.library]\npath = "~/Pictures/Photos Library.photoslibrary"',
@@ -387,7 +387,10 @@ describe("buildStep", () => {
       out.stepsBody.indexOf("[steps.params.library]"),
     );
     const text = `${out.groupBody}\n\n${out.stepsBody}`;
-    expect(listSteps(text).map((s) => s.id)).toEqual(["apple_photos/ingest"]);
+    expect(listSteps(text).map((s) => s.id)).toEqual([
+      "apple_photos/ingest",
+      "apple_photos/render_markdown",
+    ]);
   });
 
   // The method table is what names the ingest method, so it is written

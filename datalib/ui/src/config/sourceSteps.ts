@@ -726,9 +726,8 @@ function = ${quote(functionOf(opts.phase))}${inputsLine}${params ? `\n${params}`
 
 /// Everything the wizard writes for one source, in the order it goes
 /// into the file: the group (when creating), the ingest step, and the
-/// render step for a provider that renders. A provider that renders
-/// nothing (`renderStep: false`) gets no render step and no
-/// `renderId`.
+/// render step unless the source turned rendering off, in which case
+/// there is no `renderId` either.
 export function buildSource(opts: {
   entry: CatalogEntry;
   group: string;
@@ -738,15 +737,14 @@ export function buildSource(opts: {
   /// Write the `[[groups]]` block too. Off when editing: the group
   /// already exists and is renamed in place.
   withGroup: boolean;
-  /// Whether this source wants its render step. Defaults to whatever
-  /// the provider can do; the wizard passes the answer the person gave,
-  /// which is the one that decides.
+  /// Whether this source wants its render step. Defaults to yes; the
+  /// wizard passes the answer the person gave.
   renders?: boolean;
 }): { groupBody: string | null; stepsBody: string; renderId: string | null } {
   const { entry, group, values } = opts;
   const ingestId = stepIdFor(group, "download");
   const ingest = buildStep({ entry, group, phase: "download", values });
-  const renders = entry.renderStep !== false && opts.renders !== false;
+  const renders = opts.renders !== false;
   const render = renders
     ? buildStep({ entry, group, phase: "render", inputs: [ingestId], values })
     : null;

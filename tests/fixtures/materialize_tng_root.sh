@@ -152,8 +152,8 @@ done
 ln -sfn "$MODELS_DIR" "$OUT_ROOT/unified_index/qmd_aggregator/qmd/models"
 
 # Drop the TNG-themed scan tree into the root as `fsindex_scan/`. It's a plain
-# directory the `fsindex` (Unison-style) scanner can index; nothing renders it
-# (fsindex is extract-only), so it just sits in the root alongside the
+# directory the `fsindex` (Unison-style) scanner can index; the generated
+# config declares no fsindex source, so it just sits in the root alongside the
 # per-stanza markdown trees. Anchor off the checked-in `.fsindex.yaml`
 # breadcrumb and copy its containing dir, dereferencing the runfiles symlinks
 # (`cp -RL`) so the materialized tree is real files, like a user's directory.

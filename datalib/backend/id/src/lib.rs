@@ -62,6 +62,8 @@ pub enum IdNamespace {
     /// Apple's Messages app: chats and messages by the guids Messages
     /// mints for them.
     AppleMessages,
+    /// An Apple Photos library: its summary page, keyed on the source id.
+    ApplePhotos,
     Beeper,
     /// Every calendar method — Google, CalDAV, `.ics` — one keyspace:
     /// events keyed by their calendar and their own id.
@@ -82,11 +84,17 @@ pub enum IdNamespace {
     /// per account id.
     Email,
     Facebook,
+    /// A directory tree: its summary page, keyed on the source id.
+    Fsindex,
     Garmin,
     Github,
     Gitlab,
     GoogleTakeout,
+    /// A Lightroom catalog: its summary page, keyed on the source id.
+    Lightroom,
     Linkedin,
+    /// A media tree: its summary page, keyed on the source id.
+    Media,
     Notion,
     Pdf,
     Perseus,

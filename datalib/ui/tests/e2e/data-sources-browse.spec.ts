@@ -24,10 +24,9 @@ const SEARCH = '[data-testid="search-input"]';
 
 /// The fixture root declares every rendered source (`slack`, `github`,
 /// … — see `materialize_tng_root.sh`), so the positive cases browse
-/// what is already there. The negative case is not in the fixture and
-/// is the real shape: `media` is one of the download-only
-/// providers, so a config for it genuinely has no `render_markdown`
-/// step.
+/// what is already there. The negative case is not in the fixture: a
+/// `media` source whose rendering was turned off, so it has no
+/// `render_markdown` step.
 const GROUPS = `
 [[groups]]
 id = "media"
@@ -200,10 +199,10 @@ test("a step's row opens its source, as its group's row does", async ({ page }) 
   await expect(page).toHaveURL(/source_id%3Aslack/);
 });
 
-/// A source that renders nothing has no rows at all — not even the
+/// A source with no render step has no rows at all — not even the
 /// storage rows, which render is what emits. The button says so rather
 /// than opening an empty grid onto a source that looks broken.
-test("a download-only source cannot be browsed", async ({ page }) => {
+test("a source with no render step cannot be browsed", async ({ page }) => {
   await openManage(page);
   const media = browseButton(page, "media");
   await expect(media).toBeDisabled();

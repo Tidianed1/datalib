@@ -24,7 +24,7 @@ drawn.
 The page declares the seven `garmin_*` tables it reads as whole-table
 inputs (`src/render/parse.rs::inputs`). When none of their rows moved
 since the last render, the run is skipped for the cost of one
-`dolt_log()` query (`timeseries_render`'s `skip_if_current`). Otherwise
+`dolt_log()` query (`datalib_etl_render::one_page::skip_if_current`). Otherwise
 the page is rendered again; an unchanged page writes identical rows,
 which the render store records as no change. `RENDER_VERSION` in
 `src/render/mod.rs` is the number to bump when the layout changes.

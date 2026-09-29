@@ -13,8 +13,8 @@
 // `pdf` is the local-only provider that has *both* halves, which is why
 // it carries most of this spec: an `ingest -> render_markdown` edge is
 // what makes "everything downstream is queued too" a real assertion
-// about the DAG rather than a contrived one. `fsindex` (download-only)
-// is the unrelated second source — the one whose history must not move.
+// about the DAG rather than a contrived one. `fsindex`, declared here
+// with its download step alone, is the unrelated second source — the one whose history must not move.
 // Watching a run in flight needs a run that cannot finish before it is
 // seen, so that test syncs a replayed ChatGPT download instead, held
 // while it watches.
@@ -302,7 +302,7 @@ ${applets()}`;
     // Syncing a source takes on everything downstream of it, so the
     // render is in flight too: Queued behind its download, or Running on
     // what the download has published, since the download streams.
-    // This is the assertion a download-only source could not support.
+    // This is the assertion a source with no render step could not support.
     await expect
       .poll(async () => (await since(TAPED_DOWN, beforeDown)).length, {
         timeout: 10_000,
