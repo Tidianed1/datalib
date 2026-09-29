@@ -1606,11 +1606,12 @@ pub async fn head_commit(pool: &SqlitePool) -> Result<Option<String>> {
 }
 
 /// The content tables whose rows differ between two commits: every
-/// table but the `*_bookkeeping` sidecars, [`SHARED_TABLES`] and
-/// `ingested_files`. The question a provider's test asks after
-/// ingesting the same input twice under two different nows — the
-/// answer must be empty, or a stamp the store mints is sitting in a
-/// content row, and every consumer that diffs the store will find
+/// table that `datalib_history::holds_records` — all but the
+/// `*_bookkeeping` sidecars, [`SHARED_TABLES`] and `ingested_files`,
+/// the rule the History card counts by. The question a provider's test
+/// asks after ingesting the same input twice under two different nows
+/// — the answer must be empty, or a stamp the store mints is sitting in
+/// a content row, and every consumer that diffs the store will find
 /// that row changed on every run.
 pub async fn content_tables_changed(
     pool: &SqlitePool,
@@ -1628,11 +1629,7 @@ pub async fn content_tables_changed(
     .context("dolt_diff_summary")?;
     let mut changed: Vec<String> = rows
         .into_iter()
-        .filter(|t| {
-            !t.ends_with("_bookkeeping")
-                && !SHARED_TABLES.contains(&t.as_str())
-                && t != crate::file_checkpoint::INGESTED_FILES_TABLE
-        })
+        .filter(|t| datalib_history::holds_records(t))
         .collect();
     changed.sort();
     changed.dedup();
@@ -2513,6 +2510,21 @@ mod tests {
             .filter_map(parse_create_table_name)
             .collect();
         assert_eq!(from_ddl, SHARED_TABLES);
+    }
+
+    /// `datalib_history` cannot link this crate, so it keeps its own list
+    /// of the tables that are datalib's; a shared table it missed would
+    /// be counted as the source's records on the History card.
+    #[test]
+    fn history_counts_no_shared_table_as_records() {
+        for t in SHARED_TABLES
+            .iter()
+            .chain([&crate::file_checkpoint::INGESTED_FILES_TABLE])
+        {
+            assert!(!datalib_history::holds_records(t), "{t}");
+        }
+        let sidecar = parse_create_table_name(&bookkeeping_ddl_for("widgets")).unwrap();
+        assert!(!datalib_history::holds_records(&sidecar), "{sidecar}");
     }
 
     /// The stamp is what `datalib_history` parses back out, so its
