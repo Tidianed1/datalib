@@ -7,10 +7,6 @@
 //! that commit and are walked backwards through each commit's
 //! `dolt_diff_stat`, so a commit costs time proportional to what it
 //! changed rather than to the size of the store.
-//!
-//! [`changes_between`] answers the other question the History card
-//! asks: what differs between two commits of one store, net, counted
-//! over the tables that hold records.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -57,26 +53,6 @@ pub struct TableState {
     pub records: bool,
     /// Rows after this commit.
     pub rows: i64,
-    pub added: i64,
-    pub deleted: i64,
-    pub modified: i64,
-}
-
-/// What differs between two commits of one store: the net change from
-/// one to the other, not the sum of the commits between them, over the
-/// tables that [`holds_records`].
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-pub struct Changes {
-    pub added: i64,
-    pub deleted: i64,
-    pub modified: i64,
-    /// The record tables that changed, by name.
-    pub tables: Vec<TableChange>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct TableChange {
-    pub table: String,
     pub added: i64,
     pub deleted: i64,
     pub modified: i64,
@@ -199,44 +175,6 @@ async fn read_from(pool: &SqlitePool, limit: usize) -> Result<StoreHistory> {
         commits,
         truncated: false,
     })
-}
-
-/// The net change from `from` to `to`, or `None` when either is not a
-/// commit of the store. Both are commits, so neither moves under a
-/// writer and there is nothing to pin.
-pub async fn changes_between(db_path: &Path, from: &str, to: &str) -> Result<Option<Changes>> {
-    let pool = open_reader(db_path)
-        .await
-        .with_context(|| format!("open {} read-only", db_path.display()))?;
-    let result = changes_from(&pool, from, to).await;
-    pool.close().await;
-    result
-}
-
-async fn changes_from(pool: &SqlitePool, from: &str, to: &str) -> Result<Option<Changes>> {
-    let log: Vec<String> = sqlx::query_scalar("SELECT commit_hash FROM dolt_log()")
-        .fetch_all(pool)
-        .await
-        .context("dolt_log()")?;
-    if !log.iter().any(|h| h == from) || !log.iter().any(|h| h == to) {
-        return Ok(None);
-    }
-    let mut changes = Changes::default();
-    for (table, (added, deleted, modified)) in table_changes(pool, from, to).await? {
-        if !holds_records(&table) {
-            continue;
-        }
-        changes.added += added;
-        changes.deleted += deleted;
-        changes.modified += modified;
-        changes.tables.push(TableChange {
-            table,
-            added,
-            deleted,
-            modified,
-        });
-    }
-    Ok(Some(changes))
 }
 
 /// Row count of every user table at the pinned commit. A table in
@@ -571,102 +509,34 @@ mod tests {
         sqlx::query(sql).execute(pool).await.unwrap();
     }
 
-    /// A pair's counts are what differs between its two commits, not the
-    /// sum of the commits between them: a row added and then deleted
-    /// inside the range is no change, and a row changed twice is one.
-    /// Housekeeping tables are left out even when they moved.
+    /// Every table is listed, and each says whether it holds records:
+    /// the History card sums only those.
     #[tokio::test]
-    async fn a_pair_counts_the_net_change_to_record_tables_only() {
+    async fn each_table_says_whether_it_holds_records() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("store.doltlite_db");
         let pool = writer(&path).await;
         if !is_doltlite(&pool).await {
             return;
         }
+        exec(&pool, "CREATE TABLE contacts (id INTEGER PRIMARY KEY)").await;
         exec(
             &pool,
-            "CREATE TABLE contacts (id INTEGER PRIMARY KEY, v TEXT)",
+            "CREATE TABLE contacts_bookkeeping (id INTEGER PRIMARY KEY)",
         )
         .await;
-        exec(
-            &pool,
-            "CREATE TABLE contacts_bookkeeping (id INTEGER PRIMARY KEY, n INTEGER)",
-        )
-        .await;
-        exec(
-            &pool,
-            "CREATE TABLE ingested_files (path TEXT PRIMARY KEY, mtime INTEGER)",
-        )
-        .await;
-        exec(
-            &pool,
-            "INSERT INTO contacts VALUES (1, 'a'), (2, 'a'), (3, 'a')",
-        )
-        .await;
-        commit(&pool, "first").await;
-        exec(&pool, "INSERT INTO contacts VALUES (4, 'a')").await;
-        exec(&pool, "UPDATE contacts SET v = 'b' WHERE id = 1").await;
-        exec(&pool, "INSERT INTO contacts_bookkeeping VALUES (1, 1)").await;
-        exec(&pool, "INSERT INTO ingested_files VALUES ('x.vcf', 1)").await;
-        commit(&pool, "second").await;
-        exec(&pool, "DELETE FROM contacts WHERE id IN (2, 4)").await;
-        exec(&pool, "UPDATE contacts SET v = 'c' WHERE id = 1").await;
-        exec(&pool, "INSERT INTO contacts VALUES (5, 'a')").await;
-        exec(&pool, "UPDATE ingested_files SET mtime = 2").await;
-        commit(&pool, "third").await;
+        exec(&pool, "CREATE TABLE ingested_files (path TEXT PRIMARY KEY)").await;
+        exec(&pool, "INSERT INTO contacts VALUES (1)").await;
+        exec(&pool, "INSERT INTO contacts_bookkeeping VALUES (1)").await;
+        exec(&pool, "INSERT INTO ingested_files VALUES ('x.vcf')").await;
+        commit(&pool, "load").await;
         pool.close().await;
 
         let h = read(&path, 100).await.unwrap();
-        let hash = |msg: &str| {
-            h.commits
-                .iter()
-                .find(|c| c.message == msg)
-                .unwrap()
-                .hash
-                .clone()
-        };
-        let (first, third) = (hash("first"), hash("third"));
-        let second = &h.commits[1];
-        assert!(table(second, "contacts").records);
-        assert!(!table(second, "contacts_bookkeeping").records);
-        assert!(!table(second, "ingested_files").records);
-
-        let got = changes_between(&path, &first, &third)
-            .await
-            .unwrap()
-            .unwrap();
-        // 4 came and went, 1 changed twice, 2 went, 5 came.
-        assert_eq!(
-            got,
-            Changes {
-                added: 1,
-                deleted: 1,
-                modified: 1,
-                tables: vec![TableChange {
-                    table: "contacts".into(),
-                    added: 1,
-                    deleted: 1,
-                    modified: 1,
-                }],
-            }
-        );
-        // The other way round, what was added is what was deleted.
-        let back = changes_between(&path, &third, &first)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!((back.added, back.deleted, back.modified), (1, 1, 1));
-        let nothing = changes_between(&path, &third, &third)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(nothing, Changes::default());
-        assert_eq!(
-            changes_between(&path, &first, &"0".repeat(32))
-                .await
-                .unwrap(),
-            None
-        );
+        let top = &h.commits[0];
+        assert!(table(top, "contacts").records);
+        assert!(!table(top, "contacts_bookkeeping").records);
+        assert!(!table(top, "ingested_files").records);
     }
 
     #[test]

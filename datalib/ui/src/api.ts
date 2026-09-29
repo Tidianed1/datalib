@@ -1135,26 +1135,6 @@ export function fetchTreeHistory(tree: string, signal?: AbortSignal): Promise<Tr
   return getJson<TreeHistory>(`/api/pipeline/history?tree=${encodeURIComponent(tree)}`, signal);
 }
 
-/// What differs between two commits of one store, net, over its record
-/// tables. Mirrors `datalib_history::Changes`.
-export type CommitChanges = {
-  added: number;
-  deleted: number;
-  modified: number;
-  /// The record tables that changed, by name.
-  tables: { table: string; added: number; deleted: number; modified: number }[];
-};
-
-export function fetchCommitChanges(
-  store: string,
-  from: string,
-  to: string,
-  signal?: AbortSignal,
-): Promise<CommitChanges> {
-  const q = new URLSearchParams({ store, from, to });
-  return getJson<CommitChanges>(`/api/pipeline/history/changes?${q}`, signal);
-}
-
 /// A refused call's reason, as the server gave it.
 async function refusal(url: string, r: Response): Promise<Error> {
   const detail = (await r.text().catch(() => "")).trim();

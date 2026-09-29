@@ -189,7 +189,6 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sync/sources", get(sync_sources))
         .route("/api/pipeline/storage", get(pipeline_storage))
         .route("/api/pipeline/history", get(history::tree_history))
-        .route("/api/pipeline/history/changes", get(history::store_changes))
         .route("/api/requests", get(requests_list).post(request_open))
         .route("/api/requests/{id}/stop", post(request_stop))
         .route("/api/steps/{id}/turn_off", post(step_turn_off))

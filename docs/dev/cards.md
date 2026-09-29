@@ -432,8 +432,9 @@ programs against:
   commits of that source's download store can be selected and
   compared, which adds a diff group to the config and syncs it;
   `compare: true` opens with the newest two set up. The compare bar
-  names each side by the minute it was made and counts what differs
-  between the two (`/api/pipeline/history/changes`). Every count on
+  names each side by the minute it was made and counts what the
+  commits between them added, deleted and modified, each summed on
+  its own. Every count on
   the card is over the tables that hold records, not datalib's own
   (`datalib_history::holds_records`). The pairing rules are
   `config/compareCommits.ts`.

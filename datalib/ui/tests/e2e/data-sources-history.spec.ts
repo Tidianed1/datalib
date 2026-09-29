@@ -116,14 +116,14 @@ test("Compare two versions opens the history ready to compare", async ({ page })
 test("Compare two versions writes a comparison of the two commits and syncs it", async ({
   page,
 }) => {
-  const commit = (hash: string, date: string) => ({
+  const commit = (hash: string, date: string, added = 0, deleted = 0, modified = 0) => ({
     hash,
     parent: null,
     committer: "doltlite",
     date,
     message: `sync ${hash.slice(0, 4)}`,
     run: null,
-    tables: [],
+    tables: [{ table: "messages", records: true, rows: 10, added, deleted, modified }],
   });
   await page.route("**/api/pipeline/history?tree=slack", (r) =>
     r.fulfill({
@@ -134,26 +134,14 @@ test("Compare two versions writes a comparison of the two commits and syncs it",
             path: "slack/ingest/entities.doltlite_db",
             truncated: false,
             commits: [
-              commit("b".repeat(32), "2026-09-02T10:00:00+00:00"),
-              commit("a".repeat(32), "2026-09-01T10:00:00+00:00"),
+              commit("b".repeat(32), "2026-09-02T10:00:00+00:00", 3, 4, 1),
+              commit("a".repeat(32), "2026-09-01T10:00:00+00:00", 10),
             ],
           },
         ],
       },
     }),
   );
-  const counted: URLSearchParams[] = [];
-  await page.route("**/api/pipeline/history/changes?**", async (r) => {
-    counted.push(new URL(r.request().url()).searchParams);
-    await r.fulfill({
-      json: {
-        added: 3,
-        deleted: 4,
-        modified: 1,
-        tables: [{ table: "messages", added: 3, deleted: 4, modified: 1 }],
-      },
-    });
-  });
   const saved: string[] = [];
   await page.route("**/api/config", async (r) => {
     if (r.request().method() !== "PUT") return r.fallback();
@@ -175,18 +163,13 @@ test("Compare two versions writes a comparison of the two commits and syncs it",
   await menuEntry(page, "Compare two versions…").click();
   const compare = page.locator(".hc-compare");
   // The newest two, older first, each by when it was made; the hash is
-  // only in the hover. The counts are the pair's, from the server.
+  // only in the hover. The counts are the newer commit's: the older one
+  // is where the comparison starts.
   const [from, to] = [compare.locator(".hc-pick").first(), compare.locator(".hc-pick").last()];
   await expect(from).toHaveAttribute("title", new RegExp(`${"a".repeat(32)}$`));
   await expect(to).toHaveAttribute("title", new RegExp(`${"b".repeat(32)}$`));
   await expect(compare).not.toContainText("aaaaaaaa");
   await expect(compare.locator(".hc-changes")).toHaveText("3 added, 4 removed, 1 changed");
-  const pairAsked = counted.at(-1)!;
-  expect([pairAsked.get("store"), pairAsked.get("from"), pairAsked.get("to")]).toEqual([
-    "slack/ingest/entities.doltlite_db",
-    "a".repeat(32),
-    "b".repeat(32),
-  ]);
   await compare.locator(".hc-name").fill("Slack e2e changes");
   await compare.getByRole("button", { name: "Create comparison" }).click();
 

@@ -1,8 +1,6 @@
 //! `GET /api/pipeline/history?tree=<id>`: the commit history of every
 //! doltlite store under one declared tree — a step's, or a group's with
-//! its steps' under it. `GET /api/pipeline/history/changes?store=<path>
-//! &from=<hash>&to=<hash>`: what differs between two commits of one of
-//! those stores. Reads the stores; never writes them.
+//! its steps' under it. Reads the stores; never writes them.
 
 use std::path::Path;
 
@@ -67,47 +65,6 @@ pub async fn tree_history(
         tree: p.tree,
         stores,
     }))
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ChangesParams {
-    /// Data-root-relative, as `/api/pipeline/history` names it.
-    store: String,
-    from: String,
-    to: String,
-}
-
-pub async fn store_changes(
-    State(s): State<AppState>,
-    Query(p): Query<ChangesParams>,
-) -> Result<Json<datalib_history::Changes>, (StatusCode, String)> {
-    let declared = usage::declared_trees(&s.config_path());
-    // Only a store the history lists can be asked about: that is what
-    // keeps `store` from naming any other file under the root.
-    let listed = p.store.rsplit_once('/').is_some_and(|(tree, _)| {
-        declared.iter().any(|t| t == tree)
-            && stores_under(&s.root, tree, &declared).contains(&p.store)
-    });
-    if !listed {
-        return Err((
-            StatusCode::NOT_FOUND,
-            format!("no step keeps a store at {}", p.store),
-        ));
-    }
-    match datalib_history::changes_between(&s.root.join(&p.store), &p.from, &p.to).await {
-        Ok(Some(changes)) => Ok(Json(changes)),
-        Ok(None) => Err((
-            StatusCode::NOT_FOUND,
-            format!("{} has no commit {} or no commit {}", p.store, p.from, p.to),
-        )),
-        Err(e) => {
-            tracing::warn!("history changes: {}: {e:#}", p.store);
-            Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("{}: {e:#}", p.store),
-            ))
-        }
-    }
 }
 
 /// Every `.doltlite_db` directly inside the tree's directory, then inside

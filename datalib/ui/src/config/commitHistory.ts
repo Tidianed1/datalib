@@ -32,6 +32,10 @@ export type HistoryRow = {
   /// The run that made the commit, when the message names one — the
   /// job id, when the app ran it, so it is what the log is filed under.
   run: string | null;
+  /// A table row: whether the table holds the source's records rather
+  /// than datalib's own bookkeeping. True on a commit row, whose counts
+  /// are summed over those tables; false on a store row.
+  records: boolean;
   /// Rows across the record tables after the commit; a table row's own
   /// count. Null on a store row.
   rows: number | null;
@@ -76,6 +80,7 @@ function tableRow(storePath: string, hash: string, t: HistoryTable): HistoryRow 
     hash,
     date: null,
     run: null,
+    records: t.records,
     rows: t.rows,
     added: t.added,
     deleted: t.deleted,
@@ -99,6 +104,7 @@ function commitRows(storePath: string, c: HistoryCommit): HistoryRow[] {
     hash: c.hash,
     date: c.date,
     run: c.run,
+    records: true,
     rows: sum((t) => t.rows),
     added: sum((t) => t.added),
     deleted: sum((t) => t.deleted),
@@ -124,6 +130,7 @@ export function historyRows(histories: TreeHistory[]): HistoryRow[] {
         hash: null,
         date: null,
         run: null,
+        records: false,
         rows: null,
         added: null,
         deleted: null,

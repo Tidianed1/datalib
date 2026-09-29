@@ -7,6 +7,7 @@ import {
   commitLabel,
   commitTooltip,
   defaultPair,
+  pairChanges,
   recordStore,
   selectedPair,
 } from "./compareCommits";
@@ -119,6 +120,61 @@ describe("the compare bar", () => {
     expect(commitLabel(e3)).not.toContain("e3");
     const tip = commitTooltip(e3).split("\n");
     expect(tip.slice(1)).toEqual(["sync e3", "e3"]);
+  });
+
+  /// Each commit's added, deleted and modified are summed on their own
+  /// over the commits after `from` through `to`, and only over the
+  /// tables that hold records.
+  it("sums each count over the commits of the pair", () => {
+    const t = (
+      table: string,
+      added: number,
+      deleted: number,
+      modified: number,
+      records = true,
+    ) => ({
+      table,
+      records,
+      rows: 0,
+      added,
+      deleted,
+      modified,
+    });
+    const c = (hash: string, tables: HistoryCommit["tables"]): HistoryCommit => ({
+      ...commit(hash, "2026-09-09T12:00:00+00:00"),
+      tables,
+    });
+    const rows = historyRows([
+      {
+        tree: "q",
+        stores: [
+          {
+            path: "q/ingest/entities.doltlite_db",
+            truncated: false,
+            commits: [
+              c("c4", [t("contacts", 50, 50, 50)]),
+              // A row deleted here that c2 added counts in both.
+              c("c3", [t("contacts", 0, 1, 2), t("ingested_files", 0, 0, 7, false)]),
+              c("c2", [
+                t("contacts", 1, 0, 0),
+                t("addressbooks", 0, 0, 1),
+                t("contacts_bookkeeping", 1, 0, 0, false),
+              ]),
+              c("c1", [t("contacts", 9, 9, 9)]),
+            ],
+          },
+        ],
+      },
+    ]);
+    const pair = selectedPair(rows, "q", [commitRow(rows, "c1"), commitRow(rows, "c3")]);
+    if (typeof pair === "string") throw new Error(pair);
+    const got = pairChanges(rows, pair);
+    expect([got.added, got.deleted, got.modified]).toEqual([1, 1, 3]);
+    expect(got.tables).toEqual([
+      { table: "contacts", added: 1, deleted: 1, modified: 2 },
+      { table: "addressbooks", added: 0, deleted: 0, modified: 1 },
+    ]);
+    expect(changeSummary(got)).toBe("1 added, 1 removed, 3 changed");
   });
 
   it("counts what the pair changed, leaving out what is zero", () => {
