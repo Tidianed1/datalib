@@ -5,14 +5,18 @@
 // runner's record moves. Opened from a Manage row's menu. On a source,
 // two commits of its download's store can be compared: the comparison
 // is a diff group added to the config and synced.
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { Column } from "@slickgrid-universal/common";
-import type { ColumnSpec } from "@/api";
+import type { ColumnSpec, CommitChanges } from "@/api";
 import { useApi } from "@/cards/cardApi";
 import { copyToClipboard } from "@/clipboard";
 import { historyRows, truncatedStores, type HistoryRow } from "@/config/commitHistory";
 import {
   addComparison,
+  changeDetail,
+  changeSummary,
+  commitLabel,
+  commitTooltip,
   comparisonId,
   defaultPair,
   selectedPair,
@@ -27,7 +31,7 @@ import { logSource } from "./libs/logView";
 import type { HistoryViewOpts } from "./libs/historyView";
 import { TOPIC_CONFIG_WRITTEN, type CardCtx } from "./types";
 
-const { fetchTreeHistory, fetchConfig, saveConfig, openRequest } = useApi();
+const { fetchTreeHistory, fetchCommitChanges, fetchConfig, saveConfig, openRequest } = useApi();
 
 const props = defineProps<{ ctx: CardCtx; opts: HistoryViewOpts }>();
 
@@ -118,10 +122,22 @@ const canCreate = computed(
     maxDocuments.value >= 1,
 );
 
-/// How a commit reads in the compare bar: when, and what it said.
-function commitLabel(c: HistoryRow): string {
-  return `${c.date ? formatStamp(c.date) : ""} — ${c.label} (${(c.hash ?? "").slice(0, 8)})`;
-}
+/// What differs between the pair, or why that could not be read; null
+/// while it is being read. Only the answer for the pair on screen lands.
+const pairChanges = ref<CommitChanges | string | null>(null);
+let changesAsked = 0;
+watch(comparePair, async (pair) => {
+  const seq = ++changesAsked;
+  pairChanges.value = null;
+  if (!pair) return;
+  let answer: CommitChanges | string;
+  try {
+    answer = await fetchCommitChanges(pair.store, pair.from.hash!, pair.to.hash!);
+  } catch (e) {
+    answer = `Could not count the changes: ${(e as Error).message}`;
+  }
+  if (seq === changesAsked) pairChanges.value = answer;
+});
 
 async function createComparison() {
   const pair = comparePair.value;
@@ -192,7 +208,7 @@ const historyColumns: ColumnSpec[] = [
     field: "rows",
     header: "Rows",
     type: "count",
-    description: "Rows after this commit — across the data tables, or in the one table",
+    description: "Rows after this commit — across the record tables, or in the one table",
     default_visible: true,
     editable: false,
   },
@@ -359,9 +375,20 @@ onBeforeUnmount(() => unsubscribe?.());
       <template v-if="comparePair">
         <div class="hc-compare-pair">
           <span>Compare</span>
-          <span class="hc-pick">{{ commitLabel(comparePair.from) }}</span>
+          <span class="hc-pick" :title="commitTooltip(comparePair.from)">{{
+            commitLabel(comparePair.from)
+          }}</span>
           <span>→</span>
-          <span class="hc-pick">{{ commitLabel(comparePair.to) }}</span>
+          <span class="hc-pick" :title="commitTooltip(comparePair.to)">{{
+            commitLabel(comparePair.to)
+          }}</span>
+          <span v-if="pairChanges === null" class="hc-changes muted">counting…</span>
+          <span v-else-if="typeof pairChanges === 'string'" class="hc-changes bad">{{
+            pairChanges
+          }}</span>
+          <span v-else class="hc-changes" :title="changeDetail(pairChanges)">{{
+            changeSummary(pairChanges)
+          }}</span>
         </div>
         <label>
           Name

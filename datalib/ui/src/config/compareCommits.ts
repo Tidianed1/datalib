@@ -4,7 +4,9 @@
 // store (docs/dev/plans/completed/diff_renderer.md), so only commits of
 // that one store can be paired.
 
+import type { CommitChanges } from "@/api";
 import type { HistoryRow } from "./commitHistory";
+import { formatShortStamp, formatStamp } from "./timeFormat";
 import {
   insertEntries,
   buildDiffSource,
@@ -64,6 +66,40 @@ export function selectedPair(
   return order.indexOf(a.key) < order.indexOf(b.key)
     ? { store, to: a, from: b }
     : { store, to: b, from: a };
+}
+
+/// How one side of a pair reads: the minute it was made. The message is
+/// the provider's own summary and says nothing about the comparison.
+export function commitLabel(c: HistoryRow): string {
+  return formatShortStamp(c.date);
+}
+
+/// The hover on one side: the exact second, the message and the hash,
+/// for telling apart two commits made in one minute.
+export function commitTooltip(c: HistoryRow): string {
+  return [formatStamp(c.date), c.label, c.hash ?? ""].filter(Boolean).join("\n");
+}
+
+const COUNT_FMT = new Intl.NumberFormat();
+
+/// What the pair's comparison will show, as record counts:
+/// "3 added, 4 removed, 1 changed", leaving out what is zero.
+export function changeSummary(c: CommitChanges): string {
+  const parts = (
+    [
+      [c.added, "added"],
+      [c.deleted, "removed"],
+      [c.modified, "changed"],
+    ] as const
+  )
+    .filter(([n]) => n > 0)
+    .map(([n, what]) => `${COUNT_FMT.format(n)} ${what}`);
+  return parts.length ? parts.join(", ") : "No records changed";
+}
+
+/// The same counts table by table, for the summary's hover.
+export function changeDetail(c: CommitChanges): string {
+  return c.tables.map((t) => `${t.table}: ${changeSummary({ ...t, tables: [] })}`).join("\n");
 }
 
 /// Every id a new group may not take: the groups, and the groups the

@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { historyRows, type HistoryRow } from "./commitHistory";
-import { addComparison, defaultPair, recordStore, selectedPair } from "./compareCommits";
+import {
+  addComparison,
+  changeDetail,
+  changeSummary,
+  commitLabel,
+  commitTooltip,
+  defaultPair,
+  recordStore,
+  selectedPair,
+} from "./compareCommits";
+import { formatShortStamp } from "./timeFormat";
 import type { HistoryCommit, TreeHistory } from "@/api";
 
 const commit = (hash: string, date: string): HistoryCommit => ({
@@ -89,5 +99,44 @@ describe("compareCommits", () => {
     expect(text).toContain('from = "e2"');
     expect(text).toContain('to = "e3"');
     expect(text).toContain("max_documents = 50");
+  });
+});
+
+describe("the compare bar", () => {
+  const changes = (added: number, deleted: number, modified: number) => ({
+    added,
+    deleted,
+    modified,
+    tables: [],
+  });
+
+  /// The label was the provider's summary and a hash prefix, which says
+  /// nothing about what the comparison will show.
+  it("labels a side with the minute it was made, the message and hash only on hover", () => {
+    const e3 = commitRow(enterprise(), "e3");
+    expect(commitLabel(e3)).toBe(formatShortStamp("2026-09-09T12:00:00+00:00"));
+    expect(commitLabel(e3)).not.toContain("sync");
+    expect(commitLabel(e3)).not.toContain("e3");
+    const tip = commitTooltip(e3).split("\n");
+    expect(tip.slice(1)).toEqual(["sync e3", "e3"]);
+  });
+
+  it("counts what the pair changed, leaving out what is zero", () => {
+    expect(changeSummary(changes(3, 4, 1))).toBe("3 added, 4 removed, 1 changed");
+    expect(changeSummary(changes(0, 2, 0))).toBe("2 removed");
+    expect(changeSummary(changes(1200, 0, 5))).toBe(`${(1200).toLocaleString()} added, 5 changed`);
+    expect(changeSummary(changes(0, 0, 0))).toBe("No records changed");
+  });
+
+  it("breaks the counts down by table on hover", () => {
+    expect(
+      changeDetail({
+        ...changes(3, 1, 0),
+        tables: [
+          { table: "contacts", added: 2, deleted: 1, modified: 0 },
+          { table: "addressbooks", added: 1, deleted: 0, modified: 0 },
+        ],
+      }),
+    ).toBe("contacts: 2 added, 1 removed\naddressbooks: 1 added");
   });
 });

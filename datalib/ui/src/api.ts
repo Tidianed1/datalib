@@ -1090,6 +1090,9 @@ export function fetchTable(url: string, signal?: AbortSignal): Promise<TableResp
 /// `datalib_history::TableState`.
 export type HistoryTable = {
   table: string;
+  /// The source's records rather than datalib's own bookkeeping
+  /// (`datalib_history::holds_records`): what a commit's totals count.
+  records: boolean;
   /// Rows after the commit.
   rows: number;
   added: number;
@@ -1130,6 +1133,26 @@ export type TreeHistory = {
 
 export function fetchTreeHistory(tree: string, signal?: AbortSignal): Promise<TreeHistory> {
   return getJson<TreeHistory>(`/api/pipeline/history?tree=${encodeURIComponent(tree)}`, signal);
+}
+
+/// What differs between two commits of one store, net, over its record
+/// tables. Mirrors `datalib_history::Changes`.
+export type CommitChanges = {
+  added: number;
+  deleted: number;
+  modified: number;
+  /// The record tables that changed, by name.
+  tables: { table: string; added: number; deleted: number; modified: number }[];
+};
+
+export function fetchCommitChanges(
+  store: string,
+  from: string,
+  to: string,
+  signal?: AbortSignal,
+): Promise<CommitChanges> {
+  const q = new URLSearchParams({ store, from, to });
+  return getJson<CommitChanges>(`/api/pipeline/history/changes?${q}`, signal);
 }
 
 /// A refused call's reason, as the server gave it.

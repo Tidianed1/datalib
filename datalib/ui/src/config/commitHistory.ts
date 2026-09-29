@@ -32,7 +32,7 @@ export type HistoryRow = {
   /// The run that made the commit, when the message names one — the
   /// job id, when the app ran it, so it is what the log is filed under.
   run: string | null;
-  /// Rows across the data tables after the commit; a table row's own
+  /// Rows across the record tables after the commit; a table row's own
   /// count. Null on a store row.
   rows: number | null;
   added: number | null;
@@ -85,7 +85,8 @@ function tableRow(storePath: string, hash: string, t: HistoryTable): HistoryRow 
 
 function commitRows(storePath: string, c: HistoryCommit): HistoryRow[] {
   const data = c.tables.filter((t) => !isSidecar(t.table));
-  const sum = (pick: (t: HistoryTable) => number) => data.reduce((n, t) => n + pick(t), 0);
+  const records = c.tables.filter((t) => t.records);
+  const sum = (pick: (t: HistoryTable) => number) => records.reduce((n, t) => n + pick(t), 0);
   const key = `${storePath}@${c.hash}`;
   const commit: HistoryRow = {
     key,

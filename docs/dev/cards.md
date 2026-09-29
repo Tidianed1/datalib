@@ -431,8 +431,12 @@ programs against:
   moves; a commit's run opens its `logView`. With `source`, two
   commits of that source's download store can be selected and
   compared, which adds a diff group to the config and syncs it;
-  `compare: true` opens with the newest two set up. The pairing rules
-  are `config/compareCommits.ts`.
+  `compare: true` opens with the newest two set up. The compare bar
+  names each side by the minute it was made and counts what differs
+  between the two (`/api/pipeline/history/changes`). Every count on
+  the card is over the tables that hold records, not datalib's own
+  (`datalib_history::holds_records`). The pairing rules are
+  `config/compareCommits.ts`.
 - `logLineView(seq)` — one log line in full (`cards/LogLineCard.ce.vue`,
   over `/api/log/{seq}`): the message, the fields as a tree
   (`cards/JsonTree.ce.vue`), the source link at the process's commit,

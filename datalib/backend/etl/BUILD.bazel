@@ -22,6 +22,7 @@ rust_library(
     ],
     deps = [
         "//datalib/backend/flock:datalib_flock",
+        "//datalib/backend/history:datalib_history",
         "//datalib/backend/obs:datalib_obs",
         "//datalib/backend/pin:datalib_pin",
         "//datalib/backend/problems:datalib_problems",

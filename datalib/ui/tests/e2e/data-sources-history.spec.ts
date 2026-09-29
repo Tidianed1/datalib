@@ -142,6 +142,18 @@ test("Compare two versions writes a comparison of the two commits and syncs it",
       },
     }),
   );
+  const counted: URLSearchParams[] = [];
+  await page.route("**/api/pipeline/history/changes?**", async (r) => {
+    counted.push(new URL(r.request().url()).searchParams);
+    await r.fulfill({
+      json: {
+        added: 3,
+        deleted: 4,
+        modified: 1,
+        tables: [{ table: "messages", added: 3, deleted: 4, modified: 1 }],
+      },
+    });
+  });
   const saved: string[] = [];
   await page.route("**/api/config", async (r) => {
     if (r.request().method() !== "PUT") return r.fallback();
@@ -162,8 +174,19 @@ test("Compare two versions writes a comparison of the two commits and syncs it",
   await row.click({ button: "right" });
   await menuEntry(page, "Compare two versions…").click();
   const compare = page.locator(".hc-compare");
-  // The newest two, older first.
-  await expect(compare).toContainText(/aaaaaaaa.*→.*bbbbbbbb/);
+  // The newest two, older first, each by when it was made; the hash is
+  // only in the hover. The counts are the pair's, from the server.
+  const [from, to] = [compare.locator(".hc-pick").first(), compare.locator(".hc-pick").last()];
+  await expect(from).toHaveAttribute("title", new RegExp(`${"a".repeat(32)}$`));
+  await expect(to).toHaveAttribute("title", new RegExp(`${"b".repeat(32)}$`));
+  await expect(compare).not.toContainText("aaaaaaaa");
+  await expect(compare.locator(".hc-changes")).toHaveText("3 added, 4 removed, 1 changed");
+  const pairAsked = counted.at(-1)!;
+  expect([pairAsked.get("store"), pairAsked.get("from"), pairAsked.get("to")]).toEqual([
+    "slack/ingest/entities.doltlite_db",
+    "a".repeat(32),
+    "b".repeat(32),
+  ]);
   await compare.locator(".hc-name").fill("Slack e2e changes");
   await compare.getByRole("button", { name: "Create comparison" }).click();
 
