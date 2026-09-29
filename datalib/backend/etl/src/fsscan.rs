@@ -149,6 +149,17 @@ pub struct Changes {
     pub walk_errors: usize,
 }
 
+/// Whether root-relative `rel` is inside root-relative directory `rel_dir`,
+/// which may be several segments deep. Case-insensitive, because export
+/// trees come from other people's tools.
+pub fn is_under(rel: &str, rel_dir: &str) -> bool {
+    let prefix = format!("{}/", rel_dir.trim_end_matches('/'));
+    rel.len() > prefix.len()
+        && rel
+            .get(..prefix.len())
+            .is_some_and(|p| p.eq_ignore_ascii_case(&prefix))
+}
+
 impl Changes {
     /// Whether anything at all needs doing. The whole question, for a
     /// caller that reprocesses wholesale rather than per file — which
@@ -160,22 +171,14 @@ impl Changes {
             || !self.moved.is_empty()
     }
 
-    /// [`Self::needs_reading`], narrowed to one directory of the scanned root:
-    /// an export root holds several feeds' files side by side.
-    ///
-    /// `rel_dir` is root-relative and may be several segments deep. Matching is
-    /// case-insensitive, because export trees come from other people's tools.
+    /// [`Self::needs_reading`], narrowed to one directory of the scanned root
+    /// ([`is_under`]): an export root holds several feeds' files side by side.
     pub fn needs_reading_under<'a>(
         &'a self,
         rel_dir: &'a str,
     ) -> impl Iterator<Item = &'a ScannedFile> + 'a {
-        let prefix = format!("{}/", rel_dir.trim_end_matches('/'));
-        self.needs_reading().filter(move |f| {
-            f.rel.len() > prefix.len()
-                && f.rel
-                    .get(..prefix.len())
-                    .is_some_and(|p| p.eq_ignore_ascii_case(&prefix))
-        })
+        self.needs_reading()
+            .filter(move |f| is_under(&f.rel, rel_dir))
     }
 
     /// Files whose **content** the caller must read: the added and the
@@ -200,13 +203,30 @@ impl Changes {
         if self.walk_errors > 0 {
             return Vec::new();
         }
-        let removed = self.removed.iter().map(|(rel, _)| rel.as_str());
         let moved = self
             .moved
             .iter()
             .filter(|m| read.contains(m.now.rel.as_str()))
             .map(|m| m.was.as_str());
-        removed.chain(moved).collect()
+        self.gone().into_iter().chain(moved).collect()
+    }
+
+    /// For a store keyed by content, whose files are snapshots that can
+    /// overlap: whether a record may have left the input — a file gone or
+    /// rewritten, after a clean walk. Only a read of every file says which,
+    /// so a caller reads them all. An added or moved file only adds.
+    pub fn may_have_dropped_records(&self) -> bool {
+        self.walk_errors == 0 && (!self.removed.is_empty() || !self.modified.is_empty())
+    }
+
+    /// The removed paths a caller may act on: all of them after a clean
+    /// walk, none after one that reported errors. For a store keyed by
+    /// content, where a move changes nothing, this is the whole question.
+    pub fn gone(&self) -> Vec<&str> {
+        if self.walk_errors > 0 {
+            return Vec::new();
+        }
+        self.removed.iter().map(|(rel, _)| rel.as_str()).collect()
     }
 }
 
@@ -281,6 +301,19 @@ impl Scan {
                 first.error,
             ),
         )]
+    }
+
+    /// The run problem of a store keyed by content that read every file to
+    /// learn what the input still holds, and could not read `unread` of
+    /// them: nothing was deleted this run.
+    pub fn deletions_held_back(unread: usize) -> crate::download_problems::RunProblem {
+        crate::download_problems::RunProblem::listing(
+            "removed_records",
+            format!(
+                "files were removed or rewritten, but {unread} of the files could not be \
+                 read, so no record was deleted this run"
+            ),
+        )
     }
 
     /// The view to persist, once the caller has dealt with everything.

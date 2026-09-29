@@ -230,3 +230,185 @@ async fn sync_flags_default_disables_everything() {
     assert_eq!(summary.chat_messages, 0);
     assert_eq!(summary.gemini_activity, 0);
 }
+
+/// Voice's `Bills.html` sits at `Voice/Bills.html` under the export root;
+/// matching it as a bare `Bills.html` never found it.
+#[tokio::test(flavor = "multi_thread")]
+async fn google_voice_lands_the_bills() {
+    let (_work, summary, _db_path) = run_all().await;
+    assert!(summary.voice_bills > 0, "{summary:?}");
+}
+
+// ── #898: a file that is gone takes its records with it ─────────────
+
+fn copy_tree(from: &Path, to: &Path) {
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let dest = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            std::fs::create_dir_all(&dest).unwrap();
+            copy_tree(&entry.path(), &dest);
+        } else {
+            std::fs::copy(entry.path(), &dest).unwrap();
+        }
+    }
+}
+
+/// A private copy of the fixture export, a store, and a cache, so a test
+/// can delete files between syncs.
+struct Export {
+    work: tempfile::TempDir,
+    root: PathBuf,
+    db_path: PathBuf,
+}
+
+impl Export {
+    fn new() -> Self {
+        let work = tempfile::tempdir().unwrap();
+        let root = work.path().join("Takeout");
+        std::fs::create_dir_all(&root).unwrap();
+        copy_tree(&fixture_root(), &root);
+        let db_path = work.path().join("gt.doltlite_db");
+        Self {
+            work,
+            root,
+            db_path,
+        }
+    }
+
+    async fn sync(&self) -> ingest::FetchSummary {
+        let db = RawDb::open(&self.db_path).await.unwrap();
+        let summary = ingest::fetch(FetchOptions {
+            input_path: self.root.clone(),
+            ..opts(self.work.path(), &db, SyncFlags::all()).await
+        })
+        .await
+        .unwrap();
+        db.commit_all("test").await.unwrap();
+        db.close().await;
+        summary
+    }
+
+    fn remove(&self, rel: &str) {
+        std::fs::remove_file(self.root.join(rel)).unwrap();
+    }
+
+    async fn count(&self, table: &str) -> i64 {
+        let db = RawDb::open(&self.db_path).await.unwrap();
+        let n = sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table}")))
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        db.close().await;
+        n
+    }
+}
+
+const MESSAGES: &str = "Google Chat/Groups/DM TNG-BRIDGE/messages.json";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_deleted_chat_file_takes_its_records() {
+    let e = Export::new();
+    e.sync().await;
+    assert_eq!(e.count("chat_messages").await, 2);
+    assert_eq!(e.count("chat_attachments").await, 1);
+
+    e.remove(MESSAGES);
+    let s = e.sync().await;
+    assert_eq!(s.removed, 2);
+    assert_eq!(e.count("chat_messages").await, 0);
+    assert_eq!(e.count("chat_attachments").await, 0);
+    assert_eq!(
+        e.count("chat_groups").await,
+        1,
+        "group_info.json is still there"
+    );
+
+    e.remove("Google Chat/Groups/DM TNG-BRIDGE/group_info.json");
+    e.remove("Google Chat/Users/User 1234567890/user_info.json");
+    e.sync().await;
+    assert_eq!(e.count("chat_groups").await, 0);
+    assert_eq!(e.count("chat_users").await, 0);
+}
+
+/// A group's `messages.json` is all of its messages, so one a re-read
+/// file no longer carries is gone, attachment edge and all.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_message_dropped_from_a_reread_file_is_gone() {
+    let e = Export::new();
+    e.sync().await;
+
+    let path = e.root.join(MESSAGES);
+    let mut doc: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    doc["messages"].as_array_mut().unwrap().pop();
+    std::fs::write(&path, serde_json::to_vec(&doc).unwrap()).unwrap();
+    let s = e.sync().await;
+    assert_eq!(s.removed, 1);
+    assert_eq!(e.count("chat_messages").await, 1);
+    assert_eq!(
+        e.count("chat_attachments").await,
+        0,
+        "T2 carried the attachment"
+    );
+}
+
+/// A `messages.json` with no `messages` array lists nothing, which is not
+/// the same as listing no messages.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_messages_file_without_a_list_deletes_nothing() {
+    let e = Export::new();
+    e.sync().await;
+
+    std::fs::write(e.root.join(MESSAGES), b"{}").unwrap();
+    let s = e.sync().await;
+    assert_eq!(s.removed, 0);
+    assert_eq!(e.count("chat_messages").await, 2);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_deleted_maps_photo_sidecar_takes_its_row() {
+    let e = Export::new();
+    e.sync().await;
+    assert_eq!(e.count("maps_photos").await, 1);
+
+    e.remove("Maps/Photos and videos/2026-06-04-tenfwd.json");
+    let s = e.sync().await;
+    assert_eq!(s.removed, 1);
+    assert_eq!(e.count("maps_photos").await, 0);
+}
+
+/// Voice records are keyed by content, so a gone file costs a read of the
+/// rest, and only what no remaining file holds goes.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_deleted_voice_file_takes_only_its_records() {
+    let e = Export::new();
+    e.sync().await;
+    let before = e.count("voice_messages").await;
+    let bills = e.count("voice_bills").await;
+    assert!(bills > 0);
+
+    e.remove("Voice/Calls/Wesley Crusher - Missed - 2364-03-03T11_00_00Z.html");
+    let s = e.sync().await;
+    assert_eq!(s.removed, 1, "{s:?}");
+    assert_eq!(e.count("voice_messages").await, before - 1);
+    assert_eq!(e.count("voice_bills").await, bills);
+
+    e.remove("Voice/Bills.html");
+    e.sync().await;
+    assert_eq!(e.count("voice_bills").await, 0);
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_walk_error_deletes_nothing() {
+    let e = Export::new();
+    e.sync().await;
+
+    e.remove(MESSAGES);
+    e.remove("Voice/Calls/Wesley Crusher - Missed - 2364-03-03T11_00_00Z.html");
+    std::os::unix::fs::symlink(e.root.join("nowhere"), e.root.join("dangling.json")).unwrap();
+    let s = e.sync().await;
+    assert_eq!(s.removed, 0);
+    assert_eq!(e.count("chat_messages").await, 2);
+}

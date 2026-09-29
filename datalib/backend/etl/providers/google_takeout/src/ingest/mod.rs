@@ -16,6 +16,7 @@ pub mod youtube_watch_history;
 
 pub use db::{db_path_for, RawDb};
 
+use datalib_etl::download_problems;
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan;
 use std::path::PathBuf;
@@ -105,6 +106,10 @@ pub struct FetchSummary {
     pub voice_attachments: usize,
     pub blobs_stored: usize,
     pub parse_errors: usize,
+    /// Records deleted because the export no longer holds them.
+    pub removed: usize,
+    /// Export files that are gone since the last run, in the feeds read.
+    pub files_removed: usize,
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
@@ -122,6 +127,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         warn!(event = "takeout_walk_error", path = %e.path.display(), error = %e.error, "an entry of the export could not be walked");
     }
     let scan = &scan;
+    let mut problems = scan.walk_problems();
 
     if opts.sync.maps_reviews {
         match maps_reviews::ingest(&db, scan, progress).await {
@@ -143,9 +149,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     }
     if opts.sync.maps_photos {
         match maps_photos::ingest(&db, scan, progress).await {
-            Ok((rows, blobs)) => {
-                summary.maps_photos = rows;
-                summary.blobs_stored += blobs;
+            Ok(s) => {
+                summary.maps_photos = s.rows;
+                summary.blobs_stored += s.blobs;
+                summary.removed += s.removed;
+                summary.files_removed += s.files_removed;
             }
             Err(e) => {
                 warn!(event = "google_takeout_feed_failed", feed = "maps_photos", error = %e, "a feed of the export could not be ingested; continuing with the rest");
@@ -179,6 +187,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 summary.chat_messages += s.messages;
                 summary.chat_attachments += s.attachments;
                 summary.blobs_stored += s.blobs_stored;
+                summary.removed += s.removed;
+                summary.files_removed += s.files_removed;
             }
             Err(e) => {
                 warn!(event = "google_takeout_feed_failed", feed = "google_chat", error = %e, "a feed of the export could not be ingested; continuing with the rest");
@@ -207,6 +217,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 summary.voice_greetings += s.greetings;
                 summary.voice_attachments += s.attachments;
                 summary.blobs_stored += s.blobs_stored;
+                summary.removed += s.removed;
+                summary.files_removed += s.files_removed;
+                problems.extend(s.held_back);
             }
             Err(e) => {
                 warn!(event = "google_takeout_feed_failed", feed = "google_voice", error = %e, "a feed of the export could not be ingested; continuing with the rest");
@@ -214,6 +227,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             }
         }
     }
+    download_problems::report_run(db.pool(), &problems).await;
 
     Ok(summary)
 }

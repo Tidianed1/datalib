@@ -644,6 +644,16 @@ the Manage row. Key rows against `scan.given_resolved`, not the configured
 path: the scan's paths are resolved, and stripping an unresolved prefix
 fails whenever a symlink is in the way.
 
+A source keyed by *content* (mbox, SMS backups, Takeout Voice) cannot map
+a path to rows, and its files overlap: two exports hold one message. When
+`changes.may_have_dropped_records()` (a file removed or rewritten, after a
+clean walk) it reads every file, and a run that read every file without a
+failure prunes what it did not see (`prune::prune_scope`, then
+`prune::delete_owned` for CAS edges) and `forget_files` the removed paths.
+A failed read holds the prune back and reports
+`Scan::deletions_held_back`. The read costs a pass over every file, but only
+on the run where the input shrank.
+
 **Why content and not `(size, mtime)`.** A cursor on the stat pair
 re-ingests a file that was only *touched* (`rsync` without `-t`, a restore
 from backup, re-downloading the same export), re-reading and re-parsing the

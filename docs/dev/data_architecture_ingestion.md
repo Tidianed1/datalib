@@ -359,10 +359,12 @@ cached here," and the wipe destroys real history — which is why
 [`beeper`](/datalib/backend/etl/providers/beeper/INGEST.md) must not
 use it. A partial export of a normally-complete source is the same trap.
 
-A folder of `.vcf` or `.ics` files does not need it: each file is one
-address book or calendar, so a file that is gone takes its rows with it
-on an ordinary sync
+Most file-backed sources do not need it: a folder of `.vcf`, `.ics`,
+`.mbox` or SMS backup files, and Takeout's Chat, Voice and Maps photos,
+lose what their input lost on an ordinary sync
 ([`etl/README.md`](/datalib/backend/etl/README.md#answering-did-it-change-for-a-file-backed-source)).
+Takeout's single-file feeds (Maps reviews and saved places, YouTube,
+Gemini) still need it, as do the Signal and LinkedIn exports.
 
 ### What limits it
 
@@ -375,6 +377,8 @@ therefore what it can see:
 | `email` (Gmail) | `history.list` deletions; a full walk when the cursor ages out | emails, via the same cascade |
 | `contacts` (CardDAV) | RFC 6578 sync-collection `404`/`410` | contacts |
 | `contacts` (`.vcf` folder), `calendar` (`.ics` folder) | the folder's scan, and each re-read file | a gone file's address book or calendar; cards or events a re-read file dropped. Nothing is deleted when the walk reported an error |
+| `google_takeout` Chat, Maps photos | the export's scan, and each re-read `messages.json` | a gone file's user, group, messages or photo; messages a re-read file dropped |
+| `email` (mbox), `sms_backup_restore`, `google_takeout` Voice | a read of every file, whenever one was removed or rewritten | records no file holds any more. Nothing is deleted when the walk or any file's read failed |
 | `slack` | the trailing `refresh_window_days` re-walk, and each `conversations.replies` thread | messages inside the walked range; replies on a re-fetched thread |
 | `github` / `gitlab` | every PR's / MR's whole child list, per fetch | deleted comments, reviews, discussions |
 | `claude` (`api`) | `/chat_conversations`, one org at a time | that org's conversations |
