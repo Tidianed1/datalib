@@ -1249,15 +1249,13 @@ type = "google_takeout"
 group = "google-takeout"
 function = "ingest"
 
-[steps.params.common]
-# Each Takeout is a complete snapshot of the feeds it covers — so point
-# this at a full export, not one you requested a single product from, or
-# the wipe drops what the narrower export simply doesn't mention. Chat,
-# Voice and Maps photos notice deletions without it; the single-file feeds
-# (Maps reviews and saved places, YouTube, Gemini) need it.
-always_clear_before_ingest = true
-
 [steps.params.export]
+# Each Takeout is a complete snapshot of the products you ticked: a record
+# a newer export no longer holds leaves the mirror on the next sync, and
+# the old rows stay in doltlite history. Keep ticking the same products —
+# Chat, Voice and Maps photos read a missing file as a deletion. (The
+# single-file feeds, Maps reviews and saved places, YouTube and Gemini,
+# keep their records when their file is missing.)
 path = "~/backups/Takeout"
 google_chat = true                # DMs + bots + attachments → Markdown
 google_voice = true               # texts, voicemails, calls → Markdown

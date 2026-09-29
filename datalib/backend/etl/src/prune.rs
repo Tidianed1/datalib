@@ -14,7 +14,7 @@
 use std::collections::HashSet;
 
 use anyhow::{Context, Result};
-use sqlx::SqlitePool;
+use sqlx::{Sqlite, SqlitePool, Transaction};
 
 /// Delete the rows of `table` inside `scope` whose id is not in `keep`,
 /// and their bookkeeping sidecars. Returns the ids that went.
@@ -28,6 +28,20 @@ use sqlx::SqlitePool;
 /// identifiers. Values are bound.
 pub async fn prune_scope(
     pool: &SqlitePool,
+    table: &str,
+    scope: &[(&str, &str)],
+    keep: &HashSet<String>,
+) -> Result<Vec<String>> {
+    let mut tx = pool.begin().await.context("begin prune tx")?;
+    let gone = prune_scope_in_tx(&mut tx, table, scope, keep).await?;
+    tx.commit().await.context("commit prune tx")?;
+    Ok(gone)
+}
+
+/// [`prune_scope`] inside the caller's transaction, so the rows that
+/// replace a collection and the prune of what it lost land together.
+pub async fn prune_scope_in_tx(
+    tx: &mut Transaction<'_, Sqlite>,
     table: &str,
     scope: &[(&str, &str)],
     keep: &HashSet<String>,
@@ -47,7 +61,7 @@ pub async fn prune_scope(
         q = q.bind((*val).to_string());
     }
     let present: Vec<String> = q
-        .fetch_all(pool)
+        .fetch_all(&mut **tx)
         .await
         .with_context(|| format!("list {table} ids in scope for prune"))?;
 
@@ -55,11 +69,7 @@ pub async fn prune_scope(
         .into_iter()
         .filter(|id| !keep.contains(id))
         .collect();
-    if gone.is_empty() {
-        return Ok(gone);
-    }
 
-    let mut tx = pool.begin().await.context("begin prune tx")?;
     for chunk in gone.chunks(crate::bulk::SQL_CHUNK) {
         let mut placeholders = String::new();
         crate::bulk::push_placeholder_list(&mut placeholders, chunk.len());
@@ -73,12 +83,11 @@ pub async fn prune_scope(
             for id in chunk {
                 q = q.bind(id.clone());
             }
-            q.execute(&mut *tx)
+            q.execute(&mut **tx)
                 .await
                 .with_context(|| format!("prune {table}"))?;
         }
     }
-    tx.commit().await.context("commit prune tx")?;
     Ok(gone)
 }
 
@@ -94,8 +103,20 @@ pub async fn delete_owned(
     owner_column: &str,
     owners: &[String],
 ) -> Result<u64> {
-    let mut removed = 0;
     let mut tx = pool.begin().await.context("begin delete_owned tx")?;
+    let removed = delete_owned_in_tx(&mut tx, table, owner_column, owners).await?;
+    tx.commit().await.context("commit delete_owned tx")?;
+    Ok(removed)
+}
+
+/// [`delete_owned`] inside the caller's transaction.
+pub async fn delete_owned_in_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    table: &str,
+    owner_column: &str,
+    owners: &[String],
+) -> Result<u64> {
+    let mut removed = 0;
     for chunk in owners.chunks(crate::bulk::SQL_CHUNK) {
         let mut placeholders = String::new();
         crate::bulk::push_placeholder_list(&mut placeholders, chunk.len());
@@ -113,7 +134,7 @@ pub async fn delete_owned(
                 q = q.bind(id.clone());
             }
             let done = q
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await
                 .with_context(|| format!("delete owned {table}"))?;
             if i == 1 {
@@ -121,7 +142,6 @@ pub async fn delete_owned(
             }
         }
     }
-    tx.commit().await.context("commit delete_owned tx")?;
     Ok(removed)
 }
 

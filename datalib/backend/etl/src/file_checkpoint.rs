@@ -8,6 +8,8 @@
 //! Each scope namespaces rows per `(provider, feed)`, so two feeds can claim
 //! the same file without colliding.
 
+use std::collections::HashSet;
+
 use anyhow::{Context, Result};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
@@ -149,49 +151,70 @@ pub async fn record_file_pool(pool: &SqlitePool, scope: &str, file: &ScannedFile
     Ok(())
 }
 
-/// Ingest one already-scanned file, if its contents have changed since `scope`
-/// last finished with it — the dozen lines every single-file feed repeated
-/// around its parser, once.
+/// What [`ingest_snapshot`] did to its table.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct SnapshotCounts {
+    pub written: usize,
+    pub removed: usize,
+}
+
+/// Mirror one already-scanned file that holds the whole of `T`'s table, if
+/// its contents have changed since `scope` last finished with it: upsert
+/// what it lists, and delete the rows it no longer lists, in one
+/// transaction.
 ///
 /// Takes a [`ScannedFile`] rather than a path because the provider has already
 /// scanned the export root, so the file's existence and its hash are known.
 ///
-/// Returns rows written; `0` when the file is absent from the scan or
-/// unchanged. A parse that yields no rows still stamps — the file was read and
-/// understood to contain nothing, and re-reading it every run would be the
-/// "retry forever" shape.
-pub async fn ingest_changed<T, F>(
+/// `parse` returns `None` for a file that does not say which records it
+/// holds (the list it should carry is missing), and that deletes nothing;
+/// `Some(vec![])` is a file that lists none, and empties the table. Either
+/// way the file stamps: it was read and understood, and re-reading it every
+/// run would be the "retry forever" shape.
+///
+/// A file absent from the scan, or unchanged, does nothing. Absent is not
+/// empty: an export requested without this product has no such file.
+pub async fn ingest_snapshot<T, F>(
     pool: &SqlitePool,
     scope: &str,
     file: Option<&ScannedFile>,
     parse: F,
-) -> Result<usize>
+) -> Result<SnapshotCounts>
 where
     T: crate::bulk::BulkUpsertable,
-    F: FnOnce(&[u8]) -> Result<Vec<T>>,
+    F: FnOnce(&[u8]) -> Result<Option<Vec<T>>>,
 {
     let Some(f) = file else {
-        return Ok(0);
+        return Ok(SnapshotCounts::default());
     };
     if crate::fsscan::is_unchanged(&load_cursor(pool, scope).await?, f) {
-        return Ok(0);
+        return Ok(SnapshotCounts::default());
     }
 
     let bytes = std::fs::read(&f.path).with_context(|| format!("read {}", f.path.display()))?;
     let rows = parse(&bytes)?;
-    let n = rows.len();
 
     let now = datalib_time::IsoOffsetTimestamp::now_local();
     let mut tx = pool
         .begin()
         .await
         .with_context(|| format!("begin {scope} tx"))?;
-    crate::bulk::bulk_upsert_in_tx(&mut tx, &rows, &now).await?;
+    let mut counts = SnapshotCounts::default();
+    if let Some(rows) = rows {
+        crate::bulk::bulk_upsert_in_tx(&mut tx, &rows, &now).await?;
+        let keep: HashSet<String> = rows.iter().map(|r| r.id().to_string()).collect();
+        let gone = crate::prune::prune_scope_in_tx(&mut tx, T::TABLE, &[], &keep).await?;
+        crate::prune::record(T::TABLE, keep.len() + gone.len(), gone.len());
+        counts = SnapshotCounts {
+            written: rows.len(),
+            removed: gone.len(),
+        };
+    }
     record_file(&mut tx, scope, f).await?;
     tx.commit()
         .await
         .with_context(|| format!("commit {scope} tx"))?;
-    Ok(n)
+    Ok(counts)
 }
 
 /// `DELETE FROM ingested_files WHERE scope = ?`. Use from a provider's

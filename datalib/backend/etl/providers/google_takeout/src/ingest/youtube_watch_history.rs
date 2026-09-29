@@ -3,7 +3,7 @@
 use datalib_etl::fsscan;
 
 use anyhow::Result;
-use datalib_etl::file_checkpoint::{self};
+use datalib_etl::file_checkpoint::{self, SnapshotCounts};
 use datalib_etl::progress::Progress;
 use serde_json::json;
 use tracing::warn;
@@ -17,8 +17,12 @@ use datalib_etl::doltlite_raw::WirePayload;
 const FILE_REL: &str = "YouTube and YouTube Music/history/watch-history.html";
 const SCOPE: &str = "google_takeout/youtube_watch_history";
 
-pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Result<usize> {
-    let n = file_checkpoint::ingest_changed(db.pool(), SCOPE, scan.file(FILE_REL), |bytes| {
+pub async fn ingest(
+    db: &RawDb,
+    scan: &fsscan::Scan,
+    progress: &Progress,
+) -> Result<SnapshotCounts> {
+    let n = file_checkpoint::ingest_snapshot(db.pool(), SCOPE, scan.file(FILE_REL), |bytes| {
         let html = String::from_utf8_lossy(bytes);
         let mut rows: Vec<YoutubeWatchRow> = Vec::new();
         for cell in mdl_html::iter_cells(&html) {
@@ -67,10 +71,10 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
                 channel_id,
             });
         }
-        Ok(rows)
+        Ok(Some(rows))
     })
     .await?;
-    progress.set_message(&format!("youtube_watch_history: {n}"));
+    progress.set_message(&format!("youtube_watch_history: {}", n.written));
     Ok(n)
 }
 

@@ -6,7 +6,7 @@
 use datalib_etl::fsscan;
 
 use anyhow::{Context, Result};
-use datalib_etl::file_checkpoint::{self};
+use datalib_etl::file_checkpoint::{self, SnapshotCounts};
 use datalib_etl::progress::Progress;
 use serde_json::Value;
 use tracing::warn;
@@ -18,16 +18,20 @@ use datalib_etl::doltlite_raw::WirePayload;
 const FILE_REL: &str = "Maps (your places)/Saved Places.json";
 const SCOPE: &str = "google_takeout/maps_saved_places";
 
-pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Result<usize> {
-    let n = file_checkpoint::ingest_changed(db.pool(), SCOPE, scan.file(FILE_REL), |bytes| {
+pub async fn ingest(
+    db: &RawDb,
+    scan: &fsscan::Scan,
+    progress: &Progress,
+) -> Result<SnapshotCounts> {
+    let n = file_checkpoint::ingest_snapshot(db.pool(), SCOPE, scan.file(FILE_REL), |bytes| {
         let geo: Value = serde_json::from_slice(bytes).context("parse Saved Places.json")?;
         let Some(features) = geo.get("features").and_then(|v| v.as_array()) else {
             warn!(
                 event = "maps_saved_no_features",
                 path = FILE_REL,
-                "the saved-places file has no features"
+                "the saved-places file has no features list; nothing was ingested or deleted"
             );
-            return Ok(Vec::new());
+            return Ok(None);
         };
         let mut rows: Vec<MapsSavedPlaceRow> = Vec::with_capacity(features.len());
         for f in features {
@@ -55,10 +59,10 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
                 when_ts: Some(date.to_string()),
             });
         }
-        Ok(rows)
+        Ok(Some(rows))
     })
     .await?;
-    progress.set_message(&format!("maps_saved_places: {n}"));
+    progress.set_message(&format!("maps_saved_places: {}", n.written));
     Ok(n)
 }
 

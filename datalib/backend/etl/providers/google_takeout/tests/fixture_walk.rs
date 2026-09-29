@@ -412,3 +412,135 @@ async fn a_walk_error_deletes_nothing() {
     assert_eq!(s.removed, 0);
     assert_eq!(e.count("chat_messages").await, 2);
 }
+
+// ── A single-file feed's file is the whole of its table ─────────────
+
+const REVIEWS: &str = "Maps (your places)/Reviews.json";
+const SAVED: &str = "Maps (your places)/Saved Places.json";
+const SUBSCRIPTIONS: &str = "YouTube and YouTube Music/subscriptions/subscriptions.csv";
+const WATCH_HISTORY: &str = "YouTube and YouTube Music/history/watch-history.html";
+const GEMINI: &str = "My Activity/Gemini Apps/MyActivity.html";
+
+impl Export {
+    fn rewrite(&self, rel: &str, edit: impl FnOnce(String) -> String) {
+        let path = self.root.join(rel);
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&path, edit(text)).unwrap();
+    }
+}
+
+fn drop_first_feature(json: String) -> String {
+    let mut doc: serde_json::Value = serde_json::from_str(&json).unwrap();
+    doc["features"].as_array_mut().unwrap().remove(0);
+    doc.to_string()
+}
+
+fn drop_last_line(csv: String) -> String {
+    let mut lines: Vec<&str> = csv.lines().collect();
+    lines.pop();
+    lines.join("\n") + "\n"
+}
+
+/// Cut the first of the MDL activity cells Takeout's HTML feeds are made of.
+fn drop_first_cell(html: String) -> String {
+    let marker = "<div class=\"outer-cell";
+    let first = html.find(marker).unwrap();
+    let second = first + marker.len() + html[first + marker.len()..].find(marker).unwrap();
+    format!("{}{}", &html[..first], &html[second..])
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_review_dropped_from_a_newer_export_is_gone() {
+    let e = Export::new();
+    e.sync().await;
+    assert_eq!(e.count("maps_reviews").await, 2);
+
+    e.rewrite(REVIEWS, drop_first_feature);
+    let s = e.sync().await;
+    assert_eq!(s.removed, 1, "{s:?}");
+    assert_eq!(e.count("maps_reviews").await, 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_saved_place_dropped_from_a_newer_export_is_gone() {
+    let e = Export::new();
+    e.sync().await;
+    assert_eq!(e.count("maps_saved_places").await, 2);
+
+    e.rewrite(SAVED, drop_first_feature);
+    let s = e.sync().await;
+    assert_eq!(s.removed, 1, "{s:?}");
+    assert_eq!(e.count("maps_saved_places").await, 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_subscription_dropped_from_a_newer_export_is_gone() {
+    let e = Export::new();
+    e.sync().await;
+    assert_eq!(e.count("youtube_subscriptions").await, 3);
+
+    e.rewrite(SUBSCRIPTIONS, drop_last_line);
+    let s = e.sync().await;
+    assert_eq!(s.removed, 1, "{s:?}");
+    assert_eq!(e.count("youtube_subscriptions").await, 2);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_watch_dropped_from_a_newer_export_is_gone() {
+    let e = Export::new();
+    e.sync().await;
+    assert_eq!(e.count("youtube_watch_history").await, 2);
+
+    e.rewrite(WATCH_HISTORY, drop_first_cell);
+    let s = e.sync().await;
+    assert_eq!(s.removed, 1, "{s:?}");
+    assert_eq!(e.count("youtube_watch_history").await, 1);
+}
+
+/// The dropped cell is the one with the attachment, so its CAS edge must
+/// go with it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_gemini_activity_dropped_from_a_newer_export_is_gone_with_its_attachment() {
+    let e = Export::new();
+    e.sync().await;
+    assert_eq!(e.count("gemini_activity").await, 2);
+    assert_eq!(e.count("gemini_attachments").await, 1);
+
+    e.rewrite(GEMINI, drop_first_cell);
+    let s = e.sync().await;
+    assert_eq!(s.removed, 1, "{s:?}");
+    assert_eq!(e.count("gemini_activity").await, 1);
+    assert_eq!(e.count("gemini_attachments").await, 0);
+}
+
+/// A reviews file with no `features` list says nothing about which reviews
+/// exist, which is not the same as listing none.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reviews_file_without_a_list_deletes_nothing() {
+    let e = Export::new();
+    e.sync().await;
+
+    e.rewrite(REVIEWS, |_| "{}".to_string());
+    let s = e.sync().await;
+    assert_eq!(s.removed, 0, "{s:?}");
+    assert_eq!(e.count("maps_reviews").await, 2);
+}
+
+/// A single-file feed whose file is missing deletes nothing: an export
+/// requested without that product looks exactly like this.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_missing_single_file_feed_deletes_nothing() {
+    let e = Export::new();
+    e.sync().await;
+
+    for rel in [REVIEWS, SAVED, SUBSCRIPTIONS, WATCH_HISTORY, GEMINI] {
+        e.remove(rel);
+    }
+    let s = e.sync().await;
+    assert_eq!(s.removed, 0, "{s:?}");
+    assert_eq!(e.count("maps_reviews").await, 2);
+    assert_eq!(e.count("maps_saved_places").await, 2);
+    assert_eq!(e.count("youtube_subscriptions").await, 3);
+    assert_eq!(e.count("youtube_watch_history").await, 2);
+    assert_eq!(e.count("gemini_activity").await, 2);
+}

@@ -654,6 +654,13 @@ A failed read holds the prune back and reports
 `Scan::deletions_held_back`. The read costs a pass over every file, but only
 on the run where the input shrank.
 
+A feed whose one file is its whole table (Takeout's Maps reviews, YouTube
+subscriptions, …) goes through `file_checkpoint::ingest_snapshot`: a
+changed file is upserted and the table pruned to what it lists, in one
+transaction. A parser that finds no list at all returns `None` and deletes
+nothing. A file missing from the scan deletes nothing either: for an export,
+a product left out of the request looks exactly like that.
+
 **Why content and not `(size, mtime)`.** A cursor on the stat pair
 re-ingests a file that was only *touched* (`rsync` without `-t`, a restore
 from backup, re-downloading the same export), re-reading and re-parsing the
