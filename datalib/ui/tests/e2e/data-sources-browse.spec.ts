@@ -167,8 +167,9 @@ test("a different type gets a different column set", async ({ page }) => {
 test("the index group browses every source", async ({ page }) => {
   test.setTimeout(120_000);
   await openManage(page);
-  // No filter: the index group's browse is every source at once.
-  await browse(page, "unified_index", "");
+  // No source filter: the index group's browse is every source's
+  // documents at once, the grid the app opens on.
+  await browse(page, "unified_index", "is:document");
 
   // The column that separates sources is the one that earns its place
   // here — the opposite of a per-source browse: the rows come from more

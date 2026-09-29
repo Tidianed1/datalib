@@ -20,14 +20,16 @@ import type { SearchRow } from "@/api";
 /// ignores an unknown column id without complaint.
 export type BrowseColumn = keyof SearchRow;
 
-/// Columns every source's browse opens with, in this order. `kind` leads
-/// because it is the within-source discriminator even among documents
-/// (Claude has chats and projects, Notion has pages and comment
-/// threads). One stamp: a Browse is one row per document, and when it
-/// was last touched is what tells a live thread from a dead one. Unlike
-/// Modified, Touched is never empty on a row that has a stamp at all.
-/// A type can swap the stamp (`STAMP`) or leave a column out (`OMIT`).
-const ALWAYS: BrowseColumn[] = ["kind", "touched_at", "conversation_name", "snippet"];
+/// Columns every source's browse opens with, in this order, before the
+/// type's `EXTRA`. `kind` leads because it is the within-source
+/// discriminator even among documents (Claude has chats and projects,
+/// Notion has pages and comment threads); then what the document is
+/// called and what it says, so the text is on screen at any width. One
+/// stamp: a Browse is one row per document, and when it was last touched
+/// is what tells a live thread from a dead one. Unlike Modified, Touched
+/// is never empty on a row that has a stamp at all. A type can swap the
+/// stamp (`STAMP`) or leave a column out (`OMIT`).
+const ALWAYS: BrowseColumn[] = ["kind", "conversation_name", "snippet", "touched_at"];
 
 /// The stamp a type shows in place of `touched_at`.
 const STAMP: Record<string, BrowseColumn> = {
@@ -36,7 +38,7 @@ const STAMP: Record<string, BrowseColumn> = {
   calendar: "created_at",
 };
 
-/// Extra columns per source type, inserted before `snippet`.
+/// Extra columns per source type, after `ALWAYS`.
 const EXTRA: Record<string, BrowseColumn[]> = {
   // Channelled group chat: who said it, and where.
   slack: ["channel", "author"],
@@ -102,10 +104,10 @@ export function browseColumns(type: string | null): BrowseColumn[] | null {
   const extra = EXTRA[type] ?? ["channel", "author", "account", "project"];
   const omit = OMIT[type] ?? [];
   const stamp = STAMP[type] ?? "touched_at";
-  const always = ALWAYS.slice(0, -1)
-    .filter((c) => !omit.includes(c))
-    .map((c) => (c === "touched_at" ? stamp : c));
-  return [...always, ...extra, "snippet"];
+  const always = ALWAYS.filter((c) => !omit.includes(c)).map((c) =>
+    c === "touched_at" ? stamp : c,
+  );
+  return [...always, ...extra];
 }
 
 /// A diff group (`docs/dev/plans/completed/diff_renderer.md`) is not a source
@@ -119,10 +121,10 @@ const DIFF_COLUMNS: BrowseColumn[] = [
   "diff_changed_columns",
   "kind",
   "conversation_name",
+  "snippet",
   "channel",
   "author",
   "touched_at",
-  "snippet",
 ];
 
 /// The name a Browse card opens with: "Slack documents", or for a diff,
