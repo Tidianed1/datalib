@@ -180,14 +180,14 @@ class HttpDriver:
             time.sleep(POLL_SECS)
 
     def failure_log(self, step: str | None) -> str:
-        """The failed step's warnings and errors, from the run store's log."""
+        """The failed step's newest log lines, from the run store's log."""
         if not step:
             return ""
-        lines = self.call("GET", f"/api/log?step={urllib.parse.quote(step)}")
-        return "\n".join(
-            f"  {line.get('level')}: {line.get('msg') or line.get('line')}"
-            for line in lines[-40:]
-        )
+        query = urllib.parse.urlencode({"q": f"step:{step}", "limit": 40})
+        status, lines = self.request("GET", f"/api/log?{query}")
+        if status >= 400:
+            return f"  (GET /api/log?{query} → {status}: {lines})"
+        return "\n".join(f"  {line['level']}: {line['msg']}" for line in lines)
 
     def call(self, method: str, path: str, body: object | None = None) -> Any:
         status, answer = self.request(method, path, body)
