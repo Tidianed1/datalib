@@ -201,10 +201,12 @@ impl DataProcessor for EmailIngest {
                 })
                 .await?;
                 format!(
-                    "mailboxes={} threads={} emails={} blobs(stored={} skipped={} oversize={}) parse_errors={}",
+                    "mailboxes={} threads={} emails={} removed={} files_removed={} blobs(stored={} skipped={} oversize={}) parse_errors={}",
                     s.mailboxes_upserted,
                     s.threads_upserted,
                     s.emails_upserted,
+                    s.emails_removed,
+                    s.files_removed,
                     s.blobs_stored,
                     s.blobs_skipped,
                     s.blobs_oversize,

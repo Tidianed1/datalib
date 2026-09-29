@@ -152,6 +152,10 @@ test.describe("the search coverage line", () => {
     });
   }
 
+  // A rewrite still waiting on its `route.fetch()` when the page closes
+  // throws outside any test and takes the worker down with it.
+  test.afterEach(({ page }) => page.unrouteAll({ behavior: "ignoreErrors" }));
+
   test("with no index, says to sync, and free text says so without an error", async ({ page }) => {
     await rewriteQmdState(page, (state) => {
       state.index_present = false;

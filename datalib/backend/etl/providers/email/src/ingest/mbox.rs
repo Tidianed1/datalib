@@ -17,7 +17,7 @@ use datalib_etl::bulk::{
 use datalib_etl::control::DownloadControl;
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::progress::Progress;
-use datalib_etl::{file_checkpoint, fsscan};
+use datalib_etl::{download_problems, file_checkpoint, fsscan};
 use mail_parser::MessageParser;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -103,6 +103,10 @@ pub struct FetchSummary {
     pub blobs_skipped: usize,
     pub blobs_oversize: usize,
     pub parse_errors: usize,
+    /// Emails deleted because no mbox file still holds them.
+    pub emails_removed: usize,
+    /// `.mbox` files that are gone since the last run.
+    pub files_removed: usize,
 }
 
 /// Scope key for the mbox path's [`datalib_etl::scope_config`]
@@ -242,7 +246,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     for e in &scan.errors {
         warn!(event = "mbox_walk_error", path = %e.path.display(), error = %e.error, "an entry of the mbox directory could not be walked");
     }
-    if scan.files.is_empty() {
+    let cursor = file_checkpoint::load_cursor(db.pool(), CHECKPOINT_SCOPE).await?;
+    let changes = scan.changes_since(&cursor);
+    if scan.files.is_empty() && !changes.may_have_dropped_records() {
         return Ok(FetchSummary::default());
     }
     let account_id = opts
@@ -264,10 +270,13 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // Which files still need reading. A widened `only_labels` (or any
     // other scope change) re-reads everything: the cursor says the
     // bytes are unchanged, which is true and beside the point — the
-    // question being asked of them changed.
-    let cursor = file_checkpoint::load_cursor(db.pool(), CHECKPOINT_SCOPE).await?;
-    let changes = scan.changes_since(&cursor);
-    let to_process: Vec<&fsscan::ScannedFile> = if adjust.reingest_files {
+    // question being asked of them changed. So does a file removed or
+    // rewritten: two mbox files can hold one message, so only a read of
+    // every file says which emails left the input.
+    let read_all = adjust.reingest_files
+        || changes.may_have_dropped_records()
+        || changes.needs_reading().count() == scan.files.len();
+    let to_process: Vec<&fsscan::ScannedFile> = if read_all {
         scan.files.iter().collect()
     } else {
         changes.needs_reading().collect()
@@ -387,6 +396,20 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         );
     }
 
+    let mut problems = scan.walk_problems();
+    if read_all && changes.walk_errors == 0 {
+        if summary.parse_errors == 0 {
+            summary.emails_removed =
+                prune_unseen(&db, &account_id, &accumulator.seen_email_ids).await?;
+            let gone = changes.gone();
+            summary.files_removed = gone.len();
+            file_checkpoint::forget_files(db.pool(), CHECKPOINT_SCOPE, &gone).await?;
+        } else if changes.may_have_dropped_records() {
+            problems.push(fsscan::Scan::deletions_held_back(summary.parse_errors));
+        }
+    }
+    download_problems::report_run(db.pool(), &problems).await;
+
     // Record the config only once this run satisfied it, so a failure
     // leaves the previous record in place and the next run re-plans.
     // (Errors above return early, so reaching here means success.)
@@ -394,6 +417,39 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         .await;
 
     Ok(summary)
+}
+
+/// Delete this account's emails that no mbox file holds, and the
+/// threads left with none. `seen` is every message id the read met, before
+/// the label filter, so narrowing `only_labels` never deletes. Only right
+/// after reading every file. Returns how many emails went.
+async fn prune_unseen(db: &RawDb, account_id: &str, seen: &BTreeSet<String>) -> Result<usize> {
+    let held: Vec<String> = sqlx::query_scalar("SELECT id FROM emails WHERE account_id = ?")
+        .bind(account_id)
+        .fetch_all(db.pool())
+        .await
+        .context("list the account's emails")?;
+    let gone: Vec<String> = held
+        .iter()
+        .filter(|id| !seen.contains(id.as_str()))
+        .cloned()
+        .collect();
+    db.delete_emails(&gone).await?;
+    let mut tx = db.pool().begin().await.context("begin thread prune tx")?;
+    for sql in [
+        "DELETE FROM threads_bookkeeping WHERE id IN (SELECT id FROM threads \
+         WHERE account_id = ? AND id NOT IN (SELECT thread_id FROM emails))",
+        "DELETE FROM threads WHERE account_id = ? AND id NOT IN (SELECT thread_id FROM emails)",
+    ] {
+        sqlx::query(sql)
+            .bind(account_id)
+            .execute(&mut *tx)
+            .await
+            .context("delete threads with no emails")?;
+    }
+    tx.commit().await.context("commit thread prune tx")?;
+    datalib_etl::prune::record("emails", held.len(), gone.len());
+    Ok(gone.len())
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1359,6 +1415,171 @@ mod tests {
         let accounts = db.load_accounts().await.unwrap();
         assert_eq!(accounts.len(), 1);
         assert_eq!(accounts[0]["name"], "Work Gmail");
+    }
+
+    fn msg_one() -> &'static str {
+        &TWO_MSG_MBOX[..TWO_MSG_MBOX.find("From 2222@xxx").unwrap()]
+    }
+
+    fn msg_two() -> &'static str {
+        &TWO_MSG_MBOX[TWO_MSG_MBOX.find("From 2222@xxx").unwrap()..]
+    }
+
+    const MSG_THREE: &str = concat!(
+        "From 3333@xxx Thu Jun 04 08:00:00 +0000 2026\n",
+        "X-GM-THRID: 3333\n",
+        "X-Gmail-Labels: Archived\n",
+        "Message-Id: <msg-three@enterprise.starfleet>\n",
+        "From: Worf <worf@enterprise.starfleet>\n",
+        "Subject: Security drill\n",
+        "Date: Thu, 4 Jun 2026 08:00:00 +0000\n",
+        "Content-Type: text/plain; charset=utf-8\n",
+        "\n",
+        "Drill at 0800.\n",
+    );
+
+    async fn stored(db_path: &Path) -> (Vec<String>, Vec<String>) {
+        let db = RawDb::open(db_path).await.unwrap();
+        let emails = sqlx::query_scalar("SELECT id FROM emails ORDER BY id")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+        let threads = sqlx::query_scalar("SELECT id FROM threads ORDER BY id")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+        db.close().await;
+        (emails, threads)
+    }
+
+    /// #898: a gone `.mbox` file takes the emails only it held, and the
+    /// last one takes everything.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_deleted_mbox_takes_the_emails_only_it_held() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.mbox"), msg_one()).unwrap();
+        std::fs::write(dir.path().join("b.mbox"), msg_two()).unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let db_path = work.path().join("e.doltlite_db");
+        let cache = test_cache().await;
+        let run = || {
+            run_once(&db_path, dir.path(), |db| {
+                FetchOptions::new(db, cache.clone())
+            })
+        };
+        run().await;
+        // 1111 = 0x457, 2222 = 0x8ae.
+        assert_eq!(
+            stored(&db_path).await.0,
+            vec!["0000000000000457", "00000000000008ae"]
+        );
+
+        std::fs::remove_file(dir.path().join("b.mbox")).unwrap();
+        let second = run().await;
+        assert_eq!((second.emails_removed, second.files_removed), (1, 1));
+        assert_eq!(
+            stored(&db_path).await,
+            (vec!["0000000000000457".into()], vec!["1111".into()])
+        );
+
+        std::fs::remove_file(dir.path().join("a.mbox")).unwrap();
+        let third = run().await;
+        assert_eq!(third.emails_removed, 1);
+        assert_eq!(stored(&db_path).await, (vec![], vec![]));
+    }
+
+    /// A newer export written over the old one is the whole mailbox: a
+    /// message it no longer carries was deleted.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_rewritten_mbox_drops_what_it_no_longer_holds() {
+        let (dir, path) = write_tmp_mbox(TWO_MSG_MBOX);
+        let work = tempfile::tempdir().unwrap();
+        let db_path = work.path().join("e.doltlite_db");
+        let cache = test_cache().await;
+        run_once(&db_path, &path, |db| FetchOptions::new(db, cache.clone())).await;
+
+        std::fs::write(&path, msg_one()).unwrap();
+        let second = run_once(&db_path, &path, |db| FetchOptions::new(db, cache.clone())).await;
+        assert_eq!((second.emails_removed, second.files_removed), (1, 0));
+        assert_eq!(
+            stored(&db_path).await,
+            (vec!["0000000000000457".into()], vec!["1111".into()])
+        );
+        drop(dir);
+    }
+
+    /// Two exports can hold one message; deleting one of them keeps it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_deleted_mbox_keeps_what_another_file_holds() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("all.mbox"), TWO_MSG_MBOX).unwrap();
+        std::fs::write(dir.path().join("sent.mbox"), msg_two()).unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let db_path = work.path().join("e.doltlite_db");
+        let cache = test_cache().await;
+        let run = || {
+            run_once(&db_path, dir.path(), |db| {
+                FetchOptions::new(db, cache.clone())
+            })
+        };
+        run().await;
+
+        std::fs::remove_file(dir.path().join("sent.mbox")).unwrap();
+        let second = run().await;
+        assert_eq!((second.emails_removed, second.files_removed), (0, 1));
+        assert_eq!(stored(&db_path).await.0.len(), 2);
+    }
+
+    /// The re-read that decides what a gone file held counts every message,
+    /// not only those the label filter lets in, so narrowing the filter in
+    /// the same run deletes nothing that is still in a file.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_narrowed_filter_does_not_turn_a_deletion_into_a_purge() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.mbox"), TWO_MSG_MBOX).unwrap();
+        std::fs::write(dir.path().join("b.mbox"), MSG_THREE).unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let db_path = work.path().join("e.doltlite_db");
+        let cache = test_cache().await;
+        run_once(&db_path, dir.path(), |db| {
+            FetchOptions::new(db, cache.clone())
+        })
+        .await;
+        assert_eq!(stored(&db_path).await.0.len(), 3);
+
+        std::fs::remove_file(dir.path().join("b.mbox")).unwrap();
+        let second = run_once(&db_path, dir.path(), |db| FetchOptions {
+            only_labels: vec!["Sent".into()],
+            ..FetchOptions::new(db, cache.clone())
+        })
+        .await;
+        assert_eq!(second.emails_removed, 1, "only Worf's drill went");
+        assert_eq!(
+            stored(&db_path).await.0,
+            vec!["0000000000000457", "00000000000008ae"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_walk_error_deletes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.mbox"), msg_one()).unwrap();
+        std::fs::write(dir.path().join("b.mbox"), msg_two()).unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let db_path = work.path().join("e.doltlite_db");
+        let cache = test_cache().await;
+        let run = || {
+            run_once(&db_path, dir.path(), |db| {
+                FetchOptions::new(db, cache.clone())
+            })
+        };
+        run().await;
+
+        std::fs::remove_file(dir.path().join("b.mbox")).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("nowhere"), dir.path().join("c.mbox")).unwrap();
+        assert_eq!(run().await.emails_removed, 0);
+        assert_eq!(stored(&db_path).await.0.len(), 2);
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -343,6 +343,17 @@ reload therefore compared how long each had been open, and failed as
 from before an action with one from after it, check that both measure
 the same thing.
 
+**Unroute a response rewrite before the page closes.** A `page.route`
+handler that calls `route.fetch()` to edit the real answer is waiting on
+the backend, and the page keeps asking — the Manage screen refetches its
+rows whenever the server says they moved. When the test ends with one of
+those in flight, Playwright throws `route.fetch: Test ended` outside any
+test, the worker dies, and the next test on it reports "did not run". A
+spec that rewrites responses adds
+`test.afterEach(({ page }) => page.unrouteAll({ behavior: "ignoreErrors" }))`,
+as `problems-grid.spec.ts` does. A handler that only fulfills or aborts
+never waits, so it needs none.
+
 The suite runs with no retries (`playwright.config.ts` sets none), on
 purpose: a flake turns the run red and gets fixed rather than hidden. To
 hunt one, repeat the spec (§"Running one spec, and running it several
