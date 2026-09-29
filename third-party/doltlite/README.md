@@ -125,7 +125,7 @@ Before bumping, check whether the chunk-store format moved: grep
 hard-rejects any mismatch (`SQLITE_NOTADB`, "written by an incompatible
 doltlite version") with no migration path, so a bump there orphans every
 existing `.doltlite_db` on disk rather than merely needing a rebuild.
-It has been `12` from 0.11.13 through 0.50.12, and upstream freezes 12
+It has been `12` from 0.11.13 through 0.50.13, and upstream freezes 12
 for the DoltLite beta (`doc/doltlite/storage-format.md`): every version-12 file
 stays readable and writable by later version-12 builds. So a bump that
 stays on 12 needs no store migration.

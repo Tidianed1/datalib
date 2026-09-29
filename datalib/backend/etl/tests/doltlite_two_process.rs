@@ -790,7 +790,8 @@ fn branch_readers_beside_a_writer_that_pauses_after_each_seal() {
 
 /// A reader that needs no branch of its own: it reads `main`'s tip, opens
 /// `<file>@<tip>` read-only (a detached snapshot), reads, closes, and goes
-/// again, beside the `commit_run` writer.
+/// again, beside the `commit_run` writer. Before doltlite 0.50.13 that open
+/// failed for a file named `*.doltlite_db` (dolthub/doltlite#3231).
 #[allow(clippy::disallowed_macros)]
 fn detached_readers_beside_a_sealing_writer(readers: usize, commits: u64, txn_ms: u64) {
     let t = Scratch::new();
@@ -803,7 +804,7 @@ fn detached_readers_beside_a_sealing_writer(readers: usize, commits: u64, txn_ms
     let mut writer = t.spawn(&[
         "write",
         "--db",
-        &t.dot_db(),
+        &t.db(),
         "--seed",
         "--pin-out",
         &t.path("pin"),
@@ -824,7 +825,7 @@ fn detached_readers_beside_a_sealing_writer(readers: usize, commits: u64, txn_ms
             t.spawn(&[
                 "rev-read",
                 "--db",
-                &t.dot_db(),
+                &t.db(),
                 "--until",
                 &t.path("writer.json"),
                 "--hold-ms",
@@ -1409,12 +1410,6 @@ impl Scratch {
 
     fn db(&self) -> String {
         self.path("store.doltlite_db")
-    }
-
-    /// Doltlite splits `<file>@<rev>` only when the file's name contains
-    /// `.db` or `.sqlite` (`doltliteLooksLikeDbPath`); `.doltlite_db` does not.
-    fn dot_db(&self) -> String {
-        self.path("store.db")
     }
 
     fn path(&self, name: &str) -> String {
