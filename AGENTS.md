@@ -384,8 +384,11 @@ dependency:
 
 `git pull` (default merge), not `git pull --rebase`. Rebasing rewrites
 local hashes and loses what actually happened; force-push is off the
-table on shared branches. This is about how a branch takes in `main`,
-not how a PR lands — a PR lands **squashed** (next section).
+table on shared branches. A PR lands as a merge commit too (next
+section), so never squash a branch yourself: `git reset --soft` onto a
+`main` that has moved since the branch was cut commits a tree that
+silently reverts everything landed in between (#745 undid #743 that
+way).
 
 **`MODULE.bazel.lock` is never resolved by hand.** It is generated, and
 two branches that both moved it conflict textually even though the
@@ -413,14 +416,26 @@ doltlite-timing ones, or anything `scripts/flaky_tests.py` lists),
 re-run the failed jobs once before digging in. Before pushing a
 follow-up, confirm the PR is still open — a merged PR does not reopen.
 
-**A PR lands as one squashed commit**: `gh pr merge <n> --squash`, or
-"Squash and merge" on GitHub. `main`'s first-parent history is then
-one commit per PR, titled after the PR with its number, and `git
-bisect` and `git log main` read at the PR level. A merge commit
-(`--merge`) keeps every "fix typo" and "address review" commit on
-`main` for good; a rebase merge re-hashes the branch. The commit
-message is the PR title plus the branch's messages, so write the PR
-title as the commit subject you want to keep.
+**A PR lands as a merge commit**: `gh pr merge <n> --merge`, or
+"Create a merge commit" on GitHub — not squash, not rebase. The
+branch's commits then stay ancestors of `main`, so git can say whether
+a branch landed (`git merge-base --is-ancestor <branch> origin/main`),
+a branch cut from another unmerged branch merges cleanly once that one
+lands, and a follow-up after a merge is a new PR from the same branch
+carrying only the new commits.
+
+**Read `main` along its first parents**, which is one merge commit per
+PR, titled after the PR:
+
+```sh
+git log --first-parent origin/main
+git bisect start --first-parent      # steps PR by PR, never mid-branch
+git blame --first-parent <path>      # which PR, not which fixup
+```
+
+Plain `git log` and GitHub's commit list also show every commit on
+every branch; that is the price. The merge commit's subject is the PR
+title, so write the title as the line you want in that log.
 
 ## Python deps: pyproject.toml → requirements.txt → Bazel
 
