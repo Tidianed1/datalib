@@ -172,7 +172,7 @@ fn ensure_models(root: &std::path::Path) {
     // root the indexer has not touched in this incarnation.
     if !datalib_unified_index::qmd::qmd_index_path(root).exists() {
         tracing::info!(
-            "no qmd index yet; free-text search answers with an error until the first sync builds one"
+            "no qmd index yet; free-text search finds nothing until the first sync builds one"
         );
         return;
     }
@@ -345,7 +345,9 @@ async fn search_handler(
     // Structured terms alone are a SQL filter; free text is qmd's, with the
     // structured terms applied to its hits. A qmd failure is the answer —
     // `query_echo.qmd_error`, no rows — not a quieter search in its place.
+    // No index yet is not a failure: `qmd_index_missing`, and no rows.
     let mut qmd_error: Option<String> = None;
+    let mut qmd_index_missing = false;
     let offset = p.offset.unwrap_or(0);
     let through = p.through.as_deref();
     let within = match p
@@ -369,6 +371,10 @@ async fn search_handler(
     };
     let page = match search_page(&s, &q, &parsed, spec).await {
         Ok(page) => page,
+        Err(SearchFailure::NoIndex) => {
+            qmd_index_missing = true;
+            Page::default()
+        }
         Err(SearchFailure::Qmd(e)) => {
             tracing::error!(query = %q, error = %e, "a free-text search failed in qmd");
             qmd_error = Some(e);
@@ -398,6 +404,7 @@ async fn search_handler(
                 FreeTextMode::Vsearch => "vsearch",
             },
             "qmd_error": qmd_error,
+            "qmd_index_missing": qmd_index_missing,
         }),
         rows,
         total: page.total as u64,
@@ -422,6 +429,8 @@ pub struct GroupsResponse {
     pub at: Option<String>,
     /// Free text qmd could not rank: no groups, and why.
     pub qmd_error: Option<String>,
+    /// Free text before the first sync has built a qmd index: no groups.
+    pub qmd_index_missing: bool,
     pub errors: Vec<String>,
 }
 
@@ -475,6 +484,7 @@ async fn groups_handler(
                 })
                 .collect();
         }
+        Err(SearchFailure::NoIndex) => out.qmd_index_missing = true,
         Err(SearchFailure::Qmd(e)) => out.qmd_error = Some(e),
         Err(SearchFailure::Index(e)) => out.errors.push(format!("group the search: {e}")),
     }
@@ -503,6 +513,9 @@ async fn group_list(
 }
 
 enum SearchFailure {
+    /// No sync has built the qmd index yet, so free text has nothing to
+    /// search. A state to show, not an error.
+    NoIndex,
     Qmd(String),
     Index(String),
 }
@@ -641,6 +654,9 @@ async fn ranked(
     };
     if let Some(list) = s.results.get(&key) {
         return Ok((list, key.at));
+    }
+    if !datalib_unified_index::qmd::qmd_index_path(&s.root).exists() {
+        return Err(SearchFailure::NoIndex);
     }
     let ranking = qmd_ranking(&s.root, &s.repo, &s.qmd, parsed, QMD_DEPTH)
         .await

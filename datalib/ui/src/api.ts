@@ -101,6 +101,9 @@ export type QueryEcho = {
   // Set when a free-text search failed in qmd; the response then has no
   // rows, and the grid says why in a banner.
   qmd_error?: string | null;
+  // True when free text was asked before any sync built a qmd index: no
+  // rows, and not a failure.
+  qmd_index_missing?: boolean;
   [key: string]: unknown;
 };
 
@@ -546,8 +549,9 @@ export type GroupsResponse<Row = SearchRow> = {
   // More groups than one answer carries; the rest are left out.
   truncated: boolean;
   at: string | null;
-  // Only the search has one.
+  // Only the search has these two.
   qmd_error?: string | null;
+  qmd_index_missing?: boolean;
   errors: string[];
 };
 

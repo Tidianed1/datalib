@@ -1,5 +1,5 @@
-import { actOnRowByUuid, type GridApi } from "./grid-helpers";
-import { test, expect } from "@playwright/test";
+import { actOnRowByUuid, SEARCH_ROWS, type GridApi } from "./grid-helpers";
+import { test, expect, type Page } from "@playwright/test";
 
 // The grid's `Indexed` / `Embedded` columns, end to end against the
 // fixture's real qmd index.
@@ -131,4 +131,76 @@ test("rows scrolled to later get their check marks too", async ({ page }) => {
     (row) => expect(row.locator('[col-id="qmd_indexed"]')).toHaveText(CHECK, { timeout: 3_000 }),
     "qmd_indexed",
   );
+});
+
+// The line under the grid in each of the three states a root's qmd index
+// can be in. The fixture ships the third; the other two are its real
+// answers with the index state rewritten.
+test.describe("the search coverage line", () => {
+  async function rewriteQmdState(
+    page: Page,
+    rewrite: (state: {
+      index_present: boolean;
+      summary: { documents: number; embedded: number };
+    }) => void,
+  ) {
+    await page.route("**/applet/unified_index/qmd_state", async (route) => {
+      const response = await route.fetch();
+      const state = await response.json();
+      rewrite(state);
+      await route.fulfill({ response, json: state });
+    });
+  }
+
+  test("with no index, says to sync, and free text says so without an error", async ({ page }) => {
+    await rewriteQmdState(page, (state) => {
+      state.index_present = false;
+      state.summary = { documents: 0, embedded: 0 };
+    });
+    await page.route("**/applet/unified_index/search?**", async (route) => {
+      const q = new URL(route.request().url()).searchParams.get("q") ?? "";
+      if (q === "") return route.fallback();
+      const response = await route.fetch();
+      const body = await response.json();
+      body.rows = [];
+      body.total = 0;
+      body.query_echo.qmd_index_missing = true;
+      await route.fulfill({ response, json: body });
+    });
+    await page.goto("/");
+    await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 10_000 });
+    await expect(page.locator(".qmd-summary")).toHaveText(
+      "· search index not built yet — sync to build it",
+    );
+
+    await page.getByTestId("search-input").fill("enterprise");
+    await expect(page.locator(".qmd-unbuilt")).toHaveText(
+      "Free-text search starts working once the first sync builds the search index.",
+    );
+    await expect(page.locator(".qmd-error")).toHaveCount(0);
+    await expect(page.getByText("no matches.")).toHaveCount(0);
+  });
+
+  test("with keyword search only, counts each index apart", async ({ page }) => {
+    let documents = 0;
+    await rewriteQmdState(page, (state) => {
+      documents = state.summary.documents;
+      state.summary.embedded = 0;
+    });
+    await page.goto("/");
+    await expect(page.locator(".qmd-summary")).toHaveText(
+      /^\s*· [\d,]+ documents searchable · 0 with semantic search$/,
+    );
+    expect(documents, "the fixture's keyword index holds documents").toBeGreaterThan(0);
+    await expect(page.locator(".qmd-summary")).toHaveText(
+      `· ${documents.toLocaleString("en-US")} documents searchable · 0 with semantic search`,
+    );
+  });
+
+  test("with both, counts every document in each", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.locator(".qmd-summary")).toHaveText(
+      /^\s*· ([\d,]+) documents searchable · \1 with semantic search$/,
+    );
+  });
 });
