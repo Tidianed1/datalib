@@ -537,8 +537,10 @@ are already in open formats you can read with no datalib at all:
   ```
 
   The same command works on any `.doltlite_db` under your data root,
-  including the raw per-source stores under `<group>/ingest/`, whose
-  attachment bytes come across intact.
+  including the raw per-source stores under `<group>/ingest/`.
+  Attachments are not in those: their bytes live beside them in
+  `<group>/ingest/blobs.sqlite`, which is plain SQLite already and
+  opens as it is.
 
   What the export gives you is the current state of every table, with
   its schema and indexes. What it leaves behind is the version history
@@ -548,8 +550,9 @@ are already in open formats you can read with no datalib at all:
 
 `datalib-doltlite` is a `sqlite3`-compatible shell, so you can also
 just explore in place — `datalib-doltlite -readonly <file>` drops you
-in a REPL. Pass `-readonly` whenever you are only looking: a second
-writer against a live store can wedge your next sync. If you prefer a
+in a REPL. Pass `-readonly` whenever you are only looking: anything a
+writable session commits is overwritten by your next sync, and a
+transaction it leaves open stalls that sync. If you prefer a
 GUI, a build of DB Browser for SQLite patched to open doltlite files is
 at <https://github.com/thadd3us/sqlitebrowser/releases> (macOS). In the
 desktop app, **Browse** on a source's download row opens its raw store

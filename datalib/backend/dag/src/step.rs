@@ -41,8 +41,8 @@ pub struct StepSpec {
     /// shape is part of what the step is.
     pub store_shape: Option<String>,
     /// Whether a consumer may read this step's output *while it is still
-    /// being written* — P2 of the sink contract in
-    /// `docs/dev/plans/completed/streaming_steps_plan.md`.
+    /// being written* — P2 in
+    /// `datalib/backend/dag/README.md` § "What a sink owes its consumers".
     ///
     /// Default `false`, and deliberately so: most sinks cannot, and the
     /// failure when they cannot is a consumer acting on a torn read rather

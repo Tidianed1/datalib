@@ -4,8 +4,9 @@
 rest is not. Every number was measured
 on 2026-09-25 against a copy of `~/datalib/stay_alive_1` (74,023
 `grid_rows`, a 1.3 GB index, 238,716 log lines) with the
-`datalib-doltlite` shell; each measurement includes about 0.1 s of
-process start.*
+`datalib-doltlite` shell, on doltlite 0.50.3; each measurement includes
+about 0.1 s of process start. What doltlite does now is
+[`doltlite.md`](../doltlite.md).*
 
 ## What is slow, measured
 
@@ -36,7 +37,10 @@ There are three causes, and paging fixes only the first of them by itself.
    SQLite walks the whole index in order and checks every row. `ANALYZE`
    does not change the plan (29 s). A composite index
    `(provider, sort key, uuid)` takes it to **0.08 s**, and the matching
-   `count(*)` is 0.08 s too.
+   `count(*)` is 0.08 s too. **Superseded on doltlite 0.50.13:** the
+   planner now scans and sorts instead of walking the index
+   ([`doltlite.md`](../doltlite.md#query-plans-and-indexes)); the
+   composite index is still what makes it fast.
 
 The log card is fast but opens at the wrong end. `/api/log` is
 `ORDER BY seq LIMIT 5000` with a cursor that only moves forward
@@ -135,13 +139,14 @@ them; every render store also has a `grid_rows` and does not pay:
   uuid)`.
 
 `every_filter_key_is_served_by_an_index` requires each key's query plan
-to *search* an index on its own column. Scanning the newest-first index
-and testing every row also avoids a sort, and is the 38 s walk above;
-the test's first version accepted that, and passed with an index
-deleted, before it was tightened. It also fails on an index no key
-plans with: step 2 shipped one on `provider`, which the search bar has
-no key for, and step 3 dropped it. `before:`/`after:` filter on
-`created_at_utc` and have no index: a `before:` far back still walks.
+to *search* an index on its own column. On doltlite 0.50.12 and
+earlier, scanning the newest-first index and testing every row also
+avoided a sort, and was the 38 s walk above; the test's first version
+accepted that, and passed with an index deleted, before it was
+tightened. It also fails on an index no key plans with: step 2 shipped
+one on `provider`, which the search bar has no key for, and step 3
+dropped it. `before:`/`after:` filter on `created_at_utc` and have no
+index, so they scan.
 
 **Every column stays sortable, and every page takes one path.** The
 first page of a search lists every row it holds, as uuids in order:
@@ -241,10 +246,11 @@ drift (`init_schema`).
 
 **Pinned and indexed: a read transaction is the snapshot.** The
 applet has to read one commit and use the indexes. `dolt_at_` cannot do
-the second. Doltlite's `atBestIndex` seeks only on a rowid alias
-(`INTEGER PRIMARY KEY`), and `grid_rows` is keyed by a text `uuid`, so
-even `WHERE uuid = ?` at a pinned commit scans the table (0.9 s). It
-never offers secondary indexes and never consumes `ORDER BY`.
+the second: it never offers secondary indexes and never consumes
+`ORDER BY`. On 0.50.3 it did not even seek the text `uuid` key
+(`WHERE uuid = ?` at a pinned commit took 0.9 s); from 0.50.12 it seeks
+a primary-key equality, and nothing else
+([`doltlite.md`](../doltlite.md#query-plans-and-indexes)).
 
 What does work, measured with two processes on a small store (one
 reader, and a writer publishing the way `commit_run` does: commit on
@@ -259,8 +265,8 @@ reader, and a writer publishing the way `commit_run` does: commit on
   (`SEARCH t USING COVERING INDEX`).
 - **It does not block the writer.** Each publish took 0.02 s with the
   read transaction open.
-- **It sees only published work.** The writer is on its own branch,
-  which `writer_branches.md` measured too.
+- **It sees only published work.** The writer is on its own branch
+  ([`doltlite.md`](../doltlite.md#branches-head-and-the-working-set)).
 
 So **the applet's snapshot is a read transaction.** It holds one
 dedicated read-only connection out of the pool with a transaction open
@@ -287,16 +293,17 @@ writer *alone* hit 3 s. So the stretch is the machine, not the reader. `doltlite
 `a_held_read_transaction_is_a_snapshot_while_the_writer_seals` keeps
 the property: 500 seals flat out, no seal refused, every transaction
 one commit. Nothing runs `dolt_gc` on the index (only `fsindex` and
-`sqlite_mirror` call it), so compaction cannot pull chunks out from
-under an open snapshot.
+`sqlite_mirror` call it), so an open snapshot never meets a gc; what
+one would do to it is not yet measured
+([`doltlite.md`](../doltlite.md#not-yet-measured)).
 
 **A read branch was tried and rejected.** The alternative was a branch
 of the applet's own, `reader`, fast-forwarded with `dolt_merge('main')`
 from a read-write connection on it, with every query on read-only
 connections on that branch. It would have let any number of connections
 share one named snapshot. But the merging connection is a second writer
-on the file, and the real writer pays for it. Run through the real
-`commit_run` seal, 300 seals flat out, three runs each:
+on the file. On doltlite 0.50.3, through the real `commit_run` seal,
+300 seals flat out, three runs each:
 
 | reader beside the writer | writer refused |
 |---|---|
@@ -304,18 +311,14 @@ on the file, and the real writer pays for it. Run through the real
 | read branch, merging every 100 ms | 1, 2, 1 |
 | held read transaction | 0, 0, 0 |
 
-A refused seal fails with `commit conflict: another connection
-committed to this branch` from `dolt_commit`, or `database is locked`
-from moving `main`. That is a failed sync step. Once the writer blocked
-in doltlite's file lock and never came back. Merging flat out also left
-the read branch with a dirty working set ("uncommitted changes — commit
-or reset before merging"). An earlier probe through the `doltlite` shell
-had shown the writer never refused. It was wrong, because the shell's
-writer was not `commit_run`'s commit-then-publish. This is
-`etl/README.md` § "A branch each is not a way around the one-writer
-rule" again, now from a writer of one ref. (Keeping the indexes only on
-such a branch was also measured, and was slower anyway; see "The
-indexes live on `main`".)
+**Superseded on doltlite 0.50.12:** the same harness refuses none of
+the writer's seals with the reader merging every 1 to 100 ms; a merge
+now waits behind the writer's open transaction. A reader merging with
+no pause at all still starves the writer
+([`doltlite.md`](../doltlite.md#locks-and-writers)). The read
+transaction stays the choice: it writes nothing, leaves no branch
+behind, and keeping the indexes only on a read branch was slower anyway
+(see "The indexes live on `main`").
 
 The applet answers each request with the commit its transaction read,
 as `at`. When that changes, the UI treats it like `index_changed` and
@@ -326,10 +329,6 @@ This goes against a rule in `AGENTS.md` ("a reader … pins a commit"
 through `dolt_at_`), so step 2 changes the rule's text: a reader pins
 a commit with `dolt_at_` *or* a held read transaction, and the second is
 for a reader that needs indexes. Passes that already use `dolt_at_` keep it.
-
-Worth filing upstream anyway (dolthub/doltlite): `dolt_at_` seeking on
-a non-integer primary key, which would at least make pinned lookups by
-uuid cheap.
 
 **The search endpoint** takes `offset` and `sort` (`created_at:desc`;
 a column the grid shows, or `score`), with a default `limit` of 200.

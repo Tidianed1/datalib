@@ -34,17 +34,12 @@ catalog *removed* disappear from HEAD instead of sitting there frozen and
 indistinguishable from a live one, and it leaves no "is this one stale?"
 question to compute or get wrong.
 
-It looks wasteful and isn't: doltlite stores a table as a content-
-addressed prolly tree, so a `CREATE TABLE` identical to the one at HEAD
-is not a change, and a row written back byte-identical produces the same
-chunk and lands in the same place. Drop a table, recreate it, refill it
-with the same 419 rows, and `dolt_status` comes back **clean**.
-
-Which means an ingest of an unchanged catalog produces **no commit at
-all** — verified against a real catalog and asserted by
-`sqlite_mirror/tests/mirror_roundtrip.rs::unchanged_source_produces_no_commit`, which
-was watched failing against a deliberately broken build before being
-believed.
+It looks wasteful and isn't: a table dropped and refilled with the same
+schema and rows is no change to doltlite
+([doltlite.md § Diffs](/docs/dev/doltlite.md#diffs)), so an ingest of an
+unchanged catalog produces **no commit at all** — asserted by
+`sqlite_mirror/tests/mirror_roundtrip.rs::unchanged_source_produces_no_commit`,
+which was watched failing against a deliberately broken build.
 
 It also means the ingester needs no resume cursor and no
 change-tracking of its own. It never has to know how Lightroom marks
@@ -53,23 +48,18 @@ accumulates behind it.
 
 ### The copy runs inside SQLite
 
-doltlite's amalgamation reads *and writes* ordinary SQLite files as well
-as `.doltlite_db` ones, so the mirror `ATTACH`es the catalog and moves
-rows with `INSERT … SELECT`. No value crosses into Rust.
+doltlite reads plain SQLite files
+([doltlite.md § Plain SQLite files](/docs/dev/doltlite.md#plain-sqlite-files-and-sqlite-compatibility)),
+so the mirror `ATTACH`es the catalog and moves rows with
+`INSERT … SELECT`. No value crosses into Rust.
 
-That is much faster (a 3.3 MB, 133-table catalog mirrors in ~220 ms), but
-the reason it's the right design is fidelity: SQLite's dynamic typing
+That is much faster (a 3.3 MB, 133-table catalog mirrored in ~220 ms on
+doltlite 0.11.50), but the reason it's the right design is fidelity:
+SQLite's dynamic typing
 survives the hop. A Lightroom column with no declared type holds an
 integer in one row and a blob in the next, and both arrive intact.
 Marshalling through Rust would force a decision about what such a column
 "is" — and getting it wrong would silently corrupt the backup.
-
-A database doltlite creates is in its own format by default, whatever
-the filename extension; the URI parameter `doltlite_engine=sqlite`
-selects the stock engine for a new empty file (it must be a `file:`
-URI, and is ignored once the file has content).
-`datalib/backend/runs/src/store.rs` uses it, and
-`runs/tests/runs_tests/stock_sqlite_engine.rs` pins it.
 
 The test fixture is minted by `//tests/fixtures:make_lightroom_catalog.py`
 in a genrule rather than by Rust, so the input stays independent of the
@@ -81,7 +71,7 @@ Tables and their rows. Deliberately not mirrored:
 
 | Dropped | Why |
 | --- | --- |
-| Indexes | doltlite keys each table by its primary key in a prolly tree. A secondary index costs space in every commit and buys a backup nothing. |
+| Indexes | A secondary index costs space in every commit and buys a backup nothing. |
 | Shadow tables | The backing storage of a virtual table (`<name>_node`, `_content`, …): an index's pages as blobs. The virtual table itself is mirrored, as rows, when the engine has its module (rtree does); one it lacks is skipped with a warning. `PRAGMA table_list` is what tells a shadow table from a real one — `sqlite_master` calls both `table`. A Lightroom catalog has none; a Photos library has an R-tree. |
 | Triggers, views | Behavior, not data. The mirror is never written to by an application. |
 | CHECK / FOREIGN KEY, collations | `PRAGMA table_info` doesn't surface them, and enforcing the source's integrity rules on a copy of already-valid data buys nothing. |
@@ -89,9 +79,9 @@ Tables and their rows. Deliberately not mirrored:
 | Column `DEFAULT`s | A rule for writes, and nothing writes to the mirror. See below. |
 
 The schema is rebuilt from `PRAGMA table_xinfo` rather than replayed from
-the source's `sqlite_master` text. Replaying verbatim does work —
-doltlite parses all 133 of a stock catalog's table definitions unchanged
-— but it forecloses the two things this ingester needs to do to the
+the source's `sqlite_master` text. Replaying verbatim does work — doltlite
+0.11.50 parsed all 133 of a stock catalog's table definitions unchanged —
+but it forecloses the two things this ingester needs to do to the
 schema: drop a column, and choose a different primary key. Both are
 textual surgery on arbitrary SQL if you start from the source text, and
 neither is if you start from introspection.
@@ -105,13 +95,11 @@ SQLite's grammar lets a type name be a quoted name — `CREATE TABLE t(a
 "my type")` is legal — and `PRAGMA table_xinfo` reports it back with the
 quotes gone, so a catalog can declare a type of `INTEGER); DROP TABLE x;
 --` and have that text land in the middle of our `CREATE TABLE`. Quoting
-closes it, and costs nothing: SQLite dequotes a type name before
-deciding anything about the column, so `"VARCHAR(255)"` and
-`VARCHAR(255)` are the same column — same affinity, same `table_info`
-text, and an `INTEGER PRIMARY KEY` stays a rowid alias either way
-(checked in doltlite and stock SQLite across every affinity class). The
-mirror's DDL therefore reads `"id_local" "INTEGER"`, which looks unusual
-and is exactly equivalent.
+closes it, and costs nothing: a quoted type keeps its affinity and a
+quoted `"INTEGER"` primary key stays a rowid alias
+([doltlite.md § Plain SQLite files](/docs/dev/doltlite.md#plain-sqlite-files-and-sqlite-compatibility)).
+The mirror's DDL therefore reads `"id_local" "INTEGER"`, which looks
+unusual and is exactly equivalent.
 
 A column's `DEFAULT` is not carried across at all. A default only ever
 applies to a row inserted without a value for that column, and no such
@@ -177,10 +165,11 @@ they stay keyless is worth being precise about: **they have no
 ozSpaceId)` — so "just use `id_local` when there's no `id_global`" is
 already what happens above, and there is nothing left for it to key
 here. Only a *composite* natural key would work, and the source does not
-declare one. doltlite versions a keyless table by row multiset, which is
-the honest representation of a table with no identity of its own: you
-still see every change, classified as `added`/`removed` rather than
-`modified`.
+declare one. A keyless table diffs by position, not content
+([doltlite.md § Diffs](/docs/dev/doltlite.md#diffs)): the mirror copies
+it in the source's scan order, so an unchanged table is no change, but
+one row deleted from the middle reads as a run of `modified` rows. You
+still see every change, just not as the edit a person would name.
 
 All 22 are `Ag*`- or `Migrated*`-prefixed (19 and 3), which reads at a
 glance as "the Ag* tables have no primary keys". They do: of the
@@ -234,73 +223,56 @@ rebuild from an unchanged catalog leaves `dolt_status` clean and produces
 no commit — which `unchanged_source_produces_no_commit` asserts, for
 schema stability as well as row stability.
 
-Diff quality and history are untouched by the rebuild: an edited row
-still reads as `modified` (not removed-plus-added) in
-`dolt_diff_<table>`, because dolt matches rows by primary key and neither
-knows nor cares that the table was dropped in between, and
-`dolt_history_<table>` keeps every prior version across the drop —
-including across a schema change.
+Diff quality and history are untouched by the rebuild: a keyed row
+edited in the source still reads as `modified` in `dolt_diff_<table>`,
+and `dolt_history_<table>` keeps every prior version across the drop,
+schema changes included.
 
-Nothing compares the mirror's shape with the source's, which is what
-keeps the rebuild honest: SQLite reports a non-`INTEGER PRIMARY KEY`
-column as nullable while dolt stores it NOT NULL, so two such shapes
-never compare equal.
+Nothing compares the mirror's shape with the source's, and nothing can:
+doltlite makes a non-`INTEGER` primary key `NOT NULL` where SQLite
+reports it nullable
+([doltlite.md § Plain SQLite files](/docs/dev/doltlite.md#plain-sqlite-files-and-sqlite-compatibility)),
+so the two shapes never compare equal.
 
 ### Reading a column HEAD no longer has
 
 When the source drops a column, HEAD stops having it, and
 `dolt_history_<table>` / `dolt_diff_<table>` project rows through HEAD's
 schema — so it is missing from those views too. It is **not** lost.
-Branch at any earlier commit and the old schema and values read straight
-back:
-
-```sql
-SELECT dolt_branch('before_drop', '<commit-hash>');
-SELECT dolt_checkout('before_drop');
-SELECT parentId FROM AgLibraryFolder;   -- the column HEAD no longer has
-```
-
-Both halves — the absence from `dolt_history_`, and the recovery via a
-branch — are pinned by
-`a_dropped_columns_values_survive_at_their_commit`.
-
-## A doltlite blob bug worth recognising (fixed upstream)
-
-Before doltlite v0.11.53
-([dolthub/doltlite#2327](https://github.com/dolthub/doltlite/issues/2327),
-fixed by [#2329](https://github.com/dolthub/doltlite/pull/2329)), a value
-read out of an ordinary SQLite file that spilled past the page's local
-payload limit (4057 bytes at a 4096-byte `page_size`) was backed by a
-buffer reused across rows. Any consumer holding more than one row's
-value at a time — `DISTINCT`, `GROUP BY`, a materialised subquery, or an
-`INSERT … SELECT` into a table whose primary key is not a rowid alias —
-saw every value collapse onto the first row's bytes, truncated to each
-row's own length. Row counts, lengths and `typeof()` all looked right,
-no error was raised, and the damage survived `dolt_commit`; only a
-byte-for-byte comparison against the source showed it (an `EXCEPT`
-against the ATTACHed catalog hit the same bug). The mirror's `id_global`
-key rewrite is exactly that shape: six of a real catalog's 50 XMP
-packets came out holding another photo's bytes.
-
-`large_values_round_trip_byte_for_byte` compares every XMP packet
-against the source byte for byte. To re-check upstream directly:
+Open any earlier commit by path and the old schema and values read
+straight back
+([doltlite.md § Opening a revision by path](/docs/dev/doltlite.md#opening-a-revision-by-path)):
 
 ```sh
-hack/doltlite_blob_bug/run.sh                    # the fixed version
-DOLTLITE_VERSION=0.11.52 hack/doltlite_blob_bug/run.sh   # the last broken one
+doltlite -readonly '<db>/<commit-hash>' \
+  "SELECT parentId FROM AgLibraryFolder;"   # the column HEAD no longer has
 ```
 
-The script is standalone — it fetches the official doltlite CLI, builds a
-plain SQLite file with the system `sqlite3`, and needs nothing from this
-repo. `DOLTLITE_BIN=… run.sh` points it at a local build instead.
+Both halves — the absence from `dolt_history_`, and the recovery at the
+old commit — are pinned by
+`a_dropped_columns_values_survive_at_their_commit` (which recovers by
+branching, in one sqlx session).
+
+## Large values
+
+The mirror's `id_global` rewrite is an `INSERT … SELECT` into a table
+keyed by text, the shape doltlite corrupted large values in before
+0.11.53
+([doltlite.md § Versions](/docs/dev/doltlite.md#versions-the-storage-format-and-what-each-pin-brought)).
+`large_values_round_trip_byte_for_byte` compares every XMP packet
+against the source byte for byte. `hack/doltlite_blob_bug/run.sh`
+re-checks upstream: it fetches the doltlite CLI at `MODULE.bazel`'s pin,
+or at `DOLTLITE_VERSION`, or runs `DOLTLITE_BIN`, and prints the
+`dolt_version()` of the binary it ran.
 
 ## Reading a live catalog
 
 Lightroom holds its catalog open, in WAL mode, while running. So by
 default each run takes a `VACUUM INTO` snapshot first: that runs inside a
-read transaction on the source, so what lands is one coherent
-point-in-time copy. It also drops the freelist, so the snapshot is
-usually a little smaller than the catalog.
+read transaction on the source and includes the WAL's rows
+([doltlite.md § Plain SQLite files](/docs/dev/doltlite.md#plain-sqlite-files-and-sqlite-compatibility)),
+so what lands is one coherent point-in-time copy. It also drops the
+freelist, so the snapshot is usually a little smaller than the catalog.
 
 If the read-only open fails — the classic case being a WAL catalog whose
 `-shm` file we're not allowed to touch — it falls back to copying the
@@ -339,9 +311,10 @@ four, since no table disappears between them.
 
 ## Store size and `gc`
 
-doltlite accumulates unreachable chunks as history is written, so an
-un-collected store looks larger than it is. Measured on a real 3.1 MB
-catalog (133 tables, 1949 rows, 50 images), after a few runs' history:
+An uncollected store grows every run, a no-op run included
+([doltlite.md § Disk space and `dolt_gc`](/docs/dev/doltlite.md#disk-space-and-dolt_gc)).
+Measured on a real 3.1 MB catalog (133 tables, 1949 rows, 50 images),
+after a few runs' history, on doltlite 0.11.50:
 
 | | Size |
 | --- | --- |
@@ -350,17 +323,14 @@ catalog (133 tables, 1949 rows, 50 images), after a few runs' history:
 | Mirror, collected, `skip_xmp` | **812 KB** |
 | Mirror, *not* collected | 4.0 – 5.2 MB, growing per run |
 
-`dolt_log` and `dolt_history_*` are intact in every collected case —
-collection reclaims unreachable chunks, not history.
-
 `gc = true` runs it at the start of each run, which collects the
 *previous* run's garbage. Same steady-state result, and it happens while
 the working tree is provably clean and outside the commit lifecycle the
 orchestrator owns — but it does mean a brand-new store isn't collected
 until its second run.
-It is **off by default** because it rewrites the whole chunk store, which
-is time a routine no-op run shouldn't spend. Running it by hand
-periodically is a fine alternative:
+It is **off by default** because gc rewrites the whole file, which is
+time a routine no-op run shouldn't spend. Running it by hand
+periodically, with no sync running, is a fine alternative:
 
 ```sh
 bazelisk build //third-party/doltlite:doltlite
@@ -395,8 +365,8 @@ bazel-bin/datalib/backend/etl/providers/lightroom/lightroom_ingest \
 
 ## Reading the backup
 
-Stock `sqlite3` cannot open a `.doltlite_db`. Use the Bazel-built shell
-(see [`docs/dev/doltlite.md`](/docs/dev/doltlite.md)):
+Use the doltlite shell ([`docs/dev/doltlite.md`](/docs/dev/doltlite.md)
+has where to get it and the general recipes):
 
 ```sh
 bazelisk build //third-party/doltlite:doltlite
@@ -404,58 +374,47 @@ dl=bazel-bin/third-party/doltlite/doltlite
 db=~/backups/lightroom.doltlite_db
 
 # What has this backup captured?
-$dl $db "SELECT commit_hash, date, message FROM dolt_log;"
+$dl -readonly $db "SELECT commit_hash, date, message FROM dolt_log;"
 
 # What changed in the latest run, and in which tables?
-$dl $db "SELECT table_name FROM dolt_diff WHERE commit_hash = 'abc123…';"
+$dl -readonly $db "SELECT table_name FROM dolt_diff WHERE commit_hash = 'abc123…';"
 
 # Which photos were re-rated?
-$dl $db "SELECT to_id_global, from_rating, to_rating FROM dolt_diff_Adobe_images
+$dl -readonly $db "SELECT to_id_global, from_rating, to_rating FROM dolt_diff_Adobe_images
          WHERE diff_type = 'modified' AND to_commit = 'abc123…';"
 
 # Every value a photo's row has ever held.
-$dl $db "SELECT commit_date, rating, pick FROM dolt_history_Adobe_images
+$dl -readonly $db "SELECT commit_date, rating, pick FROM dolt_history_Adobe_images
          WHERE id_global = '49AFB3AB-…' ORDER BY commit_date;"
 
 # A photo deleted from the catalog months ago.
-$dl $db "SELECT * FROM dolt_history_Adobe_images WHERE id_global = '…';"
+$dl -readonly $db "SELECT * FROM dolt_history_Adobe_images WHERE id_global = '…';"
 ```
 
 `dolt_history_<table>` carries the full row at every commit, which is
-how a deleted photo's metadata is recovered; on a text key such as
-`id_global` it reads every commit's whole table, so it is slow on a long
-history (`docs/dev/doltlite.md`). There is no MySQL-style `AS OF` clause in doltlite — the
-equivalent is the table-valued `dolt_at_<table>('<commit-ish>')`, which
-accepts `HEAD`, `HEAD~N` or a raw commit hash and reads *committed*
-state only (it ignores a dirty working set).
+how a deleted photo's metadata is recovered. One table as it was at a
+commit is `dolt_at_<table>('<commit-ish>')`.
 
 To see a whole catalog as it was — including columns or tables that HEAD
-no longer has — branch at the commit and check it out. The active branch
-is per-connection, so do it in one session:
+no longer has — open that commit by path; it is read-only and writes
+nothing to the store:
 
 ```sh
-$dl $db <<'SQL'
-SELECT dolt_branch('march', 'abc123…');
-SELECT dolt_checkout('march');
-SELECT COUNT(*) FROM Adobe_images;
-SQL
+$dl -readonly "$db/abc123…" "SELECT COUNT(*) FROM Adobe_images;"
 ```
 
 ## Scaling caveat
 
-Each table is filled inside its own transaction, so peak memory scales
-with the largest single table rather than the whole catalog. That split
-is not stylistic: doltlite holds a transaction's writes in memory at
-roughly 3–4× the data size, so wrapping a whole run in one transaction
-costs ~510 MB peak RSS for 150 MB of rows — fine at that size, ~15 GB for
-a 4–5 GB catalog, which is not.
+Each table is filled inside its own transaction and the run commits
+once, at the end, so a crash mid-run leaves HEAD untouched and a dirty
+working set that the next open discards
+([doltlite.md § A writer's open discards the working set](/docs/dev/doltlite.md#a-writers-open-discards-the-working-set));
+the next run refills from the source as every run does.
 
-The run is still atomic *as history*: the dolt commit only happens at the
-end, so a crash mid-run leaves HEAD untouched and a dirty working tree,
-which `doltlite_raw::open` discards next time; the next run refills from
-the source as every run does. A multi-hundred-GB database
-would want the copy chunked by primary-key range. A Lightroom catalog
-(tens of MB, low hundreds of thousands of rows) is nowhere near that.
+Peak memory is about twice the rows copied
+([doltlite.md § What a write costs](/docs/dev/doltlite.md#what-a-write-costs)).
+A multi-hundred-GB database would want the copy chunked by primary-key
+range; a Lightroom catalog (tens of MB) is nowhere near that.
 
 ## What render will need
 

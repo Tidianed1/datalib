@@ -33,9 +33,9 @@ fn dirs_home() -> Option<PathBuf> {
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
     /// The store this run writes into, opened and closed by the caller.
-    /// A download never opens a store of its own: two live connections to
-    /// one `.doltlite_db` make each other's `dolt_commit` fail. See
-    /// `datalib/backend/etl/README.md`.
+    /// A download never opens a store of its own: one writer per file
+    /// (`datalib/backend/etl/README.md` § "One writer per file, by
+    /// construction").
     pub db: RawDb,
     /// Canonical network names to ingest. Empty = none (refuse;
     /// caller probably forgot to configure). Order doesn't matter.

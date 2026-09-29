@@ -22,8 +22,8 @@ pub trait DataProcessor: Send + Sync {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String>;
 
     /// May a consumer read this processor's output *while it is being
-    /// written* — P2 of the sink contract in
-    /// `docs/dev/plans/completed/streaming_steps_plan.md`.
+    /// written* — P2 in
+    /// `datalib/backend/dag/README.md` § "What a sink owes its consumers".
     ///
     /// Default `false`, and it should stay that way until someone has
     /// looked. The question is not "is the store doltlite" — every raw

@@ -28,7 +28,9 @@ guids beside them (`chat.guid`, `message.guid`), both minted by Messages
 and the same in every copy of one Apple ID's database, so they are the
 keys the render mints ids from (`docs/dev/entity_ids.md`). Two of the
 join tables are declared `UNIQUE` but not `PRIMARY KEY`; the config keys
-them on that pair (`join_table_keys`) so `dolt_diff` can name their rows.
+them on that pair (`join_table_keys`) so `dolt_diff` can name their rows
+(a keyless table diffs by position:
+[doltlite.md § Diffs](/docs/dev/doltlite.md#diffs)).
 
 An iPhone backup's `3d0d7e5fb2ce288813306e4d4636395e047a3d28` is this
 same database and can be pointed at directly.

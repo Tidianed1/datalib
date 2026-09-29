@@ -242,6 +242,40 @@ files are marked by the loader (`UNPINNED_BUILTINS` in `config.rs`:
 `embedding_map`, which read qmd's own SQLite file; and perseus's render,
 which reads its TEI files); any step may say `reads` itself.
 
+## What a sink owes its consumers
+
+A step's sink is whatever it writes: a doltlite store, the qmd index, a
+directory of markdown. A consumer relies on two separate properties, and
+conflating them produces a contract that is false for half the sinks.
+
+**P1. "Absent" is not "empty."** A sink never reports "there is nothing
+here" when it means "I could not read this." Every sink owes this,
+streaming or not, because a consumer that reads an empty sink concludes
+the source holds nothing — and render then deletes every document it
+had. For a doltlite store the line is the *schema commit*: a store that
+has one is readable, possibly empty, and zero rows means zero rows; a
+store with no file, only doltlite's "Initialize data repository" commit,
+or tables and no committed schema is unreadable, `pin::head` refuses
+it, and the consumer skips without sweeping.
+
+**P2. Readable while it is being written.** A consumer can take a
+stable view of a producer still writing only if the sink's engine gives
+one. A doltlite store does: a reader pins a commit, and the producer
+seals commits beside it
+([`docs/dev/doltlite.md`](../../../docs/dev/doltlite.md#three-ways-to-read-one-commit)).
+An index rewritten in place, a directory being emitted and an appended
+file do not. So P2 is the step's to declare — a `capabilities` event
+with `streams_output` — and its default is no: an undeclared output
+keeps its edge a barrier (rule 6 above;
+`a_producer_that_does_not_declare_streams_output_dispatches_nobody_early`).
+The step declares it, not the config, because only the sink's author
+knows, and a wrong "yes" is a torn read nobody sees.
+
+A producer that streams seals as it goes: it commits at a consistent
+point and says so with a `checkpoint` event
+([`step_protocol.md`](../../../docs/dev/step_protocol.md)), and
+`datalib_etl::checkpointer` decides when.
+
 ## How the loop is proven
 
 `//datalib/backend/dag:supervisor_harness_test` asks one question: does
@@ -278,7 +312,7 @@ doltlite store, a directory of files, or anything else.
 runs over the same data report the same string and "unchanged" is
 something the loop *derives* rather than something a step asserts. A
 doltlite commit hash is one: the store's head moves only when a commit
-changed something. The built-in steps report exactly that, and spell it the
+changed something ([`doltlite.md`](../../../docs/dev/doltlite.md#diffs)). The built-in steps report exactly that, and spell it the
 same way on a seal and in the outcome, so finishing on the commit last
 sealed moves nothing downstream.
 
@@ -359,7 +393,7 @@ naming no step) looks exactly like one it did.
 - **One loop per data root** (`system/runner-lock`). The loop is the
   only writer of its record, and the steps it spawns write raw stores
   whose doltlite working set is shared across every connection on the
-  branch, in any process; two loops on one root would interleave both. While `datalib-http` is up it holds this lock
+  branch, in any process ([`doltlite.md`](../../../docs/dev/doltlite.md#branches-head-and-the-working-set)); two loops on one root would interleave both. While `datalib-http` is up it holds this lock
   for its life and runs the loop in-process whenever a request is open
   (`http/src/supervisor.rs`), so every `datalib-dag` sync is a client of
   it. A `datalib-dag` is never refused for the lock: a sync is a request

@@ -46,7 +46,7 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
     rt.block_on(async {
         // ── ingest ───────────────────────────────────────────────
         // The test owns the store: one connection for the ingest and the
-        // assertions both, because two is what breaks a doltlite file.
+        // assertions both, because the file takes one writer at a time.
         let db = RawDb::open(&db_path_for(&raw_dir)).await?;
         let summary = ingest::fetch(FetchOptions {
             db: db.clone(),

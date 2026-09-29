@@ -372,9 +372,11 @@ rows for deleted files. Set difference has no clock in it.
 
 What is *not* interrupt-tolerant is the doltlite commit, and that turns
 out not to matter. Batches are written as SQLite transactions against
-doltlite's working set, which is per-file and persists without a
-`dolt_commit`; the commit at the end of the step is a history marker,
-not what makes the work durable. The expensive per-item work — container
+the working set, which lives in the file and persists without a
+`dolt_commit`
+([doltlite.md § Branches](/docs/dev/doltlite.md#branches-head-and-the-working-set));
+the commit at the end of the step is a history marker, not what makes
+the work durable. The expensive per-item work — container
 parse, payload hash, metadata read — is keyed on content and lives in
 `media_items`, which is never deleted, so an interrupted run's parses
 survive too.
@@ -393,8 +395,8 @@ So deleting the last copy of an item leaves an unreferenced
 `media_items` row, deliberately: the row is cheap and it preserves the
 record that the item was once here. Reaping them is a
 `DELETE … WHERE blake3 NOT IN (SELECT blake3 FROM media_files)` whenever
-we want it — noting that doing so discards history a `dolt_diff` would
-otherwise still show. Pinned by
+we want it; the rows stay in earlier commits, but HEAD stops recording
+that the item was once here. Pinned by
 `a_deleted_file_disappears_from_the_path_table_but_the_item_remains` in
 `tests/media_e2e.rs`.
 
@@ -433,17 +435,17 @@ dl=bazel-bin/third-party/doltlite/doltlite
 db=<root>/media/ingest/entities.doltlite_db
 
 # What is in the library?
-$dl $db "SELECT media_class, container, COUNT(*) FROM media_items
+$dl -readonly $db "SELECT media_class, container, COUNT(*) FROM media_items
          GROUP BY media_class, container ORDER BY 3 DESC;"
 
 # One recording, many files: every item that shares a payload hash.
 # This is the query the column exists for.
-$dl $db "SELECT payload_blake3, COUNT(*) c, GROUP_CONCAT(blake3)
+$dl -readonly $db "SELECT payload_blake3, COUNT(*) c, GROUP_CONCAT(blake3)
            FROM media_items WHERE payload_blake3 IS NOT NULL
           GROUP BY payload_blake3 HAVING c > 1;"
 
 # …and the human-readable form for music.
-$dl $db "SELECT i.payload_blake3, GROUP_CONCAT(f.id)
+$dl -readonly $db "SELECT i.payload_blake3, GROUP_CONCAT(f.id)
            FROM media_items i JOIN media_files f ON f.blake3 = i.blake3
           WHERE i.payload_blake3 IN (
                 SELECT payload_blake3 FROM media_items
@@ -452,16 +454,16 @@ $dl $db "SELECT i.payload_blake3, GROUP_CONCAT(f.id)
           GROUP BY i.payload_blake3;"
 
 # How much of the library has no payload recipe yet?
-$dl $db "SELECT container, COUNT(*) FROM media_items
+$dl -readonly $db "SELECT container, COUNT(*) FROM media_items
           WHERE payload_blake3 IS NULL GROUP BY container;"
 
 # Duplicates by bytes: one item, many locations.
-$dl $db "SELECT blake3, COUNT(*) c, GROUP_CONCAT(id) FROM media_files
+$dl -readonly $db "SELECT blake3, COUNT(*) c, GROUP_CONCAT(id) FROM media_files
          GROUP BY blake3 HAVING c > 1;"
 
 # Playlists, and how much of each one survives. A join, not a stored
 # count -- so it is right even if the tree changed since the scan.
-$dl $db "SELECT p.id, p.title, p.entry_count,
+$dl -readonly $db "SELECT p.id, p.title, p.entry_count,
                 SUM(f.blake3 IS NOT NULL) AS have,
                 p.entry_count - SUM(f.blake3 IS NOT NULL) AS missing
            FROM media_playlists p
@@ -470,21 +472,20 @@ $dl $db "SELECT p.id, p.title, p.entry_count,
           GROUP BY p.id ORDER BY missing DESC;"
 
 # The music a playlist remembers and the disk does not.
-$dl $db "SELECT e.playlist_id, e.position, e.target_raw
+$dl -readonly $db "SELECT e.playlist_id, e.position, e.target_raw
            FROM media_playlist_entries e
            LEFT JOIN media_files f ON f.id = e.resolved_path
           WHERE f.blake3 IS NULL AND e.target_kind = 'relative'
           ORDER BY e.playlist_id, e.position;"
 
 # What was shot where.
-$dl $db "SELECT f.id, v.captured_at, v.camera_model, v.gps_lat, v.gps_lon
+$dl -readonly $db "SELECT f.id, v.captured_at, v.camera_model, v.gps_lat, v.gps_lon
            FROM media_visual v JOIN media_files f ON f.blake3 = v.blake3
           WHERE v.gps_lat IS NOT NULL ORDER BY v.captured_at;"
 
 # What changed since the last scan.
-$dl $db "SELECT diff_type, from_id, to_id FROM dolt_diff_media_files
-          WHERE from_ref = 'HEAD^1' AND to_ref = 'HEAD'
-            AND diff_type != 'unchanged';"
+$dl -readonly $db "SELECT diff_type, from_id, to_id
+           FROM dolt_diff_media_files('HEAD^1', 'HEAD');"
 ```
 
 ## Fixtures

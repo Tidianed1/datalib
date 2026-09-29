@@ -75,7 +75,7 @@ fn build_events(api: &Path, comment_ids: &[i64]) {
 
 async fn run(out_db: &Path) -> usize {
     // The test owns the store: one connection for the download and the
-    // assertions both, because two is what breaks a doltlite file.
+    // assertions both, because the file takes one writer at a time.
     let db = RawDb::open(&db_path_for(out_db)).await.unwrap();
     let out = fetch(FetchOptions {
         full_sync: true,

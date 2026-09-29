@@ -11,8 +11,9 @@
 //! That is what lets a doltlite commit land at any moment between them
 //! (a checkpoint, the end of the run) without anyone checking what is
 //! in it. How many documents share one transaction is a throughput choice
-//! ([`IndexedMarkdownStore::begin_batch`]); doltlite charges ~50ms per
-//! statement outside one. See `docs/dev/plans/one_mode.md`.
+//! ([`IndexedMarkdownStore::begin_batch`]): each transaction rewrites every
+//! page it touched (docs/dev/doltlite.md#what-a-write-costs). See
+//! `docs/dev/plans/one_mode.md`.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -998,8 +999,8 @@ impl IndexedMarkdownStore {
                 return Ok(Vec::new());
             }
             // One read per table, never a lookup per document: `dolt_at_`
-            // uses no secondary index, so each lookup is a full scan and a
-            // whole-store read goes quadratic.
+            // uses no secondary index, so a lookup by document is a full
+            // scan and a whole-store read goes quadratic.
             let wanted = serde_json::to_string(
                 &mds.iter()
                     .map(|m| m.markdown_uuid.as_str())

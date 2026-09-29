@@ -66,7 +66,7 @@ pub enum Event {
     /// way past.
     Capabilities {
         step: StepId,
-        /// P2 of the sink contract in `docs/dev/plans/completed/streaming_steps_plan.md`:
+        /// P2 in `datalib/backend/dag/README.md` § "What a sink owes its consumers":
         /// may a consumer read this output while it is being written?
         streams_output: bool,
     },

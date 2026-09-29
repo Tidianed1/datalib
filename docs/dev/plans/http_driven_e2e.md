@@ -133,9 +133,11 @@ the source first, or pick a stale one — is the next thing to fix.
   app's page — the SPA fallback — so a mistyped call, or a step id with
   its slash unencoded, read as success. Now a 404 (`embed.rs`).
 - A store killed during its first open — tables made, schema not yet
-  committed — could never be written again: doltlite's `dolt_reset
-  --hard` refuses the initialization commit, and `dolt_clean` cannot
-  drop `sqlite_sequence`. Seeds 2 and 3 hit it under `bazelisk test`,
+  committed — could never be written again: at doltlite's
+  initialization commit neither `dolt_reset --hard` nor `dolt_clean`
+  clears an `AUTOINCREMENT` table and its `sqlite_sequence`
+  ([`doltlite.md`](../doltlite.md#plain-sqlite-files-and-sqlite-compatibility)).
+  Seeds 2 and 3 hit it under `bazelisk test`,
   where four shards at once slow each ingest enough for a kill to land
   that early. Fixed in #776, with a test that builds the state directly.
 

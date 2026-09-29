@@ -37,11 +37,10 @@ use crate::section::Section;
 /// Serializes concurrent writers against one doltlite index pool, and
 /// optionally batches every write into one transaction.
 ///
-/// doltlite serializes writes at the file level, so per-task pool connections
-/// calling `apply_one` race for the write lock and eventually see `(code 5)
-/// database is locked`. Batching matters as much: each per-doc auto-commit
-/// costs ~50ms, because every statement boundary materializes the prolly
-/// tree's manifest.
+/// Doltlite runs one write at a time per file, so per-task pool connections
+/// calling `apply_one` would queue for it and, past the busy timeout, fail
+/// with `database is locked`. Batching matters as much: every transaction
+/// rewrites each page it touched (docs/dev/doltlite.md#what-a-write-costs).
 ///
 /// The counters answer "where is the time going": `total_wait` high against
 /// wall time means writers are queuing, and `total_hold / acquisitions` is the
@@ -1600,7 +1599,7 @@ mod write_lock_tests {
     //! Reproduces the production "(code 5) database is locked": several
     //! per-source render workers calling [`apply_one`] in parallel against one
     //! pool with `max_connections > 1`. Without the [`WriteLock`] each task
-    //! gets its own connection, all race for doltlite's file-level write lock,
+    //! gets its own connection, all queue for doltlite's one write at a time,
     //! and the losers time out. No artificial sleeps — the contention is real,
     //! from the same code path production uses.
     use super::*;

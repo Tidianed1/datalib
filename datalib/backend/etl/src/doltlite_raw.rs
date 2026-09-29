@@ -242,10 +242,10 @@ pub fn db_path_for(p: &Path) -> PathBuf {
 
 // ── Open ────────────────────────────────────────────────────────────
 
-/// The file a writer's claim on `db_path` lives in: a sibling, so the
-/// store itself — which doltlite `flock`s for its own chunk-store lock —
-/// is not what we lock. The name is what `datalib_core::disk` skips when
-/// it measures a tree.
+/// The file a writer's claim on `db_path` lives in: a sibling of the
+/// store, and not doltlite's own `.<name>-lock`, which only makes writes
+/// take turns (docs/dev/doltlite.md#locks-and-writers). The name is what
+/// `datalib_core::disk` skips when it measures a tree.
 pub fn lock_path_for(db_path: &Path) -> PathBuf {
     let mut name = db_path.file_name().unwrap_or_default().to_os_string();
     name.push(".lock");
@@ -258,9 +258,9 @@ pub fn lock_path_for(db_path: &Path) -> PathBuf {
 /// directly: it works here, and fast-forwards `main` at each seal
 /// ([`commit_run`]). Everything between two seals is invisible to a
 /// reader until that moment — the rows, and the schema reconcile that
-/// creates the tables, which is the half a pinned read could not
-/// protect itself from (`pin.rs` reads the *working set's*
-/// `sqlite_master`, not the pin's).
+/// creates the tables, which a pinned read could not protect itself
+/// from: `pin.rs` lists tables from its branch's `sqlite_master`, not
+/// the pin's.
 ///
 /// The name is also the signal. `fsindex` keeps one branch per scan root
 /// and publishes none of them, so [`publish_to_main`] fires only for a
@@ -282,14 +282,10 @@ fn is_missing_function(e: &sqlx::Error) -> bool {
 /// default branch — where a writer's half-finished work would be
 /// visible to every reader.
 ///
-/// **`dolt_connect_branch`, not `dolt_checkout`.** Both leave the
-/// session on the branch, but `dolt_checkout` persists a working set
-/// for the branch it leaves and the one it enters, which costs a few
-/// hundred bytes on *every* open — including opens of a store nobody
-/// writes to. `dolt_connect_branch` only loads the branch's working set
-/// and sets the session's branch and head: it serializes no refs and
-/// commits nothing, so it writes nothing.
-/// `reopening_an_untouched_store_does_not_grow_it` is what holds this.
+/// `dolt_connect_branch`, not `dolt_checkout`: the checkout writes a few
+/// hundred bytes on every open, the connect nothing
+/// (docs/dev/doltlite.md#branches-head-and-the-working-set).
+/// `reopening_an_untouched_store_does_not_grow_it` holds it.
 async fn checkout_writer_branch(
     conn: &mut sqlx::sqlite::SqliteConnection,
 ) -> std::result::Result<(), sqlx::Error> {
@@ -317,9 +313,8 @@ async fn checkout_writer_branch(
     // connection is on the file's default branch, so a writer that
     // thinks it moved and did not writes to `main` — visible to every
     // reader, mid-batch, which is what the branch exists to prevent.
-    // Measured in #691: a failed `dolt_checkout` is silent and the rows
-    // land on the wrong branch. `fsindex::checkout_branch` reads back
-    // for the same reason.
+    // Doltlite 0.50.3 let a failed checkout through silently (#691).
+    // `fsindex::checkout_branch` reads back for the same reason.
     let active: String = sqlx::query_scalar("SELECT active_branch()")
         .fetch_one(&mut *conn)
         .await?;
@@ -351,10 +346,8 @@ async fn branch_head(pool: &SqlitePool, branch: &str) -> Option<String> {
 ///
 /// A force-move rather than a `dolt_merge` because one writer per file
 /// means `main` only ever moves here, so the branch is always a
-/// descendant of `main` and a merge would be a fast-forward anyway. It
-/// also keeps `main`'s history linear, which is what
-/// `dolt_diff_<table>` between two of its commits rests on. Two writers
-/// on one store would need the real merge.
+/// descendant of `main` and a merge would be a fast-forward anyway. Two
+/// writers on one store would need the real merge.
 ///
 /// A no-op on any other branch — see [`WRITER_BRANCH`].
 ///
@@ -372,11 +365,10 @@ pub async fn publish_to_main(pool: &SqlitePool) -> Result<()> {
     if active.as_deref() != Some(WRITER_BRANCH) {
         return Ok(());
     }
-    // Re-pointing `main` at a commit it already names still writes a ref
-    // chunk — ~676 bytes an open, on a store nobody touched.
-    // `reopening_an_untouched_store_does_not_grow_it` is what notices,
-    // and it is the only check that would: this kind of leak leaves
-    // `dolt_log` unchanged and `dolt_status` clean.
+    // Re-pointing `main` at the commit it already names still writes a
+    // few hundred bytes, on a store nobody touched. Only
+    // `reopening_an_untouched_store_does_not_grow_it` would notice: the
+    // leak leaves `dolt_log` unchanged and `dolt_status` clean.
     if branch_head(pool, WRITER_BRANCH).await == branch_head(pool, "main").await {
         return Ok(());
     }
@@ -390,9 +382,9 @@ pub async fn publish_to_main(pool: &SqlitePool) -> Result<()> {
 
 /// The pool every open shares: one connection, never recycled.
 ///
-/// Pool size 1 with no recycling because doltlite's HEAD, working set and
-/// active branch are all per-connection, and a replacement connection starts
-/// on `main` with a clean tree. See the README.
+/// Pool size 1 with no recycling because doltlite's HEAD and active
+/// branch are per connection, and a replacement connection starts on the
+/// default branch. See the README.
 ///
 /// A writer's connection also holds the file's writer lock, for exactly
 /// as long as the connection lives: the lock is handed to the connection
@@ -442,8 +434,8 @@ async fn connect_pool(db_path: &Path, access: Access, on_branch: bool) -> Result
             })
         });
     }
-    // No `journal_mode` pragma: doltlite manages its own storage and rejects
-    // it outright.
+    // No `journal_mode` pragma: doltlite has no journal and ignores it
+    // (docs/dev/doltlite.md#plain-sqlite-files-and-sqlite-compatibility).
     let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
         .with_context(|| format!("sqlite uri for {}", db_path.display()))?
         // A reader never conjures a store: an absent file is a real error for
@@ -748,9 +740,8 @@ async fn open_inner(
     on_break: OnSchemaBreak,
     ladder: &[Migration],
 ) -> Result<SqlitePool> {
-    // Logged at every call so a stray second pool against an already-open
-    // file is attributable: with max_connections=1 it surfaces only as
-    // "database is locked" on dolt_commit.
+    // Logged at every call so a stray second open against an already-open
+    // file is attributable in the run log.
     let started = std::time::Instant::now();
     let store = path_label(db_path);
     tracing::info!(store, "opening the store");
@@ -901,10 +892,9 @@ async fn open_inner(
     )
     .await
     .with_context(|| format!("write _datalib_meta for {}", db_path.display()))?;
-    // Commit the schema before handing back the pool: doltlite only
-    // materializes `dolt_diff_<table>` for tables that exist at HEAD, so an
-    // uncommitted table makes the first sync's delta vanish with a warning.
-    // The message names the build when the meta rows moved — a new
+    // Commit the schema before handing back the pool, so readers and the
+    // run's deltas start from a commit that has every table. The message
+    // names the build when the meta rows moved — a new
     // datalib, or a new shape — so `dolt_log` reads as an upgrade history.
     let message = if meta_moved {
         format!(
@@ -1397,26 +1387,15 @@ async fn forget_cursors(pool: &SqlitePool, created: &[String], recreated: &[Stri
 }
 
 /// Put the working set back at the last commit, dropping whatever a writer
-/// that died left there.
+/// that died left there: `dolt_reset --hard` for the tracked tables, then
+/// `dolt_clean` for any it created and never committed. Every commit here
+/// is `-Am`, so anything still dirty would ride into the schema commit.
 ///
-/// `dolt_reset --hard`, plus the part it leaves behind: like `git reset
-/// --hard`, it restores tracked tables and ignores an untracked one, and a
-/// writer that died after `CREATE TABLE` and before its first commit leaves
-/// exactly that. `dolt_clean` takes those, the way `git clean` does. Every
-/// commit here is `-Am`, so anything still dirty after this rides into the
-/// schema commit a few lines later — which is why both halves run.
-///
-/// A writer killed during the store's first open leaves only the commit
-/// doltlite makes with the file, "Initialize data repository", and
-/// doltlite's `dolt_reset --hard` refuses that one ("no commit to reset
-/// to"). Every table is untracked there, so `dolt_clean` alone empties the
-/// store.
-///
-/// Except `sqlite_sequence`, SQLite's counter for `AUTOINCREMENT`, made
-/// with the first such table: `dolt_clean` takes the table and cannot take
-/// the counter, which SQLite refuses to drop. It is emptied instead, and
-/// rides into the schema commit as it does on any first open. (After a real
-/// seal, `dolt_reset --hard` restores it with everything else.)
+/// At the initialization commit only `dolt_clean` runs: a hard reset
+/// there breaks it (`no such table: main.sqlite_sequence`). The
+/// `sqlite_sequence` that `dolt_clean` leaves behind is emptied instead,
+/// since SQLite refuses to drop it
+/// (docs/dev/doltlite.md#plain-sqlite-files-and-sqlite-compatibility).
 async fn discard_dirty_working_tree(pool: &SqlitePool, db_path: &Path) -> Result<()> {
     // `dolt_status` is a vtab; stock SQLite errors with "no such table".
     let dirty: std::result::Result<i64, sqlx::Error> =
@@ -2579,14 +2558,11 @@ mod tests {
         open(p, &slices).await.unwrap()
     }
 
-    /// Two writers on one store used to make each other's `dolt_commit`
-    /// fail with `commit conflict` — a timing bug, because the second
-    /// open itself succeeded. Now the second open is the failure: the
-    /// first's connection holds the file's writer lock for as long as it
-    /// lives, and the refusal names it. A reader is not a writer and
-    /// opens beside it; and once the writer has `close().await`ed the
-    /// store is free again — that call waits for the connection to
-    /// close, and the connection is what held the lock.
+    /// A second writer on a live store is refused at open, naming the
+    /// holder: the first's connection holds the file's writer lock for as
+    /// long as it lives. A reader is not a writer and opens beside it; and
+    /// once the writer has `close().await`ed the store is free again —
+    /// that call waits for the connection, which is what held the lock.
     #[tokio::test]
     async fn a_second_writer_on_a_live_store_is_refused_and_names_the_holder() {
         let dir = tempdir().unwrap();
@@ -2629,9 +2605,8 @@ mod tests {
     /// every cheaper proxy was already true while it was live.
     ///
     /// It also holds the reason `checkout_writer_branch` uses
-    /// `dolt_connect_branch`: `dolt_checkout` persists a working set for
-    /// the branch it leaves and the one it enters, which put ~500 bytes
-    /// into an untouched store on every open and nothing else noticed.
+    /// `dolt_connect_branch`: `dolt_checkout` writes a few hundred bytes on
+    /// every call, and nothing else noticed.
     #[tokio::test]
     async fn reopening_an_untouched_store_does_not_grow_it() {
         let dir = tempdir().unwrap();
@@ -4201,12 +4176,11 @@ mod tests {
         b.close().await;
     }
 
-    /// A writer killed before a store's first seal left a working set with
-    /// only doltlite's initialization commit under it, and
-    /// `dolt_reset --hard` refuses that one; an `AUTOINCREMENT` table also
-    /// leaves `sqlite_sequence`, which `dolt_clean` cannot drop. Either
-    /// failed every later open the same way, so the source could never
-    /// sync again (`tng_fuzz_test`, docs/dev/plans/http_driven_e2e.md).
+    /// A writer killed before a store's first seal leaves only doltlite's
+    /// initialization commit under its working set, and an `AUTOINCREMENT`
+    /// table leaves a `sqlite_sequence` that `dolt_clean` cannot drop. The
+    /// next open must still succeed, or the source never syncs again
+    /// (`tng_fuzz_test`, docs/dev/plans/http_driven_e2e.md).
     #[tokio::test]
     async fn a_store_killed_before_its_first_seal_opens_again() {
         let tmp = tempfile::tempdir().unwrap();
@@ -4507,15 +4481,11 @@ mod tests {
     /// and ours must stay `main` however many times a writer uses its own.
     ///
     /// Not "a connection always starts on `main`" — that is the
-    /// consequence, not the rule. In doltlite the default branch is
-    /// `zDefaultBranch` in the persisted refs block: seeding sets it to
-    /// the branch it created, `csEnsureDefaultBranch` falls back to
-    /// `main` only for a file carrying none, and `dolt_default_branch(x)`
-    /// moves it. Nothing in this repo calls that — and if anything ever
-    /// did, every reader would silently start on a writer's branch and
-    /// read uncommitted rows, which is the failure this whole
-    /// construction exists to prevent. So assert the rule, not the
-    /// consequence.
+    /// consequence, not the rule: `dolt_default_branch(x)` moves the
+    /// default for every later connection
+    /// (docs/dev/doltlite.md#branches-head-and-the-working-set), and then
+    /// every reader would silently start on a writer's branch. So assert
+    /// the rule.
     ///
     /// Measured through a *reader*: a writer is put on [`WRITER_BRANCH`]
     /// by `after_connect` whether or not it inherited anything, so it

@@ -565,8 +565,10 @@ run that writes, never as a separate cleanup chore someone must
 remember.** Where a bound exists, the status surface states it, so
 limits are never secret.
 
-Partly blocked: doltlite never actually deletes, so a bound on anything
-in a `.doltlite_db` reclaims no disk today (see
+Partly blocked: deleting rows from a `.doltlite_db` and committing
+reclaims no disk, because earlier commits still reach them; only
+rewriting that history and then running `dolt_gc()` does
+([disk space](doltlite.md#disk-space-and-dolt_gc), and see
 [Removing a source](data_architecture_ingestion_practices.md#removing-a-source)).
 The *stating* half is not blocked.
 
@@ -671,9 +673,9 @@ whole source — is empty everywhere but email under a label filter,
 where the mailbox tree decides which threads render at all.
 
 **Every emitted document is written.** There is no fingerprint deciding
-whether a write is needed: doltlite's tables are content-addressed, so a
-row identical to the stored one is no change, carries no diff, and is
-never seen by the index. A fingerprint on top of that is a second
+whether a write is needed: a row identical to the stored one is no
+change to doltlite, carries no diff, and is never seen by the index
+([diffs](doltlite.md#diffs)). A fingerprint on top of that is a second
 answer to a question the store already answers, and a worse one — an
 input hash that leaves out a value resolved at render time skips
 changed documents, and an output hash puts a per-run column on

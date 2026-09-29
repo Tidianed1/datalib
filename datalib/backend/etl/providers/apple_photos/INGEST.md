@@ -113,10 +113,11 @@ disagree.
 
 ## The R-tree, and why shadow tables are skipped
 
-`Z_RT_Asset_boundedByRect` is `CREATE VIRTUAL TABLE … USING RTREE`. The
-doltlite amalgamation has the rtree module compiled in, so the engine
-reads it like any table and writes its rows to a plain table of the
-same name.
+`Z_RT_Asset_boundedByRect` is `CREATE VIRTUAL TABLE … USING RTREE`.
+R-tree is compiled into doltlite
+([doltlite.md § Plain SQLite files](/docs/dev/doltlite.md#plain-sqlite-files-and-sqlite-compatibility)),
+so the engine reads it like any table and writes its rows to a plain
+table of the same name.
 
 Under it sit three **shadow tables** — `_node`, `_parent`, `_rowid` —
 holding the R-tree's pages as opaque blobs. `sqlite_master` calls them
@@ -127,8 +128,8 @@ its documentation gives: a secondary index costs space in every commit
 and buys a backup nothing. Mirrored, they would be the geo data stored
 twice, one copy of it churning on every location edit.
 
-A virtual table whose module the engine lacks (an FTS5 table, say) is
-skipped with a warning and counted in `virtual_tables_skipped`. Its
+A virtual table whose module the engine lacks (one from a loadable
+extension, say; FTS3/4/5 are compiled in) is skipped with a warning and counted in `virtual_tables_skipped`. Its
 shadow tables are skipped too — silently mirroring those as a fallback
 would be exactly the quiet success AGENTS.md warns about.
 
@@ -138,7 +139,7 @@ Photos keeps `Photos.sqlite` in WAL mode and does not checkpoint it:
 between two snapshots of the sample library the main file did not
 change size while the `-wal` file went from 1.5 to 3.7 MB. Anything
 that copies `Photos.sqlite` alone sees a stale library. The engine's
-`VACUUM INTO` snapshot reads through the WAL correctly, and because the
+`VACUUM INTO` snapshot includes the WAL's rows, and because the
 daemons hold the file open whether or not Photos.app is running, the
 snapshot path is the only path — `snapshot = false` reads a file that
 is always mid-write.

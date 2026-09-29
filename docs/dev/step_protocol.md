@@ -172,8 +172,8 @@ metrics for it:
 `log`'s `target` and `fields` are optional; a plain `msg` is fine.
 
 A step that seals part of its output while still running says so with
-a `checkpoint` (the streaming protocol in
-`docs/dev/plans/completed/streaming_steps_plan.md`), and should say how many rows
+a `checkpoint` (P2 in `datalib/backend/dag/README.md`
+§ "What a sink owes its consumers"), and should say how many rows
 that seal added:
 
 ```json
@@ -254,7 +254,8 @@ what reporting nothing already gets you.
 and the outcome's are compared as strings, so if you finish on the
 commit you last sealed, report it exactly as the checkpoint did, and
 your consumers do not run again for it. A doltlite store's head is a
-good version for both: it moves only when a commit changed something.
+good version for both: it moves only when a commit changed something
+([`doltlite.md`](doltlite.md#diffs)).
 
 A step that did not run keeps the version recorded for its output last
 time, or `datalib_dag::version::UNKNOWN` if there is none.

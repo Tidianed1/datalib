@@ -29,7 +29,9 @@ surrogate autoincrement integers, no ROWID-as-PK tricks.
 
 Ordering within a parent is a separate concern from identity: carry an
 explicit integer column for it. Never borrow the PK, and never
-`ORDER BY rowid` — doltlite hides it.
+`ORDER BY rowid`: on a table keyed by text, doltlite's rowid is a hash
+of the key and carries no order
+([query plans](/docs/dev/doltlite.md#query-plans-and-indexes)).
 
 `sync_runs` is the one exception, and uses `AUTOINCREMENT INTEGER`: a sync
 invocation is a local event with no upstream identity.
@@ -121,32 +123,23 @@ being greppable.
 
 ## Connection pools: one writer per file, readers pinned
 
-Doltlite's HEAD pointer, active branch and working set are **per
-connection**, and the working set is also **per file and branch**,
-shared across every connection on that branch in any process. Two
-facts, two rules, both built into `doltlite_raw` rather than left to
-convention.
-
-"Per file *and branch*" is the whole of the qualifier, and it is what
-§"A writer works on its own branch" below is built on. Measured on
-doltlite 0.50.3: a connection on one branch that inserts without
-committing leaves another branch's `dolt_status` clean and its rows
-invisible to a connection there. A connection's own branch is not
-written into the file, so the next one lands on the file's stored
-default.
+Doltlite gives each *connection* its own active branch and HEAD, and
+keeps each *branch's* uncommitted rows in the file, shared by every
+connection on that branch in any process
+([branches, HEAD and the working set](/docs/dev/doltlite.md#branches-head-and-the-working-set)).
+The rules below follow from those two facts, and each is built into
+`doltlite_raw` rather than left to convention.
 
 ### Every pool is size 1 and never recycled
 
 A pool bigger than one lands statements on connections that disagree
-about the tree, which shows up as a `dolt_commit` whose hash never
-appears in `dolt_log`, or as `commit conflict: another connection
-committed to this branch`. The dolt maintainers confirm the same is true
-of Dolt itself and recommend the same fix. So every open here pins
-`max_connections(1)` and disables `idle_timeout` and `max_lifetime`:
-sqlx would otherwise retire the very connection whose session state is
-load-bearing, and its replacement starts on `main` with a clean working
-set — an fsindex scan on a non-`main` branch would silently start
-writing to `main` after 30 minutes and report success.
+about the tree ([locks and writers](/docs/dev/doltlite.md#locks-and-writers)).
+So every open here pins `max_connections(1)` and disables
+`idle_timeout` and `max_lifetime`: sqlx would otherwise retire the very
+connection whose session state is load-bearing, and its replacement
+starts on the default branch — an fsindex scan on a non-`main` branch
+would silently start writing to `main` after 30 minutes and report
+success.
 
 Every *other* sqlx pool in the tree turns them off too, for a second
 reason: either setting gives the pool a maintenance task, and in sqlx
@@ -163,25 +156,24 @@ built any other way.
 
 ### One writer per file, by construction
 
-`open` and `open_derived` are the only ways to a handle that can commit,
-and each takes the file's writer lock — `flock(2)` on the sibling
-`<store>.doltlite_db.lock`, `datalib_flock` — and gives it to the
-connection, which holds it until it closes. A second writer on the same
-file, in another process or in this one, is refused at open with the
-holder named (`<program> (pid N)`) instead of sharing the first's
-working set: both land on the writer branch below, so an `-Am` commit
-through either pool sweeps up whatever the other has in flight, and two
-mid-write pools contend for a lock `dolt_commit` takes without waiting.
-The kernel releases the lock when
-the holder dies, so a killed run leaves no stale claim; the next `open`
-finds its dirty rows and **discards them** (`dolt_reset --hard`, then
-any table the dead writer created and never committed), so the store
-starts at its last commit. Those rows were never at a seal boundary — a
-row whose blobs are still in flight, half a channel — and no reader was
-promised them: readers pin commits. The delta since the last seal is
-refetched from the cursor, which is what idempotency is for. The same
-rule holds on Ctrl-C: nothing commits on the way out; the last seal
-stands.
+Doltlite does not refuse a second writer; it only makes it wait its
+turn. Two writers on one branch would then commit each other's rows.
+So `open` and `open_derived` are the only ways to a handle that can
+commit, and each takes the file's writer lock — `flock(2)` on the
+sibling `<store>.doltlite_db.lock`, `datalib_flock` — and gives it to
+the connection, which holds it until it closes. A second writer on the
+same file, in another process or in this one, is refused at open with
+the holder named (`<program> (pid N)`).
+
+The kernel releases the lock when the holder dies, so a killed run
+leaves no stale claim; the next `open` finds its dirty rows and
+**discards them**, so the store starts at its last commit
+([a writer's open discards the working set](/docs/dev/doltlite.md#a-writers-open-discards-the-working-set)).
+Those rows were never at a seal boundary — a row whose blobs are still
+in flight, half a channel — and no reader was promised them: readers
+pin commits. The delta since the last seal is refetched from the
+cursor, which is what idempotency is for. The same rule holds on
+Ctrl-C: nothing commits on the way out; the last seal stands.
 
 The lock lives exactly as long as the connection: `close().await` waits
 for the connection to close, and that is the moment the store is free.
@@ -202,81 +194,46 @@ store, and nothing about the others.
 stores it is given through `datalib_pin::open_reader` and writes only
 its own scratch. `datalib-doltlite` is the raw shell and takes no lock
 of *ours*: run it `-readonly` against a store a sync may be writing.
-Doltlite keeps a lock of its own besides — a dotfile sibling,
-`.<name>.doltlite_db-lock`, taken by every writable open including the
-CLI's — and that one is where `database is locked by another
-connection` comes from. It is not a substitute for ours: it serializes
-statements, it does not refuse a second writer.
+Doltlite's own lock sidecar, `.<name>.doltlite_db-lock`, is a different
+file and only makes writes take turns.
 
 ### A writer works on its own branch and publishes when it seals
 
-Doltlite's working set belongs to a *branch* and lives in the file, so
-two connections on `main` share one working set the way two people
-editing one git checkout share a working tree. That is why a second
-writer's `dolt_commit('-Am', …)` captures the first's in-flight rows,
-and why a reader on the writer's branch would see its uncommitted
-batch — including tables the writer had created but not committed.
+A reader on the writer's branch would see its uncommitted batch,
+including tables the writer has created and not committed. So a writer
+does not work on `main`. `connect_pool` puts every connection on
+`WRITER_BRANCH` (`datalib_writer`) in `after_connect`, not once at
+open: sqlx replaces a connection that breaks, and a replacement starting
+on the default branch would put half-finished work where every reader
+can see it.
 
-So a writer does not work on `main`. `connect_pool` puts every
-connection on `WRITER_BRANCH` (`datalib_writer`) in `after_connect`,
-not once at open: sqlx replaces a connection that breaks, and a
-replacement starting on the default branch would put half-finished work
-where every reader can see it.
-
-It gets there with **`dolt_connect_branch`, never `dolt_checkout`**.
-Both leave the session on the branch, but `dolt_checkout` persists a
-working set for the branch it leaves and the one it enters — a few
-hundred bytes on *every* open, including opens of a store nobody
-writes to. `dolt_connect_branch` only loads the branch's working set
-and sets the session's branch and head; it serializes no refs and
-commits nothing, so an untouched store stays byte-identical.
-`reopening_an_untouched_store_does_not_grow_it` holds that, and
-`dolt_checkout('-b', …)` is still what creates the branch, once per
-file.
+It gets there with **`dolt_connect_branch`, never `dolt_checkout`**,
+because `dolt_checkout` writes a few hundred bytes on every call and
+`dolt_connect_branch` writes nothing, so an untouched store stays
+byte-identical (`reopening_an_untouched_store_does_not_grow_it`).
+`dolt_checkout('-b', …)` still creates the branch, once per file.
 
 **Then it asks the connection back which branch it is on, and a wrong
 answer fails the open.** A selection that quietly did nothing is the one
 failure this construction cannot survive: the writer stays on the
 default branch and every row it writes is visible to every reader the
 moment it lands rather than when it is sealed — and nothing else would
-notice, because the rows are all there and the commits all happen. The
-silent failure below is measured, not hypothetical, and
-`fsindex::checkout_branch` reads back for the same reason.
+notice, because the rows are all there and the commits all happen.
 `a_writers_pool_is_on_the_writer_branch` is the guard.
 
 **The seal is the commit *and* its publication.** `commit_run` does
 `dolt_commit` on the branch and then `dolt_branch('-f', 'main', …)`.
 A force-move rather than a `dolt_merge`, because one writer per file
 means `main` only ever moves there: the branch is always a descendant,
-so a merge would be a fast-forward anyway, and `main`'s history stays
-linear — which is what `dolt_diff_<table>` between two of its commits
-rests on. Two writers on one store would need the real merge, and the
-lock above is what lets us skip it.
+so a merge would be a fast-forward anyway. That force-move is also why a branch per writer is no way
+around the one-writer rule: it is right only while one process moves
+`main`.
 
-**A branch each is not a way around the one-writer rule**, which is
-worth saying because the scheme above invites the question. Measured on
-doltlite 0.50.3: two processes, each holding one connection on a branch
-of its own, 60 commits each. Their content did stay apart — each
-branch ended with all of its own writer's rows and none of the other's
-— and about three quarters of the operations failed, with `database is
-locked by another connection` from doltlite's own lock on the file and
-`commit conflict: another connection committed to this branch. Please
-retry your transaction`. A writer that reconnects per operation fares
-worse still: a fresh connection lands on the default branch, a failed
-`dolt_connect_branch` is silent, and the rows go where nobody meant
-them to. Branches separate working sets; they do not separate the
-file.
-
-A process that only *moves a ref* is still a second writer. A reader
-kept its own branch and fast-forwarded it with `dolt_merge('main')`
-while the writer sealed through `commit_run`. Merging every 100 ms, it
-got 1–2 of 300 seals refused (`commit conflict` from `dolt_commit`,
-`database is locked` from moving `main`). Merging every 20 ms, one run
-blocked the writer in doltlite's file lock for good. A reader that
-needs a stable, indexed view holds a read transaction on a read-only
-connection instead, which cost the writer nothing at full size
-(`docs/dev/plans/paged_grids.md`, "Pinned and indexed";
-`doltlite_two_process_test`).
+A process that only *moves a ref* is a writer too — a reader that keeps
+a branch of its own and fast-forwards it with `dolt_merge('main')`
+writes to the file on every refresh and waits behind the real writer's
+transactions ([locks and writers](/docs/dev/doltlite.md#locks-and-writers)).
+Read a commit instead (below).
 
 A crash between the commit and the publication leaves the branch ahead
 of `main`; that commit is a seal the last run meant to make, so the
@@ -296,18 +253,11 @@ can see is not a seal.
 
 **A reader lands on the file's stored default branch**, which is `main`
 because seeding set it there and nothing moves it. That is the rule;
-"a connection starts on `main`" is only its consequence. In doltlite the
-default is `zDefaultBranch` in the persisted refs block, and
-`dolt_default_branch(x)` moves it — nothing here calls that, and if
-anything did, every reader would silently start on a writer's branch.
+"a connection starts on `main`" is only its consequence. Nothing here
+calls `dolt_default_branch`, and if anything did, every reader would
+silently start on a writer's branch.
 `a_fresh_connection_starts_on_main` asserts the default itself for that
 reason.
-
-Costs, measured on doltlite 0.50.3: sealing on a branch is within noise
-of sealing on `main` in both time and bytes, and with
-`dolt_connect_branch` an open of an untouched store still writes
-nothing at all. `docs/dev/plans/writer_branches.md` has the numbers and
-what could now be deleted from `pin.rs`.
 
 ### A download takes the store; it never opens one
 
@@ -339,33 +289,36 @@ nothing wrong. The `pin.rs` `Pin` refuses `HEAD` by name, and the
 shared loaders take a mandatory `Reads`, so a call site has to say
 whose store it is reading.
 
-The two-process test measures what a read-only connection may issue
+The `pinned_<table>` views read through `dolt_at_<table>`, one of
+[three ways to read one commit](/docs/dev/doltlite.md#three-ways-to-read-one-commit).
+The one long-lived reader, the search applet, holds a read transaction
+instead, because it needs the secondary indexes `dolt_at_` cannot use
+(`DoltRepo::pinned`). A read-only open of `<file>@<hash>` is the third
+way; nothing in the tree uses it yet.
+
+**The allowlist.** The two-process test measures what a reader may do
 beside a live writer — `dolt_hashof`, `sqlite_master`,
 `CREATE TEMP VIEW`, reads through `dolt_at_` modules and views,
 `dolt_diff_*`, `dolt_log()`, `dolt_commit_ancestors`,
 `dolt_diff_summary`, `dolt_diff_stat`, `dolt_status`, a `COUNT(*)` per
-table, `BEGIN`/`COMMIT` around plain reads (the held read transaction)
-— and that list is the allowlist. Any other statement a reader adds is
-presumed guilty until `doltlite_two_process_test` has run with it.
-Looking like a read is not enough: `dolt_status` from a read-only
-connection failed the writer's commit and lost its rows until doltlite
-0.50.10 (#400, dolthub/doltlite#2832), and
-`a_reader_asking_dolt_status_never_makes_the_writers_commit_fail` is
-what now says it is safe.
+table, `BEGIN`/`COMMIT` around plain reads (the held read transaction),
+`dolt_branches`, and a read-only open of `<file>@<hash>` with a
+`COUNT(*)` on it — and that list is the allowlist. Any other
+statement a reader adds is presumed guilty until
+`doltlite_two_process_test` has run with it. Looking like a read is not
+enough: a read-only `dolt_status` once failed the writer's commit and
+lost its rows
+([what a read-only connection may do](/docs/dev/doltlite.md#what-a-read-only-connection-may-do)),
+and `a_reader_asking_dolt_status_never_makes_the_writers_commit_fail`
+is what now says it is safe.
 
-For a reader that holds its connection across another process's
-commits, both measured in `datalib_pin`'s tests: a scalar function
-answers from the session's last view of the store, so a bare
-`dolt_hashof('HEAD')` keeps reporting the HEAD the connection opened at
-(`datalib_pin::head` reads `sqlite_master` first, which reloads the
-root); and a table committed after the connection opened reads through
-`dolt_at_<table>` without a reopen. Doltlite registers that module the
-first time a statement names it, so `pragma_module_list` is no census of
-what a commit holds: ask by reading through the module, as
-`pin::install_views` does. The one long-lived reader, the search
-applet, reads plain tables inside a read transaction instead, because
-it needs the indexes `dolt_at_` cannot use; a table committed after it
-opened is there at its next transaction (`DoltRepo::pinned`).
+A reader that holds its connection across another process's commits
+has two engine facts to respect, both in
+[what a read-only connection may do](/docs/dev/doltlite.md#what-a-read-only-connection-may-do):
+a bare `dolt_hashof('HEAD')` answers from the session's last view, so
+`datalib_pin::head` reads `sqlite_master` first; and `pragma_module_list`
+is no census of what a commit holds, so `pin::install_views` asks by
+reading through each table's module.
 
 Open the store once per pass — a stage that needs to load rows, run a
 `dolt_diff` scan and probe for ids does all three on one pool — and
@@ -380,64 +333,36 @@ keeps one process-wide runtime for the no-runtime case).
 
 ## What a write costs: the transaction is the unit, and the key decides the size
 
-A doltlite file is a bag of content-addressed chunks. A table is a
-prolly tree — a B-tree whose pages are chunks named by their hash —
-and a chunk is never edited in place: a write produces a new leaf page
-holding the changed rows *and every unchanged row that shared the
-page*, plus a new copy of each page on the path to the root. The old
-pages stay in the file until `dolt_gc()` finds nothing that reaches
-them. A commit is a small chunk naming one root; it makes that root's
-pages reachable, forever, and does nothing else.
+A write rewrites every page its keys fall in, a SQL transaction writes
+each page once at `COMMIT`, and a commit keeps what its transaction
+wrote for good
+([what a write costs](/docs/dev/doltlite.md#what-a-write-costs),
+[disk space and `dolt_gc`](/docs/dev/doltlite.md#disk-space-and-dolt_gc)).
+What that means here:
 
-Three consequences, each measured with `scripts/doltlite_commit_cost.py`
-(doltlite 0.50.3, 100k rows of ~100 bytes; the dated table is in
-`hack/doltlite_commit_cost/`):
-
-- **A SQL transaction rewrites each page it touched once, at
-  `COMMIT`.** 200 statements in 200 transactions wrote 430 MB of pages
-  for 15 MB of rows; the same 200 statements in one transaction wrote
-  24 MB. Every store here already batches — a render store's transaction
-  is one checkpoint interval, the grid index's is the whole run, a
-  SQLite mirror's is one table — so within one run the order rows
-  arrive in does not matter.
-- **The pages a transaction touches are the pages its keys fall in.**
-  The tree is sorted by primary key. 500 rows whose keys are adjacent
-  land in one or two leaves (~10 KB written); 500 rows with random keys
-  land in ~500 leaves (~2 MB written, 99% of it copies of neighbours).
-  Random keys are uuidv4s, uuidv5s and content hashes. Adjacent keys are
-  `(device_id, ts_ms)`, `"{metric}#{date}"`, and the time-prefixed ids
-  `datalib_id` mints: a message's `grid_rows.uuid` starts with its
-  `created_at`, so a sync's new rows land at the tree's right edge.
-- **A commit pins whatever its transaction wrote.** Commit once at the
-  end and `dolt_gc()` reclaims every intermediate page: 430 MB → 15 MB.
-  Commit after each of 200 transactions and gc reclaims nothing
-  (→ 419 MB), because each intermediate tree is now history. With
-  adjacent keys the same 200 commits cost 1 MB, since each pinned only
-  the leaf it touched.
-
-So commit cadence is free in time (a `dolt_commit` is ~20 ms whatever it
-seals) and free on disk until two things are both true: the store's
-keys scatter, and something runs `dolt_gc()`. Without gc every store
-carries every transaction's pages regardless, and only `sqlite_mirror`
-and `fsindex` gc today. What accumulates for a scattered-key store is
-the *incremental* case: a sync that adds 50 documents rewrites ~1000
-leaves, and the run's commit keeps them. It is invisible on a fresh
-root and compounds with every sync.
-
-Two recoveries, both available:
-
-- **Squash.** `dolt_reset('--soft', <base>)` then `dolt_commit` folds
-  the intermediate commits into one; the table hash is unchanged and
-  the next gc reclaims what only they reached (419 MB → 15 MB in the
-  bench). It deletes commit hashes, so a consumer whose cursor named
-  one falls back to a full pass, and a reader pinned at one loses its
-  chunks at the next gc. Squash only commits older than every
-  consumer's cursor, with the writer lock held.
-- **Key for adjacency.** The right fix where the key is ours to
-  choose, and the one every entity id now takes: see the practice note
-  in `docs/dev/data_architecture_ingestion_practices.md` § "Key a table
-  for what one run writes together", and `docs/dev/entity_ids.md` § "The
-  layout" for what the stamp in an id is and is not.
+- **Batch writes in one transaction.** Every store already does — a
+  render store's transaction is one checkpoint interval, the grid
+  index's is the whole run, a SQLite mirror's is one table — so within
+  one run the order rows arrive in does not matter.
+- **Key for adjacency where the key is ours.** Rows a run writes
+  together should sort together: `(device_id, ts_ms)`,
+  `"{metric}#{date}"`, and the time-prefixed ids `datalib_id` mints (a
+  message's `grid_rows.uuid` starts with its `created_at`, so a sync's
+  new rows land at the tree's right edge). Random keys — uuidv4s,
+  uuidv5s, content hashes — touch one page per row, and every run's
+  commit keeps those pages. See
+  `docs/dev/data_architecture_ingestion_practices.md` § "Key a table
+  for what one run writes together" and `docs/dev/entity_ids.md`
+  § "The layout".
+- **Commit cadence is free until something runs `dolt_gc()`**, and only
+  `sqlite_mirror` and `fsindex` do today. Without gc every store keeps
+  every transaction's pages regardless.
+- **A squash deletes commit hashes.** Folding old commits into one
+  (`dolt_reset('--soft', <base>)` then `dolt_commit`) lets the next gc
+  reclaim what only they reached, but a consumer whose cursor named one
+  falls back to a full pass, and a reader pinned at one loses it. Squash
+  only commits older than every consumer's cursor, with the writer lock
+  held.
 
 ## Schema self-healing: additive changes land, anything else refuses
 
@@ -528,9 +453,9 @@ keeps the rename from being silent.
 
 `declared_columns` learns a DDL's columns by parsing it into a probe table in
 an **in-memory** database. Never against the store being opened: a
-create+drop nets to nothing in the working tree but has already appended
-chunks to the file, and nothing collects them, so every `open` cost bytes
-whether or not anything was ingested.
+create+drop there still appends chunks to the file
+([what a write costs](/docs/dev/doltlite.md#what-a-write-costs)), so
+every `open` would cost bytes whether or not anything was ingested.
 
 ## `_datalib_meta`: which build wrote this store
 
@@ -582,19 +507,20 @@ The bundle is the common vocabulary at both ends. Download adds bytes as they
 arrive and drains the bundle at end of bucket; parse loads every document's
 bundle at once with `BlobBundle::load_many`; render then consumes an
 already-loaded bag of bytes — no SQL, no `block_in_place`, no dyn blob reader.
-Parse reads the edge table through a `pinned_*` view, which uses no index, so
-a query per document would be a full scan per document.
+Parse reads the edge table through a `pinned_*` view, which seeks only a
+whole-primary-key equality
+([query plans](/docs/dev/doltlite.md#query-plans-and-indexes)); the
+edge table is looked up by its owning id, so a query per document would
+be a full scan per document.
 
 **The CAS is plain SQLite, not doltlite**, created through the
 `doltlite_engine=sqlite` URI parameter like the run store. A
 content-addressed table is its own history — a hash is present or it is
 not, and a row never changes — so nothing ever read its doltlite log,
-diffs or pins, while every checkpoint's rewritten pages stayed in the
-file for good: measured on two real stores, a doltlite CAS was 2.1× and
-4.7× its payload, and `dolt_gc()` reclaimed almost none of it
-(`docs/dev/plans/completed/blob_cas_plain_sqlite.md`). So the one-writer lock,
-the writer branch, the seal and the pin are all doltlite's rules and
-none of them apply here.
+diffs or pins, while every checkpoint's pages stayed in the file: on
+two real stores a doltlite CAS was 2.1× and 4.7× its payload
+(`docs/dev/plans/completed/blob_cas_plain_sqlite.md`). So the one-writer
+lock, the writer branch, the seal and the pin do not apply here.
 
 **Bytes commit before the rows that name them, by construction.**
 `BlobCas::put_many` commits its own transaction, and `flush_cas_edges`
@@ -635,8 +561,9 @@ host-local cache rather than in the provider's versioned store:
 - **Branching it is a category error.** The cursor describes the live
   filesystem, which has no history; rolling a branch back does not un-modify
   the files on disk.
-- **It was half the store.** Measured at 100k entries, `files` + `file_stats`
-  in one doltlite store is 291 B/row against 148 B/row for `files` alone,
+- **It was half the store.** Measured at 100k entries on doltlite 0.50.13,
+  `files` + `file_stats` in one store is 322 B/row against 171 B/row for
+  `files` alone,
   because the cursor re-stores the full path as its own primary key
   (`providers/fsindex/src/ingest/STORAGE_NOTES.md` has the table).
 

@@ -81,7 +81,7 @@ async fn github_synth_playback_extract_roundtrip() {
     std::env::set_var(PLAYBACK_ENV, &playback);
 
     // The test owns the store: one connection for the download and the
-    // assertions both, because two is what breaks a doltlite file.
+    // assertions both, because the file takes one writer at a time.
     let db = RawDb::open(&db_path_for(&out_db)).await.unwrap();
     let summary = fetch(FetchOptions {
         full_sync: true,

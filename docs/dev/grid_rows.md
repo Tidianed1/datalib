@@ -93,8 +93,9 @@ Every read happens inside one read transaction on a read-only
 connection (`DoltRepo::pinned`), so a request sees one commit and the
 plain table's indexes serve it. `grid_rows` carries one index for the
 newest-first order and one per key the search bar filters on, each
-`(key, touched_at_utc, is_document, uuid)`; a key without one walks
-the whole table in order. They are declared on the struct
+`(key, touched_at_utc, is_document, uuid)`; a filter on a key without
+one reads and sorts the whole table
+([query plans](doltlite.md#query-plans-and-indexes)). They are declared on the struct
 (`#[portable_table(index = …)]`) and created only in the unified
 index, not in the render stores that also hold a `grid_rows`.
 `every_filter_key_is_served_by_an_index` fails when a key has none.
@@ -352,13 +353,11 @@ accumulates in `source_measurements`, a table in the same per-source
 series row's id must carry its time, and the grid would then return a
 copy of every file per run and bury real data under measurements.
 
-**A `Table` row carries no byte size.** doltlite is a content-addressed
-chunk store with no page layout — `dbstat` refuses outright — and
-chunks are shared between tables and between commits, so no honest
-per-table number exists. The internals to do better are in the
-amalgamation (`doltlite_chunk_walk.c` enumerates a catalog's per-table
-prolly roots, and `ChunkIndexEntry` carries each chunk's size), but
-none of it is exposed to SQL or declared in the public header.
+**A `Table` row carries no byte size.** Doltlite has no `dbstat`
+([query plans](doltlite.md#query-plans-and-indexes)), and its chunks
+are shared between tables and between commits, so no honest per-table
+number exists. The amalgamation could walk a table's chunks
+(`doltlite_chunk_walk.c`), but none of that is exposed to SQL.
 
 **Scope is `<name>/ingest`, not the whole tree.** `render_markdown` is
 datalib's own output, `system/usage.doltlite_db` already tracks it per

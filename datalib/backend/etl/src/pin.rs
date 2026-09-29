@@ -1,9 +1,9 @@
 //! Reading a doltlite store at a pinned commit.
 //!
-//! A plain `SELECT` reads doltlite's working set, which lives in the file and
-//! is shared across processes, so it can return rows a writer has not
-//! committed yet. A consumer reading a store whose producer is still running
-//! must read committed state instead: `dolt_at_<table>('<hash>')`.
+//! A plain `SELECT` on a branch reads that branch's working set, rows not
+//! yet committed included. A consumer reading a store whose producer is
+//! still running reads one commit instead, here through
+//! `dolt_at_<table>('<hash>')` (docs/dev/doltlite.md#three-ways-to-read-one-commit).
 //!
 //! [`install_views`] does that once per connection rather than once per query,
 //! by creating a `pinned_<table>` view over each table. Queries then read
@@ -18,8 +18,8 @@
 //! than a quiet wrong answer. It also leaves writes through the real names
 //! working, so a pool that reads and writes is unaffected.
 //!
-//! See `docs/dev/plans/completed/streaming_steps_plan.md`, and its §"The sink contract"
-//! before a consumer treats an empty read as an empty store: "I could not
+//! Read P1 in `datalib/backend/dag/README.md` § "What a sink owes its
+//! consumers" before a consumer treats an empty read as an empty store: "I could not
 //! read this" and "there is nothing here" must stay different answers, or
 //! render deletes every document the source used to have.
 
@@ -85,10 +85,10 @@ pub async fn head(pool: &sqlx::SqlitePool) -> Result<Option<Pin>> {
         );
         return Ok(None);
     };
-    // The same answer reached the other way. A doltlite file is born with an
-    // initialization commit, so HEAD resolves even for a store whose tables
-    // have never been committed -- and there every pinned view would be the
-    // empty one, which reads as a source that lost all its rows.
+    // The same answer reached the other way: HEAD resolves even for a store
+    // whose tables have never been committed (a doltlite file is born with a
+    // commit), and there every pinned view would be the empty one, which
+    // reads as a source that lost all its rows.
     if !holds_a_table(pool, &commit).await {
         tracing::warn!(
             store = %store_filename(pool),
@@ -118,8 +118,9 @@ fn store_filename(pool: &sqlx::SqlitePool) -> String {
 /// - and a sweep over what the walk did not produce deletes every
 ///   document the source had.
 ///
-/// It is reachable: a download that created its tables and wrote rows, then
-/// died before its first commit, leaves exactly this.
+/// It is reachable wherever a writer created tables on the reader's branch
+/// and died before its first commit — a writable CLI session on `main`,
+/// say.
 ///
 /// **A file with no tables counts as unreadable too**: that is the shape an
 /// owner's `open` leaves behind between creating the file and its first
@@ -158,9 +159,8 @@ async fn table_names(pool: &sqlx::SqlitePool) -> Result<Vec<String>> {
 }
 
 /// Whether `table` is in the tree `pin` names. Asked by reading one row
-/// through `dolt_at_<table>`: doltlite registers those modules on first
-/// use, so `pragma_module_list` does not list a table until something has
-/// read it that way.
+/// through `dolt_at_<table>`, because `pragma_module_list` lists no module
+/// before its first use (docs/dev/doltlite.md#what-a-read-only-connection-may-do).
 async fn exists_at(pool: &sqlx::SqlitePool, table: &str, pin: &Pin) -> Result<bool> {
     // Audited: `table` passed `is_table_name`, and `Pin::table` splices a
     // hash `Pin::at` validated as 40 hex characters.
@@ -180,9 +180,8 @@ async fn exists_at(pool: &sqlx::SqlitePool, table: &str, pin: &Pin) -> Result<bo
 ///
 /// The views are temp-schema objects, so they last exactly as long as the
 /// connection, are invisible to every other reader of the file, and write
-/// nothing to it. Our pools are size 1 with recycling disabled (see
-/// `doltlite_raw`'s `open_disables_connection_recycling`) because doltlite's
-/// own session state is per-connection, so one call covers the pool's life.
+/// nothing to it. Our pools are size 1 and never recycled, so one call
+/// covers the pool's life.
 ///
 /// There is deliberately no "install them unpinned" path. A caller with no
 /// commit to pin to is already in trouble — the store has nothing committed —

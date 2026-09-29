@@ -6,29 +6,30 @@ one per run. Same rows at the end — what does the extra history cost?
 
 `scripts/doltlite_commit_cost.py` builds the same 100k-row table six ways against the
 Bazel-built doltlite CLI and reports the file size before and after
-`dolt_gc()`. The write-up is `datalib/backend/etl/README.md` § "What a
-write costs"; this directory is the reproduction.
+`dolt_gc()`. What the numbers mean is
+[`docs/dev/doltlite.md`](../../docs/dev/doltlite.md) § "What a write
+costs"; this directory is the reproduction. Re-run it after a doltlite
+bump.
 
 ```sh
 bazelisk build //third-party/doltlite:doltlite
 python3 scripts/doltlite_commit_cost.py
 ```
 
-## Results — doltlite 0.50.3
-
-Measured on doltlite 0.50.3; the pin is `DOLTLITE_VERSION` in
-`third-party/doltlite/BUILD.bazel`, and a doltlite bump is the time to
-re-run the script.
+## Results — doltlite 0.50.13
 
 ```
-random keys, 200 txns, commit once                   commits=   3  before gc  430.1 MB  after gc   14.8 MB
-random keys, ONE txn, commit once                    commits=   3  before gc   24.4 MB  after gc   14.8 MB
-random keys, 200 txns, commit every 10 txns          commits=  22  before gc  430.1 MB  after gc  141.3 MB
-random keys, 200 txns, commit every txn              commits= 202  before gc  430.3 MB  after gc  419.3 MB
+random keys, 200 txns, commit once                   commits=   3  before gc  438.6 MB  after gc   14.8 MB
+random keys, ONE txn, commit once                    commits=   3  before gc   24.6 MB  after gc   14.8 MB
+random keys, 200 txns, commit every 10 txns          commits=  22  before gc  438.6 MB  after gc  141.3 MB
+random keys, 200 txns, commit every txn              commits= 202  before gc  438.7 MB  after gc  419.3 MB
   … squashed to one commit, gc again                 commits=   3                         after gc   14.8 MB
-time-prefixed keys, 200 txns, commit once            commits=   3  before gc   16.9 MB  after gc   15.6 MB
-time-prefixed keys, 200 txns, commit every txn       commits= 202  before gc   17.0 MB  after gc   16.8 MB
+time-prefixed keys, 200 txns, commit once            commits=   3  before gc   17.1 MB  after gc   15.6 MB
+time-prefixed keys, 200 txns, commit every txn       commits= 202  before gc   17.2 MB  after gc   16.8 MB
 ```
+
+Every after-gc number matches 0.50.3's. Before gc, 0.50.3 wrote 430 MB
+for the random-key rows and 0.50.12 wrote 493 MB.
 
 Reading it:
 

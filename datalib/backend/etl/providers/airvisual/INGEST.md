@@ -21,12 +21,14 @@ for nothing — `fsindex` makes the same call. `schema_raw::upsert_samples`
 is the chunked multi-row upsert, and one device's files all go in one
 transaction with its device row and its cursor stamps: a full re-read
 is a minute, so the per-file durability `contacts` and `google_takeout`
-buy with a transaction per file would cost a tree rewrite per file
-here for nothing (1,597 dead chunks per cold run, against 174). Measured
-over two real Pros (384,622 samples from 24 MB of history text): the store went from
-275 MB with payload and sidecar to 80 MB without, 66 MB after
-`dolt_gc()`; the same rows as plain SQLite are 44 MB (33 MB of rows,
-11 MB of primary-key index), the rest being doltlite's chunk format.
+buy with a transaction per file would rewrite the touched pages once per
+file here for nothing
+([doltlite.md § What a write costs](/docs/dev/doltlite.md#what-a-write-costs);
+1,597 dead chunks per cold run against 174). Measured over two real Pros
+(384,622 samples from 24 MB of history text) on doltlite 0.50.3: the
+store went from 275 MB with payload and sidecar to 80 MB without, 66 MB
+after `dolt_gc()`; the same rows as plain SQLite are 44 MB (33 MB of
+rows, 11 MB of primary-key index).
 `source_file` is a third of each row; an integer reference into
 `ingested_files` would take ~13 MB off, at the cost of the column a
 person reads.

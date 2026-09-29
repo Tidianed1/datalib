@@ -230,14 +230,13 @@ impl DoltRepo {
     /// `grid_index` step has yet to create it or commit into it — the
     /// same answer every read gives for a missing table.
     ///
-    /// A transaction on a read-only connection holds one commit for as
-    /// long as it is open, and reads the plain tables, so their indexes
-    /// serve it. `dolt_at_` holds a commit too but uses no secondary
-    /// index, and a plain read outside a transaction can see `main` move
-    /// between two statements. The writer publishes by moving `main` in
-    /// one step, so the transaction never sees a half-written batch;
-    /// holding one costs the writer nothing
-    /// (`a_held_read_transaction_is_a_snapshot_while_the_writer_seals`).
+    /// A transaction on a read-only connection holds one commit and reads
+    /// the plain tables, so their indexes serve it; `dolt_at_` would lose
+    /// them, and a plain read outside a transaction can see `main` move
+    /// between two statements
+    /// (docs/dev/doltlite.md#three-ways-to-read-one-commit). The writer
+    /// publishes by moving `main` in one step, so the transaction never
+    /// sees a half-written batch.
     async fn pinned(&self) -> Result<Option<At>, RepoError> {
         let internal = |what: &str, e: sqlx::Error| RepoError::Internal(format!("{what}: {e}"));
         if !self.db_path.is_file() {

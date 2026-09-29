@@ -258,19 +258,18 @@ Pick the surface that fits the question:
   and so sits next to `datalib-dag` in `~/.local/bin` (it is plain
   `doltlite` in the docker image, and
   `bazelisk build //third-party/doltlite:doltlite` from a checkout).
-  Its argv is `sqlite3`'s. **Always pass `-readonly`** — a stray writer
-  can wedge later syncs:
+  Its argv is `sqlite3`'s. **Always pass `-readonly`**: a writable
+  session's commits are overwritten by the next sync without an error,
+  and a transaction it holds open stalls the sync:
 
   ```sh
   datalib-doltlite -readonly unified_index/grid_index/db.doltlite_db \
     "SELECT provider, count(*) FROM grid_rows GROUP BY 1;"
   ```
 
-  Stock `sqlite3` **cannot** open the file itself — a `.doltlite_db` is
-  a prolly-tree store, not a SQLite file, and `sqlite3` says `file is
-  not a database`. But nothing is trapped in there: one pipe writes a
-  plain SQLite database with the same tables, schemas and indexes, for
-  any tool that speaks only SQLite.
+  Stock `sqlite3` **cannot** open the file itself (`file is not a
+  database`), but one pipe writes a plain SQLite database with the same
+  tables, schemas and indexes, for any tool that speaks only SQLite.
 
   ```sh
   datalib-doltlite -readonly unified_index/grid_index/db.doltlite_db .dump \
@@ -391,8 +390,11 @@ document.
   A step re-runs when an input version moved (download steps always run
   — their input is a remote service). `select step, started_at_utc from
   invocations where outcome is null` is what is running now.
-- **Wedged doltlite file** (`commit conflict` after a stray writer):
-  recovery recipes in [`docs/dev/doltlite.md`](dev/doltlite.md).
+- **A sync stuck on `database is locked`**: something holds a write
+  transaction on that store — usually a writable `doltlite` session;
+  close it. Uncommitted leftovers need no repair, since the next
+  writer's open discards them
+  ([`docs/dev/doltlite.md`](dev/doltlite.md#locks-and-writers)).
 - **A config the runner rejects**: `datalib-dag --check
   <data_root>/config.toml` lists every problem with a line number;
   `PUT /api/config` (or the Manage tab) returns the same list in
