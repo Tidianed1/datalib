@@ -103,8 +103,10 @@ index, not in the render stores that also hold a `grid_rows`.
 Free text never reaches SQL: the applet sends it to qmd, maps the hits
 to rows by `qmd_path` (below), keeps the ones the query's structured
 terms also match (`filter_uuids`), and shows each hit's own matched
-lines as its Contents cell. With no qmd index, a free-text search
-answers with an error, not a weaker search.
+lines as its Contents cell. There is no weaker search in its place:
+before the first sync builds a qmd index, free text finds no rows and
+the answer says `qmd_index_missing`, which the grid shows as a note
+rather than an error.
 
 ## Adding a column
 
