@@ -38,6 +38,23 @@ pub fn human_gap(ms: i64) -> String {
     }
 }
 
+pub fn thousands(n: i64) -> String {
+    let neg = n < 0;
+    let digits = n.unsigned_abs().to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3 + 1);
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    if neg {
+        format!("-{out}")
+    } else {
+        out
+    }
+}
+
 pub fn pretty_json(raw: &str) -> String {
     match serde_json::from_str::<serde_json::Value>(raw) {
         Ok(v) => serde_json::to_string_pretty(&v).unwrap_or_else(|_| raw.to_string()),
@@ -45,9 +62,26 @@ pub fn pretty_json(raw: &str) -> String {
     }
 }
 
+pub fn yaml_safe(s: &str) -> String {
+    if s.chars().any(|c| ":#[]{}&*?,|>'\"%@`\n".contains(c)) {
+        format!("\"{}\"", s.replace('"', "\\\""))
+    } else {
+        s.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn thousands_groups_digits() {
+        assert_eq!(thousands(0), "0");
+        assert_eq!(thousands(999), "999");
+        assert_eq!(thousands(1_000), "1,000");
+        assert_eq!(thousands(149_564), "149,564");
+        assert_eq!(thousands(-1_234_567), "-1,234,567");
+    }
 
     #[test]
     fn median_gap_ignores_a_single_long_outage() {

@@ -270,10 +270,7 @@ part of any tree-hash; see §"Stamping policy".
 
 ## What `fsindex` does not do
 
-- No row per entry. Filesystem entries do not project to `GridRow`;
-  the render step (`fsindex_render`) writes one summary page for the
-  tree — files by extension, the top-level folders — whose `item_count`
-  is the rows of `files`: files and symlinks, never directories.
+- No render side. Filesystem entries do not project to `GridRow`.
 - No CAS, no `blobs.sqlite`. We hash bytes; we don't store
   them.
 - No JSONL wire-event tape. There is no upstream wire to mirror; the

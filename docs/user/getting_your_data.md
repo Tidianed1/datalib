@@ -78,9 +78,8 @@ Every chat renders as a page a month.
 
 `type = "apple_photos"` — reads an Apple Photos `.photoslibrary`
 bundle (`library.path`). Mirrors the library's database — every asset,
-album, person, face, keyword and edit — as a versioned backup. It
-renders one summary page: how many photos and videos, when they were
-taken, their file types and the albums.
+album, person, face, keyword and edit — as a versioned backup;
+download-only, nothing is rendered.
 
 On macOS the library is `~/Pictures/Photos Library.photoslibrary` and
 it is a protected location: in the app, choose it with the picker
@@ -523,9 +522,8 @@ folder stays out unless `google_voice_include_spam = true`.
 
 `type = "lightroom"` — an Adobe Lightroom Classic catalog, the `.lrcat`
 file (`catalog.path`). Mirrors every table of the catalog as a
-deduplicated, versioned backup with full history. It renders one
-summary page: how many photos, when they were captured, their formats,
-ratings, flags and keywords.
+deduplicated, versioned backup with full history; download-only,
+nothing is rendered.
 
 The catalog is wherever Lightroom keeps it — by default
 `~/Pictures/Lightroom/Lightroom Catalog-v14.lrcat` or similar. It is
@@ -555,9 +553,8 @@ newer export drop what LinkedIn stopped including.
 ## Local files
 
 `type = "fsindex"` — any directory tree on disk (`fswalk.path`).
-Mirrors an index of every entry — path, kind, size, blake3 hash. It
-renders one summary page: how many files, how big, by extension and by
-top-level folder.
+Mirrors an index of every entry — path, kind, size, blake3 hash;
+download-only, nothing is rendered.
 
 Nothing but a path. The scan is incremental, keyed on mtime, size and
 inode, so a rescan of a big tree is fast, and it stays read-only
@@ -569,9 +566,8 @@ source's raw store.
 `type = "media"` — a directory tree of music, photos and video
 (`fswalk.path`). Mirrors every audio, image and video file with its
 metadata — artist, album and track for music; camera, lens, exposure,
-GPS and capture time for photos and video — plus `.m3u` playlists. It
-renders one summary page: how many files of each kind and format, when
-the pictures were taken, the cameras and the artists.
+GPS and capture time for photos and video — plus `.m3u` playlists;
+download-only, nothing is rendered.
 
 Nothing but a path. Files are keyed on content hash, not path, so the
 same song synced to three folders is one row with three locations, and

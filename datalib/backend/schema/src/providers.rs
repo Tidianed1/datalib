@@ -32,9 +32,6 @@ pub enum Provider {
     /// Apple's Messages app. The vendor stays for the reason it does on
     /// `apple_photos`: "messages" alone names nothing.
     AppleMessages,
-    /// An Apple Photos library's database, mirrored table for table;
-    /// rendered as one summary page.
-    ApplePhotos,
     Beeper,
     /// Calendar events: Google Calendar, CalDAV (Fastmail, iCloud, …)
     /// and `.ics` files, one tag for all of them.
@@ -60,21 +57,12 @@ pub enum Provider {
     Email,
     /// A "Download your information" export, the JSON flavour.
     Facebook,
-    /// A directory tree's files, indexed by path and content hash;
-    /// rendered as one summary page.
-    Fsindex,
     /// Garmin Connect: a watch's worth of health and activity data.
     Garmin,
     Github,
     Gitlab,
     GoogleTakeout,
-    /// A Lightroom Classic catalog, mirrored table for table; rendered
-    /// as one summary page.
-    Lightroom,
     Linkedin,
-    /// A tree of music, photos and video, with their tags; rendered as
-    /// one summary page.
-    Media,
     Notion,
     Pdf,
     Perseus,

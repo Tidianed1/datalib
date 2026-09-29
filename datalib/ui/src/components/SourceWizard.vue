@@ -106,10 +106,10 @@ const emit = defineEmits<{
       /// Null when editing: the group already exists.
       groupBody: string | null;
       /// The `[[steps]]` blocks: the ingest step, then the render step
-      /// unless rendering is off.
+      /// for a provider that renders.
       stepsBody: string;
       /// The render step's composed id, for the caller to wire into the
-      /// fan-ins. Null when rendering is off.
+      /// fan-ins. Null for a provider that renders nothing.
       renderId: string | null;
       /// Which of its `keyword_index` and `embed` steps the source gets.
       /// `none` leaves the markdown out of free-text search; the grid
@@ -143,14 +143,20 @@ const values = ref<FieldValues>({});
 /// choice the user made.
 const idTouched = ref(false);
 
+/// Can this provider render at all? A download-only provider (a photo
+/// catalog, a media tree) has no text to render, and no choice to
+/// offer.
+const providerRenders = computed(() => !!chosen.value && chosen.value.renderStep !== false);
+
 /// Whether this source wants its render step. On by default: mirrored
 /// data that is never rendered reaches neither the grid nor search, so
 /// off is the deliberate answer. Editing seeds it from what the config
 /// already has.
 const renderWanted = ref(props.editing ? !!props.editing.steps.render : true);
 
-/// Does this source write a render step.
-const renders = computed(() => !!chosen.value && renderWanted.value);
+/// Does this source write a render step — the provider can, and this
+/// source asked for it.
+const renders = computed(() => providerRenders.value && renderWanted.value);
 
 /// Whether this source's markdown gets a keyword index, and embeddings
 /// on top of it. Both on by default, for the same reason rendering is: a
@@ -210,9 +216,9 @@ const missingSteps = computed<string[]>(() => {
   return out;
 });
 
-/// A render step this source has that the form will not write back,
-/// because rendering is off. Saving removes it, and that is worth a
-/// sentence for the same reason a missing step is.
+/// A render step this source has that its provider does not write — a
+/// hand-written one under a download-only type. Saving removes it, and
+/// that is worth a sentence for the same reason a missing step is.
 const orphanRender = computed<string | null>(() =>
   props.editing && !renders.value && props.editing.steps.render
     ? props.editing.steps.render.id
@@ -1269,9 +1275,16 @@ function submit() {
           >. Saving writes {{ missingSteps.length === 1 ? "it" : "them" }}.
         </p>
         <p v-if="orphanRender" class="wiz-cred">
-          Rendering is off below, and this source has a render step,
-          <code>{{ orphanRender }}</code
-          >. Saving removes it, and takes it out of the index steps’ inputs.
+          <template v-if="providerRenders">
+            Rendering is off below, and this source has a render step,
+            <code>{{ orphanRender }}</code
+            >.
+          </template>
+          <template v-else>
+            This source has a render step, <code>{{ orphanRender }}</code
+            >, but {{ chosen.label }} renders nothing.
+          </template>
+          Saving removes it, and takes it out of the index steps’ inputs.
         </p>
 
         <p
@@ -1283,7 +1296,7 @@ function submit() {
         </p>
 
         <template v-for="section in sections" :key="section.key">
-          <section v-if="section.heading" class="wiz-section">
+          <section v-if="section.heading && providerRenders" class="wiz-section">
             <h3 class="wiz-section-head">{{ section.heading }}</h3>
             <label class="wiz-field wiz-inline">
               <span class="wiz-label">Render this source into markdown</span>

@@ -111,8 +111,9 @@ impl LightroomConfig {
     }
 }
 
-/// Params for the render step — no provider-specific render knobs, so
-/// this is the shared bare envelope (see the per-phase params split).
+/// Params for the render step. `lightroom` is download-only for now (see
+/// the provider crate's `processor::plan_render`), so this is the shared
+/// bare envelope.
 pub type LightroomRenderConfig = datalib_source_common::BareRenderConfig;
 
 pub use datalib_source_common::glob_match;

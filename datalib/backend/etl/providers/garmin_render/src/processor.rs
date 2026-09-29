@@ -6,8 +6,8 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use datalib_etl::processor::PlanContext;
 use datalib_etl_garmin_config::GarminRenderConfig;
-use datalib_etl_render::one_page::skip_if_current;
 use datalib_etl_render::processor::{plan_source_render, RenderCtx, RenderProcessor, SourceRender};
+use datalib_etl_timeseries_render::page::skip_if_current;
 
 /// Always planned: the driver's reverse lookup says whether the page's
 /// tables moved, so a no-op run costs one `dolt_log()` query.

@@ -415,11 +415,11 @@ async fn problem_counts_reach_the_rows_from_the_run_store() {
 /// An entry the loader drops still has a row — it is still in the
 /// file — and its status says so, outranking whatever the record
 /// remembers. The group it is under is not dropped with it.
-/// A source with no render step has no rows at all, so its Browse is
+/// A source that renders nothing has no rows at all, so its Browse is
 /// disabled and says so, rather than opening an empty grid onto a
 /// source that looks broken.
 #[tokio::test]
-async fn a_source_with_no_render_step_cannot_be_browsed() {
+async fn a_download_only_source_cannot_be_browsed() {
     let tmp = tempfile::tempdir().unwrap();
     let config = format!(
         "{CONFIG}

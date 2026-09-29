@@ -226,6 +226,8 @@ EXPECTED_PROVIDERS = frozenset(
         "linkedin",
         "notion",
         "chatgpt",
+        # The only file-backed source in this fixture that renders.
+        # fsindex and lightroom scan trees too but produce no rows;
         # `pdf` converts what it scans, so it must show up here.
         "pdf",
         "signal",

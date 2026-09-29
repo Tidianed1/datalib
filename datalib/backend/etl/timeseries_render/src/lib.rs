@@ -2,9 +2,8 @@
 //! garmin's. A provider's render crate keeps its own metric table (which
 //! column plots where, in what unit) and its own parse of its raw store;
 //! the sensor page (`page`), the Plotly page, the vocabulary those
-//! tables are written in, the series type they produce and the time
-//! formatting live here once. What any one-page source shares, the
-//! skip check and the page write, is `datalib_etl_render::one_page`.
+//! tables are written in, the series type they produce and the number
+//! formatting live here once.
 
 pub mod page;
 pub mod plot;
