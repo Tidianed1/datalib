@@ -7,21 +7,19 @@
 /// The words of `markdown` on one line. Reading stops once more than
 /// `limit` characters are in hand, so a long body costs only its start.
 ///
-/// A `<details>` block reads as its summary, the way the page shows it
-/// folded — a reply's Thinking stays out of the reply — unless the block
-/// is all there is, as on a tool call's own row, where its contents are
-/// the point.
+/// A `<details>` block is folded on the page, and left out here — a
+/// reply's Thinking is not the reply — unless the text is nothing else:
+/// then one block reads as its summary and contents, as on a tool call's
+/// own row, and several as their summaries.
 pub fn plain_text(markdown: &str, limit: usize) -> String {
     let mut out = Words::default();
     let mut folded: Option<Folded> = None;
+    let mut summaries = Words::default();
+    let mut first_body: Option<Words> = None;
     let mut blocks = 0;
-    let mut sole_body: Option<Words> = None;
-    let mut outside = false;
-    let mut fold = |block: Folded, out: &mut Words, blocks: usize, outside: bool| {
-        out.push(&block.summary);
-        if blocks == 1 && !outside {
-            sole_body = Some(block.body);
-        }
+    let mut fold = |block: Folded| {
+        summaries.push(&block.summary);
+        first_body.get_or_insert(block.body);
     };
     for line in markdown.lines() {
         if out.chars > limit {
@@ -31,7 +29,7 @@ pub fn plain_text(markdown: &str, limit: usize) -> String {
         if folded.is_none() {
             let Some(opened) = rest.strip_prefix("<details>") else {
                 if let Some(text) = line_text(line) {
-                    outside |= out.push(&text);
+                    out.push(&text);
                 }
                 continue;
             };
@@ -48,23 +46,26 @@ pub fn plain_text(markdown: &str, limit: usize) -> String {
             Some(at) => (&rest[..at], true),
             None => (rest, false),
         };
-        if block.body.chars <= limit {
+        if blocks == 1 && block.body.chars <= limit {
             if let Some(text) = line_text(inside) {
                 block.body.push(&text);
             }
         }
         if closed {
-            fold(folded.take().unwrap(), &mut out, blocks, outside);
+            fold(folded.take().unwrap());
         }
     }
     // A block the text ends inside — cut off — reads as closed.
     if let Some(block) = folded.take() {
-        fold(block, &mut out, blocks, outside);
+        fold(block);
     }
-    if let (1, false, Some(body)) = (blocks, outside, sole_body) {
-        out.push(&body.text);
+    if !out.text.is_empty() {
+        return out.text;
     }
-    out.text
+    if let (1, Some(body)) = (blocks, first_body) {
+        summaries.push(&body.text);
+    }
+    summaries.text
 }
 
 /// `<summary>…</summary>` at the start of a `<details>` line, and what
@@ -90,19 +91,21 @@ struct Words {
 }
 
 impl Words {
-    /// Appends `text`'s words, one space apart; whether there were any.
-    fn push(&mut self, text: &str) -> bool {
-        let mut any = false;
+    /// Appends `text`'s words, one space apart. A run of four or more
+    /// punctuation marks and nothing else (`-::~:~::~`, `======`) is a
+    /// divider someone drew, not a word.
+    fn push(&mut self, text: &str) {
         for word in text.split_whitespace() {
+            if word.len() >= 4 && word.chars().all(|c| c.is_ascii_punctuation()) {
+                continue;
+            }
             if !self.text.is_empty() {
                 self.text.push(' ');
                 self.chars += 1;
             }
             self.text.push_str(word);
             self.chars += word.chars().count();
-            any = true;
         }
-        any
     }
 }
 
@@ -111,7 +114,7 @@ fn line_text(line: &str) -> Option<String> {
     if line.starts_with("```") || line.starts_with("~~~") {
         return None;
     }
-    if matches!(line, "---" | "***" | "___") {
+    if is_rule(line) {
         return None;
     }
     let line = without_block_marks(line);
@@ -120,6 +123,13 @@ fn line_text(line: &str) -> Option<String> {
     let line = without_link_targets(&line);
     let line = without_tags(&line);
     Some(without_emphasis(&line))
+}
+
+/// A horizontal rule: three or more of one of `-`, `*`, `_`, spaces
+/// allowed between (`* * *`).
+fn is_rule(line: &str) -> bool {
+    let marks: Vec<char> = line.chars().filter(|c| !c.is_whitespace()).collect();
+    marks.len() >= 3 && matches!(marks[0], '-' | '*' | '_') && marks.iter().all(|&c| c == marks[0])
 }
 
 /// A quote's `>`s, then a heading's `#`s — only where one is followed by a
@@ -317,7 +327,7 @@ mod tests {
         );
     }
 
-    /// A reply's reasoning is folded on the page, and in the cell.
+    /// A reply's reasoning is folded on the page, and left out of the cell.
     #[test]
     fn a_folded_block_beside_other_text_reads_as_its_summary() {
         assert_eq!(
@@ -325,7 +335,7 @@ mod tests {
                 "Plot a course.\n<details><summary>Thinking</summary>\n\n\
                  > The Neutral Zone is closer.\n\n</details>\n\nCourse laid in."
             ),
-            "Plot a course. Thinking Course laid in."
+            "Plot a course. Course laid in."
         );
     }
 
@@ -363,6 +373,27 @@ mod tests {
         assert_eq!(
             text("*Riker commented on his own photo.* 2 * 3 is `six`, \\[file\\] snake_case"),
             "Riker commented on his own photo. 2 * 3 is six, [file] snake_case"
+        );
+    }
+
+    /// A text of several folded blocks and nothing else says what they are.
+    #[test]
+    fn folded_blocks_alone_read_as_their_summaries() {
+        assert_eq!(
+            text(
+                "<details><summary>Tool use: scan</summary>\n\nbody\n\n</details>\n\
+                 <details><summary>Tool result: scan</summary>\n\nbody\n\n</details>"
+            ),
+            "Tool use: scan Tool result: scan"
+        );
+    }
+
+    /// Dividers from HTML mail and meeting invites.
+    #[test]
+    fn rules_and_divider_runs_go() {
+        assert_eq!(
+            text("Join the briefing\n* * *\n-::~:~::~:~:~::-\nBridge, 0900 -- sharp..."),
+            "Join the briefing Bridge, 0900 -- sharp..."
         );
     }
 

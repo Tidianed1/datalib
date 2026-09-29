@@ -192,7 +192,7 @@ expression: snapshot
       "md_path": "tng_contacts-diff/render_markdown/00000000-0000-819d-aad9-cb628fc3bec0/index.md",
       "modified_at": null,
       "provider": "contacts",
-      "renderer_version": "rust-v1.5",
+      "renderer_version": "rust-v1.6",
       "source_id": "tng_contacts-diff",
       "title": "Maquis"
     },
@@ -432,7 +432,7 @@ expression: snapshot
       "md_path": "tng_contacts-diff/render_markdown/00000000-0000-8429-b938-7d1e51384182/index.md",
       "modified_at": null,
       "provider": "contacts",
-      "renderer_version": "rust-v1.5",
+      "renderer_version": "rust-v1.6",
       "source_id": "tng_contacts-diff",
       "title": "Maquis"
     },

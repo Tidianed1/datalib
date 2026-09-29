@@ -289,7 +289,7 @@ expression: docs_bundle(&docs)
       "notion_page_uuid": null,
       "org_name": "USS Enterprise",
       "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
-      "preview": "Look up the Klingon greeting \"nuqneH\" and propose a respectful opening line for a diplomatic dispatch to Chancellor K'mpec. Thinking For a dispatch to Chancellor K'mpec, open with \"qaleghneS, Chancellor — nuqneH?\" (\"I am honored to see you …",
+      "preview": "Look up the Klingon greeting \"nuqneH\" and propose a respectful opening line for a diplomatic dispatch to Chancellor K'mpec. For a dispatch to Chancellor K'mpec, open with \"qaleghneS, Chancellor — nuqneH?\" (\"I am honored to see you — what do…",
       "project": "Bridge Operations",
       "provider": "claude",
       "qmd_path": "claude_export/render_markdown/00000000-0000-856b-944c-412bf8dca640/all.md",
