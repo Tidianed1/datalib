@@ -58,7 +58,7 @@ published from a local machine — the tag is the trigger.
 1. Start from a clean, current main:
    `git fetch origin && git checkout -b release-vX.Y.Z origin/main`.
 2. Pick the version by reviewing what's shipping:
-   `git log v<last>..origin/main --oneline` (find `<last>` with
+   `git log --first-parent v<last>..origin/main --oneline` (find `<last>` with
    `git tag | sort -V | tail -1` — fetch tags first).
 3. Bump all four version fields: `Cargo.toml` and the three
    `BUILD.bazel`.
@@ -139,12 +139,13 @@ published from a local machine — the tag is the trigger.
    gh pr create --base main --head release-vX.Y.Z \
      --title "chore(release): bump version X.Y.Z → X.Y'.Z'"
    gh pr checks <n> --watch --fail-fast
-   gh pr merge <n> --squash
+   gh pr merge <n> --merge
    ```
 
-   The PR lands squashed (that is how every PR here lands), so the
-   commit on `main` is a new hash, not the bump commit you pushed.
-9. Tag the squashed commit on main and push the tag:
+   The PR lands as a merge commit (that is how every PR here lands),
+   so the commit to tag is that merge on `main`, not the bump commit
+   you pushed.
+9. Tag the merge commit on main and push the tag:
    `git fetch origin && git tag vX.Y.Z origin/main && git push origin vX.Y.Z`.
    Check first that `origin/main` is that commit and nothing landed on
    top of it (`git log --oneline -3 origin/main`); tag it by sha if
