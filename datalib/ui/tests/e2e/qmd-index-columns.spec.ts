@@ -1,4 +1,4 @@
-import { actOnRowByUuid, SEARCH_ROWS, type GridApi } from "./grid-helpers";
+import { actOnRowByUuid, EVERY_ROW, SEARCH_ROWS, type GridApi } from "./grid-helpers";
 import { test, expect, type Page } from "@playwright/test";
 
 // The grid's `Indexed` / `Embedded` columns, end to end against the
@@ -174,7 +174,8 @@ test.describe("the search coverage line", () => {
       body.query_echo.qmd_index_missing = true;
       await route.fulfill({ response, json: body });
     });
-    await page.goto("/");
+    // Every row: this test's free text is anything in the search bar.
+    await page.goto(EVERY_ROW);
     await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 10_000 });
     await expect(page.locator(".qmd-summary")).toHaveText(
       "· search index not built yet — sync to build it",

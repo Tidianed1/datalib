@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { clickRowByUuid } from "./grid-helpers";
+import { clickRowByUuid, EVERY_ROW } from "./grid-helpers";
 
 // The document header printed the raw `created_at` right above the first
 // message, which shows the same moment in its own short form (#902). The
@@ -26,7 +26,7 @@ test("the document header does not repeat the raw created_at", async ({ page, re
   const { created_at } = (await chat.json()) as { created_at: string | null };
   expect(created_at, "the picked document must have a created_at to look for").toBeTruthy();
 
-  await page.goto("/");
+  await page.goto(EVERY_ROW);
   await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
   await clickRowByUuid(page, pick!.uuid);
 
