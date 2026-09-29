@@ -85,6 +85,7 @@ import {
   type ServerGroup,
 } from "@/grid/serverGroups";
 import { searchFailure, type SearchFailure } from "./searchFailure";
+import { DEFAULT_QUERY, PLAIN_HINT, searchPlaceholder } from "./searchDefaults";
 import { pushToast } from "@/toasts";
 import type { CardCtx } from "./types";
 
@@ -124,9 +125,11 @@ const query = ref(initialState.get("q") ?? props.q ?? "");
 
 // An unnamed card's name tracks the live query, not just the factory
 // argument — searching from inside the card renames it.
-watch(query, (q) => props.ctx.setTitle(props.name ?? (q ? `Search: ${q}` : "Search")), {
-  immediate: true,
-});
+watch(
+  query,
+  (q) => props.ctx.setTitle(props.name ?? (q && q !== DEFAULT_QUERY ? `Search: ${q}` : "Search")),
+  { immediate: true },
+);
 const rows = shallowRef<Row[]>([]);
 /// The columns the applet declares for its rows — see `ColumnSpec`.
 const columns = ref<ColumnSpec[]>([]);
@@ -359,7 +362,9 @@ let colsEncoded: string | null = initialState.get("cols");
 function saveState() {
   if (restoring) return;
   const params = new URLSearchParams();
-  if (query.value) params.set("q", query.value);
+  // Against the card source's query, not against empty: a cleared
+  // search has to be saved, or a reload brings the default back.
+  if (query.value !== (props.q ?? "")) params.set("q", query.value);
   if (sel.value) params.set("sel", sel.value);
   if (colsEncoded) params.set("cols", colsEncoded);
   props.ctx.host.setState(params.toString());
@@ -1070,6 +1075,21 @@ onMounted(async () => {
   runSearch(query.value);
 });
 
+const hint = ref(props.placeholder ?? PLAIN_HINT);
+const namesASource = () => hint.value !== PLAIN_HINT;
+
+/// A search card with no hint of its own suggests filters on this
+/// library's sources, once the index holds any.
+async function nameSourcesInPlaceholder() {
+  if (props.placeholder != null || url !== SEARCH) return;
+  try {
+    hint.value = searchPlaceholder((await fetchGroups<Row>("", "source_ref")).groups);
+  } catch {
+    /* only a hint */
+  }
+}
+onMounted(nameSourcesInPlaceholder);
+
 // The index moved under us — a `grid_index` pass committed, which under
 // streaming happens many times per sync, as each source's rows arrive.
 // Ask the shown search again; the rows update in place while the
@@ -1082,6 +1102,7 @@ onMounted(() => {
       root: (e) => {
         if (e.kind !== "index_changed") return;
         void runSearch(query.value, true);
+        if (!namesASource()) void nameSourcesInPlaceholder();
       },
     },
     { onScreen: cardEl.value ?? undefined },
@@ -1121,7 +1142,8 @@ const columnOverrides: Record<string, Partial<Column<Row>>> = {
   conversation_name: { width: 200 },
   channel: { width: 130 },
   snippet: {
-    width: 600,
+    // Room for the default columns beside it in a 1440px window.
+    width: 480,
     // Two-line clamp via our own <div>, so the clamp styles land on the
     // direct text container. The row height is fixed at 52px to fit
     // two lines; per-row measurement was the dominant render cost on
@@ -1804,10 +1826,7 @@ onBeforeUnmount(() => {
     <div ref="searchWrapEl" class="search-input-wrap">
       <input
         v-model="query"
-        :placeholder="
-          props.placeholder ??
-          'search messages…  (try: source:Slack, -channel:announce, before:2025-01-01)'
-        "
+        :placeholder="hint"
         class="search-input"
         data-testid="search-input"
         autofocus

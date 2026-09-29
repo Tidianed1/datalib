@@ -4,7 +4,7 @@
 // placeholder per image naming its host and a banner counting them.
 
 import { test, expect, type Page } from "@playwright/test";
-import { SEARCH_ROWS, selectRowByUuid } from "./grid-helpers";
+import { EVERY_ROW, SEARCH_ROWS, selectRowByUuid } from "./grid-helpers";
 
 declare global {
   interface Window {
@@ -35,7 +35,7 @@ async function openMarketingEmail(page: Page) {
     (r) => r.kind === "Email" && r.conversation_name === "Your shore leave awaits!",
   );
   expect(email, "the fixture's Risa marketing email").toBeDefined();
-  await page.goto("/");
+  await page.goto(EVERY_ROW);
   await expect(page.locator(SEARCH_ROWS).first()).toBeVisible({ timeout: 15_000 });
   await selectRowByUuid(page, email!.uuid);
   await expect(page.locator(".chat-preview .chat-body")).toBeVisible();
