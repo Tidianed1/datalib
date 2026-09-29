@@ -1223,9 +1223,9 @@ pub struct DagRecord {
     /// step id → the errors and warnings its store held the last time
     /// it counted, in whichever run that was.
     pub problems: std::collections::HashMap<String, manage::ProblemCounts>,
-    /// step id → how many documents its store held the last time it
-    /// counted. Only render steps report it.
-    pub documents: std::collections::HashMap<String, i64>,
+    /// step id → the Items cell: what its store held the last time it
+    /// counted, and the series behind that. Only render steps report it.
+    pub items: std::collections::HashMap<String, datalib_columns::Timeseries>,
 }
 
 /// An open run in the record while nothing is running is a run that died,
@@ -1267,8 +1267,13 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
 
     let problems =
         manage::counts_by_step(&datalib_runs::latest_metric(root, datalib_problems::METRIC).await);
-    let documents = manage::documents_by_step(
+    let (since, _) = datalib_time::IsoOffsetTimestamp::now_local()
+        .bump_micros(-(manage::ITEMS_WINDOW.as_micros() as i64))
+        .to_utc_and_offset();
+    let items = manage::items_by_step(
+        &datalib_runs::latest_metric(root, datalib_metrics::ITEMS).await,
         &datalib_runs::latest_metric(root, datalib_metrics::DOCUMENTS).await,
+        &datalib_runs::metric_history(root, datalib_metrics::ITEMS, &since).await,
     );
 
     DagRecord {
@@ -1277,7 +1282,7 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
         steps: state.steps,
         progress,
         problems,
-        documents,
+        items,
     }
 }
 
@@ -1294,7 +1299,7 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
         steps: records,
         progress,
         problems: _,
-        documents: _,
+        items: _,
     } = dag_record(&s.root, &s.sync).await;
 
     let build = || -> anyhow::Result<Vec<DagStepInfo>> {

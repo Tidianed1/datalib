@@ -134,6 +134,7 @@ fn page_row(
         .kind("Notion Page")
         .source_label("Notion")
         .is_document(true)
+        .item_count(Some(1))
         .created_at(created_at)
         .modified_at(modified_at)
         .author(resolved_author(author_id, users))
@@ -189,6 +190,7 @@ fn thread_rows(
             .kind("Notion Comment Thread")
             .source_label("Notion")
             .is_document(true)
+            .item_count(Some(members_sorted.len() as i64))
             .created_at(
                 first
                     .get("created_time")
@@ -235,6 +237,7 @@ fn thread_rows(
                 .provider(Provider::Notion)
                 .kind("Notion Comment")
                 .source_label("Notion")
+                .item_count(Some(1))
                 .created_at(created_time.map(str::to_string))
                 .modified_at(
                     c.get("last_edited_time")

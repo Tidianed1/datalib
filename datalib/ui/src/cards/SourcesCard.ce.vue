@@ -140,11 +140,14 @@ them, so a wrong click is a revert. Reset a source, or its download, and what re
 it catches up at once, so its documents leave the grid; the next Sync downloads it
 all again from nothing. Reset a render and it renders its documents again from what
 is downloaded, at once.</p>
-<p><b>Documents</b> is how many things this source holds — what <b>Browse</b> opens —
-counted over the whole store, not this run, by the render step: on its own row and on
-the group above it. It moves while a render runs, each time the step seals what it has
-written. A blank cell means nothing has counted yet; a source that renders no documents
-of its own, like a photo library, counts zero.</p>
+<p><b>Items</b> is how many things this source holds: messages in a chat source (not
+the tool calls or system notes between them), readings in a sensor source, a pull
+request and its comments, one per event, contact, page or PDF, one per file or photo in
+a library. It is counted over the whole store, not this run, by the render step: on its
+own row and on the group above it. It moves while a render runs, each time the step
+seals what it has written, and its line covers the last few days of syncs. Hover for
+how many documents — what <b>Browse</b> opens — the items sit in. A blank cell means
+nothing has counted yet.</p>
 <p><b>Size</b> is bytes on disk, from a directory walk over each row’s tree — a group’s
 is its whole folder, measured on the same walk — plotted over the last few minutes, with
 its change over that time beside it. Each row’s line is scaled to its own range, so a
@@ -1413,7 +1416,6 @@ onUnmounted(() => {
         :rows="rows"
         :tree="true"
         :virtualizeRows="false"
-        :windowSecs="storage?.window_secs ?? 300"
         :actions="rowActions"
         :menu="contextMenuItems"
         :selectable="true"

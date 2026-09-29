@@ -281,7 +281,9 @@ measurement below is what notices.
   belong in `ingest/schema_raw.rs` and the render crate names them
   through the download crate.
 - **A source that renders nothing has no `_render` crate.** `ingest_only!`
-  in `datalib_step/src/dispatch.rs` says so once.
+  in `datalib_step/src/dispatch.rs` says so once, and
+  `SourceType::item_table` names the raw table whose rows are its
+  Items count, since it has no documents to count them.
 
 The measurement that checks it:
 

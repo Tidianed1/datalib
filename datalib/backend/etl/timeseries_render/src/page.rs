@@ -582,6 +582,7 @@ fn build_grid_rows(
         .kind("Sensor Timeseries")
         .source_label(profile.source_label)
         .is_document(true)
+        .item_count(Some(page.sample_count))
         .created_at(earliest_ts_ms(page.series).and_then(iso))
         .modified_at(latest_ts_ms(page.series).and_then(iso))
         .conversation_name(Some(title.clone()))

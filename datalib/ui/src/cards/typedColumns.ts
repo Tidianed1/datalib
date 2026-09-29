@@ -21,8 +21,6 @@ import { compareStamps, formatStamp } from "@/config/timeFormat";
 import { formatBytes } from "@/config/bytes";
 
 export type SlickColumnOptions<T> = {
-  /// How far back a `timeseries` cell's samples reach, in seconds.
-  windowSecs?: number;
   /// The rows form a tree; the tree column (`treeColumnField`) carries
   /// the chevron and shows each row's own id beside its label.
   tree?: boolean;
@@ -210,8 +208,6 @@ export function typedColumns<T extends Record<string, unknown>>(
   specs: ColumnSpec[],
   opts: SlickColumnOptions<T>,
 ): Column<T>[] {
-  const windowSecs = opts.windowSecs ?? 300;
-
   const Actions = actionsFormatter<T>(opts.actions ?? {});
   const treeField = treeColumnField(specs);
 
@@ -311,7 +307,7 @@ export function typedColumns<T extends Record<string, unknown>>(
           };
         case "timeseries":
           return {
-            formatter: (_r, _c, value) => renderTimeseries(value as Timeseries | null, windowSecs),
+            formatter: (_r, _c, value) => renderTimeseries(value as Timeseries | null),
             sortComparer: (a, b, dir) =>
               compareNumber(
                 (a as Timeseries | null)?.value,

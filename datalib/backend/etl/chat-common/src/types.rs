@@ -151,6 +151,15 @@ pub struct NormalizedChatItem {
     pub problems: Vec<Problem>,
 }
 
+impl NormalizedChatItem {
+    /// One of the things a conversation's `item_count` counts: what a
+    /// person or an assistant said. A tool call, its result and a
+    /// system note are in the transcript but are not messages.
+    pub fn is_message(&self) -> bool {
+        !self.is_aside && !matches!(self.kind, ItemKind::System)
+    }
+}
+
 /// A record's own stamp, or `None` — with the difference between the
 /// two kinds of `None` recorded. Upstream sending nothing is an
 /// absence and says nothing; upstream sending something we could not

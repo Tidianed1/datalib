@@ -518,7 +518,7 @@ own layout shape and decodes to nothing when it cannot be read.
 | `bytes` | an integer | a base-10 size, exact figure on hover |
 | `timestamp` | an ISO stamp about *now* (when something last ran) | "7 days ago", exact stamp on hover; sorts on the instant |
 | `datetime` | an ISO stamp that is the record's (when a message was sent) | the date and time it names; sorts on the instant |
-| `timeseries` | `{value, unit, samples, detail}` | the value and its change over the window, over a sparkline scaled to its own range |
+| `timeseries` | `{value, unit, samples, detail, window_secs}` | the value and its change over the window, over a sparkline scaled to its own range; each value names its own window, so minutes of bytes and days of items share a table |
 | `identity` | `{id, label, icon, detail}` | icon + label, id on hover; the icon is a *token* (`slack`, `step:ingest`) the viewer maps to an asset |
 | `status` | `{key, label, at, last_success_at, detail}` | a glyph for the key (a spinner while running), when it got there, the reason on hover |
 | `chips` | `[{kind, text, title}]` | a row of chips |

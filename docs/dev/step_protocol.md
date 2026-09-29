@@ -147,15 +147,18 @@ total. Absolute values are what make the runner's coalescing lossless:
 it keeps the newest value per series, and a dropped position costs
 nothing where a dropped increment would be lost work.
 
-Two names are read by name rather than just drawn. **`documents`** is
-how many documents your output store holds — whole store, not this run
-— and fills the Manage screen's Documents column; **`problems`**, with
+Three names are read by name rather than just drawn. **`items`** is
+how many things your output store holds — messages, readings, events;
+whole store, not this run — and fills the Manage screen's Items column
+and its sparkline; **`documents`** is how many documents those items
+sit in, for that cell's hover; **`problems`**, with
 a `severity=error` or `severity=warning` label, fills the red and
 yellow counts after a row's name. Report each one every run, zero
 included: the screen shows the newest value a step reported, so a
 count left out keeps last run's. A step that counts neither leaves no
-series, and draws a blank Documents cell and no counts. They are
-`datalib_metrics::DOCUMENTS` and `datalib_problems::METRIC` in the
+series, and draws a blank Items cell and no counts. They are
+`datalib_metrics::ITEMS`, `datalib_metrics::DOCUMENTS` and
+`datalib_problems::METRIC` in the
 tree; nothing else makes the reporter and the screen agree on the
 spelling.
 

@@ -18,7 +18,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
@@ -116,6 +116,15 @@ pub fn join_key(parts: &[String]) -> String {
 /// read the driver may issue inside one goes through the write lock —
 /// which hands back the held connection — rather than the pool, which
 /// would wait on itself.
+/// What a render store holds, whole store: its documents, and the items
+/// they count between them — messages, readings, events — which is the
+/// number that says how much of a source has arrived.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Holdings {
+    pub documents: i64,
+    pub items: i64,
+}
+
 pub struct IndexedMarkdownStore {
     pool: SqlitePool,
     write_lock: WriteLock,
@@ -306,6 +315,18 @@ impl IndexedMarkdownStore {
     /// served and still indexed. A document with no rows is removed the
     /// same way, the `.md` just written included; its problems stay.
     pub fn put_document(&self, out_dir: &Path, md: &RenderedMarkdown) -> Result<()> {
+        if let Some(row) = md
+            .rows
+            .iter()
+            .find(|r| r.is_document && r.item_count.is_none())
+        {
+            bail!(
+                "document {}: its document row {} has no item_count; \
+                 every renderer says how many things its document holds",
+                md.markdown_uuid,
+                row.uuid
+            );
+        }
         let previous = self.transaction(|| {
             blocking(async {
                 let previous: Option<String> = {
@@ -602,25 +623,28 @@ impl IndexedMarkdownStore {
         })
     }
 
-    /// How many documents this store holds, `except` one — the storage
-    /// report, which datalib writes about the source rather than out of
-    /// it, and which would otherwise make a source that renders nothing
-    /// read as holding one thing.
+    /// How many documents this store holds and how many items they
+    /// count between them, `except` one — the storage report, which
+    /// datalib writes about the source rather than out of it, and which
+    /// would otherwise make a source that renders nothing read as
+    /// holding one thing.
     ///
     /// Whole store, not this run: the number is what the source has,
     /// and an incremental render touches a handful of documents out of
     /// a hundred thousand.
-    pub fn document_count(&self, except: Option<&str>) -> Result<i64> {
+    pub fn holdings(&self, except: Option<&str>) -> Result<Holdings> {
         blocking(async {
             let mut guard = self.write_lock.acquire().await?;
-            sqlx::query_scalar(
-                "SELECT COUNT(*) FROM markdowns WHERE ? IS NULL OR markdown_uuid <> ?",
+            let (documents, items): (i64, i64) = sqlx::query_as(
+                "SELECT COUNT(*), COALESCE(SUM(item_count), 0) FROM markdowns \
+                 WHERE ? IS NULL OR markdown_uuid <> ?",
             )
             .bind(except)
             .bind(except)
             .fetch_one(&mut **guard.conn())
             .await
-            .context("count the store's documents")
+            .context("count the store's documents and items")?;
+            Ok(Holdings { documents, items })
         })
     }
 
@@ -1252,6 +1276,7 @@ mod tests {
             .markdown_uuid(Some(markdown_uuid.to_string()))
             .created_at(Some("2026-01-01T00:00:00+00:00".to_string()))
             .is_document(true)
+            .item_count(Some(3))
             .build()
             .expect("row")
     }
@@ -1452,6 +1477,7 @@ mod tests {
             .body("src/raw — 1.0 KiB")
             .markdown_uuid(Some("storage-doc".to_string()))
             .byte_size(Some(1024))
+            .item_count(Some(1))
             .is_document(true)
             .build()
             .expect("row")];
@@ -1636,11 +1662,35 @@ mod tests {
         let root = td.path();
         let s = store(root);
         s.put_document(root, &doc(root, "storage", "fp-s")).unwrap();
-        assert_eq!(s.document_count(Some("storage")).unwrap(), 0);
-        assert_eq!(s.document_count(None).unwrap(), 1, "without one to skip");
+        let none = Holdings::default();
+        assert_eq!(s.holdings(Some("storage")).unwrap(), none);
+        let one = Holdings {
+            documents: 1,
+            items: 3,
+        };
+        assert_eq!(s.holdings(None).unwrap(), one, "without one to skip");
         s.put_document(root, &doc(root, "md-1", "fp-1")).unwrap();
         s.put_document(root, &doc(root, "md-2", "fp-2")).unwrap();
-        assert_eq!(s.document_count(Some("storage")).unwrap(), 2);
+        let two = Holdings {
+            documents: 2,
+            items: 6,
+        };
+        assert_eq!(s.holdings(Some("storage")).unwrap(), two);
+    }
+
+    /// A document that does not say how many things it holds would
+    /// read as holding none, and the Items column would quietly
+    /// undercount; the render store refuses it instead.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_document_row_without_an_item_count_is_refused() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        let s = store(root);
+        let mut uncounted = doc(root, "md-1", "fp-1");
+        uncounted.rows[0].item_count = None;
+        let err = s.put_document(root, &uncounted).unwrap_err();
+        assert!(format!("{err:#}").contains("has no item_count"), "{err:#}");
+        assert_eq!(s.holdings(None).unwrap(), Holdings::default());
     }
 
     /// A document that comes back at another path — beeper's

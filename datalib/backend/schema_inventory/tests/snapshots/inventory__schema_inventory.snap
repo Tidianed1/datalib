@@ -1667,6 +1667,7 @@ markdowns
     title
     created_at
     modified_at
+    item_count
     md_path
     upstream_cursor
     renderer_version
