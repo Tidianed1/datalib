@@ -11,13 +11,16 @@
 //!
 //! Unlike `convert.rs`, a text edit: the config is otherwise current, so
 //! values are replaced where they stand and the missing steps appended,
-//! and every comment, lock and key the file holds survives.
+//! and every comment, lock and key the file holds survives, down to how
+//! an `inputs` array was laid out.
 
 use std::collections::BTreeSet;
 use std::ops::Range;
 
 use anyhow::{Context as _, Result};
 use serde::Deserialize;
+
+use crate::array_layout::edit_string_array;
 
 #[derive(Deserialize)]
 struct View {
@@ -147,7 +150,7 @@ pub fn rewrite(text: &str) -> Result<String> {
             edits.push((f.span(), quote("qmd_aggregator")));
         }
         if let Some(i) = &old.inputs {
-            edits.push((i.span(), quote_list(&aggregated)));
+            edits.push((i.span(), edit_string_array(&text[i.span()], &aggregated)?));
         }
         aggregator_id = old.group.as_ref().map(|g| format!("{g}/qmd_aggregator"));
     }
@@ -159,13 +162,14 @@ pub fn rewrite(text: &str) -> Result<String> {
                 .filter(|x| !old_ids.contains(*x))
                 .cloned()
                 .collect();
-            edits.push((i.span(), quote_list(&kept)));
+            edits.push((i.span(), edit_string_array(&text[i.span()], &kept)?));
         }
     }
     if let Some(aggregator) = &aggregator_id {
         for map in view.steps.iter().filter(|s| s.is_builtin("embedding_map")) {
             if let Some(i) = &map.inputs {
-                edits.push((i.span(), quote_list(std::slice::from_ref(aggregator))));
+                let only = std::slice::from_ref(aggregator);
+                edits.push((i.span(), edit_string_array(&text[i.span()], only)?));
             }
         }
     }
@@ -363,6 +367,30 @@ inputs = [\"mail/embed\"]
         ] {
             assert!(after.contains(kept), "lost {kept:?}:\n{after}");
         }
+    }
+
+    /// #897: the rewrite wrote every `inputs` it replaced on one line,
+    /// and a comment inside one went with the old ids.
+    #[test]
+    fn a_one_id_per_line_array_stays_one_id_per_line() {
+        let before = everything_in_the_fan_in().replace(
+            "inputs = [\"mail/render_markdown\", \"notes/render_markdown\"]",
+            "inputs = [\n  # every source\n  \"mail/render_markdown\",\n  \"notes/render_markdown\",\n]",
+        );
+        let after = rewrite(&before).unwrap();
+        let aggregator = "function = \"qmd_aggregator\"\ninputs = [
+  # every source
+  \"mail/keyword_index\",
+  \"mail/embed\",
+  \"notes/keyword_index\",
+  \"notes/embed\",
+]\n";
+        assert!(after.contains(aggregator), "{after}");
+        assert!(
+            after.contains("inputs = [\"unified_index/qmd_aggregator\"] # the map"),
+            "{after}"
+        );
+        loads_clean(&after);
     }
 
     #[test]

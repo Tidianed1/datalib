@@ -16,6 +16,7 @@
 //! rewrite is also the one `datalib-http` makes by itself
 //! (`upgrade_qmd_steps`).
 
+mod array_layout;
 pub mod convert;
 pub mod qmd_steps;
 
