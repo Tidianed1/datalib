@@ -364,7 +364,7 @@ function decorate(r: ManageRow, groups: Map<string, ManageRow>): Row {
 }
 
 /// Browse on a download step with a raw store: enabled whatever the
-/// group's Browse says, since a source that renders nothing still has
+/// group's Browse says, since a source with no render step still has
 /// the tables it downloaded.
 const RAW_STORE_BROWSE: Action = {
   id: "browse",
@@ -861,8 +861,8 @@ async function onWizardSubmit(payload: {
     next = replaceSteps(configText.value, existing, payload.stepsBody);
     next = renameGroup(next, current.group.id, payload.name);
     next = describeGroup(next, current.group.id, payload.description);
-    // A render step the provider does not write back — hand-written
-    // under a download-only type — leaves with the cut above, so its
+    // A render step the form does not write back — rendering turned
+    // off — leaves with the cut above, so its
     // edges have to go too, or the fan-ins name a step that no longer
     // exists and the loader refuses the whole file.
     if (current.steps.render && !payload.renderId) {

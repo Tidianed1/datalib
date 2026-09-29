@@ -161,53 +161,6 @@ pub fn plan(
         }};
     }
 
-    // A source that renders nothing: it plans an ingest wave and an
-    // empty render one. The render config is still parsed, so a typo in
-    // a render step's params is still rejected rather than ignored.
-    macro_rules! ingest_only {
-        ($cfgty:ty, $rcfgty:ty, $dlp:ident) => {{
-            let ctx = PlanContext {
-                name: name.to_string(),
-                playback_root: None,
-            };
-            match phase {
-                Phase::Ingest => {
-                    let mut cfg: $cfgty = serde_json::from_value(source).with_context(|| {
-                        format!("parse the params as a {source_type} download config")
-                    })?;
-                    cfg.common.fold_defaults(&Defaults::default());
-                    cfg.common.resolve_paths(raw_dir.clone());
-                    cfg.validate()
-                        .with_context(|| format!("source {name:?} (type={source_type})"))?;
-                    PlannedSource {
-                        name: name.to_string(),
-                        source_type,
-                        raw_path: cfg.common.raw_path().to_path_buf(),
-                        reach: Some(crate::methods::reach_or_refuse(source_type, &held)?),
-                        download_params: cfg.common.download_params.clone(),
-                        always_clear_before_ingest: cfg.common.always_clear_before_ingest,
-                        processors: Wave::Ingest($dlp::processor::plan_ingest(ctx, cfg)?),
-                    }
-                }
-                Phase::Render => {
-                    let mut cfg: $rcfgty = serde_json::from_value(source).with_context(|| {
-                        format!("parse the params as a {source_type} render config")
-                    })?;
-                    cfg.common.resolve_paths(raw_dir.clone());
-                    PlannedSource {
-                        name: name.to_string(),
-                        source_type,
-                        raw_path: cfg.common.raw_path().to_path_buf(),
-                        reach: None,
-                        download_params: Default::default(),
-                        always_clear_before_ingest: false,
-                        processors: Wave::Render(Vec::new()),
-                    }
-                }
-            }
-        }};
-    }
-
     // Exhaustive on purpose: a `SourceType` variant with no arm here is
     // a compile error, which is the whole reason the type exists.
     Ok(match source_type {
@@ -295,10 +248,11 @@ pub fn plan(
             datalib_etl_airvisual,
             datalib_etl_airvisual_render
         ),
-        SourceType::Media => ingest_only!(
+        SourceType::Media => arm!(
             datalib_etl_media_config::MediaConfig,
             datalib_etl_media_config::MediaRenderConfig,
-            datalib_etl_media
+            datalib_etl_media,
+            datalib_etl_media_render
         ),
         SourceType::Pdf => arm!(
             datalib_etl_pdf_config::PdfConfig,
@@ -354,10 +308,11 @@ pub fn plan(
             datalib_etl_sms_backup_restore,
             datalib_etl_sms_backup_restore_render
         ),
-        SourceType::Lightroom => ingest_only!(
+        SourceType::Lightroom => arm!(
             datalib_etl_lightroom_config::LightroomConfig,
             datalib_etl_lightroom_config::LightroomRenderConfig,
-            datalib_etl_lightroom
+            datalib_etl_lightroom,
+            datalib_etl_lightroom_render
         ),
         SourceType::AppleMessages => arm!(
             datalib_etl_apple_messages_config::AppleMessagesConfig,
@@ -365,15 +320,17 @@ pub fn plan(
             datalib_etl_apple_messages,
             datalib_etl_apple_messages_render
         ),
-        SourceType::ApplePhotos => ingest_only!(
+        SourceType::ApplePhotos => arm!(
             datalib_etl_apple_photos_config::ApplePhotosConfig,
             datalib_etl_apple_photos_config::ApplePhotosRenderConfig,
-            datalib_etl_apple_photos
+            datalib_etl_apple_photos,
+            datalib_etl_apple_photos_render
         ),
-        SourceType::Fsindex => ingest_only!(
+        SourceType::Fsindex => arm!(
             datalib_etl_fsindex_config::FsindexConfig,
             datalib_etl_fsindex_config::FsindexRenderConfig,
-            datalib_etl_fsindex
+            datalib_etl_fsindex,
+            datalib_etl_fsindex_render
         ),
     })
 }
@@ -699,13 +656,12 @@ mod tests {
         assert!(err.contains("both"), "{err}");
     }
 
-    /// Download-only sources are not in the `ingested_tng` fixture
-    /// pipeline (they render nothing, so there is no markdown for it to
-    /// index), which means nothing else in CI exercises their dispatch
-    /// arm or their `plan_*` pair. Without this, a `media` step's
-    /// params could stop deserializing and every test would still pass.
+    /// The summarized sources are not in the `ingested_tng` fixture
+    /// pipeline, which means nothing else in CI exercises their dispatch
+    /// arm or their `plan_*` pair. Without this, a `media` step's params
+    /// could stop deserializing and every test would still pass.
     #[test]
-    fn download_only_sources_plan_a_download_and_no_render() {
+    fn summarized_sources_plan_a_download_and_a_render() {
         let td = tempfile::tempdir().unwrap();
         for (ty, params) in [
             ("media", serde_json::json!({"playlists": false})),
@@ -738,11 +694,7 @@ mod tests {
                 serde_json::json!({}),
             )
             .unwrap();
-            assert_eq!(
-                rn.processors.len(),
-                0,
-                "{ty} renders nothing; download-only is structural, not a flag"
-            );
+            assert_eq!(rn.processors.len(), 1, "{ty} should plan its summary page");
         }
     }
 

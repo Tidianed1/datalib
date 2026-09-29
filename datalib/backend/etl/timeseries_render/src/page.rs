@@ -12,7 +12,8 @@ use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl::title::Title;
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::processor::RenderCtx;
+use datalib_etl_render::one_page::write_page;
+use datalib_etl_render::text::{thousands, yaml_safe};
 use datalib_id::{entity_id_str, IdNamespace};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
@@ -20,7 +21,7 @@ use datalib_schema::providers::Provider;
 
 use crate::plot::{standalone_html, Trace};
 use crate::series::{by_device, earliest_ts_ms, latest_ts_ms, Series};
-use crate::text::{human_gap, iso, median_gap, short, short_ts, thousands, yaml_safe};
+use crate::text::{human_gap, iso, median_gap, short, short_ts};
 use crate::units::{series_label, spec_in, MetricSpec, Quantity};
 
 const KIND_PAGE: &str = "timeseries";
@@ -155,26 +156,6 @@ impl Page<'_> {
     }
 }
 
-/// Whether a one-page source can skip this run: the driver pinned a
-/// commit and found nothing the page reads changed since the last
-/// render, which costs one `dolt_log()` query. When it can, the pin is
-/// recorded as read and the run's summary line comes back.
-pub fn skip_if_current(ctx: &RenderCtx<'_>, provider: &str, page_uuid: &str) -> Option<String> {
-    let range = ctx.raw_range();
-    let (Some(pin), false) = (range.pin, range.is_stale(page_uuid)) else {
-        return None;
-    };
-    tracing::info!(
-        event = "timeseries_render_skipped",
-        provider,
-        source = %ctx.name,
-        head = %pin,
-        "nothing the page reads changed since the last render",
-    );
-    ctx.consumed(pin);
-    Some(format!("up to date at {pin}"))
-}
-
 pub fn render_all(
     profile: &PageProfile,
     page: &Page<'_>,
@@ -231,43 +212,6 @@ pub fn render_all(
     }
 
     Ok(summary)
-}
-
-pub fn write_page(
-    root: &Path,
-    source_id: &str,
-    m_uuid: &str,
-    body: String,
-    render_version: u32,
-    build_rows: impl FnOnce(&str, &mut Vec<ProblemRow>) -> Vec<GridRow>,
-    on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-) -> Result<()> {
-    let md_path = datalib_etl::layout::render_markdown_root(root, source_id).join("index.md");
-    fs::write(&md_path, body).with_context(|| format!("write {}", md_path.display()))?;
-
-    let md_rel = md_path
-        .strip_prefix(root)
-        .unwrap_or(&md_path)
-        .to_string_lossy()
-        .into_owned();
-    let mut problems: Vec<ProblemRow> = Vec::new();
-    let rows = build_rows(&md_rel, &mut problems);
-
-    on_doc_complete(RenderedMarkdown {
-        markdown_uuid: m_uuid.to_string(),
-        source_id: source_id.to_string(),
-        // Not the raw HEAD: it moves on every ingest, and a row whose
-        // content did not change may carry nothing per-run.
-        upstream_cursor: None,
-        bucket_key: Some(m_uuid.to_string()),
-        md_path,
-        render_version,
-        rows,
-        sections: Vec::new(),
-        edges: Vec::new(),
-        problems,
-    })
-    .with_context(|| format!("on_doc_complete {m_uuid}"))
 }
 
 /// What the markdown needs to know about a plot that got written.

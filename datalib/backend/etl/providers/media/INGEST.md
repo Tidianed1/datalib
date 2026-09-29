@@ -28,21 +28,26 @@ They are separate **sources** because they answer different questions:
 | Keyed on | path | content hash | content hash |
 | Second identity | — | `content_blake3` | `payload_blake3` + scheme |
 | Per-item cost | one `stat`, sometimes one `read` | a parse and a conversion | a sniff, a container walk, a second hash |
-| Render side | none | markdown + `grid_rows` | **none** |
+| Render side | one summary page | markdown + `grid_rows` | one summary page |
 
-## No render side
+## One summary page, not a row per file
 
-`media` fills its raw store and stops, the way `fsindex` does.
-"Download-only" is structural — `processor::plan_render` returns no
-processors — not a flag.
+The render step (`media_render`) writes one page for the whole tree:
+files by kind and format, when the pictures were taken, the cameras and
+the artists. Its `item_count` is the media files — the rows of
+`media_files`, not `media_items` — because that is what a person has: a
+song kept in two folders is two files, and an item whose every path is
+gone is no longer in the library even though its row stays (see
+§"Orphaned items"). How many distinct contents the files hold is on the page
+beside the count.
 
-There is no text to render. A small metadata card per item would let
-the qmd index answer "photos from the Yosemite trip", but it is not
-built, for two reasons: the qmd index's cost at 10⁵–10⁶ items is
-unmeasured, and a grid of text rows is the wrong surface for this data,
-which wants thumbnails, a map, a time scrubber and an album view.
+There is no row per item. A small metadata card per item would let the
+qmd index answer "photos from the Yosemite trip", but it is not built,
+for two reasons: the qmd index's cost at 10⁵–10⁶ items is unmeasured,
+and a grid of text rows is the wrong surface for this data, which wants
+thumbnails, a map, a time scrubber and an album view.
 
-Nothing here reaches `grid_rows`. Query the store directly; see
+For anything the page does not say, query the store directly; see
 §"Inspecting a scan".
 
 ## The payload hash
@@ -402,7 +407,8 @@ that the item was once here. Pinned by
 
 ## Known gaps
 
-- **No render side**, so nothing appears in the grid. See above.
+- **No row per item**: the grid has the summary page and nothing
+  finer. See above.
 - **No Matroska, Ogg, GIF or WebP payload recipe.** Recognized and
   recorded; `payload_blake3` is NULL.
 - **No video frame-accurate duration for AVI** beyond
@@ -416,9 +422,10 @@ that the item was once here. Pinned by
 - **Nothing in CI runs the step.** The e2e suite calls `ingest::fetch`
   directly, so `processor.rs` and the `RawStoreSession` commit around it
   are covered only by hand-running `datalib-dag`; the `ingested_tng`
-  fixture pipeline runs only sources that render.
-  `download_only_sources_plan_a_download_and_no_render` in
-  `datalib_step/src/dispatch.rs` covers the config and planning half.
+  fixture pipeline declares no media source.
+  `summarized_sources_plan_a_download_and_a_render` in
+  `datalib_step/src/dispatch.rs` covers the config and planning half,
+  and `media_render_e2e` the render over a real scan.
 - **`skip_dataless` is not exercised by any test.** Constructing a
   cloud placeholder in a hermetic sandbox means making a file whose
   `st_blocks` is zero, which is filesystem-dependent. The guard is

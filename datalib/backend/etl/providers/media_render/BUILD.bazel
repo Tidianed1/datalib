@@ -1,0 +1,67 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//tools:insta.bzl", "insta_update")
+
+# Render half of the `media` provider: the side that knows
+# `datalib_schema`. //datalib/backend/etl/providers/media is the
+# download half and deliberately does not.
+rust_library(
+    name = "datalib_etl_media_render",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_media_render",
+    edition = "2021",
+    proc_macro_deps = [
+        "@datalib_crates//:async-trait",
+    ],
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/media_config:datalib_etl_media_config",
+        "//datalib/backend/etl/render:datalib_etl_render",
+        "//datalib/backend/etl/summary_render:datalib_etl_summary_render",
+        "//datalib/backend/id:datalib_id",
+        "//datalib/backend/schema:datalib_schema",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:futures",
+        "@datalib_crates//:sqlx",
+    ],
+)
+
+rust_test(
+    name = "media_render_unittests",
+    size = "small",
+    crate = ":datalib_etl_media_render",
+    edition = "2021",
+)
+
+# Scan the TNG media corpus, render it, and pin the page.
+rust_test(
+    name = "media_render_e2e",
+    size = "small",
+    srcs = ["tests/render_e2e.rs"],
+    data = glob(["tests/snapshots/*.snap"], allow_empty = True) + [
+        "//datalib/backend/etl/providers/media:media_fixture",
+    ],
+    edition = "2021",
+    env = {
+        "INSTA_WORKSPACE_ROOT": ".",
+        "MEDIA_FIXTURE_DIR": "datalib/backend/etl/providers/media/tests/fixtures/media_tng",
+    },
+    deps = [
+        ":datalib_etl_media_render",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/media:datalib_etl_media",
+        "//datalib/backend/etl/render:datalib_etl_render",
+        "@datalib_crates//:insta",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+insta_update(
+    name = "media_render_e2e.update",
+    extra_data = ["//datalib/backend/etl/providers/media:media_fixture"],
+    extra_env = {
+        "MEDIA_FIXTURE_DIR": "datalib/backend/etl/providers/media/tests/fixtures/media_tng",
+    },
+    test = ":media_render_e2e",
+)

@@ -7,8 +7,9 @@ use std::path::Path;
 use anyhow::Result;
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::text::thousands;
 use datalib_etl_timeseries_render::page::{Device, Page, PageProfile};
-use datalib_etl_timeseries_render::text::{iso, pretty_json, thousands};
+use datalib_etl_timeseries_render::text::{iso, pretty_json};
 use datalib_id::IdNamespace;
 use datalib_schema::providers::Provider;
 

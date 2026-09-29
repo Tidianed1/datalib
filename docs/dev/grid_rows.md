@@ -289,6 +289,10 @@ Two nullable measurements. What each one measures is decided per
 | any chat-common conversation row | the sum of its messages' `byte_size` | messages in the document |
 | any chat-common message row | the body's UTF-8 length | 1 |
 | any chat-common reaction row | — | — |
+| fsindex.File Index | — | files and symlinks, the rows of `files` |
+| media.Media Library | — | media files, the rows of `media_files` |
+| lightroom.Photo Catalog | — | photos, the rows of `Adobe_images` |
+| apple_photos.Photo Library | — | photos and videos, the rows of `ZASSET` not in Recently Deleted |
 
 On a `datalib.*` row, `byte_size` is bytes on disk **as of the last
 render that rewrote the row** — see "Storage rows" below for why that
@@ -325,9 +329,7 @@ says a row came from a diff tree; nothing else about the row changes —
 
 Every source's render wave ends by measuring its own raw store and
 emitting a handful of rows tagged `provider = "datalib"`, `source_label
-= "Storage"`, kinds `Source Size`, `Store` and `Table`. That is what
-gives a download-only source — `fsindex`, `media` — a place in the grid
-at all: they render no documents, so without this they appear nowhere.
+= "Storage"`, kinds `Source Size`, `Store` and `Table`.
 `source:Storage` is "show me what everything weighs". The code is
 `datalib/backend/datalib_step/src/introspect.rs`; its header has the
 reasons behind the rules below.

@@ -127,12 +127,6 @@ export type CatalogEntry = {
   mailboxNoun?: "labels" | "folders";
   /// False → in the picker for completeness, but no form exists yet.
   wizard: boolean;
-  /// False for a provider that declares no render step at all.
-  /// Defaults to true, and rendering no *documents* is not a reason to
-  /// set it false: the render step is also what emits the storage
-  /// report, which for a download-only source is the only thing that
-  /// puts it in the grid.
-  renderStep?: boolean;
   /// The latchkey service name, when the source needs credentials. The
   /// wizard shows its Connection section only while the params the form
   /// would write reach an origin (`ingestReach`): an import has nothing
@@ -1476,9 +1470,6 @@ export const CATALOG: CatalogEntry[] = [
     defaultName: "media",
     nameHint: "Photos and music",
     wizard: true,
-    // Download-only: media has no text to convert, so nothing is
-    // rendered and no render step is declared.
-    renderStep: false,
     fields: [
       {
         kind: "path",
@@ -1540,9 +1531,6 @@ export const CATALOG: CatalogEntry[] = [
     defaultName: "lightroom",
     nameHint: "Lightroom catalog",
     wizard: true,
-    // Download-only: a photo catalog isn't chat-shaped, so nothing is
-    // rendered and no render step is declared.
-    renderStep: false,
     fields: [
       {
         kind: "path",
@@ -1656,8 +1644,6 @@ export const CATALOG: CatalogEntry[] = [
     defaultName: "apple_photos",
     nameHint: "Photos library",
     wizard: true,
-    // Download-only, like lightroom: nothing is rendered.
-    renderStep: false,
     fields: [
       {
         kind: "path",

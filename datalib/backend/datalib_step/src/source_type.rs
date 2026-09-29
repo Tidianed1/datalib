@@ -183,24 +183,15 @@ mod tests {
         assert!(!SourceType::looks_retired("sms_backup_restore"));
     }
 
-    /// Where a `grid_rows.provider` tag exists for a type, the config
-    /// word and the tag are the same word; a person reading either
-    /// should not have to translate.
+    /// Every type renders, so every type has a `grid_rows.provider`
+    /// tag, and the config word and the tag are the same word; a
+    /// person reading either should not have to translate.
     #[test]
     fn type_spellings_agree_with_the_provider_tag() {
         use datalib_schema::providers::Provider;
         for &t in SourceType::VARIANTS {
-            let tag = Provider::parse(t.as_str());
-            let download_only = matches!(
-                t,
-                SourceType::ApplePhotos
-                    | SourceType::Fsindex
-                    | SourceType::Lightroom
-                    | SourceType::Media
-            );
-            assert_eq!(
-                tag.is_some(),
-                !download_only,
+            assert!(
+                Provider::parse(t.as_str()).is_some(),
                 "{t}: a type that renders has a provider tag spelled the same way"
             );
         }

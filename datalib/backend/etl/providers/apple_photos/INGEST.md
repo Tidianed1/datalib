@@ -13,8 +13,7 @@ storage keep only what changed, and get `dolt_log` /
 `dolt_history_<table>` / `dolt_diff_<table>` over the result. **Read
 that document first.** This one covers only what is Photos-shaped.
 
-The source is download-only: nothing is rendered (see [What render
-would need](#what-render-would-need)).
+The render step writes one summary page (see [Render](#render)).
 
 ## What a library looks like
 
@@ -208,10 +207,22 @@ SELECT h.commit_date, a.ZTITLE FROM dolt_history_Z_33ASSETS h
  WHERE h.Z_3ASSETS = (SELECT Z_PK FROM ZASSET WHERE ZUUID = '…');
 ```
 
-## What render would need
+## Render
 
-Everything `lightroom/INGEST.md` lists under "What render will need", with the
-paths already resolved: an asset is `originals/<ZDIRECTORY>/<ZFILENAME>`
+The render step (`apple_photos_render`) writes one summary page:
+photos and videos by kind, year taken and file type, the favourites,
+the hidden, the ones with a location, the albums a person made, and how
+many sit in Recently Deleted. Its `item_count` is the rows of `ZASSET`
+whose `ZTRASHEDSTATE` is 0 — the library, less the Recently Deleted
+album. Years are UTC: `ZDATECREATED` is Core Data's seconds since
+2001-01-01 UTC, and combining it with the zone beside it is left for a
+render that shows single photos. It reads the way `lightroom/INGEST.md`
+§"Render" describes, one grouped query per table and no joins, which
+is also why there are no per-album counts: they need the album↔asset
+join table, whose name (`Z_33ASSETS`) changes between schema versions.
+
+A row per asset would need everything `lightroom/INGEST.md` lists under
+"Render", with the paths already resolved: an asset is `originals/<ZDIRECTORY>/<ZFILENAME>`
 under the bundle, and its edited version is under `resources/renders/`.
 The cheapest way to the pixels is the one already in the tree: a
 `media` source pointed at `<library>/originals`, which yields EXIF,

@@ -79,12 +79,12 @@ id = "unified_index"
 [[steps]]
 group = "unified_index"
 function = "grid_index"
-inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "claude-code/render_markdown", "codex/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "fastmail-contacts/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "google-calendar/render_markdown", "fastmail-calendar/render_markdown", "icloud-calendar/render_markdown", "ics-calendar/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "garmin/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "facebook/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown", "ship-air/render_markdown", "messages/render_markdown"]
+inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "claude-code/render_markdown", "codex/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "fastmail-contacts/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "google-calendar/render_markdown", "fastmail-calendar/render_markdown", "icloud-calendar/render_markdown", "ics-calendar/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "garmin/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "facebook/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown", "fsindex-home/render_markdown", "media/render_markdown", "lightroom/render_markdown", "apple_photos/render_markdown", "ship-air/render_markdown", "messages/render_markdown"]
 
 [[steps]]
 group = "unified_index"
 function = "qmd_aggregator"
-inputs = ["claude-api/keyword_index", "claude-api/embed", "claude-export/keyword_index", "claude-export/embed", "claude-code/keyword_index", "claude-code/embed", "codex/keyword_index", "codex/embed", "chatgpt/keyword_index", "chatgpt/embed", "slack/keyword_index", "slack/embed", "github/keyword_index", "github/embed", "gitlab/keyword_index", "gitlab/embed", "notion/keyword_index", "notion/embed", "fastmail/keyword_index", "fastmail/embed", "gmail/keyword_index", "gmail/embed", "gmail-takeout/keyword_index", "gmail-takeout/embed", "fastmail-contacts/keyword_index", "fastmail-contacts/embed", "icloud-contacts/keyword_index", "icloud-contacts/embed", "vcard-contacts/keyword_index", "vcard-contacts/embed", "google-calendar/keyword_index", "google-calendar/embed", "fastmail-calendar/keyword_index", "fastmail-calendar/embed", "icloud-calendar/keyword_index", "icloud-calendar/embed", "ics-calendar/keyword_index", "ics-calendar/embed", "beeper/keyword_index", "beeper/embed", "perseus/keyword_index", "perseus/embed", "yolink/keyword_index", "yolink/embed", "garmin/keyword_index", "garmin/embed", "ship-air/keyword_index", "ship-air/embed", "signal/keyword_index", "signal/embed", "whatsapp/keyword_index", "whatsapp/embed", "facebook/keyword_index", "facebook/embed", "linkedin/keyword_index", "linkedin/embed", "google-takeout/keyword_index", "google-takeout/embed", "sms-backup-restore/keyword_index", "sms-backup-restore/embed", "pdfs/keyword_index", "pdfs/embed", "messages/keyword_index", "messages/embed"]
+inputs = ["claude-api/keyword_index", "claude-api/embed", "claude-export/keyword_index", "claude-export/embed", "claude-code/keyword_index", "claude-code/embed", "codex/keyword_index", "codex/embed", "chatgpt/keyword_index", "chatgpt/embed", "slack/keyword_index", "slack/embed", "github/keyword_index", "github/embed", "gitlab/keyword_index", "gitlab/embed", "notion/keyword_index", "notion/embed", "fastmail/keyword_index", "fastmail/embed", "gmail/keyword_index", "gmail/embed", "gmail-takeout/keyword_index", "gmail-takeout/embed", "fastmail-contacts/keyword_index", "fastmail-contacts/embed", "icloud-contacts/keyword_index", "icloud-contacts/embed", "vcard-contacts/keyword_index", "vcard-contacts/embed", "google-calendar/keyword_index", "google-calendar/embed", "fastmail-calendar/keyword_index", "fastmail-calendar/embed", "icloud-calendar/keyword_index", "icloud-calendar/embed", "ics-calendar/keyword_index", "ics-calendar/embed", "beeper/keyword_index", "beeper/embed", "perseus/keyword_index", "perseus/embed", "yolink/keyword_index", "yolink/embed", "garmin/keyword_index", "garmin/embed", "ship-air/keyword_index", "ship-air/embed", "signal/keyword_index", "signal/embed", "whatsapp/keyword_index", "whatsapp/embed", "facebook/keyword_index", "facebook/embed", "linkedin/keyword_index", "linkedin/embed", "google-takeout/keyword_index", "google-takeout/embed", "sms-backup-restore/keyword_index", "sms-backup-restore/embed", "pdfs/keyword_index", "pdfs/embed", "fsindex-home/keyword_index", "fsindex-home/embed", "media/keyword_index", "media/embed", "lightroom/keyword_index", "lightroom/embed", "apple_photos/keyword_index", "apple_photos/embed", "messages/keyword_index", "messages/embed"]
 
 # --- Claude / Anthropic -------------------------------------------------
 
@@ -1330,10 +1330,9 @@ inputs = ["sms-backup-restore/keyword_index"]
 # File-backed: point `fswalk.path` at any local directory tree. fsindex
 # walks it Unison-style (fast incremental rescans keyed on mtime/size/inode)
 # and records `(path, kind, size, blake3, optional identity uuid)` for every
-# entry in a raw store. It renders no documents of its own (filesystem entries
-# aren't chat-shaped) — the index is queryable in the per-source raw store —
-# but the render step is still worth declaring: it emits the storage report
-# every source gets, which is what puts fsindex in the grid at all.
+# entry in a raw store. Its render step writes one summary page — how many
+# files, how big, by extension and by top-level folder; the index itself is
+# queryable in the per-source raw store.
 #
 # `stamp` is off by default so the scan stays read-only against its input.
 # Set it to true to let the scanner write `.fsindex.yaml` UUID breadcrumbs
@@ -1350,11 +1349,20 @@ function = "ingest"
 [steps.params.fswalk]
 path = "~/Documents"
 
-# Renders no documents, only the storage report — see above.
 [[steps]]
 group = "fsindex-home"
 function = "render_markdown"
 inputs = ["fsindex-home/ingest"]
+
+[[steps]]
+group = "fsindex-home"
+function = "keyword_index"
+inputs = ["fsindex-home/render_markdown"]
+
+[[steps]]
+group = "fsindex-home"
+function = "embed"
+inputs = ["fsindex-home/keyword_index"]
 
 # --- pdf (local PDF corpus → markdown) ----------------------------------
 
@@ -1432,10 +1440,9 @@ inputs = ["pdfs/keyword_index"]
 # in order and verbatim — including the ones pointing at tracks you deleted
 # years ago, which is the interesting half of the data.
 #
-# It renders no documents (media has no text, and this data wants a UI of its
-# own) — query the raw store directly. The render step below still earns its
-# place: it emits the storage report every source gets, which is what puts
-# media in the grid at all.
+# Its render step writes one summary page — files by kind and format, when the
+# pictures were taken, the cameras and the artists. For anything more, query
+# the raw store directly.
 # See datalib/backend/etl/providers/media/INGEST.md.
 [[groups]]
 id = "media"
@@ -1459,11 +1466,20 @@ function = "ingest"
 [steps.params.fswalk]
 path = "~/Music"
 
-# Renders no documents, only the storage report — see above.
 [[steps]]
 group = "media"
 function = "render_markdown"
 inputs = ["media/ingest"]
+
+[[steps]]
+group = "media"
+function = "keyword_index"
+inputs = ["media/render_markdown"]
+
+[[steps]]
+group = "media"
+function = "embed"
+inputs = ["media/keyword_index"]
 
 # --- lightroom (Adobe Lightroom Classic catalog backup) -----------------
 
@@ -1475,8 +1491,8 @@ inputs = ["media/ingest"]
 # `dolt_history_<table>` and `dolt_diff_<table>`. A run over an unchanged
 # catalog produces no commit at all.
 #
-# DOWNLOAD-ONLY: it renders nothing yet (a photo isn't chat-shaped), so
-# there is no render step — query the raw store directly. See
+# Its render step writes one summary page — photos by year, format, rating,
+# flag and keyword. For anything more, query the raw store directly. See
 # datalib/backend/etl/providers/lightroom/INGEST.md.
 #
 # The engine is not Lightroom-specific: any app whose data format is a
@@ -1531,6 +1547,21 @@ function = "ingest"
 [steps.params.catalog]
 path = "~/Pictures/Lightroom/Lightroom Catalog-v14.lrcat"
 
+[[steps]]
+group = "lightroom"
+function = "render_markdown"
+inputs = ["lightroom/ingest"]
+
+[[steps]]
+group = "lightroom"
+function = "keyword_index"
+inputs = ["lightroom/render_markdown"]
+
+[[steps]]
+group = "lightroom"
+function = "embed"
+inputs = ["lightroom/keyword_index"]
+
 # --- apple_photos (Apple Photos library backup) --------------------------
 
 # File-backed: point `library.path` at a `.photoslibrary` bundle. What gets
@@ -1541,7 +1572,8 @@ path = "~/Pictures/Lightroom/Lightroom Catalog-v14.lrcat"
 # are stored, every prior state stays queryable, and an unchanged library
 # produces no commit.
 #
-# DOWNLOAD-ONLY, like lightroom: nothing is rendered. The originals sit
+# Like lightroom, its render step writes one summary page — photos and videos
+# by kind, year and file type, and the albums. The originals sit
 # beside the database at `<library>/originals/<X>/<UUID>.<ext>`; a `media`
 # source pointed at that folder gives you their EXIF and content hashes.
 # See datalib/backend/etl/providers/apple_photos/INGEST.md.
@@ -1593,13 +1625,28 @@ function = "ingest"
 [steps.params.library]
 path = "~/Pictures/Photos Library.photoslibrary"
 
+[[steps]]
+group = "apple_photos"
+function = "render_markdown"
+inputs = ["apple_photos/ingest"]
+
+[[steps]]
+group = "apple_photos"
+function = "keyword_index"
+inputs = ["apple_photos/render_markdown"]
+
+[[steps]]
+group = "apple_photos"
+function = "embed"
+inputs = ["apple_photos/keyword_index"]
+
 # --- apple_messages (the Messages app's own database) --------------------
 
 # File-backed: point `database.path` at Messages' `chat.db`, the SQLite
 # file the app keeps for itself (or a copy of it — an iPhone backup's
 # `3d0d7e5fb2ce288813306e4d4636395e047a3d28` is the same database). The
 # engine is the one apple_photos uses, so the same properties hold, and
-# unlike Photos this one renders: every chat becomes a page a month, with
+# its render step makes every chat a page a month, with
 # tapbacks on their messages and attachments listed by name. Attachment
 # bytes are not copied — they sit under `~/Library/Messages/Attachments`,
 # which picking `chat.db` grants no access to.
