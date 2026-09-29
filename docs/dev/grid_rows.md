@@ -285,10 +285,13 @@ Two nullable measurements. What each one measures is decided per
 | datalib.Source Size | bytes under `<name>/ingest` | files under it |
 | datalib.Store | the `.doltlite_db` file's size | — |
 | datalib.Table | — (see below) | rows in the table |
-| pdf.document | — | pages in the document |
-| any chat-common conversation row | the sum of its messages' `byte_size` | messages in the document |
-| any chat-common message row | the body's UTF-8 length | 1 |
+| pdf.document | — | 1 |
+| any chat-common conversation row | the sum of its items' `byte_size` | its messages: what a person or an assistant said |
+| any chat-common message row | the body's UTF-8 length | 1; — for a tool call, a tool result or a system note |
 | any chat-common reaction row | — | — |
+| a sensor or Garmin page | — | its readings: rows of the raw store, or for Garmin every day of a metric with data, every weigh-in and every activity |
+| a GitHub PR, a GitLab MR, a Notion comment thread | — | itself and its comments; each comment row 1 |
+| a calendar event, a contact, a Notion page, a Perseus book or chapter | — | 1 |
 
 On a `datalib.*` row, `byte_size` is bytes on disk **as of the last
 render that rewrote the row** — see "Storage rows" below for why that
@@ -296,9 +299,15 @@ is not "now". On a chat-common row it is the message body — the same
 string it passes as the body — and nothing else: not the attachments,
 whose sizes only some providers know, and not the raw payload, which
 the renderer never sees. So a conversation's `byte_size` is exactly the
-sum of its message rows', and its `item_count` is exactly how many of
-them there are. Reactions have their own rows but are not messages, so
-they carry neither.
+sum of its item rows', and its `item_count` is how many of them were
+said: a tool call, its result and a system note are in the transcript
+but are not messages, so their rows carry no count. Reactions have
+their own rows but are not messages, so they carry neither.
+
+**Every document row carries an `item_count`**; the render store
+refuses one that does not. It is what the Manage screen's Items column
+sums, through `markdowns.item_count` — a copy, like the document's
+stamps — so a new renderer has to decide what its documents count.
 
 Bytes on disk and a byte length of content are different measurements,
 and one kind must never mix them: a producer that measures a file
@@ -307,8 +316,8 @@ for something that *has* an on-disk size leaves the column NULL. Adding
 a kind here means adding a row to this table.
 
 `item_count` is deliberately unitless. What is being counted is `kind`'s
-job to say: a Table counts rows, a Source Size counts files, a PDF
-document counts pages, a conversation counts messages.
+job to say: a Table counts rows, a Source Size counts files, a
+conversation counts messages, a sensor page counts readings.
 
 ### `diff_status`, `diff_changed_columns`
 

@@ -519,6 +519,48 @@ pub async fn latest_metric(data_root: &Path, name: &str) -> Vec<MetricRow> {
     out
 }
 
+/// One metric series per (step, labels), across every run the store
+/// keeps, from `since_utc` on — plus the newest sample before it, so a
+/// series that has not moved inside the window still has the value it
+/// held there. Oldest first within a series; compacted, so a reader
+/// carries each value forward rather than assuming an interval.
+pub async fn metric_history(data_root: &Path, name: &str, since_utc: &str) -> Vec<MetricSampleRow> {
+    let path = runs_path(data_root);
+    if !path.exists() {
+        return Vec::new();
+    }
+    let Ok(pool) = open_existing(&path).await else {
+        return Vec::new();
+    };
+    let rows = sqlx::query(
+        "SELECT run_id, step, labels, ts_utc, tz_offset, value FROM ( \
+           SELECT *, ROW_NUMBER() OVER (PARTITION BY step, labels ORDER BY ts_utc DESC) AS rn \
+           FROM metric_samples WHERE name = ?1 AND ts_utc <= ?2) \
+         WHERE rn = 1 \
+         UNION ALL \
+         SELECT run_id, step, labels, ts_utc, tz_offset, value \
+           FROM metric_samples WHERE name = ?1 AND ts_utc > ?2 \
+         ORDER BY step, labels, ts_utc",
+    )
+    .bind(name)
+    .bind(since_utc)
+    .fetch_all(&pool)
+    .await
+    .unwrap_or_default();
+    pool.close().await;
+    rows.iter()
+        .map(|r| MetricSampleRow {
+            run_id: r.get("run_id"),
+            step: r.get("step"),
+            name: name.to_string(),
+            labels: r.get("labels"),
+            ts_utc: r.get("ts_utc"),
+            tz_offset: r.get("tz_offset"),
+            value: r.get("value"),
+        })
+        .collect()
+}
+
 async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapshot, sqlx::Error> {
     let Some(run) = sqlx::query(
         "SELECT run_id, started_at_utc, finished_at_utc, tz_offset FROM runs \

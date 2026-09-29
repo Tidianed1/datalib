@@ -962,6 +962,9 @@ export type Timeseries = {
   unit: string;
   /// Oldest first; compacted, so a step function rather than a grid.
   samples: Sample[];
+  /// How far back the plot reaches, in seconds; each series says its
+  /// own.
+  window_secs: number;
   detail?: string | null;
 };
 
@@ -1021,10 +1024,10 @@ export type ManageRow = {
   /// red and yellow chips, a green zero, or nothing when it has never
   /// counted. A group shows its last counting step's.
   problems: Chip[];
-  /// Documents the step's store holds, as of the run it last counted
-  /// in. Null — drawn blank — for every row but a render step and the
-  /// group above it.
-  documents: number | null;
+  /// The items the step's store holds, as of the run it last counted
+  /// in, with the series behind them. No value — drawn blank — for
+  /// every row but a render step and the group above it.
+  items: Timeseries;
   last_synced: string | null;
   last_success: string | null;
   disk: Timeseries;

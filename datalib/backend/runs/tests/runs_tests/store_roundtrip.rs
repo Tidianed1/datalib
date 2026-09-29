@@ -162,6 +162,44 @@ async fn latest_metric_is_the_newest_report_per_step_and_label() {
         .is_empty());
 }
 
+/// `metric_history` is what a sparkline over several runs draws: every
+/// sample inside the window, oldest first, and the one value the series
+/// held when the window opened — without which a series that last moved
+/// before it would draw nothing.
+#[tokio::test]
+async fn metric_history_is_the_window_and_the_value_it_opened_at() {
+    let td = tempfile::tempdir().unwrap();
+    let at = |stamp: &str, step: &str, value: i64| MetricRow {
+        updated_at_utc: stamp.into(),
+        ..metric(step, "items", value)
+    };
+    for (run, stamp, value) in [
+        ("run-1", "2026-09-01T00:00:00.000000+00:00", 10),
+        ("run-2", "2026-09-02T00:00:00.000000+00:00", 20),
+        ("run-3", "2026-09-03T00:00:00.000000+00:00", 30),
+    ] {
+        let w = start(td.path(), run);
+        w.metric(at(stamp, "slack/render_markdown", value));
+        w.metric(at(stamp, "mail/render_markdown", value * 100));
+    }
+    let history =
+        datalib_runs::metric_history(td.path(), "items", "2026-09-01T12:00:00.000000+00:00").await;
+    let of = |step: &str| {
+        history
+            .iter()
+            .filter(|s| s.step == step)
+            .map(|s| s.value)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(of("slack/render_markdown"), [10, 20, 30]);
+    assert_eq!(of("mail/render_markdown"), [1000, 2000, 3000]);
+    assert!(
+        datalib_runs::metric_history(td.path(), "nothing", "2026-09-01")
+            .await
+            .is_empty()
+    );
+}
+
 /// The tail contract: a reader that remembers the last `seq` it saw
 /// gets only what came after.
 #[tokio::test]

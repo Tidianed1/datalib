@@ -11,8 +11,8 @@
 
 mod activity;
 mod buttons;
-mod documents;
 mod group;
+mod items;
 mod problems;
 mod status;
 
@@ -37,7 +37,7 @@ use buttons::SyncOffer;
 use group::{Child, ChildKind, ChildStamp, ChildStatus};
 use status::{StatusView, StepEdges};
 
-pub use documents::by_step as documents_by_step;
+pub use items::{by_step as items_by_step, WINDOW as ITEMS_WINDOW};
 pub use problems::{counts_by_step, ProblemCounts};
 pub use status::dropped_detail;
 
@@ -111,8 +111,8 @@ pub fn columns() -> Vec<ColumnSpec> {
             .describe("What it is doing now, or did last, and when it got there. Hover for why; double-click for the log."),
         ColumnSpec::new("activity", "Activity", ColumnType::Chips)
             .describe("What a running step has reported: what is queued ahead of it, what it has counted, and how fast."),
-        ColumnSpec::new("documents", "Documents", ColumnType::Count)
-            .describe("How many documents this source holds \u{2014} the things Browse opens, whole store, as of its last render. Blank means it has never counted; a source that renders nothing counts zero."),
+        ColumnSpec::new("items", "Items", ColumnType::Timeseries)
+            .describe("How many things this source holds \u{2014} messages, readings, events \u{2014} whole store, as of its last render, with the last few days of syncs behind it. Hover for how many documents they sit in. Blank means it has never counted."),
         ColumnSpec::new("last_synced", "Last synced", ColumnType::Timestamp)
             .hidden()
             .describe("When it last ran, whatever came of it. A source's is its ingest step's."),
@@ -173,10 +173,11 @@ pub struct ManageRow {
     /// see `manage::problems`. A group shows its render step's, the
     /// union for the source.
     pub problems: Vec<Chip>,
-    /// Documents its store holds, as of the run it last counted in.
-    /// `None` — drawn blank — for a row that has never counted, which
-    /// is every row but a render step and the group above it.
-    pub documents: Option<i64>,
+    /// The items its store holds, as of the run it last counted in,
+    /// with the series behind the number — see `manage::items`. No
+    /// value, drawn blank, for a row that has never counted, which is
+    /// every row but a render step and the group above it.
+    pub items: Timeseries,
     pub last_synced: Option<String>,
     /// When it last succeeded; see `Status::last_success_at`.
     pub last_success: Option<String>,
@@ -572,7 +573,7 @@ impl Snapshot<'_> {
             status_from: None,
             activity: vec![],
             problems: vec![],
-            documents: None,
+            items: Timeseries::default(),
             last_synced: None,
             last_success: None,
             disk,
@@ -597,11 +598,10 @@ impl Snapshot<'_> {
                 icon: Some("system".into()),
                 detail: Some("System".into()),
             },
-            Timeseries {
-                value: dir_disk.map(|t| t.bytes as i64),
-                unit: "bytes".into(),
-                samples: dir_tree.map(samples).unwrap_or_default(),
-                detail: Some(match dir_disk {
+            bytes_series(
+                dir_disk,
+                dir_tree,
+                match dir_disk {
                     None => "Nothing on disk yet.".to_string(),
                     Some(t) => format!(
                         "{} in {dir}/ \u{2014} the run log {}, and the loop's record, the usage \
@@ -609,8 +609,8 @@ impl Snapshot<'_> {
                         human_bytes(t.bytes),
                         human_bytes(log_disk.map_or(0, |l| l.bytes)),
                     ),
-                }),
-            },
+                },
+            ),
             browse_action(
                 "Browse the log",
                 "Open every run\u{2019}s step states and log lines.",
@@ -627,18 +627,17 @@ impl Snapshot<'_> {
                 icon: None,
                 detail: Some("Every run's step states and log lines".into()),
             },
-            Timeseries {
-                value: log_disk.map(|t| t.bytes as i64),
-                unit: "bytes".into(),
-                samples: log_tree.map(samples).unwrap_or_default(),
-                detail: Some(match log_disk {
+            bytes_series(
+                log_disk,
+                log_tree,
+                match log_disk {
                     None => "Nothing on disk yet \u{2014} no run has been recorded.".to_string(),
                     Some(t) => format!(
                         "{} in {log}/ \u{2014} the store and the journal beside it.",
                         human_bytes(t.bytes)
                     ),
-                }),
-            },
+                },
+            ),
             browse_action(
                 "Browse the log",
                 "Open every run\u{2019}s step states and log lines.",
@@ -675,14 +674,32 @@ fn human_bytes(n: u64) -> String {
     }
 }
 
-fn samples(o: &OutputStorage) -> Vec<Sample> {
-    o.history
-        .iter()
-        .map(|s| Sample {
-            at: s.at.clone(),
-            value: s.bytes as i64,
+/// A Size cell: bytes on disk, with the sampler's recent walks behind
+/// the number. `present` is what exists now; `tree` is the series, which
+/// outlives a tree that has just been removed.
+fn bytes_series(
+    present: Option<&OutputStorage>,
+    tree: Option<&OutputStorage>,
+    detail: String,
+) -> Timeseries {
+    let samples = tree
+        .map(|o| {
+            o.history
+                .iter()
+                .map(|s| Sample {
+                    at: s.at.clone(),
+                    value: s.bytes as i64,
+                })
+                .collect()
         })
-        .collect()
+        .unwrap_or_default();
+    Timeseries {
+        value: present.map(|t| t.bytes as i64),
+        unit: "bytes".into(),
+        samples,
+        detail: Some(detail),
+        window_secs: usage::HISTORY_WINDOW.as_secs(),
+    }
 }
 
 /// The breakdown behind a size: per output, split into parts where the
@@ -968,23 +985,18 @@ impl RowCtx<'_> {
         };
 
         let disk = match e {
-            Entry::Applet(_) => Timeseries {
-                detail: Some("An applet owns no artifacts.".into()),
-                unit: "bytes".into(),
-                ..Default::default()
-            },
-            Entry::Step(_) => Timeseries {
-                value: on_disk.map(|o| o.bytes as i64),
-                unit: "bytes".into(),
-                samples: tree.map(samples).unwrap_or_default(),
-                detail: Some(match on_disk {
+            Entry::Applet(_) => bytes_series(None, None, "An applet owns no artifacts.".into()),
+            Entry::Step(_) => bytes_series(
+                on_disk,
+                tree,
+                match on_disk {
                     None => {
                         "Nothing on disk yet \u{2014} this hasn't produced anything.".to_string()
                     }
                     Some(o) if o.parts.is_empty() => human_bytes(o.bytes),
                     Some(o) => format!("{} \u{2014} {}", human_bytes(o.bytes), breakdown(&[o])),
-                }),
-            },
+                },
+            ),
         };
 
         let activity = match e {
@@ -1001,10 +1013,11 @@ impl RowCtx<'_> {
             Entry::Step(_) => problems::chips(self.snap.record.problems.get(&id)),
             Entry::Applet(_) => vec![],
         };
-        let documents = match e {
-            Entry::Step(_) => self.snap.record.documents.get(&id).copied(),
+        let items = match e {
+            Entry::Step(_) => self.snap.record.items.get(&id).cloned(),
             Entry::Applet(_) => None,
-        };
+        }
+        .unwrap_or_default();
         // A step under a group takes its group's Browse once the group
         // row is built (`inherit_browse`); this is the answer for one
         // outside any group.
@@ -1055,7 +1068,7 @@ impl RowCtx<'_> {
             status_from: None,
             activity,
             problems,
-            documents,
+            items,
             disk,
             actions: [browse, sync].into_iter().chain(switch).collect(),
             seeds,
@@ -1140,11 +1153,10 @@ impl RowCtx<'_> {
                     .find(|o| o.path == e.id() && o.present)
             })
             .collect();
-        let disk = Timeseries {
-            value: on_disk.map(|t| t.bytes as i64),
-            unit: "bytes".into(),
-            samples: tree.map(samples).unwrap_or_default(),
-            detail: Some(match on_disk {
+        let disk = bytes_series(
+            on_disk,
+            tree,
+            match on_disk {
                 None => {
                     "Nothing on disk yet \u{2014} this group hasn't produced anything.".to_string()
                 }
@@ -1154,8 +1166,8 @@ impl RowCtx<'_> {
                     g.id,
                     breakdown(&child_trees)
                 ),
-            }),
-        };
+            },
+        );
 
         let is_dropped = |c: &Entry<'_>| row_of(c.id()).dropped.is_some();
         // A diff group has no source step of its own: a sync of it is a
@@ -1274,10 +1286,15 @@ impl RowCtx<'_> {
             .find(|r| !r.problems.is_empty())
             .map(|r| r.problems.clone())
             .unwrap_or_default();
-        // Only the render step counts documents, so the group shows
-        // that one child's number rather than a sum over children that
-        // would double it the day a second step reported one.
-        let documents = ordered.iter().find_map(|c| row_of(c.id()).documents);
+        // Only the render step counts items, so the group shows that one
+        // child's cell rather than a sum over children that would double
+        // it the day a second step reported one.
+        let items = ordered
+            .iter()
+            .map(|c| &row_of(c.id()).items)
+            .find(|t| t.value.is_some())
+            .cloned()
+            .unwrap_or_default();
         let stamp_of = |at: fn(&StatusView) -> Option<String>| {
             if dropped.is_some() {
                 return None;
@@ -1317,7 +1334,7 @@ impl RowCtx<'_> {
             status_from,
             activity,
             problems,
-            documents,
+            items,
             last_synced,
             last_success,
             disk,

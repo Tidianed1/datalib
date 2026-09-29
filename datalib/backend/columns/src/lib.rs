@@ -206,6 +206,10 @@ pub struct Timeseries {
     pub unit: String,
     /// Oldest first. Compacted: a step function, not an even grid.
     pub samples: Vec<Sample>,
+    /// How far back the plot reaches, in seconds. The producer's to
+    /// say, since it knows how far back it kept: bytes on disk over
+    /// minutes and items over days sit side by side in one table.
+    pub window_secs: u64,
     /// The breakdown behind the number, for its hover.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,

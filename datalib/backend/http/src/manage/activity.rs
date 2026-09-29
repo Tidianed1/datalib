@@ -12,7 +12,7 @@ use crate::DagStepProgress;
 /// either waiting on the network or stuck, and either is worth a glance.
 const STALL_AFTER_SECS: i64 = 60;
 
-fn grouped(n: i64) -> String {
+pub(super) fn grouped(n: i64) -> String {
     let s = n.abs().to_string();
     let mut out = String::new();
     for (i, ch) in s.chars().enumerate() {
