@@ -60,8 +60,11 @@ pub fn convert(text: &str) -> Result<String> {
 /// The rewrite `datalib-http` makes unattended, to a config that still has
 /// a `qmd_index` step, in either earlier shape. `None` when there is
 /// nothing to do, including text that is not TOML: the loader reports
-/// that. Refused when the result would drop an entry the original ran,
-/// since nobody reviews this rewrite before it lands.
+/// that. Refused when the result would drop an entry the original ran, or
+/// drop more entries than the original, since nobody reviews this rewrite
+/// before it lands. Both, because the original already loses its
+/// `qmd_index`: a count alone misses a custom step lost in its place, and
+/// the lost entries alone miss an added step that does not load.
 pub fn upgrade_qmd_steps(text: &str) -> Result<Option<String>> {
     if !qmd_steps::is_retired(text).unwrap_or(false) {
         return Ok(None);
@@ -69,13 +72,32 @@ pub fn upgrade_qmd_steps(text: &str) -> Result<Option<String>> {
     let out = qmd_steps::rewrite(text)?;
     let before = datalib_dag::config::check_text(text);
     let after = datalib_dag::config::check_text(&out);
-    if after.dropped() > before.dropped() {
+    let kept = loaded(&after.cfg);
+    let lost: Vec<String> = loaded(&before.cfg)
+        .into_iter()
+        .filter(|e| !kept.contains(e))
+        .collect();
+    if !lost.is_empty() || after.dropped() > before.dropped() {
         bail!(
-            "the rewritten config would not load every entry the original does:\n{}",
+            "the rewritten config would not load every entry the original does{}:\n{}",
+            if lost.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", lost.join(", "))
+            },
             after.render(std::path::Path::new(datalib_dag::config::CONFIG_FILE_NAME))
         );
     }
     Ok(Some(out))
+}
+
+/// Every entry that reached the graph, by kind and id.
+fn loaded(cfg: &datalib_dag::config::DagConfig) -> Vec<String> {
+    let groups = cfg.groups.iter().map(|g| format!("group {}", g.id));
+    let steps = cfg.steps.iter().map(|s| format!("step {}", s.id));
+    let applets = cfg.applets.iter().map(|a| format!("applet {}", a.id));
+    let locks = cfg.locks.iter().map(|l| format!("lock {}", l.name));
+    groups.chain(steps).chain(applets).chain(locks).collect()
 }
 
 fn verify(toml_text: &str) -> Result<()> {
@@ -615,21 +637,28 @@ inputs = ["mail/render_markdown"]
 
     /// A rewrite nobody reviews must not cost an entry the original ran.
     /// Here a custom step already writes under `mail/keyword_index/`, so
-    /// the keyword step the rewrite adds would nest with it, and the
-    /// loader drops one of the two.
+    /// the keyword step the rewrite adds nests with it, and the loader
+    /// drops the custom step, which sits below it once the file is sorted.
+    /// The original drops one entry too (`qmd_index`), so a count of the
+    /// dropped entries does not see the loss.
     #[test]
     fn the_unattended_upgrade_refuses_a_rewrite_that_drops_an_entry() {
+        let extra = "mail/keyword_index/extra";
         let clash = format!(
-            "{SHARED_QMD_INDEX}\n[[steps]]\nid = \"mail/keyword_index/extra\"\ncommand = \"x\"\ninputs = [\"mail/render_markdown\"]\n"
+            "{SHARED_QMD_INDEX}\n[[steps]]\nid = \"{extra}\"\ncommand = \"x\"\ninputs = [\"mail/render_markdown\"]\n"
         );
-        let before = datalib_dag::config::check_text(&clash).dropped();
-        let after = datalib_dag::config::check_text(&qmd_steps::rewrite(&clash).unwrap()).dropped();
+        let runs = |text: &str| {
+            let check = datalib_dag::config::check_text(text);
+            check.cfg.steps.iter().any(|s| s.id == extra)
+        };
+        assert!(runs(&clash));
         assert!(
-            after > before,
-            "the fixture must make the rewrite drop an entry"
+            !runs(&qmd_steps::rewrite(&clash).unwrap()),
+            "the fixture must make the rewrite drop the custom step"
         );
         let err = upgrade_qmd_steps(&clash).unwrap_err().to_string();
         assert!(err.contains("would not load"), "{err}");
+        assert!(err.contains(&format!("step {extra}")), "{err}");
     }
 
     #[test]
