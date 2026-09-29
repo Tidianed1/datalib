@@ -101,6 +101,9 @@ export type QueryEcho = {
   // Set when a free-text search failed in qmd; the response then has no
   // rows, and the grid says why in a banner.
   qmd_error?: string | null;
+  // True when free text was asked before any sync built a qmd index: no
+  // rows, and not a failure.
+  qmd_index_missing?: boolean;
   [key: string]: unknown;
 };
 
@@ -546,8 +549,9 @@ export type GroupsResponse<Row = SearchRow> = {
   // More groups than one answer carries; the rest are left out.
   truncated: boolean;
   at: string | null;
-  // Only the search has one.
+  // Only the search has these two.
   qmd_error?: string | null;
+  qmd_index_missing?: boolean;
   errors: string[];
 };
 
@@ -1090,6 +1094,9 @@ export function fetchTable(url: string, signal?: AbortSignal): Promise<TableResp
 /// `datalib_history::TableState`.
 export type HistoryTable = {
   table: string;
+  /// The source's records rather than datalib's own bookkeeping
+  /// (`datalib_history::holds_records`): what a commit's totals count.
+  records: boolean;
   /// Rows after the commit.
   rows: number;
   added: number;

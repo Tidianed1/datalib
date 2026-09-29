@@ -955,9 +955,29 @@ class IngestedTngPipelineTest(unittest.TestCase):
                     "modified",
                     "content_hash|modified_at|preview|touched_at",
                 ),
+                "Kalita": ("removed", ""),
+                "Ro Laren": ("removed", ""),
                 "Worf": ("added", ""),
             },
             "the contacts diff between the two fixture commits",
+        )
+        # #898: the second sync deleted `Maquis.vcf`, and its contacts left
+        # the source with it; `Borg.vcf`, untouched, kept all four.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT coalesce(g.author, '') || '|' || g.channel FROM grid_rows g "
+                "JOIN markdowns m ON g.markdown_uuid = m.markdown_uuid "
+                "WHERE m.source_id = 'tng_contacts' "
+                "AND g.channel IN ('Borg', 'Maquis') ORDER BY g.author;",
+            ),
+            [
+                "Hugh|Borg",
+                "Locutus of Borg|Borg",
+                "Seven of Nine|Borg",
+                "drone.4.of.12@unimatrix01.borg|Borg",
+            ],
+            "the source's Borg and Maquis contacts after the second sync",
         )
         self.assertEqual(
             self._scalar(

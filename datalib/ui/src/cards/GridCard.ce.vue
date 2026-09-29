@@ -58,6 +58,7 @@ import { keepExcludeEntries, withToken, type FilterEntry } from "@/grid/query";
 import { onAfterMenuShowFit, perOpening } from "@/grid/menu";
 import { newlyPicked } from "@/grid/selection";
 import { markdownsToAsk, widen } from "@/grid/qmdAsk";
+import { searchCoverage, type SearchCoverage } from "@/grid/searchCoverage";
 import { keepActiveOnRecord } from "@/grid/activeCell";
 import { redrawChanged } from "@/grid/redrawChanged";
 import { handedOf, isEmpty, patchRows, type Handed, type RowPatch } from "@/grid/rowPatch";
@@ -151,14 +152,17 @@ const showingStale = computed(
 );
 // A free-text search failed in qmd, and came back with no rows.
 const qmdError = ref<string | null>(null);
+// Free text asked of a root no sync has built a qmd index for yet.
+const qmdIndexMissing = ref(false);
 const accounts = ref<AccountsMap>({});
 
 // --- qmd index state (the Indexed / Embedded columns) ---------------
 // Answers for the documents behind the rows on screen, gathered as the
 // grid scrolls, and started over when the result set changes.
 const qmdState = ref<Map<string, QmdDocState>>(new Map());
-// Collection-wide totals, shown next to the row count.
-const qmdSummary = ref<{ documents: number; embedded: number } | null>(null);
+// How much of the corpus each qmd index reaches, shown next to the row
+// count.
+const qmdCoverage = ref<SearchCoverage | null>(null);
 // Bumped when the result set changes. An answer for an older one is
 // dropped rather than merged into state describing rows now gone.
 let qmdGeneration = 0;
@@ -178,9 +182,9 @@ function qmdColumnsVisible(): boolean {
 }
 
 // The result set changed: forget every answer and ask afresh. With both
-// columns hidden this still asks, with no documents, for the "N of M
-// documents searchable" line under the grid, which is the only thing on
-// screen that hints the columns exist.
+// columns hidden this still asks, with no documents, for the "N documents
+// searchable" line under the grid, which is the only thing on screen that
+// hints the columns exist.
 function refreshQmdState() {
   if (!qmd()) return;
   qmdGeneration++;
@@ -214,7 +218,7 @@ async function askQmdState(uuids: string[]) {
     const merged = new Map(qmdState.value);
     for (const [uuid, st] of Object.entries(r.docs)) merged.set(uuid, st);
     qmdState.value = merged;
-    qmdSummary.value = r.summary;
+    qmdCoverage.value = searchCoverage(r);
     refreshIndexCells();
   } catch (e) {
     if ((e as { name?: string }).name === "AbortError") return;
@@ -238,16 +242,6 @@ function onViewportChanged() {
     askAboutVisibleRows();
   }, 150);
 }
-
-const qmdSummaryTitle = computed(() => {
-  const s = qmdSummary.value;
-  if (!s) return "";
-  const pending = s.documents - s.embedded;
-  return pending > 0
-    ? `${pending.toLocaleString()} indexed document(s) are still waiting on embeddings; ` +
-        `semantic search cannot reach them yet.`
-    : "Every indexed document has embeddings.";
-});
 
 // Repaint the two index columns, which read `qmdState`, a map the grid
 // has no way to observe on its own. Only those cells: a row rebuilt
@@ -659,6 +653,7 @@ async function runSearch(q: string, refresh = false) {
   loading.value = true;
   error.value = null;
   qmdError.value = null;
+  qmdIndexMissing.value = false;
   try {
     // The card shows a failure itself, beside the rows it concerns.
     const r = await fetchRows<Row>(url, q, limit, ctrl.signal, { toast: false }, { sort, through });
@@ -673,6 +668,7 @@ async function runSearch(q: string, refresh = false) {
     rows.value = win.rows;
     total.value = r.total;
     qmdError.value = typeof r.query_echo?.qmd_error === "string" ? r.query_echo.qmd_error : null;
+    qmdIndexMissing.value = r.query_echo?.qmd_index_missing === true;
     shownQuery.value = q;
     if (again) showChanged(true);
     else showNew();
@@ -766,6 +762,7 @@ async function runGrouped(q: string, refresh: boolean) {
   loading.value = true;
   error.value = null;
   qmdError.value = null;
+  qmdIndexMissing.value = false;
   try {
     const r = await fetchGroups<Row>(q, by.join(","), ctrl.signal, url);
     const windows = new Map(r.groups.map((g) => [groupKey(g.values), unread(g, r.at)]));
@@ -798,6 +795,7 @@ async function runGrouped(q: string, refresh: boolean) {
     shown = { q, sort, tail: false };
     win = null;
     qmdError.value = r.qmd_error ?? null;
+    qmdIndexMissing.value = r.qmd_index_missing ?? false;
     shownQuery.value = q;
     showGroups(again ? "refresh" : "new");
   } catch (e) {
@@ -1849,13 +1847,15 @@ onBeforeUnmount(() => {
 
     <div class="status">
       {{ rows.length }} rows (of {{ total }})
-      <span v-if="qmdSummary" class="qmd-summary" :title="qmdSummaryTitle">
-        · {{ qmdSummary.embedded.toLocaleString() }} of
-        {{ qmdSummary.documents.toLocaleString() }} documents searchable
+      <span v-if="qmdCoverage" class="qmd-summary" :title="qmdCoverage.title">
+        · {{ qmdCoverage.text }}
       </span>
     </div>
 
     <p v-if="qmdError" class="qmd-error" role="alert">Free-text search failed: {{ qmdError }}</p>
+    <p v-if="qmdIndexMissing" class="qmd-unbuilt" role="status">
+      Free-text search starts working once the first sync builds the search index.
+    </p>
 
     <p v-if="error" class="error" role="alert" :title="error.detail">
       {{ error.message }}
@@ -1878,7 +1878,12 @@ onBeforeUnmount(() => {
         <div class="grid-spinner__label">searching…</div>
       </div>
     </div>
-    <p v-if="!loading && rows.length === 0 && !error && !qmdError" class="empty">no matches.</p>
+    <p
+      v-if="!loading && rows.length === 0 && !error && !qmdError && !qmdIndexMissing"
+      class="empty"
+    >
+      no matches.
+    </p>
 
     <FeedbackModal
       :open="feedbackOpen"
@@ -1964,6 +1969,13 @@ onBeforeUnmount(() => {
 }
 .error-retry:hover {
   background: var(--datalib-border);
+}
+.qmd-unbuilt {
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--datalib-border);
+  border-radius: 4px;
+  color: var(--datalib-muted);
+  font-size: 0.9rem;
 }
 .qmd-error {
   padding: 0.4rem 0.6rem;

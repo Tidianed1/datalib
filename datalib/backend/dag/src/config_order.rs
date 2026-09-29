@@ -8,6 +8,8 @@
 //! The file is cut into entries as text, never re-serialized, and the
 //! result is refused unless it parses to the same entries as the input.
 
+use crate::config_lex::Kind;
+
 /// The config text in data-flow order, or `None` when it already is.
 /// `Err` when the text is not TOML, or when the reordered text would not
 /// say the same thing — a bug here, reported rather than written.
@@ -317,29 +319,36 @@ struct Line<'a> {
     trivia: bool,
 }
 
-/// Each line, read with enough of TOML's lexing to tell a header from a
-/// `[` inside a multi-line string or array.
+/// Each line, told apart from a `[` inside a multi-line string or array
+/// by the tokens around it.
 fn lines(text: &str) -> Vec<Line<'_>> {
-    #[derive(PartialEq)]
-    enum In {
-        Code,
-        Basic,
-        Literal,
-        MultiBasic,
-        MultiLiteral,
-    }
-    let bytes = text.as_bytes();
-    let mut state = In::Code;
-    let mut depth = 0usize;
+    let tokens = crate::config_lex::tokens(text);
     let mut out = Vec::new();
+    let mut depth = 0usize;
+    let mut next = 0;
     let mut start = 0;
-    while start < bytes.len() {
+    while start < text.len() {
+        // Only a multi-line string runs across a line start.
+        let mut in_string = false;
+        while let Some(t) = tokens.get(next).filter(|t| t.start < start) {
+            if t.end > start {
+                in_string = true;
+                break;
+            }
+            if t.kind == Kind::Punct {
+                match text.as_bytes()[t.start] {
+                    b'[' | b'{' => depth += 1,
+                    b']' | b'}' => depth = depth.saturating_sub(1),
+                    _ => {}
+                }
+            }
+            next += 1;
+        }
         let end = text[start..]
             .find('\n')
-            .map_or(bytes.len(), |n| start + n + 1);
-        let line = &text[start..end];
-        let trimmed = line.trim();
-        let in_value = state != In::Code || depth > 0;
+            .map_or(text.len(), |n| start + n + 1);
+        let trimmed = text[start..end].trim();
+        let in_value = in_string || depth > 0;
         let header = (!in_value && trimmed.starts_with('['))
             .then(|| header_name(trimmed))
             .flatten();
@@ -348,43 +357,6 @@ fn lines(text: &str) -> Vec<Line<'_>> {
             header,
             trivia: !in_value && (trimmed.is_empty() || trimmed.starts_with('#')),
         });
-        if header.is_none() {
-            let mut i = start;
-            while i < end {
-                let rest = &bytes[i..end];
-                match state {
-                    In::Code => match bytes[i] {
-                        b'#' => break,
-                        b'"' if rest.starts_with(b"\"\"\"") => {
-                            state = In::MultiBasic;
-                            i += 2;
-                        }
-                        b'\'' if rest.starts_with(b"'''") => {
-                            state = In::MultiLiteral;
-                            i += 2;
-                        }
-                        b'"' => state = In::Basic,
-                        b'\'' => state = In::Literal,
-                        b'[' | b'{' => depth += 1,
-                        b']' | b'}' => depth = depth.saturating_sub(1),
-                        _ => {}
-                    },
-                    In::Basic | In::MultiBasic if bytes[i] == b'\\' => i += 1,
-                    In::Basic if bytes[i] == b'"' || bytes[i] == b'\n' => state = In::Code,
-                    In::Literal if bytes[i] == b'\'' || bytes[i] == b'\n' => state = In::Code,
-                    In::MultiBasic if rest.starts_with(b"\"\"\"") => {
-                        state = In::Code;
-                        i += 2;
-                    }
-                    In::MultiLiteral if rest.starts_with(b"'''") => {
-                        state = In::Code;
-                        i += 2;
-                    }
-                    _ => {}
-                }
-                i += 1;
-            }
-        }
         start = end;
     }
     out

@@ -46,6 +46,12 @@ fn qmd_error(r: &SearchResponse) -> Option<&str> {
     r.query_echo["qmd_error"].as_str()
 }
 
+fn qmd_index_missing(r: &SearchResponse) -> bool {
+    r.query_echo["qmd_index_missing"]
+        .as_bool()
+        .expect("query_echo always says whether the qmd index is missing")
+}
+
 /// A free-text search comes best first by qmd's score, and its pages are
 /// consecutive slices of that one ranking; each row shows the words its
 /// hit matched.
@@ -56,6 +62,7 @@ async fn free_text_pages_follow_qmd_rank_and_show_the_matched_words() {
 
     let whole = search(&s, QUERY, None, 1_000, None).await;
     assert_eq!(qmd_error(&whole), None);
+    assert!(!qmd_index_missing(&whole));
     assert!(whole.errors.is_empty(), "{:?}", whole.errors);
     let ranked = scores(&whole);
     assert!(
@@ -190,10 +197,12 @@ async fn the_map_matches_structured_terms_without_qmd() {
     assert!(!matched.markdown_uuids.is_empty());
 }
 
-/// A root with no qmd index answers free text with the reason, on the grid
-/// and on the map, not with an empty result that reads as "no matches".
+/// A root no sync has built a qmd index for answers free text with no
+/// rows and `qmd_index_missing`, on the grid and its groups: a state the
+/// grid explains, not a failure it shows as an error, and not an empty
+/// result that reads as "no matches". The map says why in its errors.
 #[tokio::test]
-async fn free_text_without_a_qmd_index_says_why() {
+async fn free_text_without_a_qmd_index_says_it_is_not_built() {
     stage_runtime_once();
     let root = tempfile::tempdir().unwrap();
     datalib_qmd_fixture::copy_grid_index(root.path());
@@ -201,10 +210,17 @@ async fn free_text_without_a_qmd_index_says_why() {
 
     let r = search(&s, QUERY, None, 10, None).await;
     assert!(r.rows.is_empty());
-    assert!(qmd_error(&r).is_some(), "{:?}", r.query_echo);
+    assert!(qmd_index_missing(&r), "{:?}", r.query_echo);
+    assert_eq!(qmd_error(&r), None);
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
     let g = groups(&s, QUERY, "kind").await;
     assert!(g.groups.is_empty());
-    assert!(g.qmd_error.is_some());
+    assert!(g.qmd_index_missing);
+    assert_eq!(g.qmd_error, None);
+
+    let structured = search(&s, "is:document", None, 10, None).await;
+    assert!(!structured.rows.is_empty());
+    assert!(!qmd_index_missing(&structured));
 
     let params = map::MatchParams {
         q: Some(QUERY.to_string()),

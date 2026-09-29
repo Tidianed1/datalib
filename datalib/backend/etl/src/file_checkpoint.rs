@@ -113,6 +113,19 @@ pub async fn record_file(
     Ok(())
 }
 
+/// Drop one path's stamp, inside the transaction that deleted the rows it
+/// produced — so a crash between the two leaves the path still stamped,
+/// and the next run sees it removed again and retries.
+pub async fn forget_file(tx: &mut Transaction<'_, Sqlite>, scope: &str, rel: &str) -> Result<()> {
+    sqlx::query("DELETE FROM ingested_files WHERE scope = ? AND rel_path = ?")
+        .bind(scope)
+        .bind(rel)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("forget ingested_files {scope}={rel}"))?;
+    Ok(())
+}
+
 /// [`record_file`] for callers that don't already own a transaction.
 pub async fn record_file_pool(pool: &SqlitePool, scope: &str, file: &ScannedFile) -> Result<()> {
     let mut tx = pool.begin().await.context("begin record_file tx")?;

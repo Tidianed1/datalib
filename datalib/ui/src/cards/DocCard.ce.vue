@@ -496,16 +496,16 @@ watch(
         <!-- Title block (with copy-id button and source-URL arrow) is
              rendered inline at the top of the body by the cross-provider
              `Title` helper. The header here only carries the
-             non-title chrome: feedback button and timestamps. The
-             "open this column alone" affordance lives in the host's
-             column chrome. -->
+             non-title chrome: the feedback button. No date: a message
+             shows its own, and a document's other stamps are in its
+             frontmatter. The "open this column alone" affordance lives
+             in the host's column chrome. -->
         <p class="meta">
           <FeedbackButton
             :entity-uuid="chat.markdown_uuid"
             entity-kind="conversation"
             label="Conversation"
           />
-          <span v-if="chat.created_at"> · {{ chat.created_at }}</span>
         </p>
       </header>
       <ul v-if="problems.length || problemErrors.length" class="problems">
