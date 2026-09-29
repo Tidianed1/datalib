@@ -192,6 +192,7 @@ rust_test(
         "@datalib_crates//:libc",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sha2",
+        "@datalib_crates//:sqlx",
         "@datalib_crates//:tar",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",

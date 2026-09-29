@@ -42,9 +42,13 @@ pub fn by_step(
                     value: s.value,
                 })
                 .collect();
+            // A file tree or a photo library counts a table rather than
+            // documents, and "in 0 documents" would read as a fault.
             let detail = match documents.get(m.step.as_str()) {
-                Some(&d) => format!("{} in {}", count(m.value, "item"), count(d, "document")),
-                None => count(m.value, "item"),
+                Some(&d) if d > 0 => {
+                    format!("{} in {}", count(m.value, "item"), count(d, "document"))
+                }
+                _ => count(m.value, "item"),
             };
             let cell = Timeseries {
                 value: Some(m.value),
@@ -97,10 +101,12 @@ mod tests {
             &[
                 latest("slack/render_markdown", datalib_metrics::ITEMS, 48_210),
                 latest("mail/render_markdown", datalib_metrics::ITEMS, 0),
+                latest("photos/render_markdown", datalib_metrics::ITEMS, 4),
             ],
             &[
                 latest("slack/render_markdown", datalib_metrics::DOCUMENTS, 1204),
                 latest("old/render_markdown", datalib_metrics::DOCUMENTS, 7),
+                latest("photos/render_markdown", datalib_metrics::DOCUMENTS, 0),
             ],
             &[
                 sample("slack/render_markdown", "2026-09-01T00:00:00+00:00", 40_000),
@@ -121,6 +127,12 @@ mod tests {
         let mail = &by["mail/render_markdown"];
         assert_eq!(mail.value, Some(0));
         assert_eq!(mail.detail.as_deref(), Some("0 items"));
+        let photos = &by["photos/render_markdown"];
+        assert_eq!(
+            photos.detail.as_deref(),
+            Some("4 items"),
+            "no documents to name"
+        );
 
         assert!(!by.contains_key("old/render_markdown"));
     }

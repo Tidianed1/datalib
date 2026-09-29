@@ -34,6 +34,7 @@ pub async fn run(
     emitter.declare_streams_output(true);
     let PlannedSource {
         name,
+        source_type,
         processors,
         raw_path,
         ..
@@ -51,6 +52,9 @@ pub async fn run(
     let measured = crate::introspect::scan(data_root, raw_rel)
         .await
         .with_context(|| format!("measure {}", name))?;
+    let item_table = source_type
+        .item_table()
+        .map(|t| (t, crate::introspect::table_rows(&measured, t)));
     // Every source gets a storage report, including the ones that
     // render no documents of their own — for `fsindex` and `media` it
     // is the only thing they put in the grid.
@@ -85,7 +89,22 @@ pub async fn run(
     // The last word on what the source holds, after the sweep: a run
     // that deleted more than it wrote leaves the checkpoints' last
     // number too high, and this is the one that stands between runs.
-    report_holdings(&progress, report.holdings);
+    match item_table {
+        None => report_holdings(&progress, report.holdings),
+        Some((_, Some(rows))) => report_holdings(
+            &progress,
+            Holdings {
+                items: rows,
+                ..report.holdings
+            },
+        ),
+        // Before its first download, or a mirrored library with no such
+        // table: nothing counted, so no count is reported.
+        Some((table, None)) => {
+            tracing::info!(table, "no {table} table to count items in");
+            progress.metric(datalib_metrics::DOCUMENTS, &[], report.holdings.documents);
+        }
+    }
     if report.removed > 0 {
         progress.set_message(&format!(
             "{} document(s) dropped — their source is gone upstream",
