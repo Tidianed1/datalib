@@ -67,6 +67,9 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(0);
     })
     .map_err(|e| anyhow::anyhow!("{e}"))?;
+    // Before the url file: a spawner may signal the moment it sees it,
+    // and a SIGINT that lands before its handler kills the process.
+    let signals = ShutdownSignals::register()?;
     let bind = std::env::var("DATALIB_BIND").unwrap_or_else(|_| DEFAULT_BIND.into());
     let created = !root.exists();
 
@@ -154,7 +157,7 @@ async fn main() -> anyhow::Result<()> {
     let applets = state.applets.clone();
     let sync = state.sync.clone();
     axum::serve(listener, router(state))
-        .with_graceful_shutdown(terminated(parent_gone))
+        .with_graceful_shutdown(terminated(signals, parent_gone))
         .await?;
     tracing::info!("datalib-http: shutting down, stopping applets and syncs");
     applets.shutdown();
@@ -180,33 +183,51 @@ const SYNC_STOP_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 /// own kill is the fallback there.
 const PARENT_GONE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// The signals that end the server, registered when this is built rather
+/// than when the shutdown future is first polled (axum spawns it, so that
+/// is some time after serving starts). One interrupt stream serves both
+/// Ctrl-Cs, so a second one is seen however soon it follows the first.
+struct ShutdownSignals {
+    interrupt: Interrupt,
+    #[cfg(unix)]
+    terminate: tokio::signal::unix::Signal,
+}
+
+#[cfg(unix)]
+type Interrupt = tokio::signal::unix::Signal;
+#[cfg(windows)]
+type Interrupt = tokio::signal::windows::CtrlC;
+
+impl ShutdownSignals {
+    fn register() -> std::io::Result<Self> {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{signal, SignalKind};
+            Ok(Self {
+                interrupt: signal(SignalKind::interrupt())?,
+                terminate: signal(SignalKind::terminate())?,
+            })
+        }
+        #[cfg(windows)]
+        {
+            Ok(Self {
+                interrupt: tokio::signal::windows::ctrl_c()?,
+            })
+        }
+    }
+}
+
 /// Resolves on the first Ctrl-C, SIGTERM or the parent pipe closing —
 /// and from then on arms the two ways out of a shutdown that will not
 /// finish: a second Ctrl-C ends the process at once, and
 /// [`SHUTDOWN_DEADLINE`] ends it regardless. Without those, the first
 /// Ctrl-C closes the listener and nothing more, and tokio's installed
 /// handler swallows every Ctrl-C after it.
-async fn terminated(parent_gone: tokio::sync::oneshot::Receiver<()>) {
-    let interrupt = async {
-        let _ = tokio::signal::ctrl_c().await;
-    };
+async fn terminated(mut signals: ShutdownSignals, parent_gone: tokio::sync::oneshot::Receiver<()>) {
     #[cfg(unix)]
-    let terminate = async {
-        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(mut sig) => {
-                sig.recv().await;
-            }
-            // No handler is worse than a handler that never fires, but
-            // both are survivable: the applet's own parent watch is the
-            // backstop either way.
-            Err(e) => {
-                tracing::warn!("datalib-http: cannot listen for SIGTERM: {e}");
-                std::future::pending::<()>().await;
-            }
-        }
-    };
+    let terminate = signals.terminate.recv();
     #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
+    let terminate = std::future::pending::<Option<()>>();
     // `Err` is the sender dropped without firing: the watch was never
     // armed (no `DATALIB_PARENT_PIPE`), so there is no parent to outlive.
     let parent_gone = async {
@@ -216,7 +237,7 @@ async fn terminated(parent_gone: tokio::sync::oneshot::Receiver<()>) {
     };
 
     tokio::select! {
-        _ = interrupt => {
+        _ = signals.interrupt.recv() => {
             tracing::info!("datalib-http: interrupted, shutting down (Ctrl-C again to exit now)");
         }
         _ = terminate => {
@@ -227,8 +248,9 @@ async fn terminated(parent_gone: tokio::sync::oneshot::Receiver<()>) {
         }
     }
 
-    tokio::spawn(async {
-        let _ = tokio::signal::ctrl_c().await;
+    let mut interrupt = signals.interrupt;
+    tokio::spawn(async move {
+        interrupt.recv().await;
         datalib_parent_watch::report("datalib-http: interrupted again, exiting now");
         std::process::exit(130);
     });

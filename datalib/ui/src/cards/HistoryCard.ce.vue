@@ -13,8 +13,13 @@ import { copyToClipboard } from "@/clipboard";
 import { historyRows, truncatedStores, type HistoryRow } from "@/config/commitHistory";
 import {
   addComparison,
+  changeDetail,
+  changeSummary,
+  commitLabel,
+  commitTooltip,
   comparisonId,
   defaultPair,
+  pairChanges,
   selectedPair,
   type CommitPair,
 } from "@/config/compareCommits";
@@ -118,10 +123,9 @@ const canCreate = computed(
     maxDocuments.value >= 1,
 );
 
-/// How a commit reads in the compare bar: when, and what it said.
-function commitLabel(c: HistoryRow): string {
-  return `${c.date ? formatStamp(c.date) : ""} — ${c.label} (${(c.hash ?? "").slice(0, 8)})`;
-}
+const pairCounts = computed(() =>
+  comparePair.value ? pairChanges(lines.value, comparePair.value) : null,
+);
 
 async function createComparison() {
   const pair = comparePair.value;
@@ -192,7 +196,7 @@ const historyColumns: ColumnSpec[] = [
     field: "rows",
     header: "Rows",
     type: "count",
-    description: "Rows after this commit — across the data tables, or in the one table",
+    description: "Rows after this commit — across the record tables, or in the one table",
     default_visible: true,
     editable: false,
   },
@@ -359,9 +363,16 @@ onBeforeUnmount(() => unsubscribe?.());
       <template v-if="comparePair">
         <div class="hc-compare-pair">
           <span>Compare</span>
-          <span class="hc-pick">{{ commitLabel(comparePair.from) }}</span>
+          <span class="hc-pick" :title="commitTooltip(comparePair.from)">{{
+            commitLabel(comparePair.from)
+          }}</span>
           <span>→</span>
-          <span class="hc-pick">{{ commitLabel(comparePair.to) }}</span>
+          <span class="hc-pick" :title="commitTooltip(comparePair.to)">{{
+            commitLabel(comparePair.to)
+          }}</span>
+          <span v-if="pairCounts" class="hc-changes" :title="changeDetail(pairCounts)">{{
+            changeSummary(pairCounts)
+          }}</span>
         </div>
         <label>
           Name

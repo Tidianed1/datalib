@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { clickRowByUuid } from "./grid-helpers";
+import { EVERY_ROW, clickRowByUuid } from "./grid-helpers";
 
 // Clicking a grid row opens that row's document as a column on the
 // right with the corresponding section highlighted and scrolled into
@@ -74,7 +74,7 @@ test("row clicks highlight and scroll to the right message", async ({ page, requ
     "fixture must contain a conversation with at least two distinct message rows",
   ).not.toBeNull();
 
-  await page.goto("/");
+  await page.goto(EVERY_ROW);
   await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
 
   await clickRowByUuid(page, chosen!.uuidA);

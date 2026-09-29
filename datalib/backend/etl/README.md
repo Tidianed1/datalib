@@ -630,6 +630,38 @@ the same file without colliding. Stamping is per file and inside the caller's
 transaction, so a crash partway through keeps what landed and re-reads only
 the rest.
 
+**A file that is gone takes its records with it.** `changes.removed` names
+every path the cursor has and the scan does not. A source whose rows are keyed
+by path (a `.vcf` file is one address book, an `.ics` file one calendar) reads
+`needs_reading_by_path()`, which counts a moved file as new at its new path,
+then deletes the rows of each path in `gone_by_path(&read)` and calls
+`forget_file` in the same transaction. The path is removed from the cursor
+only then, so a crash in between just retries. `gone_by_path` is empty
+whenever the walk reported an error, because a folder that failed to list
+looks the same as one whose files were deleted. Report `scan.walk_problems()`
+through `download_problems::report_run`, so the skipped deletions show on
+the Manage row. Key rows against `scan.given_resolved`, not the configured
+path: the scan's paths are resolved, and stripping an unresolved prefix
+fails whenever a symlink is in the way.
+
+A source keyed by *content* (mbox, SMS backups, Takeout Voice) cannot map
+a path to rows, and its files overlap: two exports hold one message. When
+`changes.may_have_dropped_records()` (a file removed or rewritten, after a
+clean walk) it reads every file, and a run that read every file without a
+failure prunes what it did not see (`prune::prune_scope`, then
+`prune::delete_owned` for CAS edges) and `forget_files` the removed paths.
+A failed read holds the prune back and reports
+`Scan::deletions_held_back`. The read costs a pass over every file, but only
+on the run where the input shrank.
+
+A feed whose one file is its whole table (Takeout's Maps reviews, YouTube
+subscriptions, …) goes through `file_checkpoint::ingest_snapshot`: a
+changed file is upserted and the table pruned to what it lists, in one
+transaction. A parser that finds no list at all returns `None` and deletes
+nothing. A file missing from the scan deletes nothing either: for an export,
+a product left out of the request looks exactly like that. Takeout's
+folder feeds hold to the same rule one level up (`product_exported`).
+
 **Why content and not `(size, mtime)`.** A cursor on the stat pair
 re-ingests a file that was only *touched* (`rsync` without `-t`, a restore
 from backup, re-downloading the same export), re-reading and re-parsing the

@@ -139,6 +139,7 @@ fn to_item(
         },
         attachments,
         reactions: Vec::new(),
+        labels: Vec::new(),
         system_note: None,
         source_url: None,
         kind_label: None,

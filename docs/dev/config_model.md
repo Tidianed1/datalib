@@ -340,6 +340,14 @@ group each step after the steps it reads. Nothing else moves, and the
 comments above an entry move with it. Where two groups read each other
 it orders the steps one by one instead.
 
+The UI and the qmd upgrade edit the text rather than re-serializing it.
+An `inputs` array is edited where it stands (`dag/src/config_array.rs` on the
+server, `ui/src/config/tomlText.ts` in the UI): one id per line stays one
+id per line, with its indentation, trailing comma and comments, and a
+one-line array stays on one line. Both cut the text with the same small
+lexer (`dag/src/config_lex.rs` beside the sorter; the UI keeps a copy),
+and refuse an edit that does not read back as what was asked for.
+
 ## The retired shapes
 
 `datalib-migrate-config` (`datalib/backend/migrate_config/`) is the
@@ -350,6 +358,6 @@ retired type words become the current ones, and `sync` /
 their own `path` (`convert.rs`). The rewrite is value-level, so comments do not
 survive. The loader and `datalib-step` recognize the old shapes only
 well enough to name the tool. The one rewrite made without asking is the
-qmd steps', a text edit that keeps comments: `datalib-http` makes it
-through `upgrade_qmd_steps`, which refuses a result that would drop an
-entry the original ran.
+qmd steps', a text edit that keeps comments and leaves the file in
+data-flow order: `datalib-http` makes it through `upgrade_qmd_steps`,
+which refuses a result that would drop an entry the original ran.

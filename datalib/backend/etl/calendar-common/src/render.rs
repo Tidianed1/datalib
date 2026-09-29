@@ -393,11 +393,14 @@ fn build_grid_row(
     start: Option<String>,
     problems: &mut Vec<ProblemRow>,
 ) -> Option<GridRow> {
+    // What the event is, when and where, and what it says, before the
+    // calendar and the guest list, which fill a cell with addresses.
     let title = title_of(event).to_string();
     let mut text: Vec<String> = vec![title.clone()];
     text.extend(when_line(event));
     text.extend(repeats_lines(event));
     text.extend(event.location.clone());
+    text.extend(event.description.clone());
     text.push(event.calendar_label.clone());
     if let Some(o) = &event.organizer {
         text.extend(person_line(o.name.as_deref(), o.email.as_deref()));
@@ -408,7 +411,6 @@ fn build_grid_row(
             .iter()
             .filter_map(|a| person_line(a.person.name.as_deref(), a.person.email.as_deref())),
     );
-    text.extend(event.description.clone());
 
     GridRow::builder()
         .uuid(event.event_uuid.clone())
@@ -689,7 +691,8 @@ mod tests {
         assert_eq!(row.author.as_deref(), Some("Jean-Luc Picard"));
         assert_eq!(row.channel.as_deref(), Some("Bridge"));
         assert!(row.preview.contains("Weekly on Monday and Thursday"));
-        assert!(row.preview.contains("troi@enterprise.test"));
+        // What the event says comes before the guest list.
+        assert!(row.preview.contains("Ship's status."));
     }
 
     #[test]

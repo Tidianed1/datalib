@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { clickRowByUuid } from "./grid-helpers";
+import { EVERY_ROW, clickRowByUuid } from "./grid-helpers";
 
 // The focused message in the document pane gets a visible
 // "highlight window" — an accent-colored outline on all four
@@ -22,7 +22,7 @@ test("selected message has a visible accent-colored outline", async ({ page, req
   const pick = data.rows.find((r) => r.kind !== "Chat" && r.message_index != null);
   expect(pick, "fixture must contain a message row").not.toBeUndefined();
 
-  await page.goto("/");
+  await page.goto(EVERY_ROW);
   await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
 
   // Match on row uuid, not (conversation_uuid, message_index). Some

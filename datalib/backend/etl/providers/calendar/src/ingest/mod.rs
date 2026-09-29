@@ -56,6 +56,8 @@ pub struct FetchSummary {
     pub events_deleted: usize,
     /// `.ics` files whose contents had not moved since the last run.
     pub files_skipped: usize,
+    /// `.ics` files that are gone, their calendars with them.
+    pub files_removed: usize,
     pub errors: usize,
     pub requests: usize,
 }
@@ -63,12 +65,13 @@ pub struct FetchSummary {
 impl FetchSummary {
     pub fn line(&self) -> String {
         format!(
-            "calendars={} new={} updated={} deleted={} files_skipped={} errors={} requests={}",
+            "calendars={} new={} updated={} deleted={} files_skipped={} files_removed={} errors={} requests={}",
             self.calendars,
             self.events_new,
             self.events_updated,
             self.events_deleted,
             self.files_skipped,
+            self.files_removed,
             self.errors,
             self.requests,
         )

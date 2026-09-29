@@ -370,7 +370,10 @@ programs against:
   its free text (`RowsSpec`); the qmd columns and ranking appear only
   for the search. Row click opens the row's document via
   `host.openCards`; double-click opens it as a standalone single-column
-  page in a new tab. Persists `q`/`sel`/`cols` state.
+  page in a new tab. Persists `q`/`sel`/`cols` state. A search given
+  no `q` opens on `is:document`, one row per document; with no
+  `placeholder`, the empty bar suggests filters on the biggest source
+  the index holds (`cards/searchDefaults.ts`).
 - `documentView(markdownUuid?, sectionUuid?)` — renders one document
   (`/applet/unified_index/chat/{markdownUuid}`), highlighting and scrolling to
   `sectionUuid`. A different selection is a different card: the grid
@@ -431,8 +434,13 @@ programs against:
   moves; a commit's run opens its `logView`. With `source`, two
   commits of that source's download store can be selected and
   compared, which adds a diff group to the config and syncs it;
-  `compare: true` opens with the newest two set up. The pairing rules
-  are `config/compareCommits.ts`.
+  `compare: true` opens with the newest two set up. The compare bar
+  names each side by the minute it was made and counts what the
+  commits between them added, deleted and modified, each summed on
+  its own. Every count on
+  the card is over the tables that hold records, not datalib's own
+  (`datalib_history::holds_records`). The pairing rules are
+  `config/compareCommits.ts`.
 - `logLineView(seq)` — one log line in full (`cards/LogLineCard.ce.vue`,
   over `/api/log/{seq}`): the message, the fields as a tree
   (`cards/JsonTree.ce.vue`), the source link at the process's commit,

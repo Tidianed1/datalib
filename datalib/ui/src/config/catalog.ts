@@ -1179,13 +1179,13 @@ export const CATALOG: CatalogEntry[] = [
       {
         kind: "bool",
         target: "common.always_clear_before_ingest",
-        label: "Treat each export as complete",
-        default: true,
+        label: "Empty the mirror before each sync",
+        default: false,
         help:
-          "Each sync rewrites the mirror from the export as it is now, so what a newer " +
-          "export no longer holds drops out (the store's history keeps it). Only for a " +
-          "full export: pointed at one you requested a single product from, it would drop " +
-          "everything that export simply doesn't mention.",
+          "Not needed: every feed already drops what a newer export no longer holds " +
+          "(the store's history keeps it). Turned on, each sync empties the mirror and " +
+          "rewrites it from the export, so an export requested without some product " +
+          "loses that product's records.",
       },
     ],
   },

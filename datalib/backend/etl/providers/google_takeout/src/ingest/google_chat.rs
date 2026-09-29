@@ -1,6 +1,8 @@
 //! `Google Chat/` walker.
 
 use datalib_etl::fsscan;
+use datalib_etl::prune;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -27,6 +29,11 @@ pub struct ChatSummary {
     pub messages: usize,
     pub attachments: usize,
     pub blobs_stored: usize,
+    /// Users, groups and messages deleted: a gone file's, and messages a
+    /// re-read `messages.json` no longer carries.
+    pub removed: usize,
+    /// Export files that are gone since the last run.
+    pub files_removed: usize,
 }
 
 /// The name of the directory a scanned file sits in — a Chat user id
@@ -49,7 +56,10 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
     // ── Users ──────────────────────────────────────────────────────
     let mut user_rows: Vec<ChatUserRow> = Vec::new();
     let mut user_files: Vec<&fsscan::ScannedFile> = Vec::new();
-    for f in changes.needs_reading_under("Google Chat/Users") {
+    for f in changes
+        .needs_reading_by_path()
+        .filter(|f| fsscan::is_under(&f.rel, "Google Chat/Users"))
+    {
         if f.path.file_name().and_then(|s| s.to_str()) != Some("user_info.json") {
             continue;
         }
@@ -75,11 +85,17 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
     let mut messages_files: Vec<&fsscan::ScannedFile> = Vec::new();
     let mut acc = CasEdgeAccumulator::new();
     let mut n_attachments: usize = 0;
+    // A group's `messages.json` is all of its messages: what a re-read one
+    // no longer carries was deleted.
+    let mut messages_by_group: HashMap<String, HashSet<String>> = HashMap::new();
 
     // A group is a directory holding `group_info.json` and
     // `messages.json`. Both are just changed files in the scan, so
     // dispatch on which one this is rather than walking the tree.
-    for f in changes.needs_reading_under("Google Chat/Groups") {
+    for f in changes
+        .needs_reading_by_path()
+        .filter(|f| fsscan::is_under(&f.rel, "Google Chat/Groups"))
+    {
         let Some(dir_name) = parent_dir_name(f) else {
             continue;
         };
@@ -103,13 +119,15 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
                 let bytes = std::fs::read(&f.path)?;
                 let parsed: Value = serde_json::from_slice(&bytes)
                     .with_context(|| format!("parse {}", f.path.display()))?;
-                let arr = parsed
-                    .get("messages")
-                    .and_then(|v| v.as_array())
-                    .cloned()
-                    .unwrap_or_default();
-                for msg in arr {
+                // Only a file that names its messages says which are gone: one
+                // with no `messages` array prunes nothing.
+                let listed = parsed.get("messages").and_then(|v| v.as_array()).cloned();
+                let mut kept = listed.as_ref().map(|_| HashSet::new());
+                for msg in listed.unwrap_or_default() {
                     if let Some(row) = build_message_row(&dir_name, &msg) {
+                        if let Some(kept) = kept.as_mut() {
+                            kept.insert(row.id_and_payload.id.clone());
+                        }
                         // Attachments: walk msg.attached_files[].
                         if let Some(files) = msg.get("attached_files").and_then(|v| v.as_array()) {
                             for f in files {
@@ -182,6 +200,9 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
                         message_rows.push(row);
                     }
                 }
+                if let Some(kept) = kept {
+                    messages_by_group.insert(dir_name.clone(), kept);
+                }
                 messages_files.push(f);
             }
             _ => {}
@@ -222,12 +243,87 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
     })
     .await?;
 
+    for (group, kept) in &messages_by_group {
+        summary.removed += delete_group_messages(db, group, kept).await?;
+    }
+
+    // A file that is gone takes its user, group or messages with it — unless
+    // a file still here is the record of the same one.
+    let read: BTreeSet<&str> = user_files
+        .iter()
+        .chain(group_files.iter())
+        .chain(messages_files.iter())
+        .map(|f| f.rel.as_str())
+        .collect();
+    let present: HashSet<ChatFile> = scan
+        .files
+        .iter()
+        .filter_map(|f| chat_file(&f.rel))
+        .collect();
+    let gone = if super::product_exported(scan, "Google Chat") {
+        changes.gone_by_path(&read)
+    } else {
+        Vec::new()
+    };
+    for rel in &gone {
+        let Some(record) = chat_file(rel).filter(|r| !present.contains(r)) else {
+            continue;
+        };
+        summary.removed += match &record {
+            ChatFile::User(id) => {
+                prune::delete_owned(db.pool(), "chat_users", "id", std::slice::from_ref(id)).await?
+                    as usize
+            }
+            ChatFile::Group(id) => {
+                prune::delete_owned(db.pool(), "chat_groups", "id", std::slice::from_ref(id))
+                    .await? as usize
+            }
+            ChatFile::Messages(group) => delete_group_messages(db, group, &HashSet::new()).await?,
+        };
+    }
+    summary.files_removed = gone.len();
+    file_checkpoint::forget_files(db.pool(), SCOPE, &gone).await?;
+
     summary.groups = n_groups;
     summary.users = n_users;
     summary.messages = n_messages;
     summary.attachments = n_attachments;
     summary.blobs_stored = blobs_stored;
     Ok(summary)
+}
+
+/// Delete the messages of `group` not in `keep`, with their attachment
+/// edges. Returns how many went.
+async fn delete_group_messages(db: &RawDb, group: &str, keep: &HashSet<String>) -> Result<usize> {
+    let gone = prune::prune_scope(db.pool(), "chat_messages", &[("group_id", group)], keep).await?;
+    prune::delete_owned(db.pool(), "chat_attachments", "message_id", &gone).await?;
+    Ok(gone.len())
+}
+
+/// What an export file is the record of, by the directory the export
+/// names it with.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ChatFile {
+    User(String),
+    Group(String),
+    Messages(String),
+}
+
+fn chat_file(rel: &str) -> Option<ChatFile> {
+    let mut parts = rel.rsplitn(3, '/');
+    let name = parts.next()?;
+    let dir = parts.next()?.to_string();
+    if fsscan::is_under(rel, "Google Chat/Users") && name == "user_info.json" {
+        Some(ChatFile::User(dir))
+    } else if fsscan::is_under(rel, "Google Chat/Groups") {
+        match name {
+            "group_info.json" => Some(ChatFile::Group(dir)),
+            "messages.json" => Some(ChatFile::Messages(dir)),
+            _ => None,
+        }
+    } else {
+        None
+    }
 }
 
 fn build_message_row(group_id: &str, msg: &Value) -> Option<ChatMessageRow> {

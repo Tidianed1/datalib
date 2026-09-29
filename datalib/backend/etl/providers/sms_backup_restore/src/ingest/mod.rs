@@ -4,6 +4,7 @@ pub mod parse;
 pub mod schema_raw;
 
 use datalib_etl::fingerprint_cache::FingerprintCache;
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -11,9 +12,11 @@ use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw::WirePayload;
+use datalib_etl::download_problems;
 use datalib_etl::file_checkpoint;
 use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
+use datalib_etl::prune;
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::json;
@@ -54,6 +57,10 @@ pub struct FetchSummary {
     pub attachments: usize,
     pub blobs_stored: usize,
     pub parse_errors: usize,
+    /// Messages and calls deleted because no file still holds them.
+    pub removed: usize,
+    /// Backup files that are gone since the last run.
+    pub files_removed: usize,
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
@@ -71,6 +78,15 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     .await?;
     let prev = file_checkpoint::load_cursor(db.pool(), SCOPE).await?;
     let changes = scan.changes_since(&prev);
+    // Backups are snapshots and several can hold one message, so only a read
+    // of every file says which records left the input.
+    let read_all =
+        changes.may_have_dropped_records() || changes.needs_reading().count() == scan.files.len();
+    let to_read: Vec<&fsscan::ScannedFile> = if read_all {
+        scan.files.iter().collect()
+    } else {
+        changes.needs_reading().collect()
+    };
 
     let mut message_rows: Vec<SmsMessageRow> = Vec::new();
     let mut call_rows: Vec<SmsCallRow> = Vec::new();
@@ -78,7 +94,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut done: Vec<&fsscan::ScannedFile> = Vec::new();
     let mut summary = FetchSummary::default();
 
-    for f in changes.needs_reading() {
+    for f in to_read {
         let path = &f.path;
         let xml = match std::fs::read_to_string(path) {
             Ok(x) => x,
@@ -157,7 +173,49 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     })
     .await?;
 
+    let mut problems = scan.walk_problems();
+    if read_all && changes.walk_errors == 0 {
+        if summary.parse_errors == 0 {
+            summary.removed = prune_unseen(&db, &message_rows, &call_rows).await?;
+            let gone = changes.gone();
+            summary.files_removed = gone.len();
+            file_checkpoint::forget_files(db.pool(), SCOPE, &gone).await?;
+        } else if changes.may_have_dropped_records() {
+            problems.push(fsscan::Scan::deletions_held_back(summary.parse_errors));
+        }
+    }
+    download_problems::report_run(db.pool(), &problems).await;
+
     Ok(summary)
+}
+
+/// Delete the messages and calls no file holds, with their attachment
+/// edges. Only right after reading every file. Returns how
+/// many records went.
+async fn prune_unseen(
+    db: &RawDb,
+    messages: &[SmsMessageRow],
+    calls: &[SmsCallRow],
+) -> Result<usize> {
+    let keep_messages: HashSet<String> = messages
+        .iter()
+        .map(|r| r.id_and_payload.id.clone())
+        .collect();
+    let keep_calls: HashSet<String> = calls.iter().map(|r| r.id_and_payload.id.clone()).collect();
+    let gone_messages = prune::prune_scope(db.pool(), "sms_messages", &[], &keep_messages).await?;
+    prune::delete_owned(db.pool(), "sms_attachments", "message_id", &gone_messages).await?;
+    let gone_calls = prune::prune_scope(db.pool(), "sms_calls", &[], &keep_calls).await?;
+    prune::record(
+        "sms_messages",
+        keep_messages.len() + gone_messages.len(),
+        gone_messages.len(),
+    );
+    prune::record(
+        "sms_calls",
+        keep_calls.len() + gone_calls.len(),
+        gone_calls.len(),
+    );
+    Ok(gone_messages.len() + gone_calls.len())
 }
 
 fn ingest_sms(s: &SmsRecord, rows: &mut Vec<SmsMessageRow>) {

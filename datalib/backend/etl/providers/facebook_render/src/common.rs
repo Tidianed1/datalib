@@ -18,7 +18,7 @@ use serde_json::Value;
 /// v2: ids are minted through `datalib_id`, every row carries its
 ///     backpointer, and an item's id carries its stamp in its leading
 ///     bits (`datalib_id`'s v8 layout). Every uuid moved.
-pub const RENDER_VERSION: u32 = 2;
+pub const RENDER_VERSION: u32 = 3;
 
 pub const SOURCE_LABEL: &str = "Facebook";
 
@@ -173,6 +173,7 @@ pub fn chat_item(
         },
         attachments,
         reactions: Vec::new(),
+        labels: Vec::new(),
         system_note: None,
         source_url: None,
         kind_label: None,

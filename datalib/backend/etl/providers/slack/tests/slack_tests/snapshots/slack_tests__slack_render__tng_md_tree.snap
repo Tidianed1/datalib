@@ -1,10 +1,10 @@
 ---
-source: datalib/backend/etl/providers/slack/tests/slack_render.rs
+source: datalib/backend/etl/providers/slack/tests/slack_tests/slack_render.rs
 expression: bundle
 ---
 === slack_api/render_markdown/00000000-0000-8317-9ef9-393bf7346f79/all.md ===
 ---
-title: "#bridge: Mr. Data, status report. (all)"
+title: "#bridge: Mr. Data, status report."
 provider: slack
 source_label: "Slack"
 chat_uuid: 00000000-0000-8317-9ef9-393bf7346f79
@@ -16,7 +16,7 @@ external_id: C_BRIDGE#12604000100.000100
 item_count: 3
 ---
 
-<h1 class="page-title" data-page-title-uuid="00000000-0000-8317-9ef9-393bf7346f79">#bridge: Mr. Data, status report. (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000100000100?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<h1 class="page-title" data-page-title-uuid="00000000-0000-8317-9ef9-393bf7346f79">#bridge: Mr. Data, status report. <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000100000100?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
 <div id="m-0b7698f2-dea0-85d5-a39a-abc9bdba7fcd" data-section-uuid="0b7698f2-dea0-85d5-a39a-abc9bdba7fcd" class="msg msg--slack">
 
@@ -49,7 +49,7 @@ Set a course, Mr. Data. Warp factor five.
 
 === slack_api/render_markdown/00000000-0000-83bc-ae17-f15c9ea6dbb3/all.md ===
 ---
-title: "@William T. Riker: Captain, the away team roster is ready for your review. (all)"
+title: "@William T. Riker: Captain, the away team roster is ready for your review."
 provider: slack
 source_label: "Slack"
 chat_uuid: 00000000-0000-83bc-ae17-f15c9ea6dbb3
@@ -61,7 +61,7 @@ external_id: D_RIKER#12604000900.000900
 item_count: 1
 ---
 
-<h1 class="page-title" data-page-title-uuid="00000000-0000-83bc-ae17-f15c9ea6dbb3">@William T. Riker: Captain, the away team roster is ready for your review. (all) <a class="source-link" href="https://slack.com/archives/D_RIKER/p12604000900000900?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<h1 class="page-title" data-page-title-uuid="00000000-0000-83bc-ae17-f15c9ea6dbb3">@William T. Riker: Captain, the away team roster is ready for your review. <a class="source-link" href="https://slack.com/archives/D_RIKER/p12604000900000900?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
 <div id="m-0b7698ff-13a0-89e2-a71a-9301e97ee4b8" data-section-uuid="0b7698ff-13a0-89e2-a71a-9301e97ee4b8" class="msg msg--slack">
 
@@ -74,7 +74,7 @@ Captain, the away team roster is ready for your review.
 
 === slack_api/render_markdown/00000000-0000-85ce-ad38-deac11f57f93/all.md ===
 ---
-title: "#bridge: I recommend raising shields, Captain. (all)"
+title: "#bridge: I recommend raising shields, Captain."
 provider: slack
 source_label: "Slack"
 chat_uuid: 00000000-0000-85ce-ad38-deac11f57f93
@@ -86,7 +86,7 @@ external_id: C_BRIDGE#12604000400.000400
 item_count: 1
 ---
 
-<h1 class="page-title" data-page-title-uuid="00000000-0000-85ce-ad38-deac11f57f93">#bridge: I recommend raising shields, Captain. (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<h1 class="page-title" data-page-title-uuid="00000000-0000-85ce-ad38-deac11f57f93">#bridge: I recommend raising shields, Captain. <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
 <div id="m-0b7698f7-7280-8966-bad5-3ef67d2995a1" data-section-uuid="0b7698f7-7280-8966-bad5-3ef67d2995a1" class="msg msg--slack">
 
@@ -99,7 +99,7 @@ I recommend raising shields, Captain.
 
 === slack_api/render_markdown/00000000-0000-86e8-a93e-c2df52701153/all.md ===
 ---
-title: "@William T. Riker, Worf: I must object to beaming down unarmed. (all)"
+title: "@William T. Riker, Worf: I must object to beaming down unarmed."
 provider: slack
 source_label: "Slack"
 chat_uuid: 00000000-0000-86e8-a93e-c2df52701153
@@ -111,7 +111,7 @@ external_id: G_AWAYTEAM#12604000903.000903
 item_count: 1
 ---
 
-<h1 class="page-title" data-page-title-uuid="00000000-0000-86e8-a93e-c2df52701153">@William T. Riker, Worf: I must object to beaming down unarmed. (all) <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000903000903?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<h1 class="page-title" data-page-title-uuid="00000000-0000-86e8-a93e-c2df52701153">@William T. Riker, Worf: I must object to beaming down unarmed. <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000903000903?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
 <div id="m-0b7698ff-1f58-83f0-858a-e33c7da8df4a" data-section-uuid="0b7698ff-1f58-83f0-858a-e33c7da8df4a" class="msg msg--slack">
 
@@ -124,7 +124,7 @@ I must object to beaming down unarmed.
 
 === slack_api/render_markdown/00000000-0000-8752-b0c1-474a169fdb3c/all.md ===
 ---
-title: "#ten-forward: Anyone up for poker tonight? (all)"
+title: "#ten-forward: Anyone up for poker tonight?"
 provider: slack
 source_label: "Slack"
 chat_uuid: 00000000-0000-8752-b0c1-474a169fdb3c
@@ -136,7 +136,7 @@ external_id: C_TENFWD#12604000600.000600
 item_count: 2
 ---
 
-<h1 class="page-title" data-page-title-uuid="00000000-0000-8752-b0c1-474a169fdb3c">#ten-forward: Anyone up for poker tonight? (all) <a class="source-link" href="https://slack.com/archives/C_TENFWD/p12604000600000600?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<h1 class="page-title" data-page-title-uuid="00000000-0000-8752-b0c1-474a169fdb3c">#ten-forward: Anyone up for poker tonight? <a class="source-link" href="https://slack.com/archives/C_TENFWD/p12604000600000600?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
 <div id="m-0b7698fa-7fc0-88ac-8adf-c22400c25539" data-section-uuid="0b7698fa-7fc0-88ac-8adf-c22400c25539" class="msg msg--slack">
 
@@ -159,7 +159,7 @@ I do not understand the appeal of this Earth game.
 
 === slack_api/render_markdown/00000000-0000-8948-9dff-ce3daf102bd8/all.md ===
 ---
-title: "#engineering: Warp core efficiency at 99.7%. (all)"
+title: "#engineering: Warp core efficiency at 99.7%."
 provider: slack
 source_label: "Slack"
 chat_uuid: 00000000-0000-8948-9dff-ce3daf102bd8
@@ -171,7 +171,7 @@ external_id: C_ENG#12604000500.000500
 item_count: 1
 ---
 
-<h1 class="page-title" data-page-title-uuid="00000000-0000-8948-9dff-ce3daf102bd8">#engineering: Warp core efficiency at 99.7%. (all) <a class="source-link" href="https://slack.com/archives/C_ENG/p12604000500000500?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<h1 class="page-title" data-page-title-uuid="00000000-0000-8948-9dff-ce3daf102bd8">#engineering: Warp core efficiency at 99.7%. <a class="source-link" href="https://slack.com/archives/C_ENG/p12604000500000500?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
 <div id="m-0b7698f8-f920-8e90-bd54-7eb8ac1b6886" data-section-uuid="0b7698f8-f920-8e90-bd54-7eb8ac1b6886" class="msg msg--slack">
 
@@ -184,7 +184,7 @@ Warp core efficiency at 99.7%.
 
 === slack_api/render_markdown/00000000-0000-8a4c-aff9-7a14aadb2344/all.md ===
 ---
-title: "#bridge: New combadge prototypes — thoughts? (all)"
+title: "#bridge: New combadge prototypes — thoughts?"
 provider: slack
 source_label: "Slack"
 chat_uuid: 00000000-0000-8a4c-aff9-7a14aadb2344
@@ -196,7 +196,7 @@ external_id: C_BRIDGE#12604000700.000700
 item_count: 1
 ---
 
-<h1 class="page-title" data-page-title-uuid="00000000-0000-8a4c-aff9-7a14aadb2344">#bridge: New combadge prototypes — thoughts? (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000700000700?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<h1 class="page-title" data-page-title-uuid="00000000-0000-8a4c-aff9-7a14aadb2344">#bridge: New combadge prototypes — thoughts? <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000700000700?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
 <div id="m-0b7698fc-0660-89df-b570-20fea0d34957" data-section-uuid="0b7698fc-0660-89df-b570-20fea0d34957" class="msg msg--slack">
 
@@ -212,7 +212,7 @@ New combadge prototypes — thoughts?
 
 === slack_api/render_markdown/00000000-0000-8ad6-bdfa-3f1529359a94/all.md ===
 ---
-title: "@William T. Riker, Worf: Noted, Mr. Worf. Phasers on stun. (all)"
+title: "@William T. Riker, Worf: Noted, Mr. Worf. Phasers on stun."
 provider: slack
 source_label: "Slack"
 chat_uuid: 00000000-0000-8ad6-bdfa-3f1529359a94
@@ -224,7 +224,7 @@ external_id: G_AWAYTEAM#12604000904.000904
 item_count: 1
 ---
 
-<h1 class="page-title" data-page-title-uuid="00000000-0000-8ad6-bdfa-3f1529359a94">@William T. Riker, Worf: Noted, Mr. Worf. Phasers on stun. (all) <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000904000904?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<h1 class="page-title" data-page-title-uuid="00000000-0000-8ad6-bdfa-3f1529359a94">@William T. Riker, Worf: Noted, Mr. Worf. Phasers on stun. <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000904000904?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
 <div id="m-0b7698ff-2340-896e-ac88-a3f776701ae9" data-section-uuid="0b7698ff-2340-896e-ac88-a3f776701ae9" class="msg msg--slack">
 
@@ -237,7 +237,7 @@ Noted, Mr. Worf. Phasers on stun.
 
 === slack_api/render_markdown/00000000-0000-8c74-8f5e-10f7cfb23eb4/all.md ===
 ---
-title: "@William T. Riker: Thank you, Number One. Make it so. (all)"
+title: "@William T. Riker: Thank you, Number One. Make it so."
 provider: slack
 source_label: "Slack"
 chat_uuid: 00000000-0000-8c74-8f5e-10f7cfb23eb4
@@ -249,7 +249,7 @@ external_id: D_RIKER#12604000901.000901
 item_count: 1
 ---
 
-<h1 class="page-title" data-page-title-uuid="00000000-0000-8c74-8f5e-10f7cfb23eb4">@William T. Riker: Thank you, Number One. Make it so. (all) <a class="source-link" href="https://slack.com/archives/D_RIKER/p12604000901000901?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<h1 class="page-title" data-page-title-uuid="00000000-0000-8c74-8f5e-10f7cfb23eb4">@William T. Riker: Thank you, Number One. Make it so. <a class="source-link" href="https://slack.com/archives/D_RIKER/p12604000901000901?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
 <div id="m-0b7698ff-1788-84e2-9319-1da246eea5c2" data-section-uuid="0b7698ff-1788-84e2-9319-1da246eea5c2" class="msg msg--slack">
 
@@ -262,7 +262,7 @@ Thank you, Number One. Make it so.
 
 === slack_api/render_markdown/00000000-0000-8c86-9536-e7d7234af0ca/all.md ===
 ---
-title: "@Lt. Cmdr. Data: Sir, I have completed my analysis of the Romulan signature. (all)"
+title: "@Lt. Cmdr. Data: Sir, I have completed my analysis of the Romulan signature."
 provider: slack
 source_label: "Slack"
 chat_uuid: 00000000-0000-8c86-9536-e7d7234af0ca
@@ -274,7 +274,7 @@ external_id: D_DATA#12604000902.000902
 item_count: 1
 ---
 
-<h1 class="page-title" data-page-title-uuid="00000000-0000-8c86-9536-e7d7234af0ca">@Lt. Cmdr. Data: Sir, I have completed my analysis of the Romulan signature. (all) <a class="source-link" href="https://slack.com/archives/D_DATA/p12604000902000902?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<h1 class="page-title" data-page-title-uuid="00000000-0000-8c86-9536-e7d7234af0ca">@Lt. Cmdr. Data: Sir, I have completed my analysis of the Romulan signature. <a class="source-link" href="https://slack.com/archives/D_DATA/p12604000902000902?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
 <div id="m-0b7698ff-1b70-80ae-b392-d12d67f7a814" data-section-uuid="0b7698ff-1b70-80ae-b392-d12d67f7a814" class="msg msg--slack">
 
@@ -289,7 +289,7 @@ Sir, I have completed my analysis of the Romulan signature.
 
 === slack_api/render_markdown/00000000-0000-8d68-b7dc-08d9ae2795f6/all.md ===
 ---
-title: "#bridge: Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 271  (all)"
+title: "#bridge: Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 271 "
 provider: slack
 source_label: "Slack"
 chat_uuid: 00000000-0000-8d68-b7dc-08d9ae2795f6
@@ -301,7 +301,7 @@ external_id: C_BRIDGE#12604000800.000800
 item_count: 1
 ---
 
-<h1 class="page-title" data-page-title-uuid="00000000-0000-8d68-b7dc-08d9ae2795f6">#bridge: Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 271  (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000800000800?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<h1 class="page-title" data-page-title-uuid="00000000-0000-8d68-b7dc-08d9ae2795f6">#bridge: Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 271  <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000800000800?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
 <div id="m-0b7698fd-8d00-8d8a-babd-75592eff4b85" data-section-uuid="0b7698fd-8d00-8d8a-babd-75592eff4b85" class="msg msg--slack">
 

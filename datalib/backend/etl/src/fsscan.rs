@@ -110,6 +110,12 @@ pub struct Scan {
     /// configured, or a deliberate symlink indirection silently becomes its
     /// current target.
     pub root_as_given: PathBuf,
+    /// The root as given, resolved: the file itself when the caller gave
+    /// one file. What a caller keying rows by path under its configured
+    /// input strips from [`ScannedFile::path`], which is resolved too —
+    /// stripping the unresolved spelling fails whenever a symlink is on
+    /// the way.
+    pub given_resolved: PathBuf,
     pub files: Vec<ScannedFile>,
     pub errors: Vec<WalkError>,
     pub stats: ScanStats,
@@ -137,6 +143,21 @@ pub struct Changes {
     pub moved: Vec<Moved>,
     /// Same path, same digest.
     pub unchanged: usize,
+    /// Entries the walk could not read. A directory that failed to list
+    /// looks exactly like one whose files were all deleted, so while this
+    /// is non-zero `removed` is not evidence that anything went.
+    pub walk_errors: usize,
+}
+
+/// Whether root-relative `rel` is inside root-relative directory `rel_dir`,
+/// which may be several segments deep. Case-insensitive, because export
+/// trees come from other people's tools.
+pub fn is_under(rel: &str, rel_dir: &str) -> bool {
+    let prefix = format!("{}/", rel_dir.trim_end_matches('/'));
+    rel.len() > prefix.len()
+        && rel
+            .get(..prefix.len())
+            .is_some_and(|p| p.eq_ignore_ascii_case(&prefix))
 }
 
 impl Changes {
@@ -150,22 +171,14 @@ impl Changes {
             || !self.moved.is_empty()
     }
 
-    /// [`Self::needs_reading`], narrowed to one directory of the scanned root:
-    /// an export root holds several feeds' files side by side.
-    ///
-    /// `rel_dir` is root-relative and may be several segments deep. Matching is
-    /// case-insensitive, because export trees come from other people's tools.
+    /// [`Self::needs_reading`], narrowed to one directory of the scanned root
+    /// ([`is_under`]): an export root holds several feeds' files side by side.
     pub fn needs_reading_under<'a>(
         &'a self,
         rel_dir: &'a str,
     ) -> impl Iterator<Item = &'a ScannedFile> + 'a {
-        let prefix = format!("{}/", rel_dir.trim_end_matches('/'));
-        self.needs_reading().filter(move |f| {
-            f.rel.len() > prefix.len()
-                && f.rel
-                    .get(..prefix.len())
-                    .is_some_and(|p| p.eq_ignore_ascii_case(&prefix))
-        })
+        self.needs_reading()
+            .filter(move |f| is_under(&f.rel, rel_dir))
     }
 
     /// Files whose **content** the caller must read: the added and the
@@ -173,12 +186,57 @@ impl Changes {
     pub fn needs_reading(&self) -> impl Iterator<Item = &ScannedFile> {
         self.added.iter().chain(self.modified.iter())
     }
+
+    /// [`Self::needs_reading`] for a store that keys its rows by path, where
+    /// a move is new rows at one path and none at the other: the moved
+    /// files are read again at their new path.
+    pub fn needs_reading_by_path(&self) -> impl Iterator<Item = &ScannedFile> {
+        self.needs_reading()
+            .chain(self.moved.iter().map(|m| &m.now))
+    }
+
+    /// The paths whose rows a store keyed by path should delete: every
+    /// removed path, and a moved file's old path once `read` holds its new
+    /// one. Nothing at all when the walk reported errors, so a folder that
+    /// failed to read cannot shrink the store.
+    pub fn gone_by_path(&self, read: &BTreeSet<&str>) -> Vec<&str> {
+        if self.walk_errors > 0 {
+            return Vec::new();
+        }
+        let moved = self
+            .moved
+            .iter()
+            .filter(|m| read.contains(m.now.rel.as_str()))
+            .map(|m| m.was.as_str());
+        self.gone().into_iter().chain(moved).collect()
+    }
+
+    /// For a store keyed by content, whose files are snapshots that can
+    /// overlap: whether a record may have left the input — a file gone or
+    /// rewritten, after a clean walk. Only a read of every file says which,
+    /// so a caller reads them all. An added or moved file only adds.
+    pub fn may_have_dropped_records(&self) -> bool {
+        self.walk_errors == 0 && (!self.removed.is_empty() || !self.modified.is_empty())
+    }
+
+    /// The removed paths a caller may act on: all of them after a clean
+    /// walk, none after one that reported errors. For a store keyed by
+    /// content, where a move changes nothing, this is the whole question.
+    pub fn gone(&self) -> Vec<&str> {
+        if self.walk_errors > 0 {
+            return Vec::new();
+        }
+        self.removed.iter().map(|(rel, _)| rel.as_str()).collect()
+    }
 }
 
 impl Scan {
     /// What this source has not dealt with, relative to what it had.
     pub fn changes_since(&self, prev: &FileScanCursor) -> Changes {
-        let mut changes = Changes::default();
+        let mut changes = Changes {
+            walk_errors: self.errors.len(),
+            ..Changes::default()
+        };
         let now: BTreeSet<&str> = self.files.iter().map(|f| f.rel.as_str()).collect();
 
         // Paths the caller knew that are gone. Held first, because a
@@ -217,7 +275,6 @@ impl Scan {
         changes
     }
 
-    /// The view to persist, once the caller has dealt with everything.
     /// The scanned file at this root-relative path, if the scan saw
     /// one. The single-file feeds' whole question: "is my file there,
     /// and what is in it?"
@@ -225,6 +282,41 @@ impl Scan {
         self.files.iter().find(|f| f.rel == rel)
     }
 
+    /// The run problem a walk with errors leaves, for
+    /// [`crate::download_problems::report_run`]: the files it reports gone
+    /// keep their records until a walk completes. Empty for a clean walk,
+    /// so reporting it also clears the last run's row.
+    pub fn walk_problems(&self) -> Vec<crate::download_problems::RunProblem> {
+        let Some(first) = self.errors.first() else {
+            return Vec::new();
+        };
+        vec![crate::download_problems::RunProblem::listing(
+            "files",
+            format!(
+                "{} entries under {} could not be read, so no file's records \
+                 were deleted this run; first: {}: {}",
+                self.errors.len(),
+                self.root_as_given.display(),
+                first.path.display(),
+                first.error,
+            ),
+        )]
+    }
+
+    /// The run problem of a store keyed by content that read every file to
+    /// learn what the input still holds, and could not read `unread` of
+    /// them: nothing was deleted this run.
+    pub fn deletions_held_back(unread: usize) -> crate::download_problems::RunProblem {
+        crate::download_problems::RunProblem::listing(
+            "removed_records",
+            format!(
+                "files were removed or rewritten, but {unread} of the files could not be \
+                 read, so no record was deleted this run"
+            ),
+        )
+    }
+
+    /// The view to persist, once the caller has dealt with everything.
     pub fn cursor(&self) -> FileScanCursor {
         self.files
             .iter()
@@ -291,7 +383,7 @@ where
             _ => (resolved.clone(), None),
         }
     } else {
-        (resolved, None)
+        (resolved.clone(), None)
     };
 
     let cached = cache.load_under(&root).await?;
@@ -300,7 +392,7 @@ where
         ..ScanStats::default()
     };
 
-    let (walked, errors) = fswalk::walk_files(&root, &opts.ignore, |p| {
+    let (walked, mut errors) = fswalk::walk_files(&root, &opts.ignore, |p| {
         only.as_ref()
             .is_none_or(|name| p.file_name() == Some(name.as_os_str()))
             && accept(p)
@@ -341,10 +433,14 @@ where
                     hash
                 }
                 Err(e) => {
-                    // Unreadable now; surfaced like any other walk
-                    // error rather than failing the whole scan.
-                    stats.too_large += 0;
+                    // Unreadable now; surfaced like any other walk error
+                    // rather than failing the whole scan. Dropping it
+                    // silently would report the file as deleted.
                     tracing::warn!(path = %entry.path.display(), error = %e, "fsscan_hash_failed");
+                    errors.push(WalkError {
+                        path: entry.path,
+                        error: format!("{e:#}"),
+                    });
                     continue;
                 }
             },
@@ -376,6 +472,7 @@ where
     Ok(Scan {
         root,
         root_as_given: given.to_path_buf(),
+        given_resolved: resolved,
         files,
         errors,
         stats,
@@ -536,6 +633,59 @@ mod tests {
         assert_eq!(changes.removed.len(), 1);
         assert_eq!(changes.removed[0].0, "goes.txt");
         assert!(changes.added.is_empty());
+    }
+
+    /// A path-keyed store drops a deleted file's rows, and a moved file's
+    /// old rows only once its new path was read, so a failed re-read never
+    /// leaves the content keyed nowhere.
+    #[tokio::test]
+    async fn a_path_keyed_store_drops_deleted_and_moved_away_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("tree");
+        write(&root, "stays.vcf", b"a");
+        write(&root, "goes.vcf", b"b");
+        write(&root, "old.vcf", b"moved bytes");
+        let cache = fresh_cache(tmp.path()).await;
+        let mark = scan_all(&cache, &root).await.cursor();
+
+        std::fs::remove_file(root.join("goes.vcf")).unwrap();
+        std::fs::rename(root.join("old.vcf"), root.join("new.vcf")).unwrap();
+        let changes = scan_all(&cache, &root).await.changes_since(&mark);
+
+        let to_read: Vec<&str> = changes
+            .needs_reading_by_path()
+            .map(|f| f.rel.as_str())
+            .collect();
+        assert_eq!(to_read, vec!["new.vcf"]);
+
+        let read = BTreeSet::from(["new.vcf"]);
+        assert_eq!(changes.gone_by_path(&read), vec!["goes.vcf", "old.vcf"]);
+        assert_eq!(
+            changes.gone_by_path(&BTreeSet::new()),
+            vec!["goes.vcf"],
+            "a move whose new path failed to read keeps its old rows",
+        );
+    }
+
+    /// A walk that hit an error cannot tell a deleted file from one it
+    /// failed to see, so nothing it reports gone is deleted.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_walk_error_deletes_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("tree");
+        write(&root, "stays.vcf", b"a");
+        write(&root, "goes.vcf", b"b");
+        let cache = fresh_cache(tmp.path()).await;
+        let mark = scan_all(&cache, &root).await.cursor();
+
+        std::fs::remove_file(root.join("goes.vcf")).unwrap();
+        std::os::unix::fs::symlink(root.join("nowhere"), root.join("dangling.vcf")).unwrap();
+        let changes = scan_all(&cache, &root).await.changes_since(&mark);
+
+        assert_eq!(changes.walk_errors, 1, "{changes:?}");
+        assert_eq!(changes.removed.len(), 1, "the removal is still reported");
+        assert!(changes.gone_by_path(&BTreeSet::new()).is_empty());
     }
 
     /// A rename must not read a byte: the content is already known, so

@@ -623,13 +623,9 @@ function = "ingest"
 # paths for nested labels). Exact match, union across labels;
 # empty = everything.
 only_extract_labels = []          # ingest only messages carrying these labels
-
-[steps.params.common]
-# The .mbox is a complete snapshot, so a message that is no longer in it
-# was deleted. Wipe the entity tables before each ingest and rewrite them
-# from the file, and the deletion falls out. The old rows stay in doltlite
-# history, so `dolt_diff` can still show you what went.
-always_clear_before_ingest = true
+# The .mbox is a complete snapshot: a message a newer export no longer
+# carries, or one only a deleted .mbox held, leaves the mirror on the next
+# sync. The old rows stay in doltlite history.
 
 [steps.params.mbox]
 path = "~/backups/Takeout/Mail/All mail Including Spam and Trash.mbox"
@@ -724,11 +720,8 @@ group = "vcard-contacts"
 function = "ingest"
 [steps.params.vcf]
 path = "~/backups/contacts_vcf"
-[steps.params.common]
-# The directory is the whole address book, so a `.vcf` that is gone means
-# the contact is gone. (CardDAV mode above doesn't need this: the server
-# reports deletions itself.)
-always_clear_before_ingest = true
+# Each `.vcf` is an address book: a card a file no longer carries, or every
+# card of a file that is gone, leaves the mirror on the next sync.
 
 [[steps]]
 group = "vcard-contacts"
@@ -1256,13 +1249,11 @@ type = "google_takeout"
 group = "google-takeout"
 function = "ingest"
 
-[steps.params.common]
-# Each Takeout is a complete snapshot of the feeds it covers — so point
-# this at a full export, not one you requested a single product from, or
-# the wipe drops what the narrower export simply doesn't mention.
-always_clear_before_ingest = true
-
 [steps.params.export]
+# Each Takeout is a complete snapshot of the products you ticked: a record
+# a newer export no longer holds leaves the mirror on the next sync, and
+# the old rows stay in doltlite history. A product missing from the export
+# altogether deletes nothing — it reads as "not requested this time".
 path = "~/backups/Takeout"
 google_chat = true                # DMs + bots + attachments → Markdown
 google_voice = true               # texts, voicemails, calls → Markdown
@@ -1305,10 +1296,8 @@ group = "sms-backup-restore"
 function = "ingest"
 [steps.params.backup]
 path = "~/backups/SMSBackupRestore"
-[steps.params.common]
-# The export directory is the whole archive, so a message no longer in it
-# was deleted on the phone.
-always_clear_before_ingest = true
+# The directory is the whole archive: a message no backup file still holds
+# leaves the mirror on the next sync.
 
 [[steps]]
 group = "sms-backup-restore"
