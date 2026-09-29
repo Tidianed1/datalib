@@ -145,8 +145,6 @@ type = "email"
 [[steps]]
 group = "gmail"
 function = "ingest"
-[steps.params.common]
-always_clear_before_ingest = true
 [steps.params.mbox]
 path = "/import/$(basename "$MBOX")"
 account_id = "you@gmail.com"

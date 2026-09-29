@@ -3,15 +3,18 @@
 pub mod parse;
 pub mod schema_raw;
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{blake3_hex, CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw::WirePayload;
+use datalib_etl::download_problems::RunProblem;
 use datalib_etl::file_checkpoint;
 use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
+use datalib_etl::prune;
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::json;
 use tracing::warn;
@@ -32,6 +35,12 @@ pub struct VoiceSummary {
     pub greetings: usize,
     pub attachments: usize,
     pub blobs_stored: usize,
+    /// Records deleted because no Voice file still holds them.
+    pub removed: usize,
+    pub files_removed: usize,
+    /// Set when files were removed or rewritten but one could not be read,
+    /// so nothing was deleted.
+    pub held_back: Option<RunProblem>,
 }
 
 pub async fn ingest(
@@ -45,14 +54,23 @@ pub async fn ingest(
     // whose relative path is its own — no walk of its own, no stat.
     let prev = file_checkpoint::load_cursor(db.pool(), SCOPE).await?;
     let changes = scan.changes_since(&prev);
-    let changed: Vec<&fsscan::ScannedFile> = changes.needs_reading_under("Voice").collect();
-    let under = |f: &fsscan::ScannedFile, dir: &str| {
-        let prefix = format!("Voice/{dir}/");
-        f.rel.len() > prefix.len()
-            && f.rel
-                .get(..prefix.len())
-                .is_some_and(|p| p.eq_ignore_ascii_case(&prefix))
+    // Records are keyed by what they say, not by file, so only a read of
+    // every Voice file says which records left the input.
+    let voice_files: Vec<&fsscan::ScannedFile> = scan
+        .files
+        .iter()
+        .filter(|f| fsscan::is_under(&f.rel, "Voice"))
+        .collect();
+    let read_all = changes.may_have_dropped_records()
+        || changes.needs_reading_under("Voice").count() == voice_files.len();
+    let changed: Vec<&fsscan::ScannedFile> = if read_all {
+        voice_files
+    } else {
+        changes.needs_reading_under("Voice").collect()
     };
+    let under =
+        |f: &fsscan::ScannedFile, dir: &str| fsscan::is_under(&f.rel, &format!("Voice/{dir}"));
+    let mut failed = 0usize;
 
     let mut message_rows: Vec<VoiceMessageRow> = Vec::new();
     let mut bill_rows: Vec<VoiceBillRow> = Vec::new();
@@ -80,6 +98,7 @@ pub async fn ingest(
         )
         .unwrap_or_else(|e| {
             warn!(event = "voice_record_failed", path = %path.display(), error = %e, "a call record could not be parsed");
+            failed += 1;
             false
         });
         if consumed {
@@ -90,7 +109,7 @@ pub async fn ingest(
     // ── Bills.html ──────────────────────────────────────────────────
     if let Some(f) = changed
         .iter()
-        .find(|f| f.rel.eq_ignore_ascii_case("Bills.html"))
+        .find(|f| f.rel.eq_ignore_ascii_case("Voice/Bills.html"))
     {
         match std::fs::read_to_string(&f.path) {
             Ok(html) => {
@@ -112,7 +131,8 @@ pub async fn ingest(
                 done.push(f);
             }
             Err(e) => {
-                warn!(event = "voice_bills_failed", error = %e, "the bills could not be parsed")
+                warn!(event = "voice_bills_failed", error = %e, "the bills could not be parsed");
+                failed += 1;
             }
         }
     }
@@ -143,7 +163,8 @@ pub async fn ingest(
                 done.push(f);
             }
             Err(e) => {
-                warn!(event = "voice_greeting_failed", path = %path.display(), error = %e, "a greeting could not be ingested")
+                warn!(event = "voice_greeting_failed", path = %path.display(), error = %e, "a greeting could not be ingested");
+                failed += 1;
             }
         }
     }
@@ -176,13 +197,74 @@ pub async fn ingest(
     })
     .await?;
 
-    Ok(VoiceSummary {
+    let mut summary = VoiceSummary {
         messages: n_messages,
         bills: n_bills,
         greetings: n_greetings,
         attachments: n_attachments,
         blobs_stored,
-    })
+        ..VoiceSummary::default()
+    };
+    if read_all && changes.walk_errors == 0 {
+        if failed == 0 {
+            let kept = Kept {
+                messages: message_rows
+                    .iter()
+                    .map(|r| r.id_and_payload.id.clone())
+                    .collect(),
+                bills: bill_rows
+                    .iter()
+                    .map(|r| r.id_and_payload.id.clone())
+                    .collect(),
+                greetings: greeting_rows
+                    .iter()
+                    .map(|r| r.id_and_payload.id.clone())
+                    .collect(),
+            };
+            summary.removed = prune_unseen(db, &kept, include_spam).await?;
+            let gone = changes.gone();
+            summary.files_removed = gone.len();
+            file_checkpoint::forget_files(db.pool(), SCOPE, &gone).await?;
+        } else if changes.may_have_dropped_records() {
+            summary.held_back = Some(fsscan::Scan::deletions_held_back(failed));
+        }
+    }
+    Ok(summary)
+}
+
+/// The ids a full read of the Voice subtree produced, per table.
+struct Kept {
+    messages: HashSet<String>,
+    bills: HashSet<String>,
+    greetings: HashSet<String>,
+}
+
+/// Delete the records no Voice file holds, with their attachment
+/// edges. Messages only in the folders this run read, so turning spam off
+/// never deletes it. Only right after reading every file. Returns how many
+/// records went.
+async fn prune_unseen(db: &RawDb, kept: &Kept, include_spam: bool) -> Result<usize> {
+    let folders: &[&str] = if include_spam {
+        &["calls", "spam"]
+    } else {
+        &["calls"]
+    };
+    let mut owners: Vec<String> = Vec::new();
+    for folder in folders {
+        owners.extend(
+            prune::prune_scope(
+                db.pool(),
+                "voice_messages",
+                &[("folder", folder)],
+                &kept.messages,
+            )
+            .await?,
+        );
+    }
+    owners.extend(prune::prune_scope(db.pool(), "voice_greetings", &[], &kept.greetings).await?);
+    let bills = prune::prune_scope(db.pool(), "voice_bills", &[], &kept.bills).await?;
+    prune::delete_owned(db.pool(), "voice_attachments", "message_id", &owners).await?;
+    Ok(owners.len() + bills.len())
 }
 
 /// Parse one `Calls/`/`Spam/` file into message rows + CAS edges.

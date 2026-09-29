@@ -126,6 +126,21 @@ pub async fn forget_file(tx: &mut Transaction<'_, Sqlite>, scope: &str, rel: &st
     Ok(())
 }
 
+/// [`forget_file`] for several paths, in a transaction of its own: for a
+/// caller whose deletion already committed, where a crash in between only
+/// means the next run finds the same paths gone and deletes nothing more.
+pub async fn forget_files(pool: &SqlitePool, scope: &str, rels: &[&str]) -> Result<()> {
+    if rels.is_empty() {
+        return Ok(());
+    }
+    let mut tx = pool.begin().await.context("begin forget_files tx")?;
+    for rel in rels {
+        forget_file(&mut tx, scope, rel).await?;
+    }
+    tx.commit().await.context("commit forget_files tx")?;
+    Ok(())
+}
+
 /// [`record_file`] for callers that don't already own a transaction.
 pub async fn record_file_pool(pool: &SqlitePool, scope: &str, file: &ScannedFile) -> Result<()> {
     let mut tx = pool.begin().await.context("begin record_file tx")?;

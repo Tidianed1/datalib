@@ -57,8 +57,15 @@ impl DataProcessor for SmsIngest {
         })
         .await?;
         let summary = format!(
-            "sms={} mms={} calls={} attachments={} blobs={} parse_errors={}",
-            s.sms, s.mms, s.calls, s.attachments, s.blobs_stored, s.parse_errors,
+            "sms={} mms={} calls={} attachments={} blobs={} removed={} files_removed={} parse_errors={}",
+            s.sms,
+            s.mms,
+            s.calls,
+            s.attachments,
+            s.blobs_stored,
+            s.removed,
+            s.files_removed,
+            s.parse_errors,
         );
         session.finish(ctx, summary).await
     }

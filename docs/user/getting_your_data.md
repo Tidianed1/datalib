@@ -265,10 +265,9 @@ Mirrors your address book. Fastmail has a section of its own:
 [Fastmail Contacts](#fastmail-contacts).
 
 - **A `.vcf` export.** Most address books export vCards; point
-  `vcf.path` at a directory of them. No credentials. The directory is
-  the whole address book, so `all_sources.toml` sets
-  `always_clear_before_ingest = true` to let a missing `.vcf` mean a
-  missing contact.
+  `vcf.path` at a directory of them. No credentials. Each file is an
+  address book, so deleting a `.vcf` deletes its contacts on the next
+  sync.
 - **A CardDAV server.** Put it in `carddav.server_url` — the host alone
   is usually enough, since discovery tries `/.well-known/carddav`. The
   login is latchkey's: register a service for the server's host

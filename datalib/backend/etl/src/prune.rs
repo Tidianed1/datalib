@@ -82,6 +82,49 @@ pub async fn prune_scope(
     Ok(gone)
 }
 
+/// Delete the rows of `table` whose `owner_column` is one of `owners`, and
+/// their bookkeeping sidecars: the CAS edges of records a prune removed.
+/// Returns how many rows went.
+///
+/// `table` and `owner_column` are interpolated; callers pass trusted
+/// identifiers. The owners are bound.
+pub async fn delete_owned(
+    pool: &SqlitePool,
+    table: &str,
+    owner_column: &str,
+    owners: &[String],
+) -> Result<u64> {
+    let mut removed = 0;
+    let mut tx = pool.begin().await.context("begin delete_owned tx")?;
+    for chunk in owners.chunks(crate::bulk::SQL_CHUNK) {
+        let mut placeholders = String::new();
+        crate::bulk::push_placeholder_list(&mut placeholders, chunk.len());
+        let sidecar = format!(
+            "DELETE FROM {table}_bookkeeping WHERE id IN \
+             (SELECT id FROM {table} WHERE {owner_column} IN ({placeholders}))"
+        );
+        let rows = format!("DELETE FROM {table} WHERE {owner_column} IN ({placeholders})");
+        for (i, sql) in [sidecar, rows].into_iter().enumerate() {
+            // Audited: `table` and `owner_column` are `&'static str` at every
+            // callsite; the IN-list is a `?,?,?` run sized from the chunk and
+            // every owner is bound.
+            let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+            for id in chunk {
+                q = q.bind(id.clone());
+            }
+            let done = q
+                .execute(&mut *tx)
+                .await
+                .with_context(|| format!("delete owned {table}"))?;
+            if i == 1 {
+                removed += done.rows_affected();
+            }
+        }
+    }
+    tx.commit().await.context("commit delete_owned tx")?;
+    Ok(removed)
+}
+
 /// Note that a prune took place, loudly when it was a big one.
 ///
 /// This used to be a veto: a prune taking most of a collection was refused
@@ -204,5 +247,29 @@ mod tests {
         let keep: HashSet<String> = ["a".to_string()].into_iter().collect();
         let gone = prune_scope(&pool, "notes", &[], &keep).await.unwrap();
         assert_eq!(gone, vec!["b".to_string()]);
+    }
+
+    /// A pruned record's edges go with it, and nobody else's.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn delete_owned_removes_only_the_named_owners_rows() {
+        let d = tempfile::tempdir().unwrap();
+        let pool = open_notes(&d.path().join("t.doltlite_db")).await;
+        for (id, owner) in [("e1", "gone"), ("e2", "gone"), ("e3", "kept")] {
+            sqlx::query("INSERT INTO notes (id, owner, payload) VALUES (?, ?, '{}')")
+                .bind(id)
+                .bind(owner)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let n = delete_owned(&pool, "notes", "owner", &["gone".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(n, 2);
+        let left: Vec<String> = sqlx::query_scalar("SELECT id FROM notes")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert_eq!(left, vec!["e3".to_string()]);
     }
 }
