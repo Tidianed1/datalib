@@ -112,6 +112,15 @@ pub struct FetchSummary {
     pub files_removed: usize,
 }
 
+/// Whether the export holds `product_dir` at all. Only a product that is
+/// here says what was deleted from it: one missing entirely was left out of
+/// the Takeout request, so its records stay and its cursor is kept.
+pub(crate) fn product_exported(scan: &fsscan::Scan, product_dir: &str) -> bool {
+    scan.files
+        .iter()
+        .any(|f| fsscan::is_under(&f.rel, product_dir))
+}
+
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = opts.db.clone();
 

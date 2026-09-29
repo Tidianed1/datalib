@@ -659,7 +659,8 @@ subscriptions, …) goes through `file_checkpoint::ingest_snapshot`: a
 changed file is upserted and the table pruned to what it lists, in one
 transaction. A parser that finds no list at all returns `None` and deletes
 nothing. A file missing from the scan deletes nothing either: for an export,
-a product left out of the request looks exactly like that.
+a product left out of the request looks exactly like that. Takeout's
+folder feeds hold to the same rule one level up (`product_exported`).
 
 **Why content and not `(size, mtime)`.** A cursor on the stat pair
 re-ingests a file that was only *touched* (`rsync` without `-t`, a restore

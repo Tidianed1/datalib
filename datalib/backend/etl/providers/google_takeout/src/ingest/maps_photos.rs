@@ -103,7 +103,11 @@ pub async fn ingest(
         .filter(|f| is_sidecar(&f.rel))
         .filter_map(|f| stem(&f.rel))
         .collect();
-    let gone = changes.gone();
+    let gone = if super::product_exported(scan, DIR_REL) {
+        changes.gone()
+    } else {
+        Vec::new()
+    };
     let rows_gone: Vec<String> = gone
         .iter()
         .filter(|rel| is_sidecar(rel))

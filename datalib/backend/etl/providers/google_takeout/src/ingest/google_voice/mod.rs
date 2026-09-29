@@ -205,7 +205,7 @@ pub async fn ingest(
         blobs_stored,
         ..VoiceSummary::default()
     };
-    if read_all && changes.walk_errors == 0 {
+    if read_all && changes.walk_errors == 0 && super::product_exported(scan, "Voice") {
         if failed == 0 {
             let kept = Kept {
                 messages: message_rows

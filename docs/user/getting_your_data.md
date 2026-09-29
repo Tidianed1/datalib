@@ -505,10 +505,12 @@ holds whatever you asked Google for; [Google Chat](#google-chat) and
 [Google Voice](#google-voice) have sections of their own. A Takeout is
 a complete snapshot, so it is also the way to notice what Google has
 deleted since the last one: unpack a newer export in its place, and
-what it no longer holds leaves the mirror on the next sync. Tick the
-same products each time. Chat, Voice and Maps photos read a missing
-file as a deletion; the other feeds keep their records when their file
-is missing.
+what it no longer holds leaves the mirror on the next sync. A product
+the newer export does not have at all deletes nothing, so an export
+requested for one product leaves the others alone. The one thing this
+cannot tell apart: a large Takeout comes as several zips, and a product
+unpacked from only some of them looks smaller, not missing, so unpack
+every part.
 
 ## Google Voice
 

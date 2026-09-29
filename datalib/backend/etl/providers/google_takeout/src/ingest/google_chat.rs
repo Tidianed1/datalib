@@ -260,7 +260,11 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
         .iter()
         .filter_map(|f| chat_file(&f.rel))
         .collect();
-    let gone = changes.gone_by_path(&read);
+    let gone = if super::product_exported(scan, "Google Chat") {
+        changes.gone_by_path(&read)
+    } else {
+        Vec::new()
+    };
     for rel in &gone {
         let Some(record) = chat_file(rel).filter(|r| !present.contains(r)) else {
             continue;

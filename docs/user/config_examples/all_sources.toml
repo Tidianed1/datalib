@@ -1252,10 +1252,8 @@ function = "ingest"
 [steps.params.export]
 # Each Takeout is a complete snapshot of the products you ticked: a record
 # a newer export no longer holds leaves the mirror on the next sync, and
-# the old rows stay in doltlite history. Keep ticking the same products —
-# Chat, Voice and Maps photos read a missing file as a deletion. (The
-# single-file feeds, Maps reviews and saved places, YouTube and Gemini,
-# keep their records when their file is missing.)
+# the old rows stay in doltlite history. A product missing from the export
+# altogether deletes nothing — it reads as "not requested this time".
 path = "~/backups/Takeout"
 google_chat = true                # DMs + bots + attachments → Markdown
 google_voice = true               # texts, voicemails, calls → Markdown

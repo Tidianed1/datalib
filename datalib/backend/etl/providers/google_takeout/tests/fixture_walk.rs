@@ -544,3 +544,71 @@ async fn a_missing_single_file_feed_deletes_nothing() {
     assert_eq!(e.count("youtube_watch_history").await, 2);
     assert_eq!(e.count("gemini_activity").await, 2);
 }
+
+// ── A product missing from the export deletes nothing ───────────────
+
+const PRODUCTS: [&str; 3] = ["Google Chat", "Voice", "Maps/Photos and videos"];
+
+impl Export {
+    /// Move a product's folder out of the export, as a Takeout requested
+    /// without it would be; returns where it went.
+    fn set_aside(&self, rel: &str) -> PathBuf {
+        let aside = self.work.path().join("aside").join(rel);
+        std::fs::create_dir_all(aside.parent().unwrap()).unwrap();
+        std::fs::rename(self.root.join(rel), &aside).unwrap();
+        aside
+    }
+
+    fn put_back(&self, rel: &str, aside: &Path) {
+        std::fs::rename(aside, self.root.join(rel)).unwrap();
+    }
+}
+
+/// An export requested without Chat, Voice or Maps photos looks exactly
+/// like one whose product was emptied, so a missing product folder is
+/// read as "not exported", never as "deleted".
+#[tokio::test(flavor = "multi_thread")]
+async fn a_product_missing_from_the_export_deletes_nothing() {
+    let e = Export::new();
+    e.sync().await;
+    let tables = [
+        "chat_users",
+        "chat_groups",
+        "chat_messages",
+        "chat_attachments",
+        "voice_messages",
+        "voice_bills",
+        "maps_photos",
+    ];
+    let mut before = Vec::new();
+    for t in tables {
+        before.push(e.count(t).await);
+    }
+
+    for p in PRODUCTS {
+        e.set_aside(p);
+    }
+    let s = e.sync().await;
+    assert_eq!(s.removed, 0, "{s:?}");
+    for (t, n) in tables.iter().zip(before) {
+        assert_eq!(e.count(t).await, n, "{t}");
+    }
+}
+
+/// Holding the deletions back keeps the cursor, so a product that comes
+/// back smaller still loses what it dropped.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_product_that_returns_smaller_loses_what_it_dropped() {
+    let e = Export::new();
+    e.sync().await;
+    assert_eq!(e.count("chat_messages").await, 2);
+
+    let aside = e.set_aside("Google Chat");
+    e.sync().await;
+    std::fs::remove_file(aside.join("Groups/DM TNG-BRIDGE/messages.json")).unwrap();
+    e.put_back("Google Chat", &aside);
+    let s = e.sync().await;
+    assert_eq!(s.removed, 2, "{s:?}");
+    assert_eq!(e.count("chat_messages").await, 0);
+    assert_eq!(e.count("chat_groups").await, 1);
+}

@@ -368,9 +368,18 @@ The Signal and LinkedIn exports still need it.
 A Takeout feed read from one file (Maps reviews and saved places,
 YouTube, Gemini) treats that file as its whole table: re-read, it
 replaces the table and deletes what it no longer lists
-(`file_checkpoint::ingest_snapshot`). A file that is *missing* deletes
-nothing, because an export requested without that product looks the
-same as one whose product was emptied.
+(`file_checkpoint::ingest_snapshot`).
+
+Every Takeout feed draws the line at what the request form lets a person
+leave out. A product missing from the export entirely (no `Google Chat/`,
+no `Voice/`, no `Maps/Photos and videos/`, or a single-file feed's file)
+deletes nothing and keeps its cursor, because an export requested without
+it looks the same as one whose product was emptied. Inside a product that
+is there, what is missing was deleted. A single-file feed's product is
+its file, not its folder: YouTube's `history/` can hold search history
+without watch history when only one was ticked. What this cannot see is
+a product split across the zips of a large Takeout and unpacked from
+only some of them.
 
 ### What limits it
 
@@ -383,9 +392,9 @@ therefore what it can see:
 | `email` (Gmail) | `history.list` deletions; a full walk when the cursor ages out | emails, via the same cascade |
 | `contacts` (CardDAV) | RFC 6578 sync-collection `404`/`410` | contacts |
 | `contacts` (`.vcf` folder), `calendar` (`.ics` folder) | the folder's scan, and each re-read file | a gone file's address book or calendar; cards or events a re-read file dropped. Nothing is deleted when the walk reported an error |
-| `google_takeout` Chat, Maps photos | the export's scan, and each re-read `messages.json` | a gone file's user, group, messages or photo; messages a re-read file dropped |
+| `google_takeout` Chat, Maps photos | the export's scan, and each re-read `messages.json` | a gone file's user, group, messages or photo; messages a re-read file dropped. A missing `Google Chat/` or photos folder deletes nothing |
 | `google_takeout` Maps reviews and saved places, YouTube, Gemini | each re-read file, which is the feed's whole table | records the file no longer lists, and a Gemini activity's attachment edges. A missing file deletes nothing |
-| `email` (mbox), `sms_backup_restore`, `google_takeout` Voice | a read of every file, whenever one was removed or rewritten | records no file holds any more. Nothing is deleted when the walk or any file's read failed |
+| `email` (mbox), `sms_backup_restore`, `google_takeout` Voice | a read of every file, whenever one was removed or rewritten | records no file holds any more. Nothing is deleted when the walk or any file's read failed, or when Takeout's `Voice/` is missing |
 | `slack` | the trailing `refresh_window_days` re-walk, and each `conversations.replies` thread | messages inside the walked range; replies on a re-fetched thread |
 | `github` / `gitlab` | every PR's / MR's whole child list, per fetch | deleted comments, reviews, discussions |
 | `claude` (`api`) | `/chat_conversations`, one org at a time | that org's conversations |
