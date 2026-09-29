@@ -49,7 +49,7 @@ use datalib_schema::providers::Provider;
 /// v8: every id carries its row's `created_at` in its leading bits
 ///     (`datalib_id`'s v8 layout), so a sync's rows land in adjacent
 ///     leaves of the render store and the index.
-pub const RENDER_VERSION: u32 = 8;
+pub const RENDER_VERSION: u32 = 9;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -334,6 +334,7 @@ fn build_chat(
                 kind: ItemKind::Text,
                 attachments: Vec::new(),
                 reactions: Vec::new(),
+                labels: Vec::new(),
                 system_note: None,
                 source_url: None,
                 kind_label: Some(kind_for_block(btype).to_string()),
@@ -366,6 +367,7 @@ fn build_chat(
             kind,
             attachments: norm_atts,
             reactions: Vec::new(),
+            labels: Vec::new(),
             system_note: None,
             source_url: None,
             kind_label: Some(kind_label.to_string()),
@@ -500,6 +502,7 @@ fn build_project_page(
             kind: ItemKind::Text,
             attachments: Vec::new(),
             reactions: Vec::new(),
+            labels: Vec::new(),
             system_note: None,
             source_url: None,
             kind_label: Some("Project Knowledge".to_string()),
@@ -592,6 +595,7 @@ fn project_item(
         kind: ItemKind::Text,
         attachments: Vec::new(),
         reactions: Vec::new(),
+        labels: Vec::new(),
         system_note: None,
         source_url: None,
         kind_label: Some(kind_label.to_string()),

@@ -253,11 +253,23 @@ document's for everything inside it.
 
 A producer hands the builder the row's whole text (`.body(…)`), and the
 builder keeps two things from it: `preview`, the first 240 characters
-on one line (`PREVIEW_CHARS`), which is the grid's Contents cell; and
+of it as plain text on one line (`PREVIEW_CHARS`), which is the grid's
+Contents cell; and
 `content_hash`, blake3 of the whole body, so a change past the preview
 still changes the row. The body itself is not stored — the rendered
 markdown holds it, and qmd's index of that markdown is how free text
 finds it.
+
+The body is markdown, and `datalib_schema::plain_text` turns it into
+what a person reads: tags, images, link targets, heading and quote
+marks, emphasis and code fences go, and a `<details>` block reads as
+its summary unless it is all the body there is. A qmd hit's snippet
+goes through the same pass. So what a producer puts in the body is
+what the row *says*, in the order that matters: a calendar event's
+description comes before its guest list, a chat's document row leaves
+out its asides, and an email's mailbox labels are not in it at all.
+Changing what a producer puts there changes every row it wrote, so it
+takes a `RENDER_VERSION` bump to reach a store already rendered.
 
 ### `qmd_path` and `source_id`
 

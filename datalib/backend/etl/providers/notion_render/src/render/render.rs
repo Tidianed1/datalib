@@ -28,7 +28,7 @@ use super::parse::ParsedNotion;
 ///     comment's id carries its `created_time` in its leading bits
 ///     (`datalib_id`'s v8 layout). Every uuid moved; `notion_page_uuid`
 ///     now holds the page's datalib id.
-pub const RENDER_VERSION: u32 = 4;
+pub const RENDER_VERSION: u32 = 5;
 pub const SLUG_MAX_LEN: usize = 60;
 
 static SLUG_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[^a-z0-9]+").unwrap());

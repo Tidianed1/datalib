@@ -39,7 +39,7 @@ use datalib_schema::providers::Provider;
 ///     `user-…` id.
 /// v9: every id carries its row's `created_at` in its leading bits
 ///     (`datalib_id`'s v8 layout).
-pub const RENDER_VERSION: u32 = 9;
+pub const RENDER_VERSION: u32 = 10;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -176,6 +176,7 @@ fn build_chat(
             kind,
             attachments,
             reactions: Vec::new(),
+            labels: Vec::new(),
             system_note: None,
             source_url: None,
             kind_label: Some(kind_label.to_string()),

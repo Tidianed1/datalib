@@ -26,7 +26,7 @@ use datalib_schema::providers::Provider;
 /// the configured source and every row gained its backpointer — every uuid
 /// moved; to 5 when labels came from `X-ABLabel` and every `TYPE`,
 /// `CREATED` became `created_at`, and groups listed their members.
-pub const RENDER_VERSION: u32 = 5;
+pub const RENDER_VERSION: u32 = 6;
 
 /// Every card by `(addressbook, UID)`, for a group to name its members.
 type Cards<'a> = HashMap<(&'a str, &'a str), &'a ParsedContact>;

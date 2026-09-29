@@ -161,7 +161,7 @@ pub struct GridRow {
     /// Preview-pane path for the whole thread: `/chat/{conversation_uuid}`.
     #[col(sql = "VARCHAR(255)")]
     pub entire_chat: String,
-    /// The start of the row's body, flattened to one line: what the grid's
+    /// The start of the row's body as plain text on one line: what the grid's
     /// Contents column shows when there is no search term. Cut from the
     /// body the producer hands the builder (`GridRowBuilder::body`); the
     /// body itself is not stored here — the rendered markdown holds it,

@@ -41,6 +41,9 @@ selected section (`applySelection` in `ChatBody.ce.vue`) — without
 that, clicking a tool-call row in the grid would scroll to something
 invisible.
 
+An aside keeps its own grid row, but its document's row leaves it out:
+that row's Contents is what was said, not the plumbing.
+
 Decide `is_aside` from what the item *is* upstream, not from its
 `kind_label`. ChatGPT files `system` messages under the same "Tool
 Call" label as real tool traffic, and a system prompt is content

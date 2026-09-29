@@ -41,7 +41,7 @@ use datalib_schema::providers::Provider;
 ///     recipe. The raw store keys messages and threads by
 ///     `{team}#{channel}#{ts}`, so an existing root resets and downloads
 ///     again.
-pub const RENDER_VERSION: u32 = 7;
+pub const RENDER_VERSION: u32 = 8;
 
 #[derive(Debug, Default)]
 pub struct RenderSummary {
@@ -266,6 +266,7 @@ fn build_item(
         kind,
         attachments,
         reactions,
+        labels: Vec::new(),
         system_note: None,
         // Per-message permalink (with thread_ts for replies).
         source_url: Some(slack_link(&m.team_id, &m.channel_id, &m.ts, Some(&root.ts))),
