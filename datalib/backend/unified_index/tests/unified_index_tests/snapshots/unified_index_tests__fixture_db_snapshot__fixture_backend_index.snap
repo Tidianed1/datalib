@@ -144,7 +144,7 @@ expression: snapshot
       "md_path": "tng_contacts/render_markdown/00000000-0000-8140-88d9-42badf1b195b/index.md",
       "modified_at": null,
       "provider": "contacts",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "tng_contacts",
       "title": "Borg"
     },
@@ -180,7 +180,7 @@ expression: snapshot
       "md_path": "tng_contacts-diff/render_markdown/00000000-0000-8195-8ee2-d14cb601f004/index.md",
       "modified_at": "2371-01-02T00:00:00+00:00",
       "provider": "contacts",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "tng_contacts-diff",
       "title": "Bridge"
     },
@@ -192,7 +192,7 @@ expression: snapshot
       "md_path": "tng_contacts-diff/render_markdown/00000000-0000-819d-aad9-cb628fc3bec0/index.md",
       "modified_at": null,
       "provider": "contacts",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "tng_contacts-diff",
       "title": "Maquis"
     },
@@ -240,7 +240,7 @@ expression: snapshot
       "md_path": "tng_contacts/render_markdown/00000000-0000-81e2-8596-1ee8f9640d13/index.md",
       "modified_at": "2371-01-09T00:00:00+00:00",
       "provider": "contacts",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "tng_contacts",
       "title": "Bridge"
     },
@@ -276,7 +276,7 @@ expression: snapshot
       "md_path": "tng_contacts-diff/render_markdown/00000000-0000-825c-a3c4-1fb84e9bfce6/index.md",
       "modified_at": "2371-01-09T00:00:00+00:00",
       "provider": "contacts",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "tng_contacts-diff",
       "title": "Bridge"
     },
@@ -324,7 +324,7 @@ expression: snapshot
       "md_path": "tng_contacts/render_markdown/00000000-0000-829a-bb9d-4c1b203d3251/index.md",
       "modified_at": null,
       "provider": "contacts",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "tng_contacts",
       "title": "Bridge"
     },
@@ -432,7 +432,7 @@ expression: snapshot
       "md_path": "tng_contacts-diff/render_markdown/00000000-0000-8429-b938-7d1e51384182/index.md",
       "modified_at": null,
       "provider": "contacts",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "tng_contacts-diff",
       "title": "Maquis"
     },
@@ -528,7 +528,7 @@ expression: snapshot
       "md_path": "tng_contacts/render_markdown/00000000-0000-85d8-ac4b-9c4472cee5ea/index.md",
       "modified_at": "2371-01-02T00:00:00+00:00",
       "provider": "contacts",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "tng_contacts",
       "title": "Bridge"
     },
@@ -588,7 +588,7 @@ expression: snapshot
       "md_path": "tng_contacts-diff/render_markdown/00000000-0000-86be-a0a0-341fa48bbc80/index.md",
       "modified_at": "2370-02-11T00:00:00+00:00",
       "provider": "contacts",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "tng_contacts-diff",
       "title": "Bridge"
     },
@@ -1056,7 +1056,7 @@ expression: snapshot
       "md_path": "tng_contacts/render_markdown/00000000-0000-8acb-9e72-ef58e1a96813/index.md",
       "modified_at": null,
       "provider": "contacts",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "tng_contacts",
       "title": "Borg"
     },
@@ -1068,7 +1068,7 @@ expression: snapshot
       "md_path": "tng_contacts/render_markdown/00000000-0000-8b00-b38c-a2a290dad572/index.md",
       "modified_at": "2370-08-22T00:00:00+00:00",
       "provider": "contacts",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "tng_contacts",
       "title": "Bridge"
     },
@@ -1248,7 +1248,7 @@ expression: snapshot
       "md_path": "tng_contacts/render_markdown/00000000-0000-8c51-a4b4-dde335468f6c/index.md",
       "modified_at": null,
       "provider": "contacts",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "tng_contacts",
       "title": "Borg"
     },
@@ -1380,7 +1380,7 @@ expression: snapshot
       "md_path": "tng_contacts/render_markdown/00000000-0000-8d78-9232-e6b0deeebfb7/index.md",
       "modified_at": "2370-09-04T00:00:00+00:00",
       "provider": "contacts",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "tng_contacts",
       "title": "Engineering"
     },
@@ -1488,7 +1488,7 @@ expression: snapshot
       "md_path": "tng_contacts/render_markdown/00000000-0000-8f5b-ab9b-f6b9fbf217b5/index.md",
       "modified_at": null,
       "provider": "contacts",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "tng_contacts",
       "title": "Borg"
     },
@@ -1621,7 +1621,7 @@ expression: snapshot
       "message": "schema: grid index"
     },
     {
-      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=142 markdowns_read=142 markdowns_removed=3 rows_inserted=602"
+      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=142 markdowns_read=142 markdowns_removed=3 rows_inserted=604"
     }
   ],
   "grid_rows": [
@@ -12411,8 +12411,8 @@ expression: snapshot
     },
     {
       "kind": "Table",
-      "members_sha": "sha256:eef6a2382ecab5ace9a979c94bb47557017bb5727f995546a1bf4c7dd9b603f7",
-      "rows": 149,
+      "members_sha": "sha256:948076ffd1010397505d9141f38ba171a0be22ccda40cc823a8691e9acaf9ecf",
+      "rows": 150,
       "source": ""
     }
   ],
@@ -12420,6 +12420,6 @@ expression: snapshot
     "documents_count": 134,
     "dolt_log_count": 3,
     "grid_rows_count": 359,
-    "storage_rows_count": 207
+    "storage_rows_count": 208
   }
 }
