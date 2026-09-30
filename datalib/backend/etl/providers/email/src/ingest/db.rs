@@ -1,6 +1,6 @@
 //! Open + non-DDL data-manipulation for the JMAP raw store.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -10,7 +10,7 @@ use sqlx::{Row, Sqlite, Transaction};
 use datalib_etl::bulk::bulk_upsert_entity_in_tx;
 use datalib_etl::doltlite_raw::{self as dr};
 
-use super::schema_raw::{full_ddl, EmailKeywordRow, EmailMailboxRow};
+use super::schema_raw::{full_ddl, EmailKeywordRow, EmailMailboxRow, LADDER};
 pub use super::schema_raw::{EmailRow, BLOB_KIND_EML};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
@@ -23,7 +23,7 @@ pub fn state_scope(account_id: &str, type_name: &str) -> String {
 
 // RawDb
 
-datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl());
+datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl(), LADDER);
 
 impl RawDb {
     // ── state tokens ────────────────────────────────────────────────
@@ -169,6 +169,86 @@ impl RawDb {
             }
         }
         Ok(out)
+    }
+
+    /// This account's mailbox rows: id → name.
+    pub async fn mailbox_names(&self, account_id: &str) -> Result<BTreeMap<String, String>> {
+        let rows: Vec<(String, Option<String>)> =
+            sqlx::query_as("SELECT id, name FROM mailboxes WHERE account_id = ?")
+                .bind(account_id)
+                .fetch_all(self.pool())
+                .await
+                .context("select the account's mailboxes")?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, name)| (id, name.unwrap_or_default()))
+            .collect())
+    }
+
+    /// Up to `limit` emails filed under `mailbox_id` with an id after
+    /// `after`, in id order: each one's id, account and payload.
+    pub async fn emails_filed_under(
+        &self,
+        mailbox_id: &str,
+        after: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, String, Value)>> {
+        let rows: Vec<(String, String, String)> = sqlx::query_as(
+            "SELECT e.id, e.account_id, json(e.payload) FROM email_mailboxes m
+             JOIN emails e ON e.id = m.email_id
+             WHERE m.mailbox_id = ? AND e.id > ?
+             ORDER BY e.id
+             LIMIT ?",
+        )
+        .bind(mailbox_id)
+        .bind(after)
+        .bind(limit as i64)
+        .fetch_all(self.pool())
+        .await
+        .with_context(|| format!("select the emails filed under {mailbox_id}"))?;
+        rows.into_iter()
+            .map(|(id, account, payload)| {
+                let v = serde_json::from_str(&payload)
+                    .with_context(|| format!("parse the payload of email {id}"))?;
+                Ok((id, account, v))
+            })
+            .collect()
+    }
+
+    /// Delete this account's emails an authoritative enumeration did not
+    /// name, and the threads left with none. Only for a walk that listed
+    /// every message the account has. Returns how many emails went.
+    pub async fn prune_emails_to(
+        &self,
+        account_id: &str,
+        seen: &BTreeSet<String>,
+    ) -> Result<usize> {
+        let held: Vec<String> = sqlx::query_scalar("SELECT id FROM emails WHERE account_id = ?")
+            .bind(account_id)
+            .fetch_all(self.pool())
+            .await
+            .context("list the account's emails")?;
+        let gone: Vec<String> = held
+            .iter()
+            .filter(|id| !seen.contains(id.as_str()))
+            .cloned()
+            .collect();
+        self.delete_emails(&gone).await?;
+        let mut tx = self.pool().begin().await.context("begin thread prune tx")?;
+        for sql in [
+            "DELETE FROM threads_bookkeeping WHERE id IN (SELECT id FROM threads \
+             WHERE account_id = ? AND id NOT IN (SELECT thread_id FROM emails))",
+            "DELETE FROM threads WHERE account_id = ? AND id NOT IN (SELECT thread_id FROM emails)",
+        ] {
+            sqlx::query(sql)
+                .bind(account_id)
+                .execute(&mut *tx)
+                .await
+                .context("delete threads with no emails")?;
+        }
+        tx.commit().await.context("commit thread prune tx")?;
+        datalib_etl::prune::record("emails", held.len(), gone.len());
+        Ok(gone.len())
     }
 
     // ── hard-deletes (JMAP destroy + parent-id cascades) ────────────
@@ -428,7 +508,7 @@ mod tests {
         let rows = vec![
             MailboxRow::from_jmap_payload(
                 "A1",
-                &json!({"id": "M1", "name": "Inbox", "role": "inbox", "totalEmails": 42}),
+                &json!({"id": "M1", "name": "Inbox", "role": "inbox"}),
             )
             .unwrap(),
             MailboxRow::from_jmap_payload(
@@ -436,18 +516,69 @@ mod tests {
                 &json!({"id": "M2", "name": "Sent", "role": "sent"}),
             )
             .unwrap(),
+            MailboxRow::from_jmap_payload("A2", &json!({"id": "M3", "name": "Inbox"})).unwrap(),
         ];
         bulk(&db, &rows).await;
-        let mboxes = db.load_mailboxes().await.unwrap();
-        assert_eq!(mboxes.len(), 2);
-        // promoted columns
-        let row: (String, i64) =
-            sqlx::query_as("SELECT name, total_emails FROM mailboxes WHERE id = 'M1'")
+        assert_eq!(db.load_mailboxes().await.unwrap().len(), 3);
+        let a1 = db.mailbox_names("A1").await.unwrap();
+        assert_eq!(
+            a1.into_iter().collect::<Vec<_>>(),
+            vec![
+                ("M1".to_string(), "Inbox".to_string()),
+                ("M2".to_string(), "Sent".to_string())
+            ]
+        );
+    }
+
+    /// A store an older build wrote, with the mailbox counts as columns
+    /// and in the content payload, opens on the first rung: the columns
+    /// are gone, the payload keeps everything but the counts, and the
+    /// rest of the store is untouched.
+    #[tokio::test]
+    async fn the_first_rung_takes_the_counts_out_of_the_mailbox_row() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("j.doltlite_db");
+        {
+            let ddl = full_ddl();
+            let ddl: Vec<&str> = ddl.iter().map(String::as_str).collect();
+            let pool = dr::open(&path, &ddl).await.unwrap();
+            for sql in [
+                "ALTER TABLE mailboxes ADD COLUMN total_emails INTEGER NULL",
+                "ALTER TABLE mailboxes ADD COLUMN unread_emails INTEGER NULL",
+                "INSERT INTO mailboxes (id, payload, account_id, name, role, total_emails, unread_emails)
+                 VALUES ('M1', jsonb('{\"id\":\"M1\",\"name\":\"Inbox\",\"totalEmails\":42,\"unreadEmails\":3,\"totalThreads\":40}'),
+                         'A1', 'Inbox', 'inbox', 42, 3)",
+            ] {
+                sqlx::query(sql).execute(&pool).await.unwrap();
+            }
+            dr::commit_run(&pool, "an older build's rows")
+                .await
+                .unwrap();
+            pool.close().await;
+        }
+
+        let db = RawDb::open(&path).await.expect("the rung carries it");
+        let payload: String = sqlx::query_scalar("SELECT json(payload) FROM mailboxes")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&payload).unwrap(),
+            json!({"id": "M1", "name": "Inbox"})
+        );
+        let columns: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('mailboxes')")
+                .fetch_all(db.pool())
+                .await
+                .unwrap();
+        assert!(!columns.iter().any(|c| c.contains("emails")), "{columns:?}");
+        let version: String =
+            sqlx::query_scalar("SELECT value FROM _datalib_meta WHERE key = 'schema_version'")
                 .fetch_one(db.pool())
                 .await
                 .unwrap();
-        assert_eq!(row.0, "Inbox");
-        assert_eq!(row.1, 42);
+        assert_eq!(version, "1");
+        db.close().await;
     }
 
     #[tokio::test]

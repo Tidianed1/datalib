@@ -91,16 +91,44 @@ label differently depending on how you ask:
 | inbox   | `Inbox`                  | `INBOX`                  |
 | promos  | `Category Promotions`    | `CATEGORY_PROMOTIONS`    |
 
-Left alone that is two `mailboxes` rows and two `mailbox_id`s for one
-label — the user's Inbox appearing twice in the grid. `canonical_name`
-collapses a system label onto **Takeout's** spelling and passes a user
-label through untouched.
+`canonical_name` collapses a system label onto **Takeout's** spelling
+and passes a user label through untouched; that is the `name` every
+mode stores, so the user's Inbox reads as one label whichever way it
+arrived.
 
-**`mailbox_id` does not canonicalize.** Google lets you create a *user*
-label named literally `INBOX`, and canonicalizing behind the caller's
-back would merge it with the system inbox. Only the caller knows
-whether Google marked a label `type: system`, so canonicalization is the
-caller's job.
+**A label's row is keyed by the best id the mode has.**
+
+| mode | `mailboxes.id` |
+|------|----------------|
+| JMAP | the server's `Mailbox.id` |
+| Gmail API | `gmail:<account>:<label id>` (`gmail_mailbox_id`), Google's own id, so a rename renames the row rather than making a new one |
+| mbox | `mbox-<hash of account and name>` (`mailbox_id`), since a Takeout export carries only the name; or, when the store already has a Gmail API row of that name, that row's id |
+
+The two Gmail modes meet in one store when a Takeout import is followed
+by a live sync, or the other way round. Each Gmail API run moves every
+email under a name-keyed row onto the real id of the label of that
+name, and drops the name-keyed row; an mbox run files a message under
+the real id when the store has one. A name-keyed row for a label Gmail
+no longer lists stays as it was — nothing says what became of it.
+
+Google lets you create a *user* label named literally `INBOX`; only
+the API's `type: system` flag tells it from the system inbox, which is
+why `LabelIndex` canonicalizes only the labels Google marked system.
+
+**A label that goes away comes off its mail.** `refile_mailboxes`
+(`src/ingest/mod.rs`) moves every email under a gone mailbox off it —
+its payload's `mailboxIds` and its `email_mailboxes` rows together, so
+the two diffs agree — and deletes the row. It runs for a JMAP
+`Mailbox/changes` destroy, for a row a full `Mailbox/get` did not list,
+for a Gmail label `labels.list` no longer lists, and for a name-keyed
+row no message carries after an mbox run read every file (with no
+label filter).
+
+**A mailbox's counts are volatile.** JMAP's `totalEmails`,
+`unreadEmails`, `totalThreads` and `unreadThreads` go to the sidecar's
+`volatile_payload` (`MAILBOX_VOLATILE_PATHS`), so a message arriving
+does not change the Inbox's row. The email raw store's ladder rung 1
+took them out of stores written before.
 
 **Thread ids.** Gmail's API `threadId` is hex; Takeout's `X-GM-THRID`
 header is the same 64-bit number in decimal. `normalize_thread_id`
@@ -189,7 +217,8 @@ A held cursor makes the next run re-enumerate, which is cheap:
 
 A walk over the whole mailbox (no label filter, not budget-limited) is
 also when deletions `history.list` never reported are found: rows the
-walk did not list are pruned.
+walk did not list are pruned. Labels are reconciled every run, walk or
+not: `labels.list` is always the whole set.
 
 Deletions carry Gmail's own message id, and the delete looks the row
 up in `gmail_messages`, which also says which rows this mode wrote. Ingest

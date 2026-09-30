@@ -14,6 +14,8 @@ use datalib_etl_contact_common::{
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{keys_reading, Bucket, Buckets, RawRange};
 
+use datalib_etl_contacts::ingest::schema_raw::member_uid;
+
 use super::ids;
 use super::parse::{ParsedContact, ParsedContacts};
 use datalib_schema::providers::Provider;
@@ -25,11 +27,33 @@ use datalib_schema::providers::Provider;
 /// the source name; to 4 when ids moved onto `datalib_id` under
 /// the configured source and every row gained its backpointer — every uuid
 /// moved; to 5 when labels came from `X-ABLabel` and every `TYPE`,
-/// `CREATED` became `created_at`, and groups listed their members.
-pub const RENDER_VERSION: u32 = 6;
+/// `CREATED` became `created_at`, and groups listed their members; to 7
+/// when a card listed the groups it is in.
+pub const RENDER_VERSION: u32 = 7;
 
 /// Every card by `(addressbook, UID)`, for a group to name its members.
 type Cards<'a> = HashMap<(&'a str, &'a str), &'a ParsedContact>;
+
+/// The groups naming each `(addressbook, UID)` as a member.
+type Groups<'a> = HashMap<(&'a str, &'a str), Vec<&'a ParsedContact>>;
+
+fn groups_by_member(contacts: &[ParsedContact]) -> Groups<'_> {
+    let mut out: Groups = HashMap::new();
+    for group in contacts.iter().filter(|c| c.is_group) {
+        for uid in group.members.iter().filter_map(|m| member_uid(m)) {
+            out.entry((group.addressbook.as_str(), uid))
+                .or_default()
+                .push(group);
+        }
+    }
+    for groups in out.values_mut() {
+        groups.sort_by(|a, b| {
+            (a.display_name.as_deref(), &a.uid).cmp(&(b.display_name.as_deref(), &b.uid))
+        });
+        groups.dedup_by(|a, b| std::ptr::eq(*a, *b));
+    }
+    out
+}
 
 /// Every bucket a pass looked at — named first with nothing, then the
 /// rendered ones with what they read — for the processor to declare.
@@ -55,10 +79,11 @@ pub fn render_all(
         .iter()
         .map(|c| ((c.addressbook.as_str(), c.uid.as_str()), c))
         .collect();
+    let groups = groups_by_member(&parsed.contacts);
     let mut contacts: Vec<(bool, NormalizedContact)> = parsed
         .contacts
         .iter()
-        .map(|c| (c.is_group, normalize(c, source_id, &cards)))
+        .map(|c| (c.is_group, normalize(c, source_id, &cards, &groups)))
         .collect();
 
     // What to render: the contacts the driver found stale, plus every
@@ -101,14 +126,30 @@ pub fn render_all(
     Ok(buckets)
 }
 
-fn normalize(contact: &ParsedContact, source_id: &str, cards: &Cards) -> NormalizedContact {
+fn normalize(
+    contact: &ParsedContact,
+    source_id: &str,
+    cards: &Cards,
+    groups: &Groups,
+) -> NormalizedContact {
     let mut fields: Vec<ContactField> = Vec::new();
     let mut inputs = contact.inputs.clone();
+    // The group's name is on this page, and its card is where the
+    // membership lives: a member added or dropped re-renders this card.
+    for group in groups
+        .get(&(contact.addressbook.as_str(), contact.uid.as_str()))
+        .into_iter()
+        .flatten()
+    {
+        inputs.extend(group.inputs.iter().cloned());
+        let name = group
+            .display_name
+            .clone()
+            .unwrap_or_else(|| group.uid.clone());
+        fields.push(ContactField::new("Group", name));
+    }
     for member in &contact.members {
-        let uid = member
-            .get(..9)
-            .filter(|p| p.eq_ignore_ascii_case("urn:uuid:"))
-            .map_or(member.as_str(), |_| &member[9..]);
+        let uid = member_uid(member).unwrap_or(member);
         let card = cards.get(&(contact.addressbook.as_str(), uid));
         // The member's name is part of this page, so its card is an input.
         inputs.extend(card.iter().flat_map(|c| c.inputs.iter().cloned()));
@@ -254,7 +295,7 @@ mod tests {
 
     #[test]
     fn normalize_maps_fields_uuids_and_stamps() {
-        let n = normalize(&sample(), "tng_contacts", &Cards::new());
+        let n = normalize(&sample(), "tng_contacts", &Cards::new(), &Groups::new());
         assert_eq!(
             n.contact_uuid,
             ids::contact("tng_contacts", "Bridge", "tng-picard").uuid
@@ -294,7 +335,7 @@ mod tests {
     fn normalize_canonicalizes_basic_iso_rev() {
         let mut c = sample();
         c.revision = Some("20260605T191839Z".to_string());
-        let n = normalize(&c, "fastmail_contacts", &Cards::new());
+        let n = normalize(&c, "fastmail_contacts", &Cards::new(), &Groups::new());
         assert_eq!(n.modified_at.as_deref(), Some("2026-06-05T19:18:39+00:00"));
         // The grid's own contract must accept it (this is what was failing).
         datalib_time::validate_iso_offset(n.modified_at.as_deref().unwrap())
@@ -328,7 +369,7 @@ mod tests {
             ..sample()
         };
         let cards: Cards = [(("Bridge", "tng-picard"), &picard)].into_iter().collect();
-        let n = normalize(&group, "tng_contacts", &cards);
+        let n = normalize(&group, "tng_contacts", &cards, &Groups::new());
         let members: Vec<(&str, &str)> = n
             .fields
             .iter()
@@ -341,6 +382,43 @@ mod tests {
         assert_eq!(n.created_at.as_deref(), Some("2370-01-01T00:00:00+00:00"));
         let rows: Vec<&str> = n.inputs.iter().map(|i| i.id.as_str()).collect();
         assert_eq!(rows, vec!["row-group", "row-picard"]);
+    }
+
+    /// A card lists the groups it is in, first, and reads each group's
+    /// row: dropping it from a group re-renders it.
+    #[test]
+    fn a_member_lists_its_groups_and_reads_their_rows() {
+        let picard = ParsedContact {
+            inputs: vec![Input::new("contacts", "row-picard")],
+            ..sample()
+        };
+        let group = |uid: &str, name: &str| ParsedContact {
+            uid: uid.to_string(),
+            display_name: Some(name.to_string()),
+            is_group: true,
+            members: vec!["urn:uuid:tng-picard".to_string()],
+            inputs: vec![Input::new("contacts", format!("row-{uid}"))],
+            ..sample()
+        };
+        let contacts = vec![
+            picard,
+            group("g2", "Senior Staff"),
+            group("g1", "Away Team"),
+        ];
+        let groups = groups_by_member(&contacts);
+        let n = normalize(&contacts[0], "tng_contacts", &Cards::new(), &groups);
+        let listed: Vec<(&str, &str)> = n
+            .fields
+            .iter()
+            .take(2)
+            .map(|f| (f.label.as_str(), f.value.as_str()))
+            .collect();
+        assert_eq!(
+            listed,
+            vec![("Group", "Away Team"), ("Group", "Senior Staff")]
+        );
+        let rows: Vec<&str> = n.inputs.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(rows, vec!["row-picard", "row-g1", "row-g2"]);
     }
 
     #[test]

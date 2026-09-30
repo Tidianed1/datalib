@@ -7,6 +7,7 @@
 
 use std::path::Path;
 
+use crate::doltlite_raw::Migration;
 use anyhow::Result;
 use datalib_etl_macros::RawStoreHandle;
 use serde_json::Value;
@@ -31,8 +32,18 @@ impl EntityStore {
     /// Open to write, reconciling the schema to `ddl`. Only the download
     /// step that owns the store does this.
     pub async fn open<S: AsRef<str>>(db_path: &Path, ddl: &[S]) -> Result<Self> {
+        Self::open_migrating(db_path, ddl, &[]).await
+    }
+
+    /// [`Self::open`], climbing the provider's migration ladder first
+    /// (etl/README.md §"The migration ladder").
+    pub async fn open_migrating<S: AsRef<str>>(
+        db_path: &Path,
+        ddl: &[S],
+        ladder: &[Migration],
+    ) -> Result<Self> {
         let slices: Vec<&str> = ddl.iter().map(AsRef::as_ref).collect();
-        let pool = dr::open(db_path, &slices).await?;
+        let pool = dr::open_migrating(db_path, &slices, ladder).await?;
         Ok(Self { pool, pin: None })
     }
 
@@ -108,7 +119,15 @@ pub struct CasEntityStore {
 
 impl CasEntityStore {
     pub async fn open<S: AsRef<str>>(db_path: &Path, ddl: &[S]) -> Result<Self> {
-        let entities = EntityStore::open(db_path, ddl).await?;
+        Self::open_migrating(db_path, ddl, &[]).await
+    }
+
+    pub async fn open_migrating<S: AsRef<str>>(
+        db_path: &Path,
+        ddl: &[S],
+        ladder: &[Migration],
+    ) -> Result<Self> {
+        let entities = EntityStore::open_migrating(db_path, ddl, ladder).await?;
         let cas = BlobCas::open(&blob_cas::cas_path_for(db_path)).await?;
         Ok(Self { entities, cas })
     }
@@ -141,15 +160,20 @@ impl std::ops::Deref for CasEntityStore {
 
 /// Declare a provider's `RawDb`: a newtype over [`EntityStore`] or
 /// [`CasEntityStore`] that derefs to it, closes every pool it opened, and
-/// opens with the provider's DDL (a `Vec<String>` or a `&[&str]`). The provider's own queries go in an
-/// `impl RawDb` of its own beside the macro.
+/// opens with the provider's DDL (a `Vec<String>` or a `&[&str]`) and,
+/// when it keeps one, its migration ladder. The provider's own queries go
+/// in an `impl RawDb` of its own beside the macro.
 ///
 /// ```ignore
 /// datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl());
+/// datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl(), LADDER);
 /// ```
 #[macro_export]
 macro_rules! raw_db {
     ($(#[$meta:meta])* $vis:vis $name:ident : $store:ident, $ddl:expr) => {
+        $crate::raw_db!($(#[$meta])* $vis $name : $store, $ddl, &[]);
+    };
+    ($(#[$meta:meta])* $vis:vis $name:ident : $store:ident, $ddl:expr, $ladder:expr) => {
         $(#[$meta])*
         #[derive(Clone, Debug)]
         $vis struct $name {
@@ -176,7 +200,9 @@ macro_rules! raw_db {
 
         impl $name {
             $vis async fn open(db_path: &::std::path::Path) -> ::anyhow::Result<Self> {
-                let store = $crate::entity_store::$store::open(db_path, &$ddl[..]).await?;
+                let store =
+                    $crate::entity_store::$store::open_migrating(db_path, &$ddl[..], $ladder)
+                        .await?;
                 Ok(Self { store })
             }
 

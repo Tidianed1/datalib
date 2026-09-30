@@ -10,13 +10,13 @@ use anyhow::{Context, Result};
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-use datalib_etl::bulk::bulk_upsert_in_tx;
+use datalib_etl::bulk::{bulk_upsert_entity_in_tx, bulk_upsert_in_tx};
 use datalib_etl::doltlite_raw::{self as dr};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
-use super::schema_raw::full_ddl;
 pub use super::schema_raw::{addressbook_pk, contact_pk, AccountRow, AddressbookRow, ContactRow};
+use super::schema_raw::{full_ddl, GroupMemberRow, LADDER};
 
 #[derive(Clone, Debug, RawStoreHandle)]
 pub struct RawDb {
@@ -102,7 +102,7 @@ impl RawDb {
     pub async fn open(db_path: &Path) -> Result<Self> {
         let owned = full_ddl();
         let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
-        let pool = dr::open(db_path, &slices).await?;
+        let pool = dr::open_migrating(db_path, &slices, LADDER).await?;
         // `db_path` is the entity db file, never the per-source directory:
         // `cas_path_for` derives the sibling via `.parent()`, so a directory
         // here would leak the CAS into the shared `raw/` root.
@@ -255,6 +255,19 @@ impl RawDb {
         let now = datalib_time::IsoOffsetTimestamp::now_local();
         let mut tx = self.pool.begin().await.context("begin contacts batch tx")?;
         bulk_upsert_in_tx(&mut tx, rows, &now).await?;
+        // Delete-then-insert: the members are whatever the card names now.
+        let mut members: Vec<GroupMemberRow> = Vec::new();
+        for row in rows {
+            sqlx::query("DELETE FROM contact_group_members WHERE group_id = ?")
+                .bind(&row.id_and_payload.id)
+                .execute(&mut *tx)
+                .await
+                .context("clear a group's members")?;
+            members.extend(GroupMemberRow::for_contact(row));
+        }
+        bulk_upsert_entity_in_tx(&mut tx, &members)
+            .await
+            .context("insert group members")?;
         tx.commit().await.context("commit contacts batch tx")?;
         Ok(())
     }
@@ -284,6 +297,11 @@ impl RawDb {
                 .execute(&mut *tx)
                 .await
                 .context("delete contact bookkeeping")?;
+            sqlx::query("DELETE FROM contact_group_members WHERE group_id = ?")
+                .bind(&id)
+                .execute(&mut *tx)
+                .await
+                .context("delete a group's members")?;
             sqlx::query("DELETE FROM contact_photos WHERE owner_id = ?")
                 .bind(&id)
                 .execute(&mut *tx)
@@ -322,6 +340,11 @@ impl RawDb {
                 .execute(&mut *tx)
                 .await
                 .context("delete contact bookkeeping")?;
+            sqlx::query("DELETE FROM contact_group_members WHERE group_id = ?")
+                .bind(&id)
+                .execute(&mut *tx)
+                .await
+                .context("delete a group's members")?;
             sqlx::query("DELETE FROM contact_photos WHERE owner_id = ?")
                 .bind(&id)
                 .execute(&mut *tx)
@@ -348,6 +371,7 @@ impl RawDb {
             .await
             .context("begin delete addressbook tx")?;
         for sql in [
+            "DELETE FROM contact_group_members WHERE addressbook_id = ?",
             "DELETE FROM contact_photos WHERE owner_id IN \
              (SELECT id FROM contacts WHERE addressbook_id = ?)",
             "DELETE FROM contacts_bookkeeping WHERE id IN \
@@ -562,5 +586,100 @@ mod tests {
         let path = dir.path().join("contacts.doltlite_db");
         let db = RawDb::open(&path).await.unwrap();
         db.delete_contact("ab1", "/cards/X.vcf").await.unwrap();
+    }
+
+    fn group_row(members: &[&str]) -> ContactRow {
+        let lines: String = members
+            .iter()
+            .map(|m| format!("X-ADDRESSBOOKSERVER-MEMBER:urn:uuid:{m}\n"))
+            .collect();
+        ContactRow::new(
+            "ab".into(),
+            "bridge".into(),
+            "/cards/bridge.vcf".into(),
+            None,
+            Some("Bridge".into()),
+            None,
+            &format!(
+                "BEGIN:VCARD\nVERSION:3.0\nUID:bridge\nFN:Bridge\n\
+                 X-ADDRESSBOOKSERVER-KIND:group\n{lines}END:VCARD\n"
+            ),
+        )
+    }
+
+    async fn members(db: &RawDb) -> Vec<(String, Option<String>)> {
+        sqlx::query_as(
+            "SELECT group_id, member_id FROM contact_group_members ORDER BY group_id, member_id",
+        )
+        .fetch_all(db.pool())
+        .await
+        .unwrap()
+    }
+
+    /// The membership table follows the group card: a member dropped from
+    /// the card is a row gone, and a deleted group takes its rows with it.
+    #[tokio::test]
+    async fn group_members_follow_the_group_card() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&dir.path().join("contacts.doltlite_db"))
+            .await
+            .unwrap();
+        db.upsert_contact(&group_row(&["tng-picard", "tng-riker"]))
+            .await
+            .unwrap();
+        assert_eq!(
+            members(&db).await,
+            vec![
+                ("ab#bridge".to_string(), Some("ab#tng-picard".to_string())),
+                ("ab#bridge".to_string(), Some("ab#tng-riker".to_string())),
+            ]
+        );
+
+        db.upsert_contact(&group_row(&["tng-picard"]))
+            .await
+            .unwrap();
+        assert_eq!(
+            members(&db).await,
+            vec![("ab#bridge".to_string(), Some("ab#tng-picard".to_string()))]
+        );
+
+        db.delete_contact("ab", "/cards/bridge.vcf").await.unwrap();
+        assert!(members(&db).await.is_empty());
+        db.close().await;
+    }
+
+    /// A store an older build wrote has group cards and no membership
+    /// table; its first open under this build fills the table from the
+    /// cards already there, because an address book's sync-token says
+    /// nothing changed and the download would never fill it.
+    #[tokio::test]
+    async fn the_first_rung_fills_members_from_the_cards_already_stored() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("contacts.doltlite_db");
+        {
+            let ddl: Vec<String> = full_ddl()
+                .into_iter()
+                .filter(|d| !d.contains("contact_group_members"))
+                .collect();
+            let ddl: Vec<&str> = ddl.iter().map(String::as_str).collect();
+            let pool = dr::open(&path, &ddl).await.unwrap();
+            let now = datalib_time::IsoOffsetTimestamp::now_local();
+            let mut tx = pool.begin().await.unwrap();
+            bulk_upsert_in_tx(&mut tx, &[group_row(&["tng-picard"])], &now)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+            dr::commit_run(&pool, "an older build's rows")
+                .await
+                .unwrap();
+            pool.close().await;
+        }
+
+        let db = RawDb::open(&path).await.expect("the rung carries it");
+        assert_eq!(
+            members(&db).await,
+            vec![("ab#bridge".to_string(), Some("ab#tng-picard".to_string()))]
+        );
+        db.close().await;
     }
 }

@@ -102,6 +102,13 @@ bookkeeping. The bytes stay in the CAS — another email may share the
 same `.eml` blob, and doltlite's history retains the prior state
 either way.
 
+A full enumeration is the one moment the mirror sees what was destroyed
+while no cursor was replaying. A mailbox a full `Mailbox/get` does not
+list comes off every email and its row goes, the same as one
+`Mailbox/changes` reports destroyed. An `Email/query` walk that finished
+and was not narrowed by `only_extract_labels` prunes the emails it did
+not list, and the threads left with none.
+
 ## Rate limits
 
 Fastmail doesn't 429 us in practice — JMAP's batch shape (one
@@ -156,7 +163,7 @@ hash.
 
 | table | shape |
 |---|---|
-| `accounts`, `mailboxes`, `threads`, `emails` | payload-shaped entity tables, each with a paired `<table>_bookkeeping` sidecar |
+| `accounts`, `mailboxes`, `threads`, `emails` | payload-shaped entity tables, each with a paired `<table>_bookkeeping` sidecar; a mailbox's counts live in the sidecar's `volatile_payload` |
 | `gmail_messages` | Gmail API mode only: Gmail's message id → the row it produced |
 | `email_mailboxes`, `email_keywords` | N:M join tables with a synthesized `id` PK, refreshed delete-then-insert per email upsert; no sidecars |
 | `email_blobs` | CAS edge carrying the `.eml` `blake3`, NULL until the bytes land |

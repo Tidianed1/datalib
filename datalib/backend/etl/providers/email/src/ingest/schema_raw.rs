@@ -8,7 +8,7 @@
 //! than on `emails`, is in this provider's INGEST.md.
 
 use datalib_etl::blob_cas::CasEdgeRow as _;
-use datalib_etl::doltlite_raw::{self as dr, WirePayload};
+use datalib_etl::doltlite_raw::{self as dr, Migration, WirePayload};
 use datalib_etl_macros::{CasEdgeRow, RawTable};
 use serde_json::Value;
 
@@ -94,8 +94,10 @@ impl AccountRow {
     }
 }
 
-/// `mailboxes` — one row per JMAP Mailbox or Mbox-derived
-/// folder/label.
+/// `mailboxes` — one row per JMAP Mailbox, Gmail label, or Mbox-derived
+/// label. The id is upstream's own where it has one (JMAP's `Mailbox.id`,
+/// [`crate::ingest::labels::gmail_mailbox_id`]); a Takeout label only
+/// has its name ([`crate::ingest::labels::mailbox_id`]).
 #[derive(Debug, Clone, RawTable)]
 #[raw_table(table = "mailboxes", index = "mailboxes_by_account:account_id")]
 pub struct MailboxRow {
@@ -105,9 +107,17 @@ pub struct MailboxRow {
     pub parent_id: Option<String>,
     pub role: Option<String>,
     pub sort_order: Option<i64>,
-    pub total_emails: Option<i64>,
-    pub unread_emails: Option<i64>,
 }
+
+/// A mailbox's counts move with every message that arrives or is read,
+/// and say nothing about the mailbox itself; kept in the content payload
+/// they would make the Inbox row change on nearly every sync.
+pub const MAILBOX_VOLATILE_PATHS: &[dr::VolatilePath] = &[
+    &["totalEmails"],
+    &["unreadEmails"],
+    &["totalThreads"],
+    &["unreadThreads"],
+];
 
 impl MailboxRow {
     pub fn from_jmap_payload(account_id: &str, payload: &Value) -> anyhow::Result<Self> {
@@ -134,8 +144,6 @@ impl MailboxRow {
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
             sort_order: payload.get("sortOrder").and_then(|v| v.as_i64()),
-            total_emails: payload.get("totalEmails").and_then(|v| v.as_i64()),
-            unread_emails: payload.get("unreadEmails").and_then(|v| v.as_i64()),
         })
     }
 }
@@ -391,6 +399,26 @@ pub struct GmailMessageRow {
     pub email_id: String,
     pub thread_id: String,
 }
+
+/// The raw store's migration ladder (etl/README.md §"The migration
+/// ladder").
+pub const LADDER: &[Migration] = &[Migration {
+    version: 1,
+    name: "mailbox counts leave the content row",
+    apply: |conn| {
+        Box::pin(async move {
+            for sql in [
+                "ALTER TABLE mailboxes DROP COLUMN total_emails",
+                "ALTER TABLE mailboxes DROP COLUMN unread_emails",
+                "UPDATE mailboxes SET payload = jsonb_remove(payload, \
+                 '$.totalEmails', '$.unreadEmails', '$.totalThreads', '$.unreadThreads')",
+            ] {
+                sqlx::query(sql).execute(&mut *conn).await?;
+            }
+            Ok(())
+        })
+    },
+}];
 
 pub fn full_ddl() -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
