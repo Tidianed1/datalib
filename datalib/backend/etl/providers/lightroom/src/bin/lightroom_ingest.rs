@@ -122,7 +122,6 @@ async fn main() -> Result<()> {
         sync::Inputs {
             backups: args.backups.as_deref(),
             catalog: args.catalog.as_deref(),
-            now: chrono::Local::now().naive_local(),
         },
         &options,
         &progress,

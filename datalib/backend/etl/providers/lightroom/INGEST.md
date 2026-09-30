@@ -333,10 +333,15 @@ each sync mirrors every backup the store does not hold yet, oldest
 first, **one commit per backup**. Each backup is mirrored exactly as a
 catalog is; any two commits then diff like any two runs.
 
-**With `catalog.path` set too**, the catalog is mirrored after the
-backups, as the run's last commit, so the backups are the history and
-the live catalog is HEAD. A sync that finds a new backup commits it and
-then the catalog on top again.
+**HEAD always ends on the newest state.** With `catalog.path` set too,
+the catalog is mirrored after the backups as the run's last commit, so
+the backups are the history and the live catalog is HEAD. Without one,
+the newest backup is HEAD. Whenever a sync replays any backup, it puts
+that newest state back on top as its last commit, whether or not it
+changed. That keeps things simple when a backup turns up late, older
+than what is already committed: it is replayed like any other, the
+history detours back to it for one commit, and the next commit returns
+to the present.
 
 - **Which file is a backup.** The folder is scanned with `fsscan`, so a
   backup already hashed costs a `stat`. Each entry in it is one backup:
@@ -345,53 +350,43 @@ then the catalog on top again.
   added after it (`2019-12-14 0731 - Before restoring captions`) is
   fine. When a folder has both the `.zip` and an unpacked `.lrcat`, the
   zip is used: it is what Lightroom wrote, and the unpacked copy may
-  have been opened since. An entry with no catalog in it is ignored.
-- **Each commit is dated when its backup was taken**
-  (`dolt_commit('--date', …)`), with the folder's time read in this
-  machine's time zone. So `dolt_log.date` and
-  `dolt_history_<table>.commit_date` read as the catalog's own history.
-  The store's first commits and each run's closing commit (the problem
-  rows, the filter record) are dated when they were made.
-- **History is one line.** A backup older than the newest state already
-  in the store has nowhere to go. That state is the newest backup, or the
-  live catalog as of the last sync that changed it: a backup taken
-  before then turns up too late. It is left out and reported as a
-  problem on the Manage row, not committed on top as though the catalog
-  had gone back in time. So is a folder holding two catalogs, and one
-  whose name does not start with a date. To take an older backup in,
-  start a new store.
+  have been opened since. An entry with no catalog in it is ignored; a
+  folder holding two catalogs, or one whose name does not start with a
+  date, is reported as a problem on the Manage row.
 - **A backup is known by its bytes, not its name.** Renaming a backup's
   folder by hand — adding a note — changes nothing: its hash is already
   in the store. A backup whose file changed after it was committed is
-  reported rather than committed again, and history keeps the version
-  committed then.
-- **`lightroom_snapshots` lists the states the store holds**: one row per
-  backup — `snapshot` (the entry's name), `taken_at` (from the name, local
-  time), `file` (relative to the folder) and `blake3` (the file's
-  hash) — landing in the commit that
-  mirrored it, so `dolt_diff_lightroom_snapshots` names the backup behind
-  every commit. With a catalog there is also a `live catalog` row, whose
-  `taken_at` is the last sync at which mirroring the catalog changed the
-  store; a sync that changes nothing leaves it alone, and so stays a
-  no-op.
+  new bytes, so it is replayed.
+- **Each commit names its file and is dated when its backup was taken.**
+  The message's first line is the backup's file, relative to the folder
+  (`download lightroom: backup 2026-09-27 1650/Lightroom Catalog-v13-3.zip`),
+  and the mirror's counts follow below it. The date is the folder's time
+  (`dolt_commit('--date', …)`) read in this machine's time zone, so
+  `dolt_history_<table>.commit_date` reads as the catalog's own history.
+  The catalog's commits, a backup mirrored again to go back on top, and
+  the store's own bookkeeping commits are dated when they were made.
+- **`lightroom_snapshots` lists the backups the store holds**: `snapshot`
+  (the entry's name), `taken_at` (from the name, local time), `file`
+  (relative to the folder) and `blake3` (the file's hash), each row
+  landing in the commit that mirrored it.
 - **A changed filter reaches HEAD without waiting for a backup.**
   `include_tables`, `exclude_tables`, `exclude_columns`, `skip_xmp`,
-  `stable_key_columns` and `primary_keys` shape every backup mirrored
-  from then on. With a catalog, its mirror carries the change to HEAD.
-  Without one, a sync that finds no new backup mirrors the newest backup
-  again under the new filters, as a commit dated now. The filters are
-  recorded with `scope_config` for the comparison; earlier commits keep
-  the filters they were made with.
+  `stable_key_columns` and `primary_keys` shape every mirror from then
+  on. With a catalog, its mirror carries the change to HEAD. Without
+  one, a sync that finds no new backup mirrors the newest backup again
+  under the new filters. The filters are recorded with `scope_config`
+  for the comparison; earlier commits keep the filters they were made
+  with.
 - **A folder with no backups fails the run**, as does one that cannot
   be read (a backup drive that is not mounted).
 
 A zip is unpacked into a temporary directory for the length of its
 mirror, so a run needs free space for one catalog at a time; the
 unpacked copy is read without a snapshot, since nothing else has it
-open. `tests/backups_folder.rs` covers the order, the dates, the ledger,
-the refusals, the filter change, the live catalog on top, the unchanged
-catalog left unread and backups known by their bytes, against zipped
-copies of the TNG catalog.
+open. `tests/backups_folder.rs` covers the order, the dates, the
+messages, the ledger, a late older backup, the filter change, the live
+catalog on top, the unchanged catalog left unread and backups known by
+their bytes, against zipped copies of the TNG catalog.
 
 ## Store size and `gc`
 

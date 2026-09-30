@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
 use datalib_etl::download_problems;
@@ -72,10 +72,6 @@ impl DataProcessor for LightroomIngest {
         let entity_db = raw_layout::entities_db(&self.raw_path);
         let pool = ingest::mirror::open_mirror(&entity_db).await?;
         let session = ctx.open_store(pool.clone(), entity_db).await;
-        let now = chrono::DateTime::parse_from_rfc3339(ctx.now)
-            .with_context(|| format!("the run's now {:?} is not RFC 3339", ctx.now))?
-            .with_timezone(&chrono::Local)
-            .naive_local();
         let cache = FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?;
         let run = sync::run(
             &pool,
@@ -83,7 +79,6 @@ impl DataProcessor for LightroomIngest {
             sync::Inputs {
                 backups: self.backups.as_deref(),
                 catalog: self.catalog.as_deref(),
-                now,
             },
             &self.options,
             ctx.progress,

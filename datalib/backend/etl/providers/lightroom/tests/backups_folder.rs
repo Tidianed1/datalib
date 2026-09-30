@@ -6,7 +6,6 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use chrono::NaiveDateTime;
 use sqlx::sqlite::SqlitePool;
 
 use datalib_etl::doltlite_raw as dr;
@@ -71,22 +70,17 @@ impl Fixture {
     }
 
     async fn sync(&self, options: &MirrorOptions) -> Result<SyncRun> {
-        self.sync_with(options, None, NOW).await
+        self.sync_with(options, None).await
     }
 
     /// One sync: mirror what is new, report, and make the run's last
     /// commit, as the processor does.
-    async fn sync_with(
-        &self,
-        options: &MirrorOptions,
-        catalog: Option<&Path>,
-        now: &str,
-    ) -> Result<SyncRun> {
-        self.run(options, Some(&self.backups()), catalog, now).await
+    async fn sync_with(&self, options: &MirrorOptions, catalog: Option<&Path>) -> Result<SyncRun> {
+        self.run(options, Some(&self.backups()), catalog).await
     }
 
     async fn sync_catalog(&self, options: &MirrorOptions, catalog: &Path) -> Result<SyncRun> {
-        self.run(options, None, Some(catalog), NOW).await
+        self.run(options, None, Some(catalog)).await
     }
 
     async fn run(
@@ -94,15 +88,10 @@ impl Fixture {
         options: &MirrorOptions,
         backups: Option<&Path>,
         catalog: Option<&Path>,
-        now: &str,
     ) -> Result<SyncRun> {
         let pool = mirror::open_mirror(&self.store()).await?;
         let cache = FingerprintCache::open(&self.dir.path().join("fingerprints.sqlite")).await?;
-        let inputs = sync::Inputs {
-            backups,
-            catalog,
-            now: at(now),
-        };
+        let inputs = sync::Inputs { backups, catalog };
         let run = sync::run(
             &pool,
             &cache,
@@ -125,13 +114,6 @@ impl Fixture {
     async fn read(&self) -> SqlitePool {
         mirror::open_sqlite(&self.store(), false).await.unwrap()
     }
-}
-
-/// The run's now, as the tests pin it.
-const NOW: &str = "2024-01-01T00:00:00";
-
-fn at(s: &str) -> NaiveDateTime {
-    NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S").unwrap()
 }
 
 async fn write_catalog(path: &Path, edits: &[&str]) {
@@ -260,9 +242,18 @@ async fn each_backup_is_a_commit_dated_when_it_was_taken() -> Result<()> {
             "2023-01-02 15:00:00"
         ]
     );
-    assert!(backups[1]
-        .0
-        .contains("backup 2022-06-15 1400 - before keywords"));
+    let first_lines: Vec<&str> = backups
+        .iter()
+        .map(|(m, _)| m.lines().next().unwrap_or(""))
+        .collect();
+    assert_eq!(
+        first_lines,
+        [
+            "download lightroom: backup 2021-03-01 0900/TngCatalog.lrcat.zip",
+            "download lightroom: backup 2022-06-15 1400 - before keywords/TngCatalog-2.lrcat",
+            "download lightroom: backup 2023-01-02 0800/TngCatalog-v13.zip",
+        ]
+    );
 
     let history: Vec<(String, Option<i64>)> = sqlx::query_as(
         "SELECT commit_date, rating FROM dolt_history_Adobe_images \
@@ -282,7 +273,7 @@ async fn each_backup_is_a_commit_dated_when_it_was_taken() -> Result<()> {
     assert_eq!(keywords, 1, "HEAD is the newest backup");
 
     let ledger: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT snapshot, taken_at, file FROM lightroom_snapshots WHERE snapshot != 'live catalog' ORDER BY taken_at",
+        "SELECT snapshot, taken_at, file FROM lightroom_snapshots ORDER BY taken_at",
     )
     .fetch_all(&pool)
     .await?;
@@ -332,10 +323,11 @@ async fn a_folder_with_nothing_new_commits_nothing() -> Result<()> {
     Ok(())
 }
 
-/// A newer backup is appended; one older than the newest committed is a
-/// problem row, and history is left alone.
+/// A backup that turns up older than the newest one committed is still
+/// replayed, and the newest is then mirrored again, so HEAD ends on the
+/// newest state. A newer backup is simply appended.
 #[tokio::test]
-async fn a_new_backup_is_appended_and_an_older_one_refused() -> Result<()> {
+async fn an_older_backup_is_replayed_and_the_newest_put_back_on_top() -> Result<()> {
     let f = Fixture::new();
     f.backup(
         "2022-06-15 1400",
@@ -347,13 +339,6 @@ async fn a_new_backup_is_appended_and_an_older_one_refused() -> Result<()> {
     f.sync(&options()).await?;
 
     f.backup(
-        "2023-01-02 0800",
-        "TngCatalog.lrcat",
-        Some("TngCatalog.zip"),
-        &[RERATE],
-    )
-    .await;
-    f.backup(
         "2020-01-01 0000",
         "TngCatalog.lrcat",
         Some("TngCatalog.zip"),
@@ -361,22 +346,63 @@ async fn a_new_backup_is_appended_and_an_older_one_refused() -> Result<()> {
     )
     .await;
     let run = f.sync(&options()).await?;
-    assert_eq!(run.mirrored, ["2023-01-02 0800"]);
-    let refused: Vec<&str> = run.problems.iter().map(|p| p.id.as_str()).collect();
-    assert_eq!(refused, ["2020-01-01 0000"]);
+    assert_eq!(run.mirrored, ["2020-01-01 0000"]);
+    assert!(run.problems.is_empty(), "{:?}", run.problems);
 
     let pool = f.read().await;
-    let problems: Vec<String> =
-        sqlx::query_scalar("SELECT scope_key FROM problems WHERE scope_key LIKE 'record:%'")
-            .fetch_all(&pool)
-            .await?;
-    assert_eq!(problems, ["record:lightroom_snapshots:2020-01-01 0000"]);
+    let first_lines: Vec<String> = log(&pool)
+        .await
+        .into_iter()
+        .filter_map(|(m, _)| m.lines().next().map(str::to_string))
+        .filter(|l| l.contains(": backup "))
+        .collect();
+    assert_eq!(
+        first_lines,
+        [
+            "download lightroom: backup 2022-06-15 1400/TngCatalog.zip",
+            "download lightroom: backup 2020-01-01 0000/TngCatalog.zip",
+            "download lightroom: backup 2022-06-15 1400/TngCatalog.zip, \
+             mirrored again to put the newest back on top",
+        ]
+    );
+    let keyword_history: Vec<String> = sqlx::query_scalar(
+        "SELECT diff_type FROM dolt_diff_AgLibraryKeyword \
+          WHERE coalesce(to_id_global, from_id_global) = 'KEYWORD-9001-HOLODECK'",
+    )
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(
+        keyword_history.len(),
+        2,
+        "added, then removed: {keyword_history:?}"
+    );
     let keywords: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM AgLibraryKeyword WHERE id_global = 'KEYWORD-9001-HOLODECK'",
     )
     .fetch_one(&pool)
     .await?;
-    assert_eq!(keywords, 0, "the refused backup never reached the mirror");
+    assert_eq!(keywords, 0, "HEAD is the 2022 backup again");
+    pool.close().await;
+
+    f.backup(
+        "2023-01-02 0800",
+        "TngCatalog.lrcat",
+        Some("TngCatalog.zip"),
+        &[RERATE],
+    )
+    .await;
+    let run = f.sync(&options()).await?;
+    assert_eq!(run.mirrored, ["2023-01-02 0800"]);
+    let pool = f.read().await;
+    let again = log(&pool)
+        .await
+        .iter()
+        .filter(|(m, _)| m.contains("mirrored again"))
+        .count();
+    assert_eq!(
+        again, 1,
+        "the newest was committed last; nothing to put back"
+    );
     assert_eq!(rating_of_picard(&pool).await, Some(1));
     pool.close().await;
     Ok(())
@@ -404,7 +430,7 @@ async fn a_changed_filter_mirrors_the_newest_backup_again() -> Result<()> {
         ..options()
     };
     let run = f.sync(&narrowed).await?;
-    assert_eq!(run.mirrored, ["2021-03-01 0900"]);
+    assert!(run.mirrored.is_empty(), "{:?}", run.mirrored);
     let pool = f.read().await;
     assert!(!table_exists(&pool, "AgOzSpaceIds").await);
     assert!(log(&pool)
@@ -442,13 +468,6 @@ async fn table_exists(pool: &SqlitePool, name: &str) -> bool {
 const RENAME: &str =
     "UPDATE AgLibraryKeyword SET name = 'Holodeck 3' WHERE id_global = 'KEYWORD-9001-HOLODECK'";
 
-async fn live_row(pool: &SqlitePool) -> Option<String> {
-    sqlx::query_scalar("SELECT taken_at FROM lightroom_snapshots WHERE snapshot = 'live catalog'")
-        .fetch_optional(pool)
-        .await
-        .unwrap()
-}
-
 /// With both set, the backups are history and the live catalog is HEAD:
 /// backups first, oldest first, then the catalog committed on top.
 #[tokio::test]
@@ -470,7 +489,7 @@ async fn the_live_catalog_lands_on_top_of_the_backups() -> Result<()> {
     .await;
     let live = f.live(&[RERATE, KEYWORD]).await;
 
-    let run = f.sync_with(&options(), Some(&live), NOW).await?;
+    let run = f.sync_with(&options(), Some(&live)).await?;
     assert_eq!(run.mirrored, ["2021-03-01 0900", "2022-06-15 1400"]);
     assert!(run.live.is_some());
 
@@ -481,7 +500,7 @@ async fn the_live_catalog_lands_on_top_of_the_backups() -> Result<()> {
         .filter_map(|m| {
             if m.contains(": backup ") {
                 Some("backup")
-            } else if m.contains(": catalog Live.lrcat") {
+            } else if m.lines().next().is_some_and(|l| l.ends_with("/Live.lrcat")) {
                 Some("catalog")
             } else {
                 None
@@ -495,25 +514,20 @@ async fn the_live_catalog_lands_on_top_of_the_backups() -> Result<()> {
     .fetch_one(&pool)
     .await?;
     assert_eq!(keywords, 1, "HEAD is the live catalog");
-    assert_eq!(live_row(&pool).await.as_deref(), Some(NOW));
     let before = head(&pool).await;
     pool.close().await;
 
-    // Nothing new anywhere, a month later: no commit, and the live row
-    // stays put.
-    let run = f
-        .sync_with(&options(), Some(&live), "2024-02-01T00:00:00")
-        .await?;
+    // Nothing new anywhere: no commit.
+    let run = f.sync_with(&options(), Some(&live)).await?;
     assert!(run.mirrored.is_empty());
     assert_eq!(head(&f.read().await).await, before);
     Ok(())
 }
 
-/// The live catalog is the newest state the store holds, so a backup
-/// taken before it was last mirrored cannot follow it; one taken after
-/// goes in, and the live catalog lands on top again.
+/// Backups that turn up after the live catalog was mirrored are replayed
+/// whatever their dates, and the live catalog goes back on top.
 #[tokio::test]
-async fn a_backup_older_than_the_last_live_mirror_is_refused() -> Result<()> {
+async fn late_backups_replay_under_the_live_catalog() -> Result<()> {
     let f = Fixture::new();
     f.backup(
         "2021-03-01 0900",
@@ -523,9 +537,8 @@ async fn a_backup_older_than_the_last_live_mirror_is_refused() -> Result<()> {
     )
     .await;
     let live = f.live(&[KEYWORD]).await;
-    f.sync_with(&options(), Some(&live), NOW).await?;
+    f.sync_with(&options(), Some(&live)).await?;
 
-    // Taken before NOW, when the live catalog was mirrored.
     f.backup(
         "2023-05-05 0500",
         "TngCatalog.lrcat",
@@ -533,7 +546,6 @@ async fn a_backup_older_than_the_last_live_mirror_is_refused() -> Result<()> {
         &[RERATE],
     )
     .await;
-    // Taken after it.
     f.backup(
         "2025-02-02 0200",
         "TngCatalog.lrcat",
@@ -541,15 +553,10 @@ async fn a_backup_older_than_the_last_live_mirror_is_refused() -> Result<()> {
         &[KEYWORD, RENAME],
     )
     .await;
-    let run = f.sync_with(&options(), Some(&live), NOW).await?;
-    assert_eq!(run.mirrored, ["2025-02-02 0200"]);
-    let refused: Vec<&str> = run.problems.iter().map(|p| p.id.as_str()).collect();
-    assert_eq!(refused, ["2023-05-05 0500"]);
-    assert!(
-        run.problems[0].detail.contains("live catalog"),
-        "{}",
-        run.problems[0].detail
-    );
+    let run = f.sync_with(&options(), Some(&live)).await?;
+    assert_eq!(run.mirrored, ["2023-05-05 0500", "2025-02-02 0200"]);
+    assert!(run.problems.is_empty(), "{:?}", run.problems);
+    assert!(run.live.is_some(), "the unchanged catalog goes back on top");
 
     let pool = f.read().await;
     let name: String = sqlx::query_scalar(
@@ -557,10 +564,7 @@ async fn a_backup_older_than_the_last_live_mirror_is_refused() -> Result<()> {
     )
     .fetch_one(&pool)
     .await?;
-    assert_eq!(
-        name, "Holodeck",
-        "the live catalog, not the backup, is HEAD"
-    );
+    assert_eq!(name, "Holodeck", "the live catalog, not a backup, is HEAD");
     assert_eq!(rating_of_picard(&pool).await, Some(5));
     pool.close().await;
     Ok(())
@@ -579,13 +583,13 @@ async fn a_changed_filter_reaches_head_through_the_live_catalog() -> Result<()> 
     )
     .await;
     let live = f.live(&[]).await;
-    f.sync_with(&options(), Some(&live), NOW).await?;
+    f.sync_with(&options(), Some(&live)).await?;
 
     let narrowed = MirrorOptions {
         exclude_tables: vec!["AgOz*".into()],
         ..options()
     };
-    let run = f.sync_with(&narrowed, Some(&live), NOW).await?;
+    let run = f.sync_with(&narrowed, Some(&live)).await?;
     assert!(run.mirrored.is_empty(), "{:?}", run.mirrored);
     let pool = f.read().await;
     assert!(!table_exists(&pool, "AgOzSpaceIds").await);
@@ -623,8 +627,8 @@ async fn an_unchanged_catalog_is_not_mirrored_again() -> Result<()> {
 }
 
 /// A backup is known by its bytes. Renaming its folder changes nothing;
-/// rewriting its file after it was committed is reported, and history
-/// keeps what was committed.
+/// rewriting its file makes it a backup the store does not hold, so it
+/// is replayed.
 #[tokio::test]
 async fn backups_are_known_by_their_bytes() -> Result<()> {
     let f = Fixture::new();
@@ -658,12 +662,8 @@ async fn backups_are_known_by_their_bytes() -> Result<()> {
     )
     .await;
     let run = f.sync(&options()).await?;
-    assert!(run.mirrored.is_empty(), "{run:?}");
-    let refused: Vec<&str> = run.problems.iter().map(|p| p.id.as_str()).collect();
-    assert_eq!(refused, ["2021-03-01 0900"]);
-    assert!(run.problems[0]
-        .detail
-        .contains("changed after it was committed"));
-    assert_eq!(rating_of_picard(&f.read().await).await, Some(5));
+    assert_eq!(run.mirrored, ["2021-03-01 0900"], "{run:?}");
+    assert!(run.problems.is_empty(), "{run:?}");
+    assert_eq!(rating_of_picard(&f.read().await).await, Some(1));
     Ok(())
 }

@@ -6,7 +6,6 @@
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
-use chrono::NaiveDateTime;
 use sqlx::sqlite::SqlitePool;
 
 use datalib_etl::doltlite_raw as dr;
@@ -19,7 +18,7 @@ use datalib_etl::scope_config;
 use datalib_etl::stop::StopFlag;
 use datalib_etl_sqlite_mirror::{MirrorOptions, MirrorStats};
 
-use super::backups::{self, Backup, LEDGER, LEDGER_DDL, LIVE};
+use super::backups::{self, Backup, LEDGER, LEDGER_DDL};
 use super::unpack::{self, is_catalog, is_zip};
 
 /// `scope_config`'s key for the filters the newest commit was mirrored
@@ -34,8 +33,6 @@ pub struct Inputs<'a> {
     pub backups: Option<&'a Path>,
     /// Mirrored last, on top of the backups.
     pub catalog: Option<&'a Path>,
-    /// The run's now, in local time: the live catalog's `taken_at`.
-    pub now: NaiveDateTime,
 }
 
 #[derive(Debug, Default)]
@@ -136,70 +133,87 @@ pub async fn run(
         .map(|(name, why)| RecordProblem::new(LEDGER, name, why))
         .collect();
 
-    // The filters shape every commit from here on, but the store's newest
-    // commit was made under the old ones. With no new backup and no live
-    // catalog to carry them, mirror the newest backup again so HEAD shows
-    // the catalog as the filters now say.
-    let mut todo: Vec<(Backup, bool)> = plan.ingest.iter().map(|b| (b.clone(), false)).collect();
-    let mut remirror_missing = false;
-    if filters_changed && todo.is_empty() && inputs.catalog.is_none() {
-        let newest = backups::newest(&ledger);
-        match plan
-            .found
-            .iter()
-            .find(|b| Some(b.name.as_str()) == newest.map(|h| h.snapshot.as_str()))
-        {
-            Some(b) => todo.push((b.clone(), true)),
-            None => {
-                remirror_missing = true;
-                run.problems.push(RecordProblem::new(
-                    LEDGER,
-                    newest.map(|h| h.snapshot.as_str()).unwrap_or(""),
-                    "the table and column filters changed, and this, the newest state in \
-                     the store, is not a backup on disk that can be mirrored again under \
-                     them; the store keeps the old filters until the next backup",
-                ));
-            }
-        }
-    }
-
-    for (backup, again) in todo {
+    for backup in &plan.ingest {
         if stop.requested() {
             return Ok(run);
         }
-        let stats = unpack::mirror_file(pool, &backup.file.path, &options, progress)
-            .await
-            .with_context(|| format!("mirror backup {}", backup.name))?;
+        let stats = mirror_backup(pool, backup, &options, progress).await?;
         options.gc = false;
         let hash = fsscan::hex(&backup.file.blake3);
         backups::record(pool, &backup.name, backup.taken_at, &backup.file.rel, &hash).await?;
-
-        let (what, date) = if again {
-            // Dated now: the filters changed now, not when the backup
-            // was taken.
-            ("backup mirrored again under new filters", None)
-        } else {
-            ("backup", backups::commit_date(backup.taken_at))
-        };
         let msg = format!(
-            "download {label}: {what} {}: {}",
-            backup.name,
+            "download {label}: backup {}\n\n{}",
+            backup.file.rel,
             stats.summary()
         );
         // Not announced as a checkpoint: nothing reads this store while
         // the step runs, so the runner has no use for the version.
+        let date = backups::commit_date(backup.taken_at);
         dr::commit_run_dated(pool, &msg, date.as_deref()).await?;
         run.mirrored.push(backup.name.clone());
         run.last = Some(stats);
     }
-
     if stop.requested() {
         return Ok(run);
     }
+
+    // HEAD has to end on the newest state. With a catalog, that is the
+    // catalog, mirrored below. Without one it is the newest backup, which
+    // needs mirroring again when a backup older than it was replayed
+    // after it, or when the filters changed and no new backup carries
+    // them. Dated now: the reason is now, not when the backup was taken.
+    let again = if inputs.catalog.is_some() {
+        None
+    } else if !run.mirrored.is_empty() {
+        Some("to put the newest back on top")
+    } else if filters_changed {
+        Some("under new filters")
+    } else {
+        None
+    };
+    let mut newest_missing = false;
+    if let Some(why) = again {
+        let newest = plan
+            .found
+            .iter()
+            .map(|b| (b.taken_at, b.name.as_str()))
+            .chain(ledger.iter().map(|h| (h.taken_at, h.snapshot.as_str())))
+            .max();
+        let last = run.mirrored.last().map(String::as_str);
+        match newest {
+            Some((_, name)) if Some(name) == last => {}
+            Some((_, name)) => match plan.found.iter().find(|b| b.name == name) {
+                Some(backup) => {
+                    let stats = mirror_backup(pool, backup, &options, progress).await?;
+                    let msg = format!(
+                        "download {label}: backup {}, mirrored again {why}\n\n{}",
+                        backup.file.rel,
+                        stats.summary()
+                    );
+                    dr::commit_run(pool, &msg).await?;
+                    run.last = Some(stats);
+                }
+                None => {
+                    newest_missing = true;
+                    run.problems.push(RecordProblem::new(
+                        LEDGER,
+                        name,
+                        format!(
+                            "the newest backup in the store is no longer on disk, so it could \
+                             not be mirrored again {why}; HEAD is an older state until the \
+                             next backup"
+                        ),
+                    ));
+                }
+            },
+            None => {}
+        }
+    }
+
     // Record the filters once HEAD is mirrored under them. An absent
     // record is taken as a match: it is a store from before the record,
     // or a first run.
-    if !remirror_missing && recorded.as_ref() != Some(&scope) {
+    if !newest_missing && recorded.as_ref() != Some(&scope) {
         scope_config::store(pool, SCOPE, &scope).await?;
     }
 
@@ -222,35 +236,26 @@ pub async fn run(
             file_checkpoint::record_file_pool(pool, CATALOG_CURSOR, f).await?;
         }
         file_checkpoint::forget_files(pool, CATALOG_CURSOR, &changes.gone()).await?;
-        // Only a mirror that changed something moves the live row: the
-        // row's time is what a backup that turns up later is held
-        // against, and a catalog whose file moved but whose rows did not
-        // has not moved on.
-        if mirror_changed(pool).await? {
-            let main = scan
-                .files
-                .iter()
-                .find(|f| f.path.file_name() == catalog.file_name())
-                .map(|f| fsscan::hex(&f.blake3))
-                .unwrap_or_default();
-            backups::record(
-                pool,
-                LIVE,
-                inputs.now,
-                &catalog.display().to_string(),
-                &main,
-            )
-            .await?;
-        }
-        let name = catalog
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let msg = format!("download {label}: catalog {name}: {}", stats.summary());
+        let msg = format!(
+            "download {label}: catalog {}\n\n{}",
+            catalog.display(),
+            stats.summary()
+        );
         dr::commit_run(pool, &msg).await?;
         run.live = Some(stats);
     }
     Ok(run)
+}
+
+async fn mirror_backup(
+    pool: &SqlitePool,
+    backup: &Backup,
+    options: &MirrorOptions,
+    progress: &Progress,
+) -> Result<MirrorStats> {
+    unpack::mirror_file(pool, &backup.file.path, options, progress)
+        .await
+        .with_context(|| format!("mirror backup {}", backup.file.rel))
 }
 
 /// The live catalog's own file and its `-wal`, where Lightroom keeps
@@ -281,18 +286,6 @@ async fn scan_catalog(cache: &FingerprintCache, catalog: &Path) -> Result<Scan> 
         bail!("the catalog {} does not exist", catalog.display());
     }
     Ok(scan)
-}
-
-/// Did the mirror leave anything uncommitted outside the store's own
-/// bookkeeping?
-async fn mirror_changed(pool: &SqlitePool) -> Result<bool> {
-    let tables: Vec<String> = sqlx::query_scalar("SELECT table_name FROM dolt_status")
-        .fetch_all(pool)
-        .await
-        .context("read dolt_status")?;
-    Ok(tables.iter().any(|t| {
-        t != LEDGER && t != INGESTED_FILES_TABLE && !dr::SHARED_TABLES.contains(&t.as_str())
-    }))
 }
 
 /// The options that decide what a mirrored catalog looks like. Not

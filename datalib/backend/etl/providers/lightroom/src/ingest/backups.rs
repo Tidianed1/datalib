@@ -1,6 +1,6 @@
-//! A folder of Lightroom backups: which entries are backups, which the
-//! store already holds, and which may still go on top of its history.
-//! Pure over an `fsscan` of the folder and the ledger; `sync` acts on it.
+//! A folder of Lightroom backups: which entries are backups, and which
+//! the store does not hold yet. Pure over an `fsscan` of the folder and
+//! the ledger; `sync` acts on it.
 
 use std::collections::BTreeMap;
 
@@ -12,9 +12,8 @@ use datalib_etl::fsscan::{self, ScannedFile};
 
 use super::unpack::{is_catalog, is_zip};
 
-/// The store's record of the catalog states it holds: one row per
-/// backup, written in the commit that mirrored it, and one for the live
-/// catalog, moved whenever mirroring it changed the store.
+/// The store's record of the backups it holds, one row per backup,
+/// written in the commit that mirrored it.
 pub const LEDGER: &str = "lightroom_snapshots";
 
 pub const LEDGER_DDL: &str = "CREATE TABLE IF NOT EXISTS lightroom_snapshots (
@@ -23,10 +22,6 @@ pub const LEDGER_DDL: &str = "CREATE TABLE IF NOT EXISTS lightroom_snapshots (
     file TEXT NOT NULL,
     blake3 TEXT NOT NULL
 )";
-
-/// The live catalog's row in [`LEDGER`]. A backup's name starts with a
-/// date, so it can never be this.
-pub const LIVE: &str = "live catalog";
 
 /// How Lightroom names a backup's folder: `2026-09-27 1650`, sometimes
 /// with a note a person added after it.
@@ -104,45 +99,18 @@ pub fn plan(entries: Vec<Entry>, ledger: &[Held]) -> Plan {
     out.found
         .sort_by(|a, b| (a.taken_at, &a.name).cmp(&(b.taken_at, &b.name)));
 
-    let newest_held = newest(ledger);
-    for b in &out.found {
-        let hash = fsscan::hex(&b.file.blake3);
-        let backups = ledger.iter().filter(|h| h.snapshot != LIVE);
-        // Known by content, not by name: a folder renamed by hand is the
-        // backup the store already has.
-        if backups.clone().any(|h| h.blake3 == hash) {
-            continue;
-        }
-        if let Some(h) = backups.clone().find(|h| h.snapshot == b.name) {
-            out.refused.push((
-                b.name.clone(),
-                format!(
-                    "{} changed after it was committed on {}; history keeps the version \
-                     committed then",
-                    b.file.rel,
-                    h.taken_at.format(LEDGER_DATE_FORMAT),
-                ),
-            ));
-            continue;
-        }
-        match newest_held {
-            // History is one line: a backup taken before the newest state
-            // already committed, a backup's or the live catalog's, has
-            // nowhere to go.
-            Some(newest) if b.taken_at < newest.taken_at => out.refused.push((
-                b.name.clone(),
-                format!(
-                    "taken {}, before the newest state already in the store ({}, {}); \
-                     backups are added in the order they were taken, so this one \
-                     was left out",
-                    b.taken_at.format(LEDGER_DATE_FORMAT),
-                    newest.snapshot,
-                    newest.taken_at.format(LEDGER_DATE_FORMAT),
-                ),
-            )),
-            _ => out.ingest.push(b.clone()),
-        }
-    }
+    // Known by content, not by name: a folder renamed by hand is the
+    // backup the store already has, and a file rewritten since it was
+    // committed is a backup it does not.
+    out.ingest = out
+        .found
+        .iter()
+        .filter(|b| {
+            let hash = fsscan::hex(&b.file.blake3);
+            !ledger.iter().any(|h| h.blake3 == hash)
+        })
+        .cloned()
+        .collect();
     out
 }
 
@@ -378,62 +346,33 @@ mod tests {
         let p = plan_of(lightroom_folder(), &ledger);
         let renamed = "2019-12-14 0731 - Before restoring captions";
         assert!(!names(&p.ingest).contains(&renamed));
-        assert!(!refused(&p).contains(&renamed), "{:?}", p.refused);
-        assert_eq!(names(&p.ingest), ["2026-09-02 0911"]);
+        assert!(p.refused.is_empty(), "{:?}", p.refused);
     }
 
-    /// History cannot be rewritten, so a backup whose file changed after
-    /// it was committed is reported, not committed again.
+    /// A backup whose file changed after it was committed is new bytes,
+    /// so it is replayed like any backup the store does not hold.
     #[test]
-    fn a_backup_changed_since_it_was_committed_is_refused() {
+    fn a_backup_changed_since_it_was_committed_is_replayed() {
         let ledger = [held(
             "2016-10-01 0856",
             "2016-10-01T08:56:00",
             "2016, before",
         )];
         let p = plan_of(lightroom_folder(), &ledger);
-        assert!(!names(&p.ingest).contains(&"2016-10-01 0856"));
-        let (name, why) = &p.refused[0];
-        assert_eq!(name, "2016-10-01 0856");
-        assert!(why.contains("changed after it was committed"), "{why}");
+        assert!(names(&p.ingest).contains(&"2016-10-01 0856"));
+        assert!(p.refused.is_empty(), "{:?}", p.refused);
     }
 
-    /// History is one line, so a backup that turns up after a newer one
-    /// was committed cannot be slotted in; it is reported, not appended
-    /// on top as though the catalog had gone back in time.
+    /// A backup that turns up after a newer one was committed is still
+    /// replayed, in date order among the new ones; `sync` then puts the
+    /// newest state back on top.
     #[test]
-    fn a_backup_older_than_the_newest_held_is_refused() {
+    fn a_backup_older_than_the_newest_held_is_replayed() {
         let ledger = [held("2019-01-28 1032", "2019-01-28T10:32:00", "2019-01")];
         let p = plan_of(lightroom_folder(), &ledger);
-        assert_eq!(
-            names(&p.ingest),
-            [
-                "2019-12-14 0731 - Before restoring captions",
-                "2026-09-02 0911"
-            ]
-        );
-        assert_eq!(refused(&p), ["2016-10-01 0856", "2018-03-07 2110"]);
-    }
-
-    /// The live catalog's row is a state like any backup's: a backup
-    /// taken before the catalog was last mirrored cannot follow it.
-    #[test]
-    fn the_live_catalog_holds_back_an_older_backup() {
-        let ledger = [
-            held("2016-10-01 0856", "2016-10-01T08:56:00", "2016"),
-            held(LIVE, "2019-06-01T12:00:00", "live"),
-        ];
-        let p = plan_of(lightroom_folder(), &ledger);
-        assert_eq!(
-            names(&p.ingest),
-            [
-                "2019-12-14 0731 - Before restoring captions",
-                "2026-09-02 0911"
-            ]
-        );
-        let (name, why) = &p.refused[0];
-        assert_eq!(name, "2018-03-07 2110");
-        assert!(why.contains(LIVE), "{why}");
+        assert_eq!(p.ingest.len(), 4, "{:?}", names(&p.ingest));
+        assert_eq!(p.ingest[0].name, "2016-10-01 0856");
+        assert!(p.refused.is_empty(), "{:?}", p.refused);
     }
 
     #[test]
