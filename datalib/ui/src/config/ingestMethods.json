@@ -7,7 +7,7 @@
   ],
   "apple_messages": [
     {
-      "path": "database",
+      "path": "messages",
       "reach": "local"
     }
   ],

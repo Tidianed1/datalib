@@ -6,9 +6,8 @@
 //! putting a message in its chat. Identity comes from the guids beside
 //! the rowids: a chat is its `chat.guid`, a message its `message.guid`,
 //! both Apple-issued and the same in every copy of one account's
-//! database. Attachments are named, not copied: the files sit under
-//! `~/Library/Messages/Attachments/`, which a picked `chat.db` grants no
-//! access to, so each renders as a placeholder carrying its path.
+//! database. Attachments are named, not copied (INGEST.md says why), so
+//! each renders as a placeholder carrying its path.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;

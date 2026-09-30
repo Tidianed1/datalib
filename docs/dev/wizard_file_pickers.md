@@ -43,7 +43,8 @@ Three pieces, one per layer:
 1. **A Tauri capability** —
    [`capabilities/pick-local-paths.json`](../../datalib/tauri/capabilities/pick-local-paths.json)
    grants `dialog:allow-open` (and nothing else from the dialog plugin)
-   to the `main` and `card-*` windows. `tauri-plugin-dialog` is
+   to the `main` and `card-*` windows, plus
+   `core:path:allow-resolve-directory` so the page can expand a `~`. `tauri-plugin-dialog` is
    registered in [`main.rs`](../../datalib/tauri/src/main.rs), which
    also uses it for the launcher's own folder picker (`launcher_pick`).
 2. **`pickPath()`** in
@@ -105,18 +106,25 @@ comes for free. What you owe it:
   (`["lrcat"]`). Keep them broad enough not to hide a legitimate file —
   the typed input is the escape hatch, but only if the user thinks to
   use it.
-- **An example path in the `help`**, where the location is
-  predictable (`~/Library/Messages`). Paste is a legitimate way in —
+- **An example path in the `help`**. Paste is a legitimate way in —
   over ssh, from a note, from a colleague — and the browser-served case
   has nothing else. Not a `placeholder`: text inside the box reads as a
   value someone already typed, so no wizard field has one.
+- **`startIn`**, where the location is fixed by the app that owns it
+  (`~/Library/Messages`, `~/Pictures/Lightroom`), not a download the
+  user put somewhere. The picker opens there while the field is empty,
+  and the help shows the path with a copy button, so the help must
+  name it exactly (`catalogStartIn.test.ts` checks).
 
-Two behaviors the shared code already handles, worth not breaking:
-cancel is a no-op on the field, and the dialog opens at the field's
-current value when that value is an absolute path (`~/…` is dropped —
-Tauri passes `defaultPath` to the platform dialog verbatim, no shell is
-involved, so a literal `~` is a *relative* path resolved against the
-process's cwd).
+Three behaviors the shared code already handles, worth not breaking:
+cancel is a no-op on the field; the dialog opens at the field's current
+value, else at its `startIn`, with a leading `~` expanded against the
+home directory Tauri reports (Tauri passes `defaultPath` to the
+platform dialog verbatim, no shell is involved, so a literal `~` would
+be a *relative* path resolved against the process's cwd); and help text
+selects and copies in WebKit, where the `<label>` around each field
+would otherwise take the click that ends a drag and focus its input
+(`wizard-help-select.spec.ts`).
 
 What is still missing is validation on selection: the descriptor knows
 what the folder should contain (`Databases/msgstore.db.crypt15` for
@@ -175,7 +183,23 @@ test was in Datalib.app's position:
 
 Two consequences for a descriptor whose path is a macOS package: it
 must say `picks: "file"`, and the grant it earns does carry down the
-spawn chain above. What is **not** measured is whether the grant
+spawn chain above.
+
+**A picked file grants that file; a picked folder grants what is in
+it.** Measured in the app with `apple_messages`, without Full Disk
+Access:
+
+| picked | what the step could then do |
+|---|---|
+| `~/Library/Messages/chat.db` | copy `chat.db`; copying `chat.db-wal` beside it: `Operation not permitted` |
+| the folder `~/Library/Messages` | mirror `LiteSegmentStore.db` in it, a file never picked on its own (`VACUUM INTO` opened it in place, `-wal` and `-shm` included) |
+
+A SQLite database in WAL mode is three files, so a source reading one
+picks the folder that holds them. A refusal inside a protected folder
+can look like absence (`stat` answers `No such file or directory`), so
+check a missing file in Finder before blaming the grant.
+
+What is **not** measured is whether the grant
 survives quitting and relaunching the app; the TCC database that would
 say so is itself protected. Until it is, the wizard's help text for
 such a source names Full Disk Access as the durable fallback, and the

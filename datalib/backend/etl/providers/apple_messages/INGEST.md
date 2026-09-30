@@ -87,19 +87,22 @@ untouched runs is a finding, not a surprise. `recoverable_message_part`
 
 The rendered page lists each attachment by name, size and path and
 draws chat-common's "(not yet fetched)" placeholder; no bytes reach the
-CAS. Two reasons. Picking `chat.db` in the wizard grants the app access
-to that file and nothing else — `~/Library/Messages/Attachments/` is
-behind the same TCC wall and stays closed — and the tree is often tens
-of gigabytes of video. A registry like WhatsApp's `wa_media_files`, fed
-from a folder the user picks separately, is the shape if it is wanted.
+CAS. The tree under `~/Library/Messages/Attachments/` is often tens of
+gigabytes of video, so nothing copies it yet. A registry like WhatsApp's
+`wa_media_files` is the shape if it is wanted; whether the folder the
+wizard picks also opens `Attachments/` to the app has not been measured.
 
 ## macOS permissions
 
 `~/Library/Messages` is a location macOS protects: a process without
 access gets `Operation not permitted` on a plain `ls`, and `sudo` does
-not help. In the app, choosing the file in the picker is what grants
+not help. In the app, choosing the folder in the picker is what grants
 access (`docs/dev/wizard_file_pickers.md`; Cmd-Shift-G in the dialog
-reaches the folder). Full Disk Access (System Settings → Privacy &
+reaches it), which is why `messages.path` names the folder and the
+database is found inside it. Choosing `chat.db` alone grants that one
+file: the snapshot's `VACUUM INTO` then fails, since SQLite has to open
+`chat.db-wal` and `chat.db-shm` to read a WAL database, and so does the
+file copy it falls back to, on the `-wal`. Full Disk Access (System Settings → Privacy &
 Security) is the durable fallback, and what a terminal needs to run
 `datalib-dag` against the config directly — Finder already has it, so
 dragging a copy out works when the terminal cannot.
