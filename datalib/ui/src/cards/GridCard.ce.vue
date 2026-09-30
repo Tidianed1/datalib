@@ -1334,6 +1334,8 @@ type MenuScope = {
   /// what the user saw — an author's name, not their uuid — than the
   /// row's field), and its element, for the feedback breadcrumb.
   cell: { column: string; cellValue: string; el: HTMLElement | null } | null;
+  /// The cell under the click as its row's copy has it; null when empty.
+  copy: { header: string; text: string } | null;
   targets: Row[];
   filter: FilterEntry[];
   notion: FilterEntry[];
@@ -1354,6 +1356,8 @@ function menuScope(args: MenuFromCellCallbackArgs): MenuScope {
       ? (args.grid.getCellNode(args.row, args.cell) ?? null)
       : null;
   const cell = colId ? { column: colId, cellValue: el?.textContent?.trim() ?? "", el } : null;
+  const copied = anchor && column ? copyCell(column, anchor) : "";
+  const copy = copied ? { header: String(column!.name ?? colId), text: copied } : null;
   const targets = resolveTargetRows(anchor);
   const filterCtx = anchor ? buildFilterCtx(colId, anchor) : null;
   // Optional "Filter by Notion Page" entries, populated when the right-
@@ -1381,6 +1385,7 @@ function menuScope(args: MenuFromCellCallbackArgs): MenuScope {
   return {
     anchor,
     cell,
+    copy,
     targets,
     filter: filterCtx ? keepExcludeEntries(filterCtx) : [],
     notion: notionCtx ? keepExcludeEntries(notionCtx) : [],
@@ -1425,8 +1430,8 @@ function openFeedback(surface: "grid_cell" | "grid_row", m: MenuScope) {
   feedbackOpen.value = true;
 }
 
-// The right-click menu, ahead of the grid's own entries (copy the cell,
-// the grouping commands). Each entry decides for itself whether the
+// The right-click menu, ahead of the grid's own entries (the grouping
+// commands). Each entry decides for itself whether the
 // cell under the click gives it anything to do.
 const menuItems: (MenuCommandItem | "divider")[] = [
   entry(
@@ -1451,6 +1456,11 @@ const menuItems: (MenuCommandItem | "divider")[] = [
     (m) => appendFilterToQuery(m.notion[1].token),
   ),
   dividerAfter((m) => m.notion.length > 0),
+  entry(
+    "copy-cell",
+    (m) => (m.copy ? `Copy ${m.copy.header}` : null),
+    (m) => void copyToClipboard(m.copy!.text),
+  ),
   entry(
     "copy-uuids",
     (m) => (m.targets.length ? `Copy UUID${plural(m)}` : null),
@@ -1581,6 +1591,9 @@ function gridOptions(): GridOption {
     enableContextMenu: true,
     contextMenu: {
       commandItems: menuItems,
+      // Ours copies the cell as its row's copy does; the grid's copies
+      // the raw field, an object as "[object Object]".
+      hideCopyCellValueCommand: true,
       onBeforeMenuShow: scopes.onBeforeMenuShow,
       onAfterMenuShow: onAfterMenuShowFit,
       // The grid scrolls itself — a page landing above the viewport holds

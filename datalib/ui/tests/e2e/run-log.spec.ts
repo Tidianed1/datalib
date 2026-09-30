@@ -360,6 +360,23 @@ test("the copy key puts the selected lines on the clipboard as TSV", async ({ pa
   expect(lines.slice(1).map((l) => l.split("\t")[5])).toEqual(msgs);
 });
 
+/// Source is drawn from `fields`, so the grid's own Copy, which copies
+/// the raw field, put the whole JSON on the clipboard.
+test("a cell's right-click copies the cell as it reads", async ({ page }) => {
+  const dialog = await openServerLog(page);
+  await scrollLogToStart(dialog);
+  const cell = dialog.locator(`${ROWS}[data-row="0"] .slick-cell[col-id="source"]`);
+  const shown = (await cell.textContent())?.trim() ?? "";
+  expect(shown, "the first line should have a source").not.toBe("");
+  const readClipboard = await stubClipboard(page);
+
+  const copy = menuEntry(page, /^Copy Source$/);
+  await rightClick(cell, copy);
+  await expect(menuEntry(page, /^Copy$/)).toHaveCount(0);
+  await copy.click();
+  await expect.poll(readClipboard, { message: "clipboard after Copy Source" }).toBe(shown);
+});
+
 // Grouping goes through the panel's `__fwRunLogApi.groupBy`, which
 // calls the plugin's own `setDroppedGroups` — the same thing its drop
 // handler calls, and how the Explore grid's spec groups too. The drag

@@ -3,6 +3,7 @@ import {
   actOnRowByUuid,
   contextMenuRowByUuid,
   firstRowUuid,
+  searchMenuItem,
   selectRowByUuid,
   stubClipboard,
   type GridApi,
@@ -94,4 +95,31 @@ test("the copy key puts the selected rows on the clipboard as TSV", async ({ pag
   expect(copied.split("\n")[0]).toBe(headers.map((h) => h.trim()).join("\t"));
   expect(copied).toContain(a.stamp);
   expect(copied).toContain(b.stamp);
+});
+
+/// A Touched cell draws the stamp in the viewer's zone; its copy is the
+/// stamp as the row holds it.
+test("a cell's right-click copies the cell's value", async ({ page }) => {
+  await page.goto("/");
+  await firstRowUuid(page);
+  const row = await page.evaluate(() =>
+    (window as unknown as { __fwGridApi: GridApi }).__fwGridApi
+      .rows()
+      .find((r) => typeof r.touched_at === "string"),
+  );
+  expect(row, "the grid must hold a row with a Touched stamp").toBeTruthy();
+  const readClipboard = await stubClipboard(page);
+
+  await actOnRowByUuid(
+    page,
+    row!.uuid as string,
+    (r) => r.locator('[col-id="touched_at"]').click({ button: "right", timeout: 3_000 }),
+    "touched_at",
+  );
+  await expect(searchMenuItem(page, /^Copy Touched$/)).toBeVisible();
+  await expect(searchMenuItem(page, /^Copy$/)).toHaveCount(0);
+  await searchMenuItem(page, /^Copy Touched$/).click();
+  await expect
+    .poll(readClipboard, { message: "clipboard after Copy Touched" })
+    .toBe(row!.touched_at);
 });

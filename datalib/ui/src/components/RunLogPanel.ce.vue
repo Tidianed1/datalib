@@ -35,6 +35,7 @@ import { keepActiveOnRecord } from "@/grid/activeCell";
 import { redrawChanged } from "@/grid/redrawChanged";
 import { newlyPicked } from "@/grid/selection";
 import { copySelectedRowsOnKey } from "@/grid/copyRows";
+import { copyToClipboard } from "@/clipboard";
 import {
   asking,
   firstWindow,
@@ -854,6 +855,17 @@ const QUERY_KEYS: Partial<Record<keyof RunLogLine, string>> = {
   msg: "msg",
 };
 
+/// The column and the line under the right-click. `onBeforeMenuShow` is
+/// handed the cell's coordinates and nothing else; the command callbacks
+/// get the column and the row as well.
+function underMenu(args: MenuFromCellCallbackArgs) {
+  const column = (args.column ?? args.grid.getColumns()[args.cell ?? -1]) as
+    Column<RunLogLine> | undefined;
+  const line = (args.dataContext ?? args.grid.getDataItem(args.row ?? -1)) as
+    RunLogLine | undefined;
+  return { column, line };
+}
+
 /// The cell under the right-click, as the menu needs it: the query key
 /// for its column, the raw value and the value as shown. Null when the
 /// column has no key or the cell is empty.
@@ -863,12 +875,7 @@ function cellUnderMenu(args: MenuFromCellCallbackArgs): {
   value: string;
   shown: string;
 } | null {
-  // `onBeforeMenuShow` is handed the cell's coordinates and nothing
-  // else; the command callbacks get the column and the row as well.
-  const column = (args.column ?? args.grid.getColumns()[args.cell ?? -1]) as
-    Column<RunLogLine> | undefined;
-  const line = (args.dataContext ?? args.grid.getDataItem(args.row ?? -1)) as
-    RunLogLine | undefined;
+  const { column, line } = underMenu(args);
   const field = column?.field as keyof RunLogLine | undefined;
   const key = field && QUERY_KEYS[field];
   if (!column || !line || !field || !key) return null;
@@ -895,6 +902,15 @@ function menuEntries(args: MenuFromCellCallbackArgs): MenuEntry[] {
         action: () => setQuery(withToken(query.value, filterToken(cell.key, cell.value, true))),
       },
     );
+  }
+  const { column, line } = underMenu(args);
+  const text = column && line && typeof line.seq === "number" ? copyCell(column, line) : "";
+  if (text) {
+    if (entries.length) entries.push({ name: "", separator: true });
+    entries.push({
+      name: `Copy ${String(column!.name ?? column!.id)}`,
+      action: () => void copyToClipboard(text),
+    });
   }
   if (query.value.trim()) {
     if (entries.length) entries.push({ name: "", separator: true });
@@ -972,7 +988,10 @@ function gridOptions(): GridOption {
       // Following the tail scrolls, and a menu open on a line stays
       // open until the reader is done with it.
       hideMenuOnScroll: false,
-      ...menuSlots(4, menuEntries),
+      // Ours copies the cell as a copied line has it; the grid's copies
+      // the raw field, the whole of `fields` for Source.
+      hideCopyCellValueCommand: true,
+      ...menuSlots(6, menuEntries),
     },
   };
 }
