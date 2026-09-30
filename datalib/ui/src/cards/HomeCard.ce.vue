@@ -65,7 +65,8 @@ const segments = computed(() => {
   const shown = bySource.slice(0, 5);
   const rest = total - shown.reduce((n, s) => n + s.bytes, 0);
   const out = shown.map((s, i) => ({ ...s, tone: `seg-${i}` }));
-  if (rest > 0) out.push({ id: "rest", label: "Search index and app data", bytes: rest, tone: "seg-rest" });
+  if (rest > 0)
+    out.push({ id: "rest", label: "Search index and app data", bytes: rest, tone: "seg-rest" });
   return out.map((s) => ({ ...s, pct: (100 * s.bytes) / total }));
 });
 
@@ -251,7 +252,7 @@ onBeforeUnmount(() => {
       <section class="panel" aria-label="Sources">
         <h2 class="panel-head">
           <span class="section-title">Sources</span>
-          <button class="link" @click="open('sourcesView()')">Open Sources</button>
+          <button class="link" @click="open('sourcesNextView()')">Open Sources</button>
         </h2>
         <div class="grid grid-head">
           <span /><span>Name</span><span>Status</span><span>Updated</span
@@ -493,10 +494,9 @@ onBeforeUnmount(() => {
 }
 .grid {
   display: grid;
-  grid-template-columns: calc(var(--datalib-icon-size) + 4px) minmax(0, 1.4fr) minmax(
-      0,
-      1.6fr
-    ) 110px 80px 90px;
+  grid-template-columns:
+    calc(var(--datalib-icon-size) + 4px) minmax(0, 1.4fr) minmax(0, 1.6fr)
+    110px 80px 90px;
   column-gap: 12px;
   align-items: center;
   padding: 0 10px;

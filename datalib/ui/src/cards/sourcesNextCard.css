@@ -1,0 +1,218 @@
+/* The redesigned Sources card (SourcesNextCard.ce.vue). A plain file,
+   handed to the card as a style source after tableGrid.css: the grid
+   draws its cells outside Vue, so a scoped style would never reach
+   them, and everything here is scoped under `.sx` instead. */
+
+.sx {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  font-size: var(--datalib-font-size);
+  color: var(--datalib-fg);
+  background: var(--datalib-bg);
+}
+
+.sx-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px var(--datalib-pad);
+  border-bottom: 1px solid var(--datalib-border-soft);
+}
+.sx-line {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sx-line-ok {
+  color: var(--datalib-muted);
+}
+.sx-line-bad {
+  color: var(--datalib-error-fg);
+}
+
+.sx-btn {
+  flex: 0 0 auto;
+  height: var(--datalib-control-h);
+  padding: 0 10px;
+  font: inherit;
+  font-weight: 600;
+  border: 1px solid var(--datalib-border);
+  border-radius: var(--datalib-radius);
+  background: var(--datalib-bg);
+  color: var(--datalib-fg);
+  cursor: pointer;
+}
+.sx-btn:hover:not(:disabled) {
+  background: var(--datalib-hover);
+}
+.sx-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.sx-btn-primary {
+  border-color: var(--datalib-accent);
+  background: var(--datalib-accent);
+  color: var(--datalib-on-accent);
+}
+.sx-btn-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--datalib-accent) 85%, black);
+}
+.sx-btn-danger {
+  color: var(--datalib-error-fg);
+}
+
+/* A notice about the config, as a strip across the card. */
+.sx-strip {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  padding: 6px var(--datalib-pad);
+  border-bottom: 1px solid var(--datalib-error-border);
+  background: var(--datalib-error-bg);
+  color: var(--datalib-error-fg);
+}
+.sx-strip-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.sx-strip code {
+  font-family: var(--datalib-mono);
+  font-size: var(--datalib-font-size-small);
+}
+.sx-empty {
+  margin: 0;
+  padding: var(--datalib-pad);
+  color: var(--datalib-muted);
+}
+
+/* The table: the grid fills this box and scrolls inside it. */
+.sx-grid {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.sx .grid-pane {
+  --slick-font-size-base: var(--datalib-font-size);
+  --slick-header-font-size: var(--datalib-font-size-small);
+  --slick-header-font-weight: 600;
+  --slick-header-text-color: var(--datalib-faint);
+  --slick-header-background-color: var(--datalib-surface-2);
+  --slick-cell-border-right: none;
+  --slick-header-column-border-right: none;
+  --slick-cell-border-bottom: 1px solid var(--datalib-border-soft);
+}
+.sx .slick-header-column {
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+/* A group's name reads heavier than its steps'; the problem counts
+   after it are pills in the state's colour. */
+.sx .tg-badge {
+  border: none;
+  font-size: var(--datalib-font-size-small);
+  font-weight: 600;
+}
+.sx .tg-chip-error {
+  color: var(--datalib-error-fg);
+  background: var(--datalib-error-bg);
+}
+.sx .tg-chip-warning {
+  color: var(--datalib-warn-fg);
+  background: var(--datalib-warn-bg);
+}
+.sx .tg-chip {
+  border-radius: var(--datalib-radius);
+}
+
+/* Status: a dot in the state's colour, the word, then when. */
+.sx-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+  min-width: 0;
+  white-space: nowrap;
+}
+.sx-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.sx-spinner {
+  width: 10px;
+  height: 10px;
+}
+.sx-when {
+  color: var(--datalib-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sx-tone-ok {
+  color: var(--datalib-ok);
+}
+.sx-tone-ok .sx-dot {
+  background: var(--datalib-ok-dot);
+}
+.sx-tone-run {
+  color: var(--datalib-accent);
+}
+.sx-tone-warn {
+  color: var(--datalib-warn-fg);
+}
+.sx-tone-warn .sx-dot {
+  background: var(--datalib-warn-dot);
+}
+.sx-tone-error {
+  color: var(--datalib-error-fg);
+  font-weight: 600;
+}
+.sx-tone-muted {
+  color: var(--datalib-muted);
+}
+.sx-tone-muted .sx-dot {
+  background: var(--datalib-border);
+}
+
+/* The row's buttons: quiet until the row is under the pointer. */
+.sx .tg-icon-btn {
+  width: 22px;
+  height: 20px;
+  border-radius: var(--datalib-radius);
+}
+.sx .tg-switch {
+  width: 24px;
+  height: 14px;
+  border: none;
+  background: var(--datalib-border);
+}
+.sx .tg-switch-knob {
+  top: 2px;
+  left: 2px;
+  background: #fff;
+}
+.sx .tg-switch[aria-checked="true"] {
+  background: var(--datalib-accent);
+}
+.sx .tg-switch[aria-checked="true"] .tg-switch-knob {
+  left: 12px;
+  background: #fff;
+}
+
+/* The size plot: a quiet track, the number over it. */
+.sx .tg-plot {
+  background: var(--datalib-surface-2);
+  border-radius: var(--datalib-radius);
+}
