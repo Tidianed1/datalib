@@ -461,7 +461,11 @@ cheap.
 
 From those two events the sink derives the pair a reader actually wants:
 `done`, the increments so far, and `queued`, what the announced total
-leaves. `queued` is the "N queued" the Manage screen shows.
+leaves. `queued` is the "N queued" the Manage screen shows. When a
+step ends, however it ended — succeeded, failed, stopped, turned off —
+the sink sets every `queued` series of that step to zero, its own and
+each `queued{from=…}`: a step that is not running has nothing ahead of
+it in this run.
 
 The trap is that `done` accumulates across **everything** the step
 reported, while `total` is simply whichever length it announced last —

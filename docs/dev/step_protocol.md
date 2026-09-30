@@ -143,9 +143,11 @@ far each time it moves; `labels` is optional and splits one name into
 series (`table=messages`). A value that goes down is simply a gauge, and
 the one gauge the UI looks for is **`queued`** — how much work is ahead
 of you right now, which you usually know even when you cannot know the
-total. Absolute values are what make the runner's coalescing lossless:
-it keeps the newest value per series, and a dropped position costs
-nothing where a dropped increment would be lost work.
+total. You need not send a last `queued` of zero: when you end, however
+you end, the runner sets it to zero for you. Absolute values are what
+make the runner's coalescing lossless: it keeps the newest value per
+series, and a dropped position costs nothing where a dropped increment
+would be lost work.
 
 Three names are read by name rather than just drawn. **`items`** is
 how many things your output store holds — messages, readings, events;
