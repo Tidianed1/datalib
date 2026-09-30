@@ -396,6 +396,44 @@ mod read_only {
     }
 
     #[tokio::test]
+    async fn a_per_table_module_is_named_as_its_table_is() {
+        let s = Store::new();
+        let mut w = s.rw().await;
+        ok(&mut w, "CREATE TABLE Mixed_Case (id TEXT PRIMARY KEY)").await;
+        ok(
+            &mut w,
+            "CREATE TABLE \"odd \"\"name\"\"\" (id TEXT PRIMARY KEY)",
+        )
+        .await;
+        ok(&mut w, "INSERT INTO Mixed_Case VALUES ('x'), ('y')").await;
+        ok(&mut w, "INSERT INTO \"odd \"\"name\"\"\" VALUES ('x')").await;
+        commit(&mut w, "load").await;
+        w.close().await.unwrap();
+
+        let mut r = s.ro().await;
+        for sql in [
+            "SELECT COUNT(*) FROM dolt_at_Mixed_Case('HEAD')",
+            "SELECT COUNT(*) FROM dolt_at_mixed_case('HEAD')",
+            "SELECT COUNT(*) FROM \"dolt_at_Mixed_Case\"('HEAD')",
+        ] {
+            assert_eq!(int(&mut r, sql).await, 2, "{sql}");
+        }
+        assert_eq!(
+            int(
+                &mut r,
+                "SELECT COUNT(*) FROM \"dolt_at_odd \"\"name\"\"\"('HEAD')"
+            )
+            .await,
+            1,
+            "a quoted module name reaches a table no bare identifier can name"
+        );
+        err_contains(
+            exec(&mut r, "SELECT COUNT(*) FROM \"dolt_at_Absent\"('HEAD')").await,
+            "no such table: dolt_at_Absent",
+        );
+    }
+
+    #[tokio::test]
     async fn a_held_read_transaction_is_one_commit() {
         let (s, _) = store_with_rows().await;
         let mut r = s.ro().await;

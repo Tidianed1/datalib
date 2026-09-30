@@ -33,6 +33,9 @@ import { KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
 import { menuSlots, type MenuEntry } from "@/grid/menu";
 import { keepActiveOnRecord } from "@/grid/activeCell";
 import { redrawChanged } from "@/grid/redrawChanged";
+import { newlyPicked } from "@/grid/selection";
+import { copySelectedRowsOnKey } from "@/grid/copyRows";
+import { copyToClipboard } from "@/clipboard";
 import {
   asking,
   firstWindow,
@@ -661,6 +664,18 @@ const source: Formatter<RunLogLine> = (_r, _c, _value, _col, line) => {
   return { html: a, toolTip: `${shown} at ${at}`, addClasses: levelClass(line) };
 };
 
+/// What a cell copies as when its line is copied: the whole value where
+/// the cell shortens it, the stamp as stored.
+function copyCell(column: Column<RunLogLine>, line: RunLogLine): string {
+  if (column.id === "source") {
+    const src = sourceOf(line.fields);
+    return src ? sourceLabel(src) : "";
+  }
+  if (column.id === "fields") return fieldsWithoutSource(line.fields);
+  const value = line[column.field as keyof RunLogLine];
+  return value == null ? "" : String(value);
+}
+
 /// What a group row says: the column, its value and how many lines
 /// share it. An element rather than a string for the reason `plain`
 /// gives.
@@ -850,6 +865,17 @@ const QUERY_KEYS: Partial<Record<keyof RunLogLine, string>> = {
   msg: "msg",
 };
 
+/// The column and the line under the right-click. `onBeforeMenuShow` is
+/// handed the cell's coordinates and nothing else; the command callbacks
+/// get the column and the row as well.
+function underMenu(args: MenuFromCellCallbackArgs) {
+  const column = (args.column ?? args.grid.getColumns()[args.cell ?? -1]) as
+    Column<RunLogLine> | undefined;
+  const line = (args.dataContext ?? args.grid.getDataItem(args.row ?? -1)) as
+    RunLogLine | undefined;
+  return { column, line };
+}
+
 /// The cell under the right-click, as the menu needs it: the query key
 /// for its column, the raw value and the value as shown. Null when the
 /// column has no key or the cell is empty.
@@ -859,12 +885,7 @@ function cellUnderMenu(args: MenuFromCellCallbackArgs): {
   value: string;
   shown: string;
 } | null {
-  // `onBeforeMenuShow` is handed the cell's coordinates and nothing
-  // else; the command callbacks get the column and the row as well.
-  const column = (args.column ?? args.grid.getColumns()[args.cell ?? -1]) as
-    Column<RunLogLine> | undefined;
-  const line = (args.dataContext ?? args.grid.getDataItem(args.row ?? -1)) as
-    RunLogLine | undefined;
+  const { column, line } = underMenu(args);
   const field = column?.field as keyof RunLogLine | undefined;
   const key = field && QUERY_KEYS[field];
   if (!column || !line || !field || !key) return null;
@@ -892,6 +913,15 @@ function menuEntries(args: MenuFromCellCallbackArgs): MenuEntry[] {
       },
     );
   }
+  const { column, line } = underMenu(args);
+  const text = column && line && typeof line.seq === "number" ? copyCell(column, line) : "";
+  if (text) {
+    if (entries.length) entries.push({ name: "", separator: true });
+    entries.push({
+      name: `Copy ${String(column!.name ?? column!.id)}`,
+      action: () => void copyToClipboard(text),
+    });
+  }
   if (query.value.trim()) {
     if (entries.length) entries.push({ name: "", separator: true });
     entries.push({ name: "Clear the query", action: () => setQuery("") });
@@ -909,10 +939,11 @@ function gridOptions(): GridOption {
     // Cells and group rows are text (see `plain`), never markup.
     enableHtmlRendering: false,
     // A row selects on click and the arrow keys move the selection;
-    // the line opens in full beside the card either way.
+    // the line opens in full beside the card either way. Several select
+    // with a modifier, for ⌘C to copy as TSV.
     enableCellNavigation: true,
     enableSelection: true,
-    multiSelect: false,
+    multiSelect: true,
     selectionOptions: { selectActiveRow: true },
     enableTextSelectionOnCells: true,
     enableAutoTooltip: false,
@@ -968,7 +999,10 @@ function gridOptions(): GridOption {
       // Following the tail scrolls, and a menu open on a line stays
       // open until the reader is done with it.
       hideMenuOnScroll: false,
-      ...menuSlots(4, menuEntries),
+      // Ours copies the cell as a copied line has it; the grid's copies
+      // the raw field, the whole of `fields` for Source.
+      hideCopyCellValueCommand: true,
+      ...menuSlots(6, menuEntries),
     },
   };
 }
@@ -992,17 +1026,21 @@ function createGrid(first: RunLogLine[]) {
   bundle = b;
   b.slickGrid.onScroll.subscribe(onScroll);
   // A new line keeps the selection on its line, and the grid reports
-  // that as a change of index: only a different line is announced.
-  let selectedSeq: number | null = null;
-  b.slickGrid.onSelectedRowsChanged.subscribe((_e, args) => {
-    const row = args.rows[args.rows.length - 1];
-    if (row == null) return;
+  // that as a change of index: only a line newly picked is announced.
+  const lineAt = (row: number): RunLogLine | null => {
     const line = b.dataView.getItem(row) as RunLogLine | undefined;
-    // A group row selects nothing.
-    if (!line || typeof line.seq !== "number" || line.seq === selectedSeq) return;
-    selectedSeq = line.seq;
-    emit("line-selected", line.seq);
+    // A group row is no line.
+    return line && typeof line.seq === "number" ? line : null;
+  };
+  let selectedSeqs = new Set<string>();
+  b.slickGrid.onSelectedRowsChanged.subscribe((_e, args) => {
+    const now = args.rows.map(lineAt).filter((l): l is RunLogLine => l != null);
+    const { picked, selected } = newlyPicked(selectedSeqs, now, (l) => String(l.seq));
+    selectedSeqs = selected;
+    const line = picked[picked.length - 1];
+    if (line) emit("line-selected", line.seq);
   });
+  copySelectedRowsOnKey(b.slickGrid, lineAt, copyCell);
   // What the bar's drop does, without the mouse, for the e2e tests:
   // a drag dispatched by hand dies inside SortableJS under load, and
   // the grid card exposes the same thing as `__fwGridApi.groupBy`.

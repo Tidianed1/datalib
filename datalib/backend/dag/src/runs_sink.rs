@@ -6,7 +6,7 @@
 //! wire carries deltas, the store carries positions, and coalescing
 //! deltas would lose work.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, Weak};
 
 use datalib_runs::store::{now_split, split_stamp};
@@ -32,6 +32,9 @@ struct Acc {
     done: u64,
     total: Option<u64>,
     checkpoints: u64,
+    /// The labels of every `queued` series written for the step, so its
+    /// finish can empty them all.
+    queued: BTreeSet<String>,
 }
 
 /// An [`EventSink`] that keeps the run store current.
@@ -51,6 +54,10 @@ fn now() -> (String, Option<String>) {
 /// checkpoint sealed, why the step ended, a hint — so a filter on
 /// target finds the runner's lines the way it finds a crate's.
 const RUNNER_TARGET: &str = "datalib_dag::runner";
+
+/// The gauge of work still ahead of a step: its own, and one per
+/// producer (`queued{from=<producer>}`) that the scheduler keeps.
+const QUEUED: &str = "queued";
 
 impl RunStoreSink {
     /// Returns `None` when the store could not be opened. The store is
@@ -100,11 +107,21 @@ impl RunStoreSink {
     }
 
     fn metric(&self, step: &StepId, name: &str, labels: &BTreeMap<String, String>, value: i64) {
+        let labels = canonical_labels(labels);
+        if name == QUEUED {
+            let mut steps = self.steps.lock().expect("run store sink mutex");
+            let acc = steps.entry(step.clone()).or_default();
+            acc.queued.insert(labels.clone());
+        }
+        self.write_metric(step, name, labels, value);
+    }
+
+    fn write_metric(&self, step: &StepId, name: &str, labels: String, value: i64) {
         let (updated_at_utc, tz_offset) = now();
         self.writer.metric(MetricRow {
             step: step.clone(),
             name: name.to_string(),
-            labels: canonical_labels(labels),
+            labels,
             value,
             updated_at_utc,
             tz_offset,
@@ -153,7 +170,7 @@ impl RunStoreSink {
         let none = BTreeMap::new();
         self.metric(step, "done", &none, done as i64);
         if let Some(total) = total {
-            self.metric(step, "queued", &none, total.saturating_sub(done) as i64);
+            self.metric(step, QUEUED, &none, total.saturating_sub(done) as i64);
         }
     }
 }
@@ -193,6 +210,7 @@ impl EventSink for RunStoreSink {
                 self.writer.process(process.clone());
                 self.update(step, |a| {
                     *a = Acc {
+                        queued: std::mem::take(&mut a.queued),
                         row: StepRunRow {
                             state: LiveState::Running.as_str().into(),
                             attempt: *attempt as i64,
@@ -218,7 +236,9 @@ impl EventSink for RunStoreSink {
             } => {
                 let finished_at_utc = now().0;
                 let mut ended = None;
+                let mut queued = BTreeSet::new();
                 self.update(step, |a| {
+                    queued = std::mem::take(&mut a.queued);
                     a.row.state = status.as_str().into();
                     a.row.finished_at_utc = Some(finished_at_utc.clone());
                     a.row.error = error.clone();
@@ -233,6 +253,10 @@ impl EventSink for RunStoreSink {
                 });
                 if let Some(p) = ended {
                     self.writer.process(p);
+                }
+                // Ended is ended, however: nothing is ahead of it now.
+                for labels in queued {
+                    self.write_metric(step, QUEUED, labels, 0);
                 }
                 if let Some(error) = error {
                     let level = if *status == RunState::Stopped {
@@ -682,6 +706,53 @@ mod tests {
             "1 + 3 + 2, not the last delta"
         );
         assert_eq!(metric_value(&snap, "slack/raw", "queued"), Some(3));
+    }
+
+    /// A step that has ended has nothing ahead of it, however it ended:
+    /// its own `queued` and every `queued{from=…}` go to zero, the one
+    /// published before it started included.
+    #[tokio::test]
+    async fn every_ending_empties_the_queue() {
+        for status in [RunState::Succeeded, RunState::Failed, RunState::Stopped] {
+            let (_td, snap) = run(&[
+                Event::Metric {
+                    step: "slack/raw".into(),
+                    name: "queued".into(),
+                    labels: BTreeMap::from([("from".to_string(), "slack/list".to_string())]),
+                    value: 5,
+                },
+                Event::StepStart {
+                    step: "slack/raw".into(),
+                    attempt: 1,
+                    builtin: true,
+                },
+                Event::ProgressLength {
+                    step: "slack/raw".into(),
+                    total: Some(9),
+                },
+                inc("slack/raw", 3),
+                Event::StepFinish {
+                    step: "slack/raw".into(),
+                    status,
+                    error: None,
+                    exit_code: None,
+                    signal: None,
+                },
+            ])
+            .await;
+            let queued: BTreeMap<String, i64> = snap
+                .metrics
+                .iter()
+                .filter(|m| m.name == "queued")
+                .map(|m| (m.labels.clone(), m.value))
+                .collect();
+            assert_eq!(
+                queued,
+                BTreeMap::from([(String::new(), 0), ("from=slack/list".to_string(), 0)]),
+                "{status:?}"
+            );
+            assert_eq!(metric_value(&snap, "slack/raw", "done"), Some(3));
+        }
     }
 
     /// A retry re-runs the step from the beginning, so the count has to
