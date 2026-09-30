@@ -1,0 +1,46 @@
+# The cargo-about binary for the host, copied out of the pinned release
+# archive MODULE.bazel fetches. `scripts/third_party_notices.sh` builds
+# this and runs it from bazel-bin; it cannot run as a build action
+# because it needs cargo and the network to fetch crate sources.
+#
+# `manual`: only the platforms the release ships have a binary, so
+# `bazelisk build //...` on any other host must not try to pick one.
+
+load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
+
+config_setting(
+    name = "darwin_aarch64",
+    constraint_values = [
+        "@platforms//os:macos",
+        "@platforms//cpu:aarch64",
+    ],
+)
+
+config_setting(
+    name = "linux_x86_64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+config_setting(
+    name = "linux_aarch64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:aarch64",
+    ],
+)
+
+copy_file(
+    name = "cargo-about",
+    src = select({
+        ":darwin_aarch64": "@cargo_about_aarch64_apple_darwin//:cargo-about",
+        ":linux_x86_64": "@cargo_about_x86_64_unknown_linux_musl//:cargo-about",
+        ":linux_aarch64": "@cargo_about_aarch64_unknown_linux_musl//:cargo-about",
+    }),
+    out = "cargo-about",
+    is_executable = True,
+    tags = ["manual"],
+    visibility = ["//visibility:public"],
+)
