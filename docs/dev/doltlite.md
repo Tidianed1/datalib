@@ -494,9 +494,11 @@ and `doc/doltlite/refs.md` in the doltlite repo at `v0.50.13`.
 | a table committed later | readable by name | at the next transaction | open the newer commit |
 | what holds it | `pin.rs` tests | `a_held_read_transaction_is_a_snapshot_while_the_writer_seals` | `detached_readers_are_snapshots_while_the_writer_seals` |
 
-The tree reads through the first (`pin.rs`'s `pinned_<table>` views)
-and, in the search applet, the second. The third works on our
-`.doltlite_db` names from 0.50.13: three detached readers beside 500
+Every reader in the tree uses the third (`doltlite_raw::open_reader`),
+except the search applet, which holds a transaction; `dolt_at_` is for
+reading one table at another commit on a connection already open (the
+history reader). The detached open works on our `.doltlite_db` names
+from 0.50.13 and runs every query from 0.50.14: three detached readers beside 500
 flat-out seals saw 0 errors, each open read one sealed commit, opens
 took ~1–10 ms even while the writer held a transaction, and the file
 came out byte-identical to the writer's alone.
@@ -513,13 +515,10 @@ came out byte-identical to the writer's alone.
   pinned even if a peer moves or deletes the ref. `dolt_diff_<table>`,
   `dolt_log()` and `dolt_hashof('HEAD')` work there.
 - **A missing revision fails the open**: `branch or revision "x" not found`.
-- **A detached open refuses any query that needs an ephemeral table** —
-  an `IN` list or subquery, `DISTINCT` — with `attempt to write a
-  readonly database` (dolthub/doltlite#3392, 0.50.13). Joins, `UNION`,
-  `ORDER BY` and `GROUP BY` work, and a read-only open of a *branch*
-  runs all of it.
-  `revision_by_path::a_detached_open_refuses_a_query_that_needs_an_ephemeral_table`
-  holds it, so a fix shows up as that test failing.
+- **Every query runs on a detached open**, including those that need a
+  temporary table (`IN (…)`, `DISTINCT`); through 0.50.13 those were
+  refused as writes (dolthub/doltlite#3392).
+  `revision_by_path::a_detached_open_runs_queries_that_need_an_ephemeral_table`.
 
 Doltlite decides where the file name ends by looking for the longest
 prefix that is a doltlite store. Before 0.50.13 it looked only at
@@ -706,6 +705,7 @@ What each pin was taken for, newest first:
 
 | version | what it brought us |
 |---|---|
+| 0.50.14 | a detached open runs `IN` and `DISTINCT` (dolthub/doltlite#3392), so readers open `<store>@<commit>` directly |
 | 0.50.13 | a revision opened by path works on any file name (dolthub/doltlite#3231); an unindexed filter plans as scan + sort |
 | 0.50.12 | per-table modules registered on first use; `dolt_at_` and `dolt_history_` seek a text primary key; a ref-moving reader no longer refuses the writer's seals |
 | 0.50.10 | a read-only `dolt_status` no longer fails a writer's commit (dolthub/doltlite#2832, our #400) |

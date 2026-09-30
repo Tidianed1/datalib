@@ -189,7 +189,7 @@ pub async fn load_photo_blobs(db: &RawDb) -> Result<std::collections::HashMap<St
 
     // owner_id → blake3 for the rows that actually have bytes.
     // Audited: the only interpolation is a table name the caller chose --
-    // a literal, or that literal behind `pinned_`.
+    // a literal.
     let edges = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT id, owner_id, blake3 FROM {} WHERE blake3 IS NOT NULL",
         CONTACT_PHOTOS_TABLE

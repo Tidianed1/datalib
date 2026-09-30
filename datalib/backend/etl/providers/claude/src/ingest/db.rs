@@ -278,7 +278,7 @@ pub async fn load_conversations_from(pool: &SqlitePool) -> Result<Vec<LoadedConv
 
 pub async fn first_user_uuid_from(pool: &SqlitePool) -> Result<Option<String>> {
     // Audited: the only interpolation is a table name the caller chose --
-    // a literal, or that literal behind `pinned_`.
+    // a literal.
     let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT id FROM {} ORDER BY id LIMIT 1",
         "users"

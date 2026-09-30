@@ -139,10 +139,9 @@ async fn parse_doltlite_async(
     source_id: &str,
     range: RawRange<'_>,
 ) -> Result<ParsedSlack> {
-    // Pinned at open — at the driver's commit, else HEAD — with the views
-    // installed before anything reads. No commit means nothing has been
-    // committed here to render: emptiness, not a reason to read the
-    // working set.
+    // Opened at the driver's commit, else HEAD. No commit means nothing
+    // has been committed here to render: emptiness, not a reason to read
+    // the working set.
     let Some(reader) = datalib_etl::doltlite_raw::open_reader(db_path, range.pin)
         .await
         .with_context(|| format!("open slack doltlite for render {}", db_path.display()))?
@@ -163,9 +162,8 @@ async fn parse_doltlite_async(
         None
     };
 
-    // Pin before anything reads this store. The diff below and the rows
-    // behind it have to name one commit, and the `pinned_<table>` views must
-    // already exist when the diff runs — its bucket query joins live tables.
+    // Open at one commit before anything reads this store: the diff below
+    // and the rows behind it have to name that commit.
     // No commit at all means nothing has been committed here to render, which
     // is emptiness, not a reason to read the working set.
 

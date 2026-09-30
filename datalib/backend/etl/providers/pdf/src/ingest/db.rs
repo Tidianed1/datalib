@@ -106,7 +106,7 @@ impl RawDb {
     /// absolute path under that root.
     pub async fn scan_root(&self) -> Result<Option<(String, PathBuf)>> {
         // Audited: the only interpolation is a table name this handle chose
-        // -- a literal, or that literal behind `pinned_`.
+        // -- a literal.
         let row = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT id, abs_root FROM {} ORDER BY id LIMIT 1",
             "pdf_scan_meta"
@@ -141,7 +141,7 @@ impl RawDb {
 
     pub async fn convertible_documents(&self, root: &Path) -> Result<Vec<RenderTarget>> {
         // Audited: the only interpolations are table names this handle
-        // chose -- literals, or those literals behind `pinned_`. The aliases
+        // chose -- literals. The aliases
         // keep the qualified column references working, since a pinned read
         // renames the table out from under them.
         let rows = sqlx::query(sqlx::AssertSqlSafe(format!(

@@ -271,34 +271,29 @@ commit later.
 
 ### A reader opens read-only and pinned
 
-`open_reader(path, commit)` is the read path: read-only, so "a reader
-must not write" is the engine's rule (`attempt to write a readonly
-database`); never creates the file; takes no lock; and pins at open —
-at the commit the caller names (the render driver's) or at HEAD — with
-the `pinned_<table>` views installed, so every content read through
-[`Reads::At`] names one commit however long the pass runs. It hands
-back a `Reader`, or `None` when the store has nothing committed, which
-the caller must decide about (a consumer does nothing that pass) rather
-than fall through to the working set. **A file with no tables in it yet
-counts as nothing committed.** That is the shape an owner's `open`
-leaves behind between creating the file and its first `CREATE TABLE`,
-and under streaming a consumer opens there often enough to matter: no
-pinned view gets created, so without this the consumer's first read
-would fail with `no such table: pinned_<t>` over a producer doing
-nothing wrong. The `pin.rs` `Pin` refuses `HEAD` by name, and the
-shared loaders take a mandatory `Reads`, so a call site has to say
-whose store it is reading.
+`open_reader(path, commit)` is the read path. It resolves the commit —
+the one the caller names (the render driver's) or HEAD — and opens
+`<store>@<hash>` read-only: a detached connection on which every plain
+table name reads that commit and nothing a writer has in flight, the
+schema is that commit's, and "a reader must not write" is the engine's
+rule (`attempt to write a readonly database`). It never creates the file
+and takes no lock. It hands back a `Reader`, or `None` when the store
+has nothing readable committed, which the caller must decide about (a
+consumer does nothing that pass) rather than fall through to the
+working set. **A commit holding no table counts as nothing committed.**
+That is the shape an owner's `open` leaves behind between creating the
+file and its first commit, and under streaming a consumer opens there
+often enough to matter. The `pin.rs` `Pin` refuses `HEAD` by name.
 
-The `pinned_<table>` views read through `dolt_at_<table>`, one of
+This is the detached open, one of
 [three ways to read one commit](/docs/dev/doltlite.md#three-ways-to-read-one-commit).
 The one long-lived reader, the search applet, holds a read transaction
-instead, because it needs the secondary indexes `dolt_at_` cannot use
-(`DoltRepo::pinned`). A read-only open of `<file>@<hash>` is the third
-way; nothing in the tree uses it yet.
+instead (`DoltRepo::pinned`), and moves to the newest `main` with
+`COMMIT; BEGIN` rather than reopening.
 
 **The allowlist.** The two-process test measures what a reader may do
 beside a live writer — `dolt_hashof`, `sqlite_master`,
-`CREATE TEMP VIEW`, reads through `dolt_at_` modules and views,
+`CREATE TEMP VIEW`, reads through `dolt_at_` modules,
 `dolt_diff_*`, `dolt_log()`, `dolt_commit_ancestors`,
 `dolt_diff_summary`, `dolt_diff_stat`, `dolt_status`, a `COUNT(*)` per
 table, `BEGIN`/`COMMIT` around plain reads (the held read transaction),
@@ -317,8 +312,7 @@ has two engine facts to respect, both in
 [what a read-only connection may do](/docs/dev/doltlite.md#what-a-read-only-connection-may-do):
 a bare `dolt_hashof('HEAD')` answers from the session's last view, so
 `datalib_pin::head` reads `sqlite_master` first; and `pragma_module_list`
-is no census of what a commit holds, so `pin::install_views` asks by
-reading through each table's module.
+is no census of what a commit holds, so ask by reading.
 
 Open the store once per pass — a stage that needs to load rows, run a
 `dolt_diff` scan and probe for ids does all three on one pool — and
@@ -329,7 +323,6 @@ checked-out connection from a task spawned at drop, and a per-call
 next open a second handle on the same file (`indexed_markdown::blocking`
 keeps one process-wide runtime for the no-runtime case).
 
-[`Reads::At`]: src/pin.rs
 
 ## What a write costs: the transaction is the unit, and the key decides the size
 
@@ -507,11 +500,8 @@ The bundle is the common vocabulary at both ends. Download adds bytes as they
 arrive and drains the bundle at end of bucket; parse loads every document's
 bundle at once with `BlobBundle::load_many`; render then consumes an
 already-loaded bag of bytes — no SQL, no `block_in_place`, no dyn blob reader.
-Parse reads the edge table through a `pinned_*` view, which seeks only a
-whole-primary-key equality
-([query plans](/docs/dev/doltlite.md#query-plans-and-indexes)); the
-edge table is looked up by its owning id, so a query per document would
-be a full scan per document.
+Parse reads the edge table in one query for every document it loads,
+not one per document.
 
 **The CAS is plain SQLite, not doltlite**, created through the
 `doltlite_engine=sqlite` URI parameter like the run store. A

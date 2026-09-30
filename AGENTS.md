@@ -356,11 +356,11 @@ The rules, none optional. How our code enforces them is in
 - **A reader opens read-only and reads one commit**, one of
   [three ways](docs/dev/doltlite.md#three-ways-to-read-one-commit):
   `dolt_at_<t>('<hash>')`, a held read transaction, or a detached
-  read-only open of `<file>@<hash>`. The tree uses the first two:
-  render and `grid_index` read `open_reader`'s `pinned_<t>` views over
-  `dolt_at_`; the search applet, which needs secondary indexes, holds a
-  transaction (`DoltRepo::pinned`). A process that *moves a ref*, even
-  on its own branch, is a writer.
+  read-only open of `<file>@<hash>`. Render and `grid_index` use the
+  last (`doltlite_raw::open_reader`), so their queries name the tables
+  themselves; the search applet holds a transaction
+  (`DoltRepo::pinned`). A process that *moves a ref*, even on its own
+  branch, is a writer.
 - **A statement a reader adds is presumed guilty until
   `doltlite_two_process_test` has run with it.** Looking like a read is
   not enough; `etl/README.md` has the allowlist.

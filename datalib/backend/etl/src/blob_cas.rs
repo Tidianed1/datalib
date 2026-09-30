@@ -510,10 +510,8 @@ impl BlobBundle {
 
     // ── parse side ───────────────────────────────────────────────────
 
-    /// A bundle for each key that names at least one ref. Every key's refs
-    /// go into one query: the edge table is read through a `pinned_*` view,
-    /// which uses no secondary index, so a query per bucket is a full scan
-    /// per bucket.
+    /// A bundle for each key that names at least one ref, from one query
+    /// over every key's refs rather than one per key.
     pub async fn load_many<K, R>(
         refs_pool: &SqlitePool,
         cas_pool: &SqlitePool,
@@ -761,8 +759,7 @@ pub trait CasEdgeRow: crate::bulk::BulkUpsertable {
     }
 
     /// Index on `(ref_column, blake3)` — supports the download's skip-check
-    /// "have we ever stored this ref's bytes" without a full scan. Render
-    /// reads the table through a `pinned_*` view, which cannot use it.
+    /// "have we ever stored this ref's bytes" without a full scan.
     fn by_ref_index_ddl() -> String {
         format!(
             "CREATE INDEX IF NOT EXISTS {table}_by_{ref_c} ON {table}({ref_c}, blake3)",

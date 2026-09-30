@@ -193,8 +193,7 @@ async fn read(args: &Args) -> Result<Value> {
 }
 
 /// What `grid_index` does to a render store on every streaming pass, in a
-/// loop: open read-only, pin HEAD, install the views, diff, read through the
-/// views, close. Every step is a read, so none of it should cost a writer
+/// loop: open read-only at HEAD, diff, read, close. Every step is a read, so none of it should cost a writer
 /// anything -- this is the role that finds out. `--dolt-status` adds a
 /// `SELECT * FROM dolt_status` to every round.
 async fn churn(args: &Args) -> Result<Value> {

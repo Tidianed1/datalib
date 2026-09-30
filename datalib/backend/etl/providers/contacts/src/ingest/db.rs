@@ -27,10 +27,8 @@ pub struct RawDb {
     /// handle rather than from a path at the call site, so there is one
     /// opener per store and `close_all` reaches it.
     cas: Option<BlobCas>,
-    /// The commit every content read resolves against, or `None` for the
-    /// download step reading back what it just wrote. Set once, at open:
-    /// a pin belongs to a connection, not to a call, because the
-    /// `pinned_<table>` views it installs live on that connection.
+    /// The commit a reader's connection reads, or `None` for the download
+    /// step reading back what it just wrote. Set once, at open.
     pin: Option<datalib_etl::pin::Pin>,
 }
 
@@ -378,7 +376,7 @@ impl RawDb {
     /// [`super::vcf_dir::fetch`].
     pub async fn load_all_for_render_and_index_md(&self) -> Result<Vec<LoadedRawContact>> {
         // Audited: the only interpolations are table names this handle
-        // chose -- literals, or those literals behind `pinned_`. The
+        // chose -- literals. The
         // aliases keep the qualified column references working, since a
         // pinned read renames the table out from under them.
         let rows = sqlx::query(sqlx::AssertSqlSafe(format!(

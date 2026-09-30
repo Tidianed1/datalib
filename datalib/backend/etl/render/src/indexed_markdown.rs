@@ -1005,7 +1005,7 @@ impl IndexedMarkdownStore {
         only: Option<&HashSet<String>>,
         pin: &datalib_etl::pin::Pin,
     ) -> Result<Vec<RenderedMarkdown>> {
-        let _ = pin; // the views were installed at `open_for_reading`
+        let _ = pin; // the reader was opened at it, in `open_for_reading`
         blocking(async {
             let mds: Vec<datalib_schema::markdowns::MarkdownRow> =
                 sqlx::query_as("SELECT * FROM markdowns ORDER BY markdown_uuid")

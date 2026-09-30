@@ -347,7 +347,7 @@ impl RawDb {
     /// `(block_id, anchor text)` for every block a comment hangs off.
     pub async fn load_comment_anchors(&self) -> Result<HashMap<String, String>> {
         // Audited: the only interpolation is a table name this handle
-        // chose -- a literal, or that literal behind `pinned_`.
+        // chose -- a literal.
         let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT id, plain_text FROM {} WHERE plain_text IS NOT NULL AND plain_text <> ''",
             "comment_anchors"

@@ -155,10 +155,9 @@ async fn parse_async(
     period: Period,
     range: RawRange<'_>,
 ) -> Result<ParsedBeeper> {
-    // Pinned at open — at the driver's commit, else HEAD — with the views
-    // installed before anything reads. No commit means nothing has been
-    // committed here to render: emptiness, not a reason to read the
-    // working set.
+    // Opened at the driver's commit, else HEAD. No commit means nothing
+    // has been committed here to render: emptiness, not a reason to read
+    // the working set.
     let Some(reader) = datalib_etl::doltlite_raw::open_reader(db_path, range.pin)
         .await
         .with_context(|| format!("open raw doltlite for render at {}", db_path.display()))?

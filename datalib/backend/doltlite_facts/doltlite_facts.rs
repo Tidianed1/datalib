@@ -515,43 +515,30 @@ mod revision_by_path {
         }
     }
 
-    /// A doltlite bug (dolthub/doltlite#3392), asserted so we notice when it is fixed: a query that
-    /// needs an ephemeral table — an `IN` list or subquery, `DISTINCT` —
-    /// is refused on a detached open as if it wrote the store. A
-    /// read-only open of a branch runs the same queries. When this fails,
-    /// readers can open `<store>@<hash>` directly instead of `pin.rs`.
+    /// Every reader opens this way, and reader queries lean on `IN (…)`,
+    /// `IN (SELECT value FROM json_each(?))` and `DISTINCT`. Through 0.50.13
+    /// a detached open refused all three as writes (dolthub/doltlite#3392).
     #[tokio::test]
-    async fn a_detached_open_refuses_a_query_that_needs_an_ephemeral_table() {
+    async fn a_detached_open_runs_queries_that_need_an_ephemeral_table() {
         let (s, commit) = store_with_rows().await;
         let mut d = connect(&s.at(&commit), true, Duration::from_secs(5)).await;
-        for sql in [
-            "SELECT COUNT(*) FROM t WHERE id IN ('a', 'b')",
-            "SELECT COUNT(*) FROM t WHERE id IN (SELECT value FROM json_each('[\"a\"]'))",
-            "SELECT DISTINCT v FROM t",
-        ] {
-            err_contains(
-                exec(&mut d, sql).await,
-                "attempt to write a readonly database",
-            );
-        }
-        let joined = "SELECT COUNT(*) FROM t JOIN json_each('[\"a\", \"b\"]') j ON j.value = t.id";
         assert_eq!(
-            int(&mut d, joined).await,
-            2,
-            "a join needs no ephemeral table"
-        );
-
-        let mut w = s.rw().await;
-        ok(
-            &mut w,
-            &format!("SELECT dolt_branch('at_rows', '{commit}')"),
-        )
-        .await;
-        let mut b = connect(&s.at("at_rows"), true, Duration::from_secs(5)).await;
-        assert_eq!(
-            int(&mut b, "SELECT COUNT(*) FROM t WHERE id IN ('a', 'b')").await,
+            int(&mut d, "SELECT COUNT(*) FROM t WHERE id IN ('a', 'b')").await,
             2
         );
+        assert_eq!(
+            int(
+                &mut d,
+                "SELECT COUNT(*) FROM t WHERE id IN (SELECT value FROM json_each('[\"a\"]'))"
+            )
+            .await,
+            1
+        );
+        assert_eq!(
+            texts(&mut d, "SELECT DISTINCT CAST(v AS TEXT) FROM t").await,
+            vec!["1", "2"]
+        );
+        assert_eq!(int(&mut d, "SELECT COUNT(DISTINCT v) FROM t").await, 2);
     }
 
     #[tokio::test]

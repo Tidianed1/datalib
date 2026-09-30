@@ -2237,11 +2237,9 @@ pub async fn scan_buckets(
     pin: &crate::pin::Pin,
     spec: &DiffScanSpec<'_>,
 ) -> Result<DiffScan> {
-    // The caller pinned first and hands us the commit, rather than us sampling
-    // HEAD here. That ordering is load-bearing twice over: the diff and the
-    // content reads that follow it name one commit by construction, and the
-    // `pinned_<table>` views already exist by the time `bucket_query` runs —
-    // which it needs, because those queries join live tables against the diff.
+    // The caller opened its reader at a commit and hands us that commit,
+    // rather than us sampling HEAD here, so the diff and the content reads
+    // that follow it name one commit by construction.
     let to_ref = pin.commit().to_string();
     let new_head = Some(to_ref.clone());
 
