@@ -1,7 +1,8 @@
 // Builtin view: the new-card gallery — the way every new card starts,
 // in both dev and non-dev mode. It lists every parameter-less
-// component with a short description: a hardcoded builtin list first
-// (sourcesView leading, since it's the app's front door), then every
+// component with a short description and its icon: the builtins
+// cards/catalog.ts offers first (sourcesView leading, since it's the
+// app's front door), then every
 // titled component in the frontend store, then the
 // "build a component with an agent" entry (handoff.ts),
 // which mints a fresh component and walks the user through handing it
@@ -13,83 +14,44 @@ import type { CardRender } from "../types";
 import { ensureFrontend, frontendManifest, gallerySource } from "../frontendRegistry";
 import { createComponentWithAgent } from "@/handoff";
 import { devMode } from "@/devMode";
+import { galleryBuiltins, type CardMeta } from "../catalog";
+import { resolveIcon } from "../icons";
 
-type GalleryEntry = {
+type GalleryEntry = CardMeta & {
   // Card source the entry expands to, e.g. `gridView()`.
   source: string;
-  title: string;
-  description: string;
 };
 
-// The builtin gallery, in display order.
-const BUILTIN_GALLERY: GalleryEntry[] = [
-  {
-    source: "sourcesView()",
-    title: "Manage data sources",
-    description: "Configure, view, and execute data ingestion steps and data stores.",
-  },
-  {
-    source: "gridView()",
-    title: "Unified Search",
-    description: "Search and browse everything in your library.",
-  },
-  {
-    source: "umapView()",
-    title: "Embedding map",
-    description:
-      "Every document placed by what it says, so like sits near like. Filter, colour by type or source, hover to preview.",
-  },
-  {
-    source: "logView()",
-    title: "Logs",
-    description:
-      "Every line the runner, the steps and the server wrote; pick a run or a process, narrow with the query bar.",
-  },
-  {
-    source: "configView()",
-    title: "config.toml",
-    description: "The config file itself, edited directly.",
-  },
-  {
-    source: "documentPickerView()",
-    title: "Markdown Document",
-    description: "View rendered markdown for any document in your library.",
-  },
-  {
-    source: "dactalView()",
-    title: "DACTAL explorer",
-    description: "Query and pivot your data with the DACTAL table UI.",
-  },
-  {
-    source: "perseusView()",
-    title: "Perseus corpus",
-    description: "Browse the Perseus editions by book, chapter, and section.",
-  },
-  {
-    source: "sourceDagView()",
-    title: "Pipeline DAG",
-    description: "See your sources' step graph and watch syncs flow through it live.",
-  },
-  {
-    source: 'tableView({ url: "/api/manage/rows" })',
-    title: "Table",
-    description: "Any endpoint that declares its columns, drawn as a typed table.",
-  },
-  {
-    source: "aliasView()",
-    title: "Component library",
-    description: "List the custom components stored on this instance.",
-  },
-];
+function iconElement(token: string | null): Element {
+  const icon = resolveIcon(token);
+  if (icon.kind === "image") {
+    const img = document.createElement("img");
+    img.className = "gv-icon";
+    img.src = icon.url;
+    img.alt = "";
+    return img;
+  }
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", "gv-icon");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("fill", "currentColor");
+  path.setAttribute("d", icon.path);
+  svg.appendChild(path);
+  return svg;
+}
 
 export function galleryView(): CardRender {
   return (root, ctx) => {
     ctx.setTitle("New card");
     const style = document.createElement("style");
     style.textContent = `
-      .gv { font: 13px/1.5 system-ui, -apple-system, sans-serif; color: var(--datalib-fg, inherit); }
+      .gv { font: var(--datalib-font-size, 13px)/1.5 var(--datalib-font, system-ui, sans-serif); color: var(--datalib-fg, inherit); }
       .gv-head { padding: 8px 12px; opacity: .6; border-bottom: 1px solid var(--datalib-border, #8884); }
-      .gv-row { padding: 8px 12px; cursor: pointer; border-bottom: 1px solid var(--datalib-border, #8882); }
+      .gv-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 12px; cursor: pointer; border-bottom: 1px solid var(--datalib-border, #8882); }
+      .gv-icon { flex: 0 0 auto; width: 18px; height: 18px; margin-top: 1px; color: var(--datalib-accent); }
+      .gv-text { flex: 1 1 auto; min-width: 0; }
       .gv-row:hover { background: var(--datalib-hover, rgba(127,127,127,.12)); }
       /* Title line: the dev-mode source shares the title's line while
          it fits (baseline-aligned flex) and wraps under it when the
@@ -132,15 +94,25 @@ export function galleryView(): CardRender {
             source: gallerySource(ns, name, meta.component_args),
             title: meta.title,
             description: meta.description,
+            icon: meta.icon ?? null,
           });
         }
       }
 
-      function addRow(title: string, description: string, src: string | null, onPick: () => void) {
+      function addRow(
+        title: string,
+        description: string,
+        icon: string | null,
+        src: string | null,
+        onPick: () => void,
+      ) {
         const row = document.createElement("div");
         row.className = "gv-row";
         row.addEventListener("click", onPick);
 
+        row.appendChild(iconElement(icon));
+        const text = document.createElement("div");
+        text.className = "gv-text";
         const headLine = document.createElement("div");
         headLine.className = "gv-head-line";
         const titleEl = document.createElement("span");
@@ -159,12 +131,13 @@ export function galleryView(): CardRender {
         const desc = document.createElement("div");
         desc.className = "gv-desc";
         desc.textContent = description;
-        row.append(headLine, desc);
+        text.append(headLine, desc);
+        row.appendChild(text);
         wrap.appendChild(row);
       }
 
-      for (const entry of [...BUILTIN_GALLERY, ...custom]) {
-        addRow(entry.title, entry.description, entry.source, () =>
+      for (const entry of [...galleryBuiltins(), ...custom]) {
+        addRow(entry.title, entry.description, entry.icon, entry.source, () =>
           ctx.host.setSource(entry.source),
         );
       }
@@ -172,8 +145,9 @@ export function galleryView(): CardRender {
       // for when nothing above fits. No source line in dev mode — the
       // component name is minted on pick.
       addRow(
-        "🤖 New component, built by an agent",
+        "New component, built by an agent",
         "Create a fresh component and hand it to a coding agent to build.",
+        "component",
         null,
         () => void createComponentWithAgent(ctx.host),
       );
