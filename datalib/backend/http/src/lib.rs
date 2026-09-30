@@ -176,6 +176,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/probe", post(connect::probe))
         .route("/api/dag", get(get_dag))
         .route("/api/manage/rows", get(manage::get_manage_rows))
+        .route(
+            "/api/manage/groups/{id}/dashboard",
+            get(manage::get_dashboard),
+        )
         .route("/api/lib/{name}", get(get_lib).put(put_lib))
         .route("/api/lib/{name}/rename", post(rename_lib))
         .route("/agent/cards.md", get(agent_cards_guide))
@@ -1073,10 +1077,14 @@ pub struct DagStepProgress {
     pub progress_age_secs: Option<i64>,
     /// For a running step: seconds since it last logged a line.
     pub log_age_secs: Option<i64>,
+    /// How fast the step's queues have been worked off lately, for an
+    /// estimate of when they empty. `None` until a `queued` series has
+    /// a sample.
+    pub queue_drain: Option<manage::QueueDrain>,
     pub updated_at_utc: String,
 }
 
-fn series_key(name: &str, labels: &str) -> String {
+pub(crate) fn series_key(name: &str, labels: &str) -> String {
     if labels.is_empty() {
         name.to_string()
     } else {
@@ -1084,7 +1092,7 @@ fn series_key(name: &str, labels: &str) -> String {
     }
 }
 
-fn secs_between(earlier: &str, later: &str) -> Option<f64> {
+pub(crate) fn secs_between(earlier: &str, later: &str) -> Option<f64> {
     let a = datalib_time::parse_strict(earlier).ok()?.inner();
     let b = datalib_time::parse_strict(later).ok()?.inner();
     Some((b - a).num_microseconds()? as f64 / 1_000_000.0)
@@ -1124,6 +1132,7 @@ fn progress_by_step(
                     rates: Default::default(),
                     progress_age_secs: age(last_move),
                     log_age_secs: age(snap.last_log_at.get(&p.step).map(String::as_str)),
+                    queue_drain: None,
                     updated_at_utc: p.updated_at_utc.clone(),
                 },
             )
@@ -1132,6 +1141,17 @@ fn progress_by_step(
     for m in &snap.metrics {
         if let Some(p) = by_step.get_mut(&m.step) {
             p.metrics.insert(series_key(&m.name, &m.labels), m.value);
+        }
+    }
+    for st in &snap.steps {
+        if let Some(p) = by_step.get_mut(&st.step) {
+            let history: Vec<&datalib_runs::MetricSampleRow> = snap
+                .queue_history
+                .iter()
+                .filter(|m| m.step == st.step)
+                .collect();
+            p.queue_drain =
+                manage::queue_drain(&history, &p.metrics, st.started_at_utc.as_deref(), now);
         }
     }
     // Two newest samples per series, oldest first: the rate is their
@@ -1843,6 +1863,7 @@ async fn run_steps(State(s): State<AppState>, Path(run): Path<String>) -> Json<R
                 rates: Default::default(),
                 progress_age_secs: None,
                 log_age_secs: None,
+                queue_drain: None,
                 updated_at_utc: st.updated_at_utc.clone(),
             }),
         })

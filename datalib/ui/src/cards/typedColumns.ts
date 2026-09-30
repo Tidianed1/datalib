@@ -8,11 +8,22 @@
 // keeps driving its grid itself.
 import type { Column, Formatter, GroupingFormatterItem } from "@slickgrid-universal/common";
 import { Editors } from "@slickgrid-universal/common";
-import type { Action, ColumnSpec, ColumnType, Identity, StatusView, Chip, Timeseries } from "@/api";
+import type {
+  Action,
+  ColumnSpec,
+  ColumnType,
+  Identity,
+  Quantity,
+  StatusView,
+  Chip,
+  Timeseries,
+} from "@/api";
 import {
   WIDTH,
   renderChips,
+  quantityText,
   renderIdentity,
+  renderQuantity,
   renderStatus,
   renderTimeseries,
   renderTimestamp,
@@ -216,6 +227,8 @@ export function copyText(type: ColumnType, value: unknown): string {
       const t = value as Timeseries;
       return t.value == null ? "" : `${t.value} ${t.unit}`;
     }
+    case "quantity":
+      return quantityText(value as Quantity);
     case "actions":
       return "";
     case "text":
@@ -343,6 +356,18 @@ export function typedColumns<T extends Record<string, unknown>>(
               compareNumber(
                 (a as Timeseries | null)?.value,
                 (b as Timeseries | null)?.value,
+                dir ?? 1,
+              ),
+          };
+        case "quantity":
+          return {
+            cssClass: "tg-right",
+            formatter: (_r, _c, value) => renderQuantity(value as Quantity | null),
+            // A figure sorts by size; a word after every figure.
+            sortComparer: (a, b, dir) =>
+              compareNumber(
+                (a as Quantity | null)?.value ?? undefined,
+                (b as Quantity | null)?.value ?? undefined,
                 dir ?? 1,
               ),
           };

@@ -416,9 +416,24 @@ programs against:
   teleported to `<body>`. Through `host.openCards` it opens beside
   itself a `gridView(...)` for Browse or a problems count, a
   `logView(...)` for a step's log or the server's, a `historyView(...)`
-  for a row's commit history, and `configView()`. The `/data_sources`
-  route is this card alone at 1.6× width (`MANAGE_STACK` in
-  `router/index.ts`).
+  for a row's commit history, a `syncDashboardView(...)` for a group's
+  sync, and `configView()`. What a row's actions do is
+  `cards/rowActions.ts`, shared with the dashboard; the card keeps only
+  what needs the config's text — edit, rename, remove, compare. The
+  `/data_sources` route is this card alone at 1.6× width (`MANAGE_STACK`
+  in `router/index.ts`).
+- `syncDashboardView({ group, step })` — one group's sync
+  (`cards/SyncDashboardCard.ce.vue`): the group's Manage row at the top
+  and each step's row under it, laid out vertically, each with a
+  toolbar of its row-menu actions and small charts over one run
+  (`cards/TimeChart.ce.vue`; which charts, and their arithmetic, are
+  `cards/dashboardCharts.ts`). The series are
+  `GET /api/manage/groups/{id}/dashboard`: every metric the step
+  reported, its warning and error lines counted up, and its tree's
+  size, for the newest run the group took part in or the one picked.
+  Every chart shares the run's time axis and one crosshair. The group's
+  log for that run is a collapsible `RunLogPanel` at the bottom.
+  `step` scrolls to that step's section.
 - `logView({ run, step, launch, q, jumpToEnd })` — the run log
   (`components/RunLogPanel.ce.vue` in `cards/LogCard.ce.vue`): one
   process's lines — a step's newest attempt, the runner, a launch of the
@@ -522,6 +537,7 @@ own layout shape and decodes to nothing when it cannot be read.
 | `bytes` | an integer | a base-10 size, exact figure on hover |
 | `timestamp` | an ISO stamp about *now* (when something last ran) | "7 days ago", exact stamp on hover; sorts on the instant |
 | `datetime` | an ISO stamp that is the record's (when a message was sent) | the date and time it names; sorts on the instant |
+| `quantity` | `{value, unit, note, detail}` | one figure by its unit (`count` grouped, `seconds` as "25 min"), or `note` in its place — a word, muted — when there is none; the reasoning on hover |
 | `timeseries` | `{value, unit, samples, detail, window_secs}` | the value and its change over the window, over a sparkline scaled to its own range; each value names its own window, so minutes of bytes and days of items share a table |
 | `identity` | `{id, label, icon, detail}` | icon + label, id on hover; the icon is a *token* (`slack`, `step:ingest`) the viewer maps to an asset |
 | `status` | `{key, label, at, last_success_at, detail}` | a glyph for the key (a spinner while running), when it got there, the reason on hover |

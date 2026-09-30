@@ -374,8 +374,10 @@ export type RowReading = {
   lastSuccess: string | null;
   /// The Bytes label over the sparkline, as drawn. Null: nothing on disk.
   disk: string | null;
-  /// The Activity chips' title; "" when there are none.
-  activity: string;
+  /// The Queue and ETA cells as drawn — a figure, or a word such as
+  /// "stalled"; "" when blank.
+  queue: string;
+  eta: string;
 };
 
 /// The time beside the Last update glyph; absent on a row that never ran.
@@ -397,6 +399,10 @@ export async function sampleRow(page: Page, id: string): Promise<RowReading | nu
           .querySelector('[col-id="status"] [role="img"]')
           ?.getAttribute("aria-label");
         if (!status) return null;
+        const quantity = (el: Element, col: string) => {
+          const text = el.querySelector(`[col-id="${col}"] .tg-quantity`)?.textContent?.trim();
+          return !text || text === "—" ? "" : text;
+        };
         const stamp = (col: string) =>
           row.querySelector(`[col-id="${col}"] [title]`)?.getAttribute("title") ?? null;
         return {
@@ -404,7 +410,8 @@ export async function sampleRow(page: Page, id: string): Promise<RowReading | nu
           lastSynced: row.querySelector(at)?.getAttribute("title") ?? null,
           lastSuccess: stamp("last_success"),
           disk: row.querySelector('[col-id="disk"] .tg-plot-value')?.textContent?.trim() ?? null,
-          activity: row.querySelector('[col-id="activity"] .tg-chips')?.getAttribute("title") ?? "",
+          queue: quantity(row, "queue"),
+          eta: quantity(row, "eta"),
         };
       }),
     LAST_UPDATE_AT,

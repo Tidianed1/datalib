@@ -110,6 +110,10 @@
 .tg-chip-error { color: var(--datalib-log-error); }
 .tg-chip-ok { color: var(--datalib-log-ok); }
 
+.tg-quantity { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tg-quantity-note { color: var(--datalib-muted); font-style: italic; }
+.tg-quantity-stalled { color: var(--datalib-log-warn); font-style: normal; }
+
 .tg-series {
   display: flex;
   align-items: center;

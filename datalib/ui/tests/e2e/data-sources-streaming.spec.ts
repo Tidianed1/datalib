@@ -7,9 +7,9 @@
 // has to be true while they are parked:
 //
 //   1. **The Pipeline table shows the whole chain in flight at once.**
-//      A download's Activity cell counts its checkpoints; its render and
-//      the index behind it read Running *while the download is still
-//      Running* — not queued behind it.
+//      The index's Queue cell counts the work its producers handed it;
+//      each render and the index behind it read Running *while the
+//      download is still Running* — not queued behind it.
 //   2. **Rows reach the Explore grid before the download that produced
 //      them finishes.** The grid was opened and searched before the sync
 //      began, and is never touched again; it refetches itself when the
@@ -100,16 +100,16 @@ async function writeConfig(page: Page, text: string) {
 }
 
 /// One reading of the Pipeline rows this spec watches — each row's
-/// status word and its Activity text — so "at once" means one reading.
+/// status word and its Queue — so "at once" means one reading.
 async function readRows(page: Page, ids: readonly string[]) {
   const status: Record<string, string> = {};
-  const activity: Record<string, string> = {};
+  const queue: Record<string, string> = {};
   for (const id of ids) {
     const drawn = await readRow(page, id);
     status[id] = drawn.status;
-    activity[id] = drawn.activity;
+    queue[id] = drawn.queue;
   }
-  return { status, activity };
+  return { status, queue };
 }
 
 /// Mark every Pipeline row's element, let `frames` more answers for the
@@ -288,14 +288,11 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
 
     // ── 1. the Pipeline table shows the whole chain in flight ───────
     // Every row Running in one reading: both downloads, the render
-    // behind each, and the index behind both. A download counts its
-    // seals (the runner records every checkpoint as a metric, and the
-    // Activity cell draws it); the index says where its work came from.
+    // behind each, and the index behind both, with a figure in the
+    // index's Queue: the scheduler keeps a `queued` gauge per producer.
     let last = await readRows(page, STEPS);
     const inFlight = () =>
-      STEPS.every((id) => last.status[id] === "Running") &&
-      /\bcheckpoints \d+/.test(last.activity[INGESTS[0]]) &&
-      /queued/.test(last.activity[INDEX]);
+      STEPS.every((id) => last.status[id] === "Running") && /^[\d,]+$/.test(last.queue[INDEX]);
     await expect
       .poll(
         async () => {

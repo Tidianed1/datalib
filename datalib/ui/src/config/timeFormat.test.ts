@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   compareStamps,
   formatDateTime,
+  formatDuration,
   formatRelative,
   formatShortStamp,
   formatStamp,
@@ -186,5 +187,13 @@ describe("formatDateTime", () => {
   it("passes an unreadable stamp through, and says nothing for none", () => {
     expect(formatDateTime("not a date")).toBe("not a date");
     expect(formatDateTime(null)).toBe("");
+  });
+});
+
+describe("an estimate's span", () => {
+  it("names the largest unit that keeps the figure small", () => {
+    expect(formatDuration(52)).toBe("52 sec");
+    expect(formatDuration(25 * 60 + 10)).toBe("25 min");
+    expect(formatDuration(5040)).toBe("1.4 h");
   });
 });

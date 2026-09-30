@@ -461,7 +461,12 @@ cheap.
 
 From those two events the sink derives the pair a reader actually wants:
 `done`, the increments so far, and `queued`, what the announced total
-leaves. `queued` is the "N queued" the Manage screen shows. When a
+leaves. `queued` is the Manage screen's Queue, and `done` the pace its
+ETA reads. The scheduler keeps a pair of its own per producer for each
+consumer (`QueueLedger`): `queued{from=…}`, the rows sealed and not
+yet read, which climbs seal by seal and falls to nothing when a pass
+ends, and `dequeued{from=…}`, the rows taken off so far, which only
+grows — the pace a sampled sawtooth can lose the bottoms of. When a
 step ends, however it ended — succeeded, failed, stopped, turned off —
 the sink sets every `queued` series of that step to zero, its own and
 each `queued{from=…}`: a step that is not running has nothing ahead of
