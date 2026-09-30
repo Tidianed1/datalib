@@ -8,7 +8,7 @@
 // keeps driving its grid itself.
 import type { Column, Formatter, GroupingFormatterItem } from "@slickgrid-universal/common";
 import { Editors } from "@slickgrid-universal/common";
-import type { Action, ColumnSpec, Identity, StatusView, Chip, Timeseries } from "@/api";
+import type { Action, ColumnSpec, ColumnType, Identity, StatusView, Chip, Timeseries } from "@/api";
 import {
   WIDTH,
   renderChips,
@@ -196,6 +196,37 @@ function text(value: unknown): string {
 }
 
 const plain: Formatter = (_r, _c, value) => ({ text: text(value), toolTip: text(value) });
+
+/// What a cell copies as: what it shows, except that a stamp copies as
+/// the stamp and a number undecorated, so a paste loses nothing.
+export function copyText(type: ColumnType, value: unknown): string {
+  if (value == null) return "";
+  switch (type) {
+    case "identity":
+      return (value as Identity).label ?? "";
+    case "markdown_uuid":
+      return typeof value === "string" ? value : ((value as Identity).label ?? "");
+    case "status": {
+      const s = value as StatusView;
+      return s.at ? `${s.label} ${s.at}` : s.label;
+    }
+    case "chips":
+      return (value as Chip[]).map((c) => c.text).join(", ");
+    case "timeseries": {
+      const t = value as Timeseries;
+      return t.value == null ? "" : `${t.value} ${t.unit}`;
+    }
+    case "actions":
+      return "";
+    case "text":
+    case "count":
+    case "number":
+    case "bytes":
+    case "timestamp":
+    case "datetime":
+      return String(value);
+  }
+}
 
 /// The column a tree hangs its chevrons off: the first one that is not
 /// a row of buttons, so an `actions` column never becomes the tree
