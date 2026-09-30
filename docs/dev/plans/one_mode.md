@@ -61,7 +61,7 @@ A store has two kinds of commit and they do different work:
   doltlite 0.50.13:** this said about 50 ms per statement; it is now
   under a millisecond, so batching is about pages, not time.
 - A **doltlite commit** is the *publication* unit. It names a snapshot
-  a reader can pin through `dolt_at_`, and `dolt_diff` between two of
+  a reader can open read-only and detached, and `dolt_diff` between two of
   them is the record of what changed. It seals whatever SQL
   transactions have landed in the working set since the previous one.
 

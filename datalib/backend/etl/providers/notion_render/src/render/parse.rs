@@ -224,7 +224,7 @@ const ATTACHMENTS_PROJECTION_SQL: &str = "
     SELECT ref_id, blake3,
            NULL AS content_type,
            NULL AS upstream_name
-      FROM pinned_notion_attachments notion_attachments
+      FROM notion_attachments
      WHERE ref_id IN ({placeholders}) AND blake3 IS NOT NULL";
 
 #[cfg(test)]

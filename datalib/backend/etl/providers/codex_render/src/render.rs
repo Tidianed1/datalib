@@ -69,13 +69,10 @@ pub fn render(
             };
             let pin = db.pin().expect("a reader is pinned at open").clone();
             let loaded = async {
-                let transcripts = datalib_etl::doltlite_raw::load_payloads_with_id(
-                    db.pool(),
-                    datalib_etl::pin::Reads::At(&pin),
-                    "transcripts",
-                )
-                .await?;
-                let records = load_records(db.pool(), &pin).await?;
+                let transcripts =
+                    datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), "transcripts")
+                        .await?;
+                let records = load_records(db.pool()).await?;
                 let scan = scan_diff(db.pool(), range.cursor, &pin).await?;
                 anyhow::Ok((transcripts, records, scan))
             }
@@ -108,19 +105,12 @@ pub fn render(
 /// One raw line: its row id, the thread, its number, the line.
 pub type RecordRow = (String, String, i64, Value);
 
-async fn load_records(
-    pool: &sqlx::SqlitePool,
-    pin: &datalib_etl::pin::Pin,
-) -> Result<Vec<RecordRow>> {
-    let view = datalib_etl::pin::Reads::At(pin).table("records");
-    // Safe: `view` is a pinned-table name the pin module composes from
-    // a `&'static str`; nothing here comes from data.
-    let sql = format!(
-        "SELECT id, transcript_id, line_no, json(payload) FROM {view} ORDER BY transcript_id, line_no"
-    );
-    let rows: Vec<(String, String, i64, String)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
-        .fetch_all(pool)
-        .await?;
+async fn load_records(pool: &sqlx::SqlitePool) -> Result<Vec<RecordRow>> {
+    let rows: Vec<(String, String, i64, String)> = sqlx::query_as(
+        "SELECT id, transcript_id, line_no, json(payload) FROM records ORDER BY transcript_id, line_no",
+    )
+    .fetch_all(pool)
+    .await?;
     rows.into_iter()
         .map(|(id, tid, n, p)| Ok((id, tid, n, serde_json::from_str(&p)?)))
         .collect()

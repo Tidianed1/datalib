@@ -39,7 +39,7 @@ pub const RENDER_VERSION: u32 = 4;
 /// falls back to `cas_objects` (we don't store it on the edge).
 const VOICE_BLOB_PROJECTION: &str = "SELECT ref_name AS ref_id, blake3, \
             NULL AS content_type, NULL AS upstream_name \
-     FROM pinned_voice_attachments voice_attachments \
+     FROM voice_attachments \
      WHERE ref_name IN ({placeholders}) AND blake3 IS NOT NULL";
 
 fn profile() -> RenderProfile {
@@ -101,18 +101,12 @@ pub fn render(
                 };
                 let pin = db.pin().expect("a reader is pinned at open").clone();
                 let loaded = async {
-                    let messages = db
-                        .load_payloads_with_id(datalib_etl::pin::Reads::At(&pin), "chat_messages")
-                        .await?;
+                    let messages = db.load_payloads_with_id("chat_messages").await?;
                     // (dir name, group_info payload) — the directory name
                     // carries the space id, which `group_info.json` itself
                     // does not.
-                    let groups = db
-                        .load_payloads_with_id(datalib_etl::pin::Reads::At(&pin), "chat_groups")
-                        .await?;
-                    let voice_messages = db
-                        .load_payloads_with_id(datalib_etl::pin::Reads::At(&pin), "voice_messages")
-                        .await?;
+                    let groups = db.load_payloads_with_id("chat_groups").await?;
+                    let voice_messages = db.load_payloads_with_id("voice_messages").await?;
                     let voice_blobs = load_voice_blobs(&db, &voice_messages).await?;
                     let scan = scan_diff(db.pool(), range.cursor, &pin).await?;
                     anyhow::Ok(Some((messages, groups, voice_messages, voice_blobs, scan)))
@@ -214,7 +208,7 @@ async fn scan_diff(
                                 THEN substr(m.id, 1, instr(m.id, '/') - 1)
                                 ELSE m.id END
                       FROM dolt_diff_chat_groups g
-                      JOIN pinned_chat_messages m ON m.group_id = coalesce(g.to_id, g.from_id)
+                      JOIN chat_messages m ON m.group_id = coalesce(g.to_id, g.from_id)
                      WHERE g.from_ref = ?1 AND g.to_ref = ?2 AND g.diff_type != 'unchanged'
                     UNION
                     SELECT 'voice:' || coalesce(to_conversation_key, from_conversation_key)
@@ -223,7 +217,7 @@ async fn scan_diff(
                     UNION
                     SELECT 'voice:' || m.conversation_key
                       FROM dolt_diff_voice_attachments d
-                      JOIN pinned_voice_messages m ON m.id = coalesce(d.to_message_id, d.from_message_id)
+                      JOIN voice_messages m ON m.id = coalesce(d.to_message_id, d.from_message_id)
                      WHERE d.from_ref = ?1 AND d.to_ref = ?2 AND d.diff_type != 'unchanged'
                 )
                 WHERE bucket IS NOT NULL AND bucket != '' AND bucket != 'voice:'

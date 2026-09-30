@@ -45,7 +45,7 @@ impl RawDb {
     }
 
     pub async fn load_self_identity(&self) -> Result<Option<Value>> {
-        load_self_identity(self.pool(), self.reads()).await
+        load_self_identity(self.pool()).await
     }
 
     // ── merge_requests ──────────────────────────────────────────────
@@ -72,12 +72,10 @@ impl RawDb {
     // ── loads ───────────────────────────────────────────────────────
 
     pub async fn load_merge_requests(&self) -> Result<Vec<LoadedMergeRequest>> {
-        // Audited: the only interpolation is a table name this handle chose.
-        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+        let rows = sqlx::query(
             "SELECT id, project_full_path, mr_iid, json(payload) AS payload
-             FROM {} WHERE payload IS NOT NULL ORDER BY id",
-            self.reads().table("merge_requests")
-        )))
+             FROM merge_requests WHERE payload IS NOT NULL ORDER BY id",
+        )
         .fetch_all(self.pool())
         .await
         .context("select merge_requests")?;
@@ -97,12 +95,10 @@ impl RawDb {
     }
 
     pub async fn load_discussions(&self) -> Result<Vec<LoadedDiscussion>> {
-        // Audited: the only interpolation is a table name this handle chose.
-        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+        let rows = sqlx::query(
             "SELECT id, project_full_path, mr_iid, discussion_id, json(payload) AS payload
-             FROM {} WHERE payload IS NOT NULL ORDER BY id",
-            self.reads().table("discussions")
-        )))
+             FROM discussions WHERE payload IS NOT NULL ORDER BY id",
+        )
         .fetch_all(self.pool())
         .await
         .context("select discussions")?;
