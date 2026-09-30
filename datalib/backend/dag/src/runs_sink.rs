@@ -6,7 +6,7 @@
 //! wire carries deltas, the store carries positions, and coalescing
 //! deltas would lose work.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, Weak};
 
 use datalib_runs::store::{now_split, split_stamp};
@@ -23,6 +23,8 @@ use crate::step::StepId;
 #[derive(Default, Clone)]
 struct Acc {
     row: StepRunRow,
+    /// From the plan; every line about the step carries it.
+    group: Option<String>,
     /// The attempt's process: what came out of the step's pipes is its,
     /// and how it ended goes on it.
     process: Option<ProcessRow>,
@@ -30,6 +32,9 @@ struct Acc {
     done: u64,
     total: Option<u64>,
     checkpoints: u64,
+    /// The labels of every `queued` series written for the step, so its
+    /// finish can empty them all.
+    queued: BTreeSet<String>,
 }
 
 /// An [`EventSink`] that keeps the run store current.
@@ -49,6 +54,10 @@ fn now() -> (String, Option<String>) {
 /// checkpoint sealed, why the step ended, a hint — so a filter on
 /// target finds the runner's lines the way it finds a crate's.
 const RUNNER_TARGET: &str = "datalib_dag::runner";
+
+/// The gauge of work still ahead of a step: its own, and one per
+/// producer (`queued{from=<producer>}`) that the scheduler keeps.
+const QUEUED: &str = "queued";
 
 impl RunStoreSink {
     /// Returns `None` when the store could not be opened. The store is
@@ -98,11 +107,21 @@ impl RunStoreSink {
     }
 
     fn metric(&self, step: &StepId, name: &str, labels: &BTreeMap<String, String>, value: i64) {
+        let labels = canonical_labels(labels);
+        if name == QUEUED {
+            let mut steps = self.steps.lock().expect("run store sink mutex");
+            let acc = steps.entry(step.clone()).or_default();
+            acc.queued.insert(labels.clone());
+        }
+        self.write_metric(step, name, labels, value);
+    }
+
+    fn write_metric(&self, step: &StepId, name: &str, labels: String, value: i64) {
         let (updated_at_utc, tz_offset) = now();
         self.writer.metric(MetricRow {
             step: step.clone(),
             name: name.to_string(),
-            labels: canonical_labels(labels),
+            labels,
             value,
             updated_at_utc,
             tz_offset,
@@ -117,6 +136,14 @@ impl RunStoreSink {
             .get(step)
             .map(|a| a.row.attempt)
             .unwrap_or(0)
+    }
+
+    fn group_of(&self, step: &StepId) -> Option<String> {
+        self.steps
+            .lock()
+            .expect("run store sink mutex")
+            .get(step)
+            .and_then(|a| a.group.clone())
     }
 
     /// The process of the step's current attempt, for a line that came
@@ -143,7 +170,7 @@ impl RunStoreSink {
         let none = BTreeMap::new();
         self.metric(step, "done", &none, done as i64);
         if let Some(total) = total {
-            self.metric(step, "queued", &none, total.saturating_sub(done) as i64);
+            self.metric(step, QUEUED, &none, total.saturating_sub(done) as i64);
         }
     }
 }
@@ -154,8 +181,11 @@ impl EventSink for RunStoreSink {
             // Publish the whole plan up front so a reader can draw every
             // row, pending ones included, before anything has started.
             Event::RunPlan { steps } => {
-                for step in steps {
-                    self.update(step, |a| a.row.state = LiveState::Pending.as_str().into());
+                for planned in steps {
+                    self.update(&planned.step, |a| {
+                        a.row.state = LiveState::Pending.as_str().into();
+                        a.group = planned.group.clone();
+                    });
                 }
             }
             // A retry re-runs the step from zero, so the counters reset
@@ -180,6 +210,7 @@ impl EventSink for RunStoreSink {
                 self.writer.process(process.clone());
                 self.update(step, |a| {
                     *a = Acc {
+                        queued: std::mem::take(&mut a.queued),
                         row: StepRunRow {
                             state: LiveState::Running.as_str().into(),
                             attempt: *attempt as i64,
@@ -187,6 +218,7 @@ impl EventSink for RunStoreSink {
                             ..Default::default()
                         },
                         process: Some(process),
+                        group: a.group.take(),
                         ..Default::default()
                     }
                 })
@@ -204,7 +236,9 @@ impl EventSink for RunStoreSink {
             } => {
                 let finished_at_utc = now().0;
                 let mut ended = None;
+                let mut queued = BTreeSet::new();
                 self.update(step, |a| {
+                    queued = std::mem::take(&mut a.queued);
                     a.row.state = status.as_str().into();
                     a.row.finished_at_utc = Some(finished_at_utc.clone());
                     a.row.error = error.clone();
@@ -220,6 +254,10 @@ impl EventSink for RunStoreSink {
                 if let Some(p) = ended {
                     self.writer.process(p);
                 }
+                // Ended is ended, however: nothing is ahead of it now.
+                for labels in queued {
+                    self.write_metric(step, QUEUED, labels, 0);
+                }
                 if let Some(error) = error {
                     let level = if *status == RunState::Stopped {
                         LogLevel::Warn
@@ -229,6 +267,7 @@ impl EventSink for RunStoreSink {
                     let (ts_utc, tz_offset) = now();
                     self.writer.log(LogRow {
                         step: Some(step.clone()),
+                        group_id: self.group_of(step),
                         attempt: self.attempt_of(step),
                         ts_utc,
                         tz_offset,
@@ -301,6 +340,7 @@ impl EventSink for RunStoreSink {
                 };
                 self.writer.log(LogRow {
                     step: Some(step.clone()),
+                    group_id: self.group_of(step),
                     attempt: self.attempt_of(step),
                     ts_utc,
                     tz_offset,
@@ -338,6 +378,7 @@ impl EventSink for RunStoreSink {
                 };
                 self.writer.log(LogRow {
                     step: Some(step.clone()),
+                    group_id: self.group_of(step),
                     attempt: self.attempt_of(step),
                     process_id,
                     ts_utc,
@@ -361,6 +402,7 @@ impl EventSink for RunStoreSink {
                 let (ts_utc, tz_offset) = now();
                 self.writer.log(LogRow {
                     step: Some(step.clone()),
+                    group_id: self.group_of(step),
                     attempt: self.attempt_of(step),
                     ts_utc,
                     tz_offset,
@@ -381,7 +423,10 @@ impl EventSink for RunStoreSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datalib_runs::{log_after, processes, snapshot, Snapshot, Stream};
+    use crate::events::PlannedStep;
+    use datalib_runs::{
+        log_after, log_query, processes, snapshot, LogCursor, LogQuery, Snapshot, Stream,
+    };
 
     async fn run(events: &[Event]) -> (tempfile::TempDir, Snapshot) {
         let td = tempfile::tempdir().unwrap();
@@ -446,6 +491,83 @@ mod tests {
         assert_eq!(lines[0].process_id, runner.process_id);
         assert_eq!(lines[0].process.as_deref(), Some("dag"));
         assert_eq!(lines[0].git_hash.as_deref(), Some("ae2d52f0"));
+    }
+
+    /// Every line about a step carries the group the plan filed it
+    /// under — its own output, and what the runner said about it after
+    /// `StepStart` reset the step's record — so `group:` finds a source's
+    /// lines whatever step wrote them.
+    #[tokio::test]
+    async fn a_steps_lines_carry_its_group_from_the_plan() {
+        let log = |step: &str, stream: Option<Stream>| Event::Log {
+            step: step.into(),
+            level: LogLevel::Info,
+            msg: "hello".into(),
+            ts: None,
+            stream,
+            target: None,
+            thread: None,
+            fields: None,
+        };
+        let (td, _snap) = run(&[
+            Event::RunPlan {
+                steps: vec![
+                    PlannedStep {
+                        step: "slack/ingest".into(),
+                        group: Some("slack".into()),
+                    },
+                    PlannedStep {
+                        step: "slack/render_markdown".into(),
+                        group: Some("slack".into()),
+                    },
+                    PlannedStep {
+                        step: "tools/backfill".into(),
+                        group: None,
+                    },
+                ],
+            },
+            Event::StepStart {
+                step: "slack/ingest".into(),
+                attempt: 1,
+                builtin: true,
+            },
+            log("slack/ingest", Some(Stream::Stderr)),
+            Event::StepFinish {
+                step: "slack/ingest".into(),
+                status: RunState::Failed,
+                error: Some("boom".into()),
+                exit_code: Some(1),
+                signal: None,
+            },
+            log("slack/render_markdown", None),
+            log("tools/backfill", None),
+        ])
+        .await;
+        let lines = log_after(td.path(), "run-1", None, 0, 10).await;
+        let groups: Vec<(Option<&str>, Option<&str>)> = lines
+            .iter()
+            .map(|l| (l.step.as_deref(), l.group_id.as_deref()))
+            .collect();
+        assert_eq!(
+            groups,
+            [
+                (Some("slack/ingest"), Some("slack")),
+                (Some("slack/ingest"), Some("slack")),
+                (Some("slack/render_markdown"), Some("slack")),
+                (Some("tools/backfill"), None),
+            ]
+        );
+        let slack = log_query(
+            td.path(),
+            &LogQuery {
+                q: "group:slack",
+                cursor: LogCursor::After(0),
+                limit: 10,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(slack.len(), 3);
     }
 
     /// A streaming consumer is spawned once per producer checkpoint,
@@ -586,6 +708,53 @@ mod tests {
         assert_eq!(metric_value(&snap, "slack/raw", "queued"), Some(3));
     }
 
+    /// A step that has ended has nothing ahead of it, however it ended:
+    /// its own `queued` and every `queued{from=…}` go to zero, the one
+    /// published before it started included.
+    #[tokio::test]
+    async fn every_ending_empties_the_queue() {
+        for status in [RunState::Succeeded, RunState::Failed, RunState::Stopped] {
+            let (_td, snap) = run(&[
+                Event::Metric {
+                    step: "slack/raw".into(),
+                    name: "queued".into(),
+                    labels: BTreeMap::from([("from".to_string(), "slack/list".to_string())]),
+                    value: 5,
+                },
+                Event::StepStart {
+                    step: "slack/raw".into(),
+                    attempt: 1,
+                    builtin: true,
+                },
+                Event::ProgressLength {
+                    step: "slack/raw".into(),
+                    total: Some(9),
+                },
+                inc("slack/raw", 3),
+                Event::StepFinish {
+                    step: "slack/raw".into(),
+                    status,
+                    error: None,
+                    exit_code: None,
+                    signal: None,
+                },
+            ])
+            .await;
+            let queued: BTreeMap<String, i64> = snap
+                .metrics
+                .iter()
+                .filter(|m| m.name == "queued")
+                .map(|m| (m.labels.clone(), m.value))
+                .collect();
+            assert_eq!(
+                queued,
+                BTreeMap::from([(String::new(), 0), ("from=slack/list".to_string(), 0)]),
+                "{status:?}"
+            );
+            assert_eq!(metric_value(&snap, "slack/raw", "done"), Some(3));
+        }
+    }
+
     /// A retry re-runs the step from the beginning, so the count has to
     /// go back to zero. Otherwise attempt 2 appears to resume from
     /// wherever attempt 1 died and can sail past `total`.
@@ -654,7 +823,12 @@ mod tests {
     #[tokio::test]
     async fn the_plan_lands_before_anything_runs() {
         let (_td, snap) = run(&[Event::RunPlan {
-            steps: vec!["slack/raw".into(), "slack/rendered_md".into()],
+            steps: ["slack/raw", "slack/rendered_md"]
+                .map(|step| PlannedStep {
+                    step: step.into(),
+                    group: Some("slack".into()),
+                })
+                .into(),
         }])
         .await;
 

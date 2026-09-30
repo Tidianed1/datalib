@@ -527,3 +527,38 @@ snapshotted.
 The normalization machinery — the volatile keys the snapshots redact, each
 commented with why — is in the test's source.
 
+
+## macOS permissions in the desktop app (by hand)
+
+Whether the app can read a protected folder — `~/Library/Messages`,
+the Photos library, `~/Documents` — is decided by macOS's privacy
+database (TCC), and no test here can reach it. Checking a change to a
+picker or to what a source reads means running the app. Why picking is
+what grants access, and what has been measured:
+[`wizard_file_pickers.md`](wizard_file_pickers.md) §"What the picker
+buys us in macOS permissions".
+
+1. **Build and launch through `datalib/tauri/run.sh`**, which starts
+   the `.app` with `open`. Launched that way the app answers for its
+   own permissions. Run the binary from a terminal instead and macOS
+   applies the terminal's permissions — if the terminal has Full Disk
+   Access, every read succeeds and the check proves nothing.
+2. **Start from no grant.** Once Datalib has been given access (a
+   picker in an earlier run, or Full Disk Access), it keeps it. Clear
+   it either by switching Datalib off under System Settings → Privacy &
+   Security → Full Disk Access, or with the command below, which
+   forgets everything macOS recorded for the app's id — the installed
+   `/Applications/Datalib.app` included, since it shares that id:
+
+   ```bash
+   tccutil reset All com.imbue.datalib
+   ```
+
+   The `run.sh` build is signed differently from a release, which may
+   already keep it apart from the installed app's grants; that has not
+   been confirmed, so reset rather than rely on it.
+3. **Watch it fail first.** Type the protected path into the wizard
+   instead of picking it, and sync: the step should fail with
+   `Operation not permitted`. If it succeeds, a grant is still in place
+   and step 2 did not take.
+4. **Then pick it**, and sync again.

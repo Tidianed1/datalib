@@ -50,6 +50,11 @@ export type Field =
         /// typed input stays the escape hatch for anything the filter
         /// wrongly excludes.
         extensions?: string[];
+        /// The folder the thing is almost always in, where the app that
+        /// owns it keeps it (`~/Library/Messages`). The picker opens
+        /// there while the field is empty, and the help text, which must
+        /// name it, shows it with a copy button beside it.
+        startIn?: string;
       })
   /// A closed set of values — one Rust enum, one dropdown. Prefer this
   /// over `text` whenever the backend parses the string against a fixed
@@ -1554,6 +1559,7 @@ export const CATALOG: CatalogEntry[] = [
         picks: "file",
         pickTitle: "Choose your Lightroom catalog",
         extensions: ["lrcat", "zip"],
+        startIn: "~/Pictures/Lightroom",
         target: "catalog.path",
         label: "Catalog file",
         help:
@@ -1566,11 +1572,13 @@ export const CATALOG: CatalogEntry[] = [
         kind: "path",
         picks: "dir",
         pickTitle: "Choose your Lightroom backups folder",
+        startIn: "~/Pictures/Lightroom",
         target: "backups.path",
         label: "Backups folder",
         help:
           "Optional, beside or instead of the catalog: the folder Lightroom writes its " +
-          "backups into, by default a Backups folder beside the catalog. Each backup (a " +
+          "backups into, by default a Backups folder beside the catalog in " +
+          "~/Pictures/Lightroom. Each backup (a " +
           "folder named for when it was taken, holding a .zip) becomes one commit, oldest " +
           "first and dated when it was taken, so the history reaches back before your first " +
           "sync. Each sync adds the backups taken since, then mirrors the catalog on top.",
@@ -1611,29 +1619,29 @@ export const CATALOG: CatalogEntry[] = [
     keywords: ["apple", "messages", "imessage", "sms", "texts", "chat.db", "iphone"],
     kind: "local",
     icon: "apple_messages",
-    defaultName: "messages",
+    defaultName: "apple-messages",
     nameHint: "Messages on this Mac",
     wizard: true,
     fields: [
       {
         kind: "path",
-        // Choosing the file here is what grants the app access to it on
+        // Choosing the folder here is what grants the app access to it on
         // macOS (docs/dev/wizard_file_pickers.md) — the same wall Photos
-        // sits behind.
-        picks: "file",
-        pickTitle: "Choose your Messages database",
-        extensions: ["db"],
+        // sits behind. Not the file: picking chat.db grants that one file,
+        // and the snapshot also reads chat.db-wal beside it.
+        picks: "dir",
+        pickTitle: "Choose your Messages folder",
+        startIn: "~/Library/Messages",
         required: true,
-        target: "database.path",
-        label: "Messages database",
+        target: "messages.path",
+        label: "Messages folder",
         help:
-          "The chat.db the Messages app keeps at ~/Library/Messages; press Cmd-Shift-G in the " +
-          "picker and paste that path to reach it. Choose it with the picker rather than " +
-          "typing the path: macOS protects the folder, and picking the file is what lets Datalib " +
-          'read it. If a sync still fails with "Operation not permitted", grant Datalib ' +
-          "Full Disk Access in System Settings. Attachments (photos, videos, files) are " +
-          "listed by name and path only — their bytes are not copied, since picking " +
-          "chat.db grants access to that one file.",
+          "The folder the Messages app keeps its database in, ~/Library/Messages. Choose it " +
+          "with the picker rather than typing the path: macOS protects the folder, and picking it is " +
+          'what lets Datalib read it. If a sync still fails with "Operation not permitted", ' +
+          "grant Datalib Full Disk Access in System Settings. A copied chat.db file works too, " +
+          "typed in here. Attachments (photos, videos, files) are listed by name and path " +
+          "only — their bytes are not copied.",
       },
       {
         kind: "bool",
@@ -1685,11 +1693,12 @@ export const CATALOG: CatalogEntry[] = [
         picks: "file",
         pickTitle: "Choose your Photos library",
         extensions: ["photoslibrary"],
+        startIn: "~/Pictures",
         required: true,
         target: "library.path",
         label: "Photos library",
         help:
-          "The library bundle, usually ~/Pictures/Photos Library.photoslibrary; its " +
+          "The library bundle, usually Photos Library.photoslibrary in ~/Pictures; its " +
           "database/Photos.sqlite is what gets mirrored. Choose it " +
           "with the picker rather than typing the path: macOS protects the library, and " +
           "picking it is what lets Datalib read it. If a sync still fails with " +

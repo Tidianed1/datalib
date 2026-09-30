@@ -492,6 +492,10 @@ again, and the only ones that should know the grid's DOM or options:
   four places a grid is built.
 - `grid/menu.ts` and `grid/rowKeys.ts` — the row menu and the `data-key`
   a row carries; `grid/query.ts` knows no grid at all.
+- `grid/copyRows.ts` — ⌘C (Ctrl+C) on a grid copies its selected rows
+  as TSV, a header line first, in the columns shown; a text selection
+  inside one selected row copies as the browser would. Each grid says
+  what a cell copies as (`copyText` in `cards/typedColumns.ts` by type).
 - `grid/rowHover.ts` — lights both halves of a row that pinned columns
   split in two; the theme's `:hover` reaches only the half under the
   pointer.

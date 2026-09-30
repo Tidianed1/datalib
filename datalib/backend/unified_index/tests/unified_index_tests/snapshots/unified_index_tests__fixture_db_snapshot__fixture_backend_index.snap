@@ -24,7 +24,7 @@ expression: snapshot
       "md_path": "chatgpt-api/render_markdown/00000000-0000-8020-9a72-3216b3199332/all.md",
       "modified_at": "2370-10-24T08:05:00+00:00",
       "provider": "chatgpt",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "chatgpt-api",
       "title": "Sonnet on a Cat Named Spot"
     },
@@ -924,7 +924,7 @@ expression: snapshot
       "md_path": "chatgpt-api/render_markdown/00000000-0000-89af-8390-876943e6455b/all.md",
       "modified_at": "2370-10-26T08:05:00+00:00",
       "provider": "chatgpt",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "chatgpt-api",
       "title": "I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?"
     },
@@ -1157,6 +1157,18 @@ expression: snapshot
       "title": "Connections"
     },
     {
+      "bucket_key": "00000000-0000-8bd2-8afb-b21d3b87dfa5",
+      "created_at": "2370-10-27T08:00:00+00:00",
+      "kind": "chat",
+      "markdown_uuid": "00000000-0000-8bd2-8afb-b21d3b87dfa5",
+      "md_path": "chatgpt-api/render_markdown/00000000-0000-8bd2-8afb-b21d3b87dfa5/all.md",
+      "modified_at": "2370-10-27T08:01:00+00:00",
+      "provider": "chatgpt",
+      "renderer_version": "rust-v1.11",
+      "source_id": "chatgpt-api",
+      "title": "Holodeck Cave on Risa"
+    },
+    {
       "bucket_key": null,
       "created_at": "2369-04-15T00:00:00+00:00",
       "kind": "storage",
@@ -1380,7 +1392,7 @@ expression: snapshot
       "md_path": "chatgpt-api/render_markdown/00000000-0000-8d7f-8279-1fc2e44e05fd/all.md",
       "modified_at": "2370-10-25T08:05:20+00:00",
       "provider": "chatgpt",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "chatgpt-api",
       "title": "Polynomial Fit for Sensor Calibration"
     },
@@ -1609,7 +1621,7 @@ expression: snapshot
       "message": "schema: grid index"
     },
     {
-      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=141 markdowns_read=141 markdowns_removed=3 rows_inserted=597"
+      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=142 markdowns_read=142 markdowns_removed=3 rows_inserted=600"
     }
   ],
   "grid_rows": [
@@ -4282,6 +4294,36 @@ expression: snapshot
       "upstream_entity_kind": "connection",
       "upstream_id": "https://www.linkedin.com/in/jlpicard",
       "uuid": "00000000-0000-8bbb-8c8b-8ae1dedef5e2"
+    },
+    {
+      "account": "data@enterprise.starfleet.test",
+      "author": null,
+      "byte_size": 638,
+      "channel": "Holodeck Cave on Risa",
+      "content_hash": "9611603923c2eebc",
+      "conversation_name": "Holodeck Cave on Risa",
+      "conversation_uuid": "00000000-0000-8bd2-8afb-b21d3b87dfa5",
+      "created_at": "2370-10-27T08:00:00+00:00",
+      "entire_chat": "/chat/00000000-0000-8bd2-8afb-b21d3b87dfa5",
+      "git_sha": null,
+      "item_count": 2,
+      "kind": "Chat",
+      "markdown_uuid": "00000000-0000-8bd2-8afb-b21d3b87dfa5",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview_len": 241,
+      "project": null,
+      "provider": "chatgpt",
+      "qmd_path": "chatgpt-api/render_markdown/00000000-0000-8bd2-8afb-b21d3b87dfa5/all.md",
+      "source_label": "ChatGPT",
+      "source_url": "https://chatgpt.com/c/68fa0004-fake-7000-8000-positronic0004",
+      "upstream_account": null,
+      "upstream_entity_kind": "conversation",
+      "upstream_id": "68fa0004-fake-7000-8000-positronic0004",
+      "uuid": "00000000-0000-8bd2-8afb-b21d3b87dfa5"
     },
     {
       "account": null,
@@ -12292,6 +12334,66 @@ expression: snapshot
       "upstream_entity_kind": "message",
       "upstream_id": "msg-fake-warp-0002",
       "uuid": "0b80f8c0-bbe0-8d30-9d79-1fb5a6a98f9c"
+    },
+    {
+      "account": "data@enterprise.starfleet.test",
+      "author": "User",
+      "byte_size": 35,
+      "channel": "Holodeck Cave on Risa",
+      "content_hash": "51f7817c5c276981",
+      "conversation_name": "Holodeck Cave on Risa",
+      "conversation_uuid": "00000000-0000-8bd2-8afb-b21d3b87dfa5",
+      "created_at": "2370-10-27T08:00:00+00:00",
+      "entire_chat": "/chat/00000000-0000-8bd2-8afb-b21d3b87dfa5",
+      "git_sha": null,
+      "item_count": 1,
+      "kind": "User Input",
+      "markdown_uuid": "00000000-0000-8bd2-8afb-b21d3b87dfa5",
+      "message_index": 0,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview_len": 35,
+      "project": null,
+      "provider": "chatgpt",
+      "qmd_path": "chatgpt-api/render_markdown/00000000-0000-8bd2-8afb-b21d3b87dfa5/all.md",
+      "source_label": "ChatGPT",
+      "source_url": null,
+      "upstream_account": null,
+      "upstream_entity_kind": "message",
+      "upstream_id": "msg-fake-risa-0001",
+      "uuid": "0b80fde2-8400-8962-9633-fc71ef31ea85"
+    },
+    {
+      "account": "data@enterprise.starfleet.test",
+      "author": "gpt-5",
+      "byte_size": 603,
+      "channel": "Holodeck Cave on Risa",
+      "content_hash": "5d2dec5a7e602117",
+      "conversation_name": "Holodeck Cave on Risa",
+      "conversation_uuid": "00000000-0000-8bd2-8afb-b21d3b87dfa5",
+      "created_at": "2370-10-27T08:01:00+00:00",
+      "entire_chat": "/chat/00000000-0000-8bd2-8afb-b21d3b87dfa5",
+      "git_sha": null,
+      "item_count": 1,
+      "kind": "LLM Response",
+      "markdown_uuid": "00000000-0000-8bd2-8afb-b21d3b87dfa5",
+      "message_index": 1,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview_len": 241,
+      "project": null,
+      "provider": "chatgpt",
+      "qmd_path": "chatgpt-api/render_markdown/00000000-0000-8bd2-8afb-b21d3b87dfa5/all.md",
+      "source_label": "ChatGPT",
+      "source_url": null,
+      "upstream_account": null,
+      "upstream_entity_kind": "message",
+      "upstream_id": "msg-fake-risa-0002",
+      "uuid": "0b80fde3-6e60-8e35-9992-a7dae32f8fff"
     }
   ],
   "storage_rows": [
@@ -12309,15 +12411,15 @@ expression: snapshot
     },
     {
       "kind": "Table",
-      "members_sha": "sha256:95ca4eb95072ca11b388782a8fce1147fe1c47402a351afe514d53046c4de36b",
+      "members_sha": "sha256:d5d26f62e8c95799738f9d178d9793dfc49adf034b8c924d847d3af63f859fd7",
       "rows": 148,
       "source": ""
     }
   ],
   "summary": {
-    "documents_count": 133,
+    "documents_count": 134,
     "dolt_log_count": 3,
-    "grid_rows_count": 356,
+    "grid_rows_count": 359,
     "storage_rows_count": 206
   }
 }
