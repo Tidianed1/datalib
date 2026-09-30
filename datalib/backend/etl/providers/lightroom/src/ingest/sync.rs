@@ -108,11 +108,13 @@ pub async fn run(
 
     let plan = match inputs.backups {
         Some(dir) => {
-            let scan = fsscan::scan(cache, dir, &ScanOptions::default(), |p| {
-                is_zip(p) || is_catalog(p)
-            })
-            .await
-            .with_context(|| format!("scan the backups folder {}", dir.display()))?;
+            let opts = ScanOptions {
+                progress: progress.clone(),
+                ..ScanOptions::default()
+            };
+            let scan = fsscan::scan(cache, dir, &opts, |p| is_zip(p) || is_catalog(p))
+                .await
+                .with_context(|| format!("scan the backups folder {}", dir.display()))?;
             run.run_problems.extend(scan.walk_problems());
             let plan = backups::plan(backups::entries(&scan.files), &ledger);
             if plan.found.is_empty() {
