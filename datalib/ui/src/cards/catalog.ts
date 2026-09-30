@@ -22,6 +22,13 @@ type BuiltinMeta = CardMeta & {
 
 /// Every builtin, in gallery order.
 export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
+  homeView: {
+    title: "Home",
+    description:
+      "What needs you, how big your library is, each source's state, and the newest documents.",
+    icon: "home",
+    gallery: "homeView()",
+  },
   sourcesView: {
     title: "Manage data sources",
     description: "Configure, view, and execute data ingestion steps and data stores.",

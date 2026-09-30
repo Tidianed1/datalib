@@ -21,8 +21,12 @@ describe("the card catalog", () => {
     }
   });
 
-  it("offers the sources card first in the gallery", () => {
-    expect(galleryBuiltins()[0].source).toBe("sourcesView()");
+  it("offers Home first in the gallery, then Sources", () => {
+    expect(
+      galleryBuiltins()
+        .slice(0, 2)
+        .map((e) => e.source),
+    ).toEqual(["homeView()", "sourcesView()"]);
   });
 
   it("answers for a builtin by the factory the source calls", () => {

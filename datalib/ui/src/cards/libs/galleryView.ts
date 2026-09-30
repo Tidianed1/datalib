@@ -1,8 +1,8 @@
 // Builtin view: the new-card gallery — the way every new card starts,
 // in both dev and non-dev mode. It lists every parameter-less
 // component with a short description and its icon: the builtins
-// cards/catalog.ts offers first (sourcesView leading, since it's the
-// app's front door), then every
+// cards/catalog.ts offers first (Home leading, since it's the app's
+// front door, then Sources), then every
 // titled component in the frontend store, then the
 // "build a component with an agent" entry (handoff.ts),
 // which mints a fresh component and walks the user through handing it
