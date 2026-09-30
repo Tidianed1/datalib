@@ -15,6 +15,10 @@ import { isDesktopApp } from "@/desktop";
 // The app window has no browser chrome, so it draws the two buttons a
 // tab would have; the browser keeps its own.
 const desktop = isDesktopApp();
+// On macOS the desktop app's page runs under the title bar (the Tauri
+// shell's `under_title_bar`): the toolbar is the title bar, so it leaves
+// the window buttons room and its empty areas move the window.
+const underTitleBar = desktop && /Mac/.test(navigator.platform);
 const goBack = () => history.back();
 const goForward = () => history.forward();
 
@@ -87,8 +91,14 @@ onUnmounted(() => stop?.());
   <main class="datalib-shell" data-feedback-root>
     <!-- The toolbar: back and forward in the desktop app, the name,
          and the search box. -->
-    <nav v-if="!gate" class="datalib-toolbar" aria-label="App">
-      <div class="datalib-toolbar-start">
+    <nav
+      v-if="!gate"
+      class="datalib-toolbar"
+      :class="{ 'datalib-toolbar--titlebar': underTitleBar }"
+      aria-label="App"
+      data-tauri-drag-region
+    >
+      <div class="datalib-toolbar-start" data-tauri-drag-region>
         <template v-if="desktop">
           <button class="datalib-tool" title="back (⌘[)" aria-label="Back" @click="goBack">
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -101,12 +111,12 @@ onUnmounted(() => stop?.());
             </svg>
           </button>
         </template>
-        <div class="datalib-brand"><span class="datalib-brand-mark" />Datalib</div>
+        <div class="datalib-brand" data-tauri-drag-region>Datalib</div>
       </div>
       <div class="datalib-toolbar-center"><CommandBox /></div>
       <!-- Lightweight sync indicator in the toolbar's flexible space —
            appearing/disappearing never shifts the page layout. -->
-      <div class="datalib-toolbar-end"><SyncProgressChrome /></div>
+      <div class="datalib-toolbar-end" data-tauri-drag-region><SyncProgressChrome /></div>
     </nav>
 
     <!-- The gates had the shell's padding before the cards went
@@ -168,6 +178,14 @@ onUnmounted(() => stop?.());
   background: var(--datalib-ground);
   border-bottom: 1px solid var(--datalib-border);
 }
+/* The title bar's height, whatever the density: the window buttons are
+   placed once, when the window opens, at this bar's middle. */
+.datalib-toolbar--titlebar {
+  height: 40px;
+  padding-left: 80px;
+  -webkit-user-select: none;
+  user-select: none;
+}
 .datalib-brand {
   display: flex;
   align-items: center;
@@ -176,12 +194,6 @@ onUnmounted(() => stop?.());
   font-size: var(--datalib-title-size);
   font-weight: 600;
   white-space: nowrap;
-}
-.datalib-brand-mark {
-  width: calc(var(--datalib-icon-size) + 2px);
-  height: calc(var(--datalib-icon-size) + 2px);
-  border-radius: 5px;
-  background: var(--datalib-accent);
 }
 /* The search box centred on the window, whatever sits either side:
    the two ends share the leftover width equally. */

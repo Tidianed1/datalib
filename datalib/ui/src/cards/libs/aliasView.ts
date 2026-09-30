@@ -13,7 +13,8 @@ export function aliasView(): CardRender {
     ctx.setTitle("Component library");
     const style = document.createElement("style");
     style.textContent = `
-      .av { font: var(--datalib-font-size)/1.5 var(--datalib-mono); color: var(--datalib-fg, inherit); }
+      :host { display: block; height: 100%; position: relative; }
+      .av { position: absolute; inset: 0; overflow-y: auto; font: var(--datalib-font-size)/1.5 var(--datalib-mono); color: var(--datalib-fg, inherit); }
       .av-head { padding: 8px 12px; opacity: .6; border-bottom: 1px solid var(--datalib-border-soft); }
       .av-row { display: flex; align-items: baseline; gap: .6rem; padding: 6px 12px; cursor: pointer; border-bottom: 1px solid var(--datalib-border-soft); }
       .av-row:hover { background: var(--datalib-hover); }

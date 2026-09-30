@@ -15,7 +15,8 @@ export function documentPickerView(): CardRender {
     ctx.setTitle("Open document");
     const style = document.createElement("style");
     style.textContent = `
-      .dp { font: var(--datalib-font-size)/1.5 var(--datalib-font); color: var(--datalib-fg, inherit); }
+      :host { display: block; height: 100%; position: relative; }
+      .dp { position: absolute; inset: 0; overflow-y: auto; font: var(--datalib-font-size)/1.5 var(--datalib-font); color: var(--datalib-fg, inherit); }
       .dp-head { padding: 8px 12px; opacity: .6; border-bottom: 1px solid var(--datalib-border-soft); }
       .dp-row { display: flex; align-items: baseline; gap: .6rem; padding: 6px 12px; cursor: pointer; border-bottom: 1px solid var(--datalib-border-soft); }
       .dp-row:hover { background: var(--datalib-hover); }

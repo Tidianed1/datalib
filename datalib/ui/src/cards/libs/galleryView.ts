@@ -47,7 +47,10 @@ export function galleryView(): CardRender {
     ctx.setTitle("New card");
     const style = document.createElement("style");
     style.textContent = `
-      .gv { font: var(--datalib-font-size, 13px)/1.5 var(--datalib-font, system-ui, sans-serif); color: var(--datalib-fg, inherit); }
+      :host { display: block; height: 100%; position: relative; }
+      /* The host clips; the list scrolls in a box pinned to it, the way
+         vueCard pins a Vue card's root. */
+      .gv { position: absolute; inset: 0; overflow-y: auto; font: var(--datalib-font-size, 13px)/1.5 var(--datalib-font, system-ui, sans-serif); color: var(--datalib-fg, inherit); }
       .gv-head { padding: 8px 12px; opacity: .6; border-bottom: 1px solid var(--datalib-border, #8884); }
       .gv-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 12px; cursor: pointer; border-bottom: 1px solid var(--datalib-border, #8882); }
       .gv-icon { flex: 0 0 auto; width: 18px; height: 18px; margin-top: 1px; color: var(--datalib-accent); }
