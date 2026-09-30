@@ -337,6 +337,66 @@ bazelisk build //third-party/doltlite:doltlite
 bazel-bin/third-party/doltlite/doltlite <root>/lightroom/ingest/entities.doltlite_db "SELECT dolt_gc();"
 ```
 
+## Why a re-ingest grew the store, and how to find out
+
+A second ingest of a newer catalog adds a commit, and the file grows by
+the rows that commit had to store again. Which tables those are can be
+read from the store's metadata alone, without looking at a single row's
+contents. Take the two `download` commits from `dolt_log`, then:
+
+```sh
+D=datalib-doltlite   # or the doltlite build from the section above
+DB=<root>/lightroom/ingest/entities.doltlite_db
+$D -readonly $DB "SELECT commit_hash, substr(message,1,140), date FROM dolt_log ORDER BY date;"
+
+# which tables changed, and how much (counts only)
+$D -readonly $DB "SELECT table_name, rows_unmodified, rows_added, rows_deleted, rows_modified, cells_modified
+                    FROM dolt_diff_stat('<old>', '<new>')
+                   ORDER BY rows_added+rows_deleted+rows_modified DESC LIMIT 40;"
+
+# for one table with lots of modified rows: which column changed, and did its storage type change?
+$D -readonly $DB "SELECT count(*), sum(from_c IS NOT to_c), sum(typeof(from_c) IS NOT typeof(to_c))
+                    FROM dolt_diff_<table>('<old>', '<new>') WHERE diff_type = 'modified';"
+```
+
+`cells_modified / rows_modified` is the quickest signal: near 1.0 means
+one column changed in every row. `pragma_table_info('<table>')` lists
+the columns without reading data. The row-level diff is a per-table
+vtab, `dolt_diff_<table>('<from>', '<to>')`, not the three-argument
+`dolt_diff(...)`
+([doltlite.md § Diffs](/docs/dev/doltlite.md#diffs)).
+
+What three catalogs from different Lightroom generations (2016, 2018,
+2019) showed:
+
+- **New photos are cheap and honest.** Each new image is one added row
+  in every per-image table (`Adobe_images`, `AgLibraryFile`,
+  `Adobe_imageDevelopSettings`, …) and a few modified ones. The row
+  counts add up exactly: old rows + added − deleted = new rows.
+- **A change of storage type rewrites every row of that column.**
+  Between the first two catalogs, `Adobe_libraryImageDevelopHistoryStep.text`
+  went from `text` to `blob` in every row while its `digest` and `name`
+  stayed the same, and the values got shorter. That fits Lightroom
+  compressing the value in newer versions; the format was not identified.
+  The mirror copies what the source holds, so the whole column is stored
+  again once. The next catalog with the same format stored no rewrite.
+- **Reprocessing rewrites rows too.** The face tables
+  (`Adobe_libraryImageFaceProcessHistory`, `AgLibraryFace`,
+  `AgLibraryFaceData`) had nearly every row modified in one column when
+  the face model changed. That is real change in the source, not churn.
+- **A stable key is why this reads as an edit.** `id_global` keys most
+  tables, so a changed column is a modified row rather than a delete and
+  an add ([When the primary key changes](#when-the-primary-key-changes)).
+  Keyless tables (`AgDNGProxyInfo` was one) compare by position, so they
+  show as wholly modified whenever rows are added.
+- **The size ratio is not the diff.** A catalog that shrank in the source
+  still grew the store, because a store keeps every version. Part of the
+  growth may also be uncollected garbage; `dolt_gc` (above) reclaims it.
+
+The counts say *what* changed; only the values say *why*, and this
+recipe deliberately does not read them. The causes above are inferences
+from column names, types and lengths.
+
 ## Running it
 
 As a DAG step — see the `lightroom` stanza in
