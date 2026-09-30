@@ -196,6 +196,7 @@ rust_test(
     deps = [
         ":datalib_dag",
         "//datalib/backend/qmd_indexer:datalib_qmd_indexer",
+        "//datalib/backend/runtime:datalib_runtime",
         "@datalib_crates//:insta",
         "@datalib_crates//:runfiles",
         "@datalib_crates//:serde_json",
