@@ -2,23 +2,26 @@
 
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 
 use datalib_etl::download_problems;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl::raw_layout;
-use datalib_etl_lightroom_config::{LightroomConfig, LightroomMethod};
+use datalib_etl_lightroom_config::LightroomConfig;
 
 use crate::ingest::{self, backups, unpack, MirrorOptions};
 
 /// The engine's options for this config. `source_path` is the catalog,
-/// or for a backups folder the folder, which the engine never reads
-/// itself: each backup in it is mirrored as its own source.
+/// else the backups folder, which the engine never reads itself: each
+/// backup in it is mirrored as its own source.
 pub fn mirror_options(config: &LightroomConfig) -> Result<MirrorOptions> {
-    let source_path = match config.method()? {
-        LightroomMethod::Catalog(p) | LightroomMethod::Backups(p) => p.path(),
-    };
+    let source_path = config
+        .catalog
+        .as_ref()
+        .or(config.backups.as_ref())
+        .ok_or_else(|| anyhow!("lightroom: set `catalog.path`, `backups.path`, or both"))?
+        .path();
     Ok(MirrorOptions {
         source_path,
         snapshot: config.snapshot,
@@ -40,7 +43,8 @@ pub fn plan_ingest(
     Ok(vec![Box::new(LightroomIngest {
         id: format!("lightroom/{name}/download"),
         raw_path: config.common.raw_path().to_path_buf(),
-        backups: matches!(config.method()?, LightroomMethod::Backups(_)),
+        catalog: config.catalog.as_ref().map(|p| p.path()),
+        backups: config.backups.as_ref().map(|p| p.path()),
         options: mirror_options(&config)?,
     })])
 }
@@ -51,8 +55,8 @@ pub fn plan_ingest(
 struct LightroomIngest {
     id: String,
     raw_path: PathBuf,
-    /// `options.source_path` is a folder of backups, not a catalog.
-    backups: bool,
+    catalog: Option<PathBuf>,
+    backups: Option<PathBuf>,
     options: MirrorOptions,
 }
 
@@ -66,26 +70,34 @@ impl DataProcessor for LightroomIngest {
         let entity_db = raw_layout::entities_db(&self.raw_path);
         let pool = ingest::mirror::open_mirror(&entity_db).await?;
         let session = ctx.open_store(pool.clone(), entity_db).await;
-        let (summary, problems) = if self.backups {
-            let run = backups::ingest(
-                &pool,
-                &self.options.source_path,
-                &self.options,
-                ctx.progress,
-                &ctx.control.stop,
-                ctx.name,
-            )
-            .await?;
-            (run.summary(), run.problems)
-        } else {
-            let stats = unpack::mirror_file(
-                &pool,
-                &self.options.source_path,
-                &self.options,
-                ctx.progress,
-            )
-            .await?;
-            (stats.summary(), Vec::new())
+        let (summary, problems) = match (&self.backups, &self.catalog) {
+            (Some(dir), catalog) => {
+                let now = chrono::DateTime::parse_from_rfc3339(ctx.now)
+                    .with_context(|| format!("the run's now {:?} is not RFC 3339", ctx.now))?
+                    .with_timezone(&chrono::Local)
+                    .naive_local();
+                let inputs = backups::Inputs {
+                    backups: dir,
+                    catalog: catalog.as_deref(),
+                    now,
+                };
+                let run = backups::ingest(
+                    &pool,
+                    inputs,
+                    &self.options,
+                    ctx.progress,
+                    &ctx.control.stop,
+                    ctx.name,
+                )
+                .await?;
+                (run.summary(), run.problems)
+            }
+            (None, Some(catalog)) => {
+                let stats =
+                    unpack::mirror_file(&pool, catalog, &self.options, ctx.progress).await?;
+                (stats.summary(), Vec::new())
+            }
+            (None, None) => unreachable!("validate() refuses a config with neither"),
         };
         // Every run, so a backup that is placed or removed stops being a
         // problem.

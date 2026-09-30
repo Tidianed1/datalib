@@ -19,10 +19,10 @@ the catalog per run and stores only what actually changed, with every
 prior state still queryable. There is no render step; see
 [What render will need](#what-render-will-need).
 
-A source reads one of two things: `catalog.path`, a `.lrcat` or one
-backup `.zip`, mirrored again on every run; or `backups.path`, a folder
-of Lightroom's backups, replayed as the catalog's history — see
-[A folder of backups](#a-folder-of-backups).
+A source reads `catalog.path`, a `.lrcat` or one backup `.zip`,
+mirrored again on every run; `backups.path`, a folder of Lightroom's
+backups, replayed as the catalog's history; or both, the backups first
+and the catalog on top — see [A folder of backups](#a-folder-of-backups).
 
 ## The model
 
@@ -324,6 +324,11 @@ each sync mirrors every backup the store does not hold yet, oldest
 first, **one commit per backup**. Each backup is mirrored exactly as a
 catalog is; any two commits then diff like any two runs.
 
+**With `catalog.path` set too**, the catalog is mirrored after the
+backups, as the run's last commit, so the backups are the history and
+the live catalog is HEAD. A sync that finds a new backup commits it and
+then the catalog on top again.
+
 - **Which file is a backup.** Each entry in the folder is one backup:
   a folder with a catalog in it, or a catalog file on its own. Its
   time comes from the start of its name (`YYYY-MM-DD HHMM`), so a note
@@ -337,23 +342,28 @@ catalog is; any two commits then diff like any two runs.
   `dolt_history_<table>.commit_date` read as the catalog's own history.
   The store's first commits and each run's closing commit (the problem
   rows, the filter record) are dated when they were made.
-- **History is one line.** A backup older than the newest one already in
-  the store has nowhere to go. It is left out and reported as a problem
-  on the Manage row, not committed on top as though the catalog had gone
-  back in time. So is a folder holding two catalogs, and one whose name
-  does not start with a date. To take an older backup in, start a new
-  store.
-- **`lightroom_backups` lists the backups the store holds**: `backup`
-  (the entry's name), `taken_at` (from the name, local time) and `file`
-  (the file mirrored, relative to the folder). Each row lands in the
-  commit that mirrored it, so `dolt_diff_lightroom_backups` names the
-  backup behind every commit.
+- **History is one line.** A backup older than the newest state already
+  in the store has nowhere to go. That state is the newest backup, or the
+  live catalog as of the last sync that changed it: a backup taken
+  before then turns up too late. It is left out and reported as a
+  problem on the Manage row, not committed on top as though the catalog
+  had gone back in time. So is a folder holding two catalogs, and one
+  whose name does not start with a date. To take an older backup in,
+  start a new store.
+- **`lightroom_snapshots` lists the states the store holds**: one row per
+  backup — `snapshot` (the entry's name), `taken_at` (from the name, local
+  time) and `file` (relative to the folder) — landing in the commit that
+  mirrored it, so `dolt_diff_lightroom_snapshots` names the backup behind
+  every commit. With a catalog there is also a `live catalog` row, whose
+  `taken_at` is the last sync at which mirroring the catalog changed the
+  store; a sync that changes nothing leaves it alone, and so stays a
+  no-op.
 - **A changed filter reaches HEAD without waiting for a backup.**
   `include_tables`, `exclude_tables`, `exclude_columns`, `skip_xmp`,
   `stable_key_columns` and `primary_keys` shape every backup mirrored
-  from then on. When a sync finds no new backup to carry a change, it
-  mirrors the newest backup again under the new filters, as a commit
-  dated now. The filters are recorded with `scope_config` for the
+  from then on. With a catalog, its mirror carries the change to HEAD.
+  Without one, a sync that finds no new backup mirrors the newest backup
+  again under the new filters, as a commit dated now. The filters are recorded with `scope_config` for the
   comparison; earlier commits keep the filters they were made with.
 - **A folder with no backups fails the run**, as does one that cannot
   be read (a backup drive that is not mounted).
@@ -362,8 +372,8 @@ A zip is unpacked into a temporary directory for the length of its
 mirror, so a run needs free space for one catalog at a time; the
 unpacked copy is read without a snapshot, since nothing else has it
 open. `tests/backups_folder.rs` covers the order, the dates, the ledger,
-the refusal and the filter change against zipped copies of the TNG
-catalog.
+the refusals, the filter change and the live catalog on top, against
+zipped copies of the TNG catalog.
 
 ## Store size and `gc`
 
@@ -470,10 +480,11 @@ function = "ingest"
 path = "~/Pictures/Lightroom/Lightroom Catalog-v14.lrcat"
 ```
 
-or, for a folder of backups, `[steps.params.backups]` with
-`path = "~/Pictures/Lightroom/Backups"` in place of the catalog.
+and, for a folder of backups beside it or instead of it,
+`[steps.params.backups]` with `path = "~/Pictures/Lightroom/Backups"`.
 
-Or standalone, with `--catalog` (a `.lrcat` or a `.zip`) or `--backups`:
+Or standalone, with `--catalog` (a `.lrcat` or a `.zip`), `--backups`,
+or both:
 
 ```sh
 bazelisk build //datalib/backend/etl/providers/lightroom:lightroom_ingest

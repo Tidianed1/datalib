@@ -1,6 +1,7 @@
 //! A folder of Lightroom backups, mirrored oldest first, one commit per
-//! backup dated when it was taken. `INGEST.md` §"A folder of backups"
-//! has the rules this implements.
+//! backup dated when it was taken, then the live catalog on top when the
+//! source has one. `INGEST.md` §"A folder of backups" has the rules this
+//! implements.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -18,15 +19,20 @@ use datalib_etl_sqlite_mirror::{MirrorOptions, MirrorStats};
 
 use super::unpack::{self, is_catalog, is_zip};
 
-/// The store's record of which backups it holds, one row per backup,
-/// written in the commit that mirrored it.
-pub const LEDGER: &str = "lightroom_backups";
+/// The store's record of the catalog states it holds: one row per
+/// backup, written in the commit that mirrored it, and one for the live
+/// catalog, moved whenever mirroring it changed the store.
+pub const LEDGER: &str = "lightroom_snapshots";
 
-const LEDGER_DDL: &str = "CREATE TABLE IF NOT EXISTS lightroom_backups (
-    backup TEXT PRIMARY KEY,
+const LEDGER_DDL: &str = "CREATE TABLE IF NOT EXISTS lightroom_snapshots (
+    snapshot TEXT PRIMARY KEY,
     taken_at TEXT NOT NULL,
     file TEXT NOT NULL
 )";
+
+/// The live catalog's row in [`LEDGER`]. A backup's name starts with a
+/// date, so it can never be this.
+pub const LIVE: &str = "live catalog";
 
 /// `scope_config`'s key for the filters the newest commit was mirrored
 /// under.
@@ -80,28 +86,36 @@ pub fn plan(entries: Vec<Entry>, ledger: &BTreeMap<String, NaiveDateTime>) -> Pl
     out.found
         .sort_by(|a, b| (a.taken_at, &a.name).cmp(&(b.taken_at, &b.name)));
 
-    let newest_held = ledger.values().max().copied();
+    let newest_held = newest(ledger);
     for b in &out.found {
         if ledger.contains_key(&b.name) {
             continue;
         }
         match newest_held {
-            // History is one line: a backup taken before the newest one
-            // already committed has nowhere to go.
-            Some(newest) if b.taken_at < newest => out.refused.push((
+            // History is one line: a backup taken before the newest state
+            // already committed, a backup's or the live catalog's, has
+            // nowhere to go.
+            Some((name, at)) if b.taken_at < at => out.refused.push((
                 b.name.clone(),
                 format!(
-                    "taken {}, before {}, the newest backup already in the store; \
+                    "taken {}, before the newest state already in the store ({name}, {}); \
                      backups are added in the order they were taken, so this one \
                      was left out",
                     b.taken_at.format(LEDGER_DATE_FORMAT),
-                    newest.format(LEDGER_DATE_FORMAT),
+                    at.format(LEDGER_DATE_FORMAT),
                 ),
             )),
             _ => out.ingest.push(b.clone()),
         }
     }
     out
+}
+
+fn newest(ledger: &BTreeMap<String, NaiveDateTime>) -> Option<(&str, NaiveDateTime)> {
+    ledger
+        .iter()
+        .max_by_key(|(_, t)| **t)
+        .map(|(n, t)| (n.as_str(), *t))
 }
 
 /// `Ok(None)` for an entry with no catalog in it, which is not a backup.
@@ -185,6 +199,8 @@ pub struct BackupsRun {
     pub found: usize,
     pub mirrored: Vec<String>,
     pub problems: Vec<RecordProblem>,
+    /// The live catalog, when the source has one and the run reached it.
+    pub live: Option<MirrorStats>,
     /// The last backup mirrored.
     pub last: Option<MirrorStats>,
 }
@@ -197,7 +213,7 @@ impl BackupsRun {
             self.mirrored.len(),
             self.problems.len()
         );
-        if let Some(last) = &self.last {
+        if let Some(last) = self.live.as_ref().or(self.last.as_ref()) {
             s.push(' ');
             s.push_str(&last.summary());
         }
@@ -205,16 +221,26 @@ impl BackupsRun {
     }
 }
 
-/// Commits each backup it mirrors, and leaves the scope record for the
-/// caller's closing commit, after it reports [`BackupsRun::problems`].
+/// What one run reads.
+pub struct Inputs<'a> {
+    pub backups: &'a Path,
+    /// Mirrored last, on top of the backups.
+    pub catalog: Option<&'a Path>,
+    /// The run's now, in local time: the live catalog's `taken_at`.
+    pub now: NaiveDateTime,
+}
+
+/// Commits each backup and the live catalog as it mirrors them, and
+/// leaves only the problems for the caller's closing commit.
 pub async fn ingest(
     pool: &SqlitePool,
-    dir: &Path,
+    inputs: Inputs<'_>,
     options: &MirrorOptions,
     progress: &Progress,
     stop: &StopFlag,
     label: &str,
 ) -> Result<BackupsRun> {
+    let dir = inputs.backups;
     sqlx::query(LEDGER_DDL)
         .execute(pool)
         .await
@@ -248,23 +274,23 @@ pub async fn ingest(
     };
 
     // The filters shape every commit from here on, but the store's newest
-    // commit was made under the old ones. With no new backup to carry
-    // them, mirror the newest again so HEAD shows the catalog as the
-    // filters now say.
+    // commit was made under the old ones. With no new backup and no live
+    // catalog to carry them, mirror the newest backup again so HEAD shows
+    // the catalog as the filters now say.
     let mut todo: Vec<(Backup, bool)> = plan.ingest.iter().map(|b| (b.clone(), false)).collect();
     let mut remirror_missing = false;
-    if filters_changed && todo.is_empty() {
-        let newest = ledger.iter().max_by_key(|(_, t)| **t).map(|(n, _)| n);
-        match plan.found.iter().find(|b| Some(&b.name) == newest) {
+    if filters_changed && todo.is_empty() && inputs.catalog.is_none() {
+        let newest = newest(&ledger).map(|(n, _)| n);
+        match plan.found.iter().find(|b| Some(b.name.as_str()) == newest) {
             Some(b) => todo.push((b.clone(), true)),
             None => {
                 remirror_missing = true;
                 run.problems.push(RecordProblem::new(
                     LEDGER,
-                    newest.map(String::as_str).unwrap_or(""),
-                    "the table and column filters changed, and this backup, the newest in \
-                     the store, is no longer on disk to mirror again under them; the store \
-                     keeps the old filters until the next backup",
+                    newest.unwrap_or(""),
+                    "the table and column filters changed, and this, the newest state in \
+                     the store, is not a backup on disk that can be mirrored again under \
+                     them; the store keeps the old filters until the next backup",
                 ));
             }
         }
@@ -286,15 +312,7 @@ pub async fn ingest(
             .unwrap_or(&backup.file)
             .display()
             .to_string();
-        sqlx::query(
-            "INSERT OR REPLACE INTO lightroom_backups (backup, taken_at, file) VALUES (?, ?, ?)",
-        )
-        .bind(&backup.name)
-        .bind(backup.taken_at.format(LEDGER_DATE_FORMAT).to_string())
-        .bind(&file)
-        .execute(pool)
-        .await
-        .context("record the backup in the ledger")?;
+        record(pool, &backup.name, backup.taken_at, &file).await?;
 
         let (what, date) = if again {
             // Dated now: the filters changed now, not when the backup
@@ -315,18 +333,70 @@ pub async fn ingest(
         run.last = Some(stats);
     }
 
-    // Record the filters once HEAD was mirrored under them. An absent
-    // record is taken as a match: it is a store from before the record,
-    // or a first run.
-    if !stopped && !remirror_missing && recorded.as_ref() != Some(&scope) {
+    if stopped {
+        return Ok(run);
+    }
+    // Record the filters once HEAD is mirrored under them, which the live
+    // catalog below does whatever changed. An absent record is taken as a
+    // match: it is a store from before the record, or a first run.
+    if !remirror_missing && recorded.as_ref() != Some(&scope) {
         scope_config::store(pool, SCOPE, &scope).await?;
+    }
+
+    if let Some(catalog) = inputs.catalog {
+        let stats = unpack::mirror_file(pool, catalog, &options, progress)
+            .await
+            .with_context(|| format!("mirror the catalog {}", catalog.display()))?;
+        // Only a mirror that changed something moves the live row: a
+        // no-op run must stay a no-op, and the row's time is what a
+        // backup that turns up later is held against.
+        if mirror_changed(pool).await? {
+            record(pool, LIVE, inputs.now, &catalog.display().to_string()).await?;
+        }
+        let name = catalog
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let msg = format!("download {label}: catalog {name}: {}", stats.summary());
+        dr::commit_run(pool, &msg).await?;
+        run.live = Some(stats);
     }
     Ok(run)
 }
 
+async fn record(
+    pool: &SqlitePool,
+    snapshot: &str,
+    taken_at: NaiveDateTime,
+    file: &str,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT OR REPLACE INTO lightroom_snapshots (snapshot, taken_at, file) VALUES (?, ?, ?)",
+    )
+    .bind(snapshot)
+    .bind(taken_at.format(LEDGER_DATE_FORMAT).to_string())
+    .bind(file)
+    .execute(pool)
+    .await
+    .with_context(|| format!("record {snapshot} in {LEDGER}"))?;
+    Ok(())
+}
+
+/// Did the mirror leave anything uncommitted outside the store's own
+/// bookkeeping?
+async fn mirror_changed(pool: &SqlitePool) -> Result<bool> {
+    let tables: Vec<String> = sqlx::query_scalar("SELECT table_name FROM dolt_status")
+        .fetch_all(pool)
+        .await
+        .context("read dolt_status")?;
+    Ok(tables
+        .iter()
+        .any(|t| t != LEDGER && !dr::SHARED_TABLES.contains(&t.as_str())))
+}
+
 async fn read_ledger(pool: &SqlitePool) -> Result<BTreeMap<String, NaiveDateTime>> {
     let rows: Vec<(String, String)> =
-        sqlx::query_as("SELECT backup, taken_at FROM lightroom_backups")
+        sqlx::query_as("SELECT snapshot, taken_at FROM lightroom_snapshots")
             .fetch_all(pool)
             .await
             .context("read the backups ledger")?;
@@ -463,6 +533,27 @@ mod tests {
         );
         let refused: Vec<&str> = p.refused.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(refused, ["2016-10-01 0856", "2018-03-07 2110"]);
+    }
+
+    /// The live catalog's row is a state like any backup's: a backup
+    /// taken before the catalog was last mirrored cannot follow it.
+    #[test]
+    fn the_live_catalog_holds_back_an_older_backup() {
+        let ledger = BTreeMap::from([
+            ("2016-10-01 0856".to_string(), at("2016-10-01T08:56:00")),
+            (LIVE.to_string(), at("2019-06-01T12:00:00")),
+        ]);
+        let p = plan(lightroom_folder(), &ledger);
+        assert_eq!(
+            names(&p.ingest),
+            [
+                "2019-12-14 0731 - Before restoring captions",
+                "2026-09-02 0911"
+            ]
+        );
+        let (name, why) = &p.refused[0];
+        assert_eq!(name, "2018-03-07 2110");
+        assert!(why.contains(LIVE), "{why}");
     }
 
     #[test]

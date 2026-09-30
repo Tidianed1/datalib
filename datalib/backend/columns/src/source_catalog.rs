@@ -79,13 +79,6 @@ const CATALOG: &[Entry] = &[
     e("fsindex", None, "File index", Some("fsindex")),
     e("media", None, "Music, photos & video", Some("media")),
     e("airvisual", None, "AirVisual", Some("airvisual")),
-    e("lightroom", Some("catalog"), "Lightroom", Some("lightroom")),
-    e(
-        "lightroom",
-        Some("backups"),
-        "Lightroom backups",
-        Some("lightroom"),
-    ),
     e("lightroom", None, "Lightroom", Some("lightroom")),
     e("apple_photos", None, "Apple Photos", Some("apple_photos")),
     e(

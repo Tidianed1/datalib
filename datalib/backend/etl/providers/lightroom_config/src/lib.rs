@@ -17,9 +17,10 @@ pub const XMP_COLUMN_PATTERNS: &[&str] = &[
     "AgMetadataSearchIndex.searchIndex",
 ];
 
-/// The lightroom-owned slice of a `lightroom` source: one catalog
-/// (`catalog.path`) or a folder of Lightroom's backups (`backups.path`),
-/// never both. The doltlite mirror lands in the ingest step's tree.
+/// The lightroom-owned slice of a `lightroom` source: a catalog
+/// (`catalog.path`), a folder of Lightroom's backups (`backups.path`), or
+/// both, the backups replayed first and the catalog mirrored on top. The
+/// doltlite mirror lands in the ingest step's tree.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LightroomConfig {
@@ -32,7 +33,8 @@ pub struct LightroomConfig {
 
     /// A folder of Lightroom's backups: one subfolder per backup, named
     /// for when it was taken (`2026-09-27 1650`). Each backup not yet in
-    /// the store becomes a commit of its own, oldest first.
+    /// the store becomes a commit of its own, oldest first, before the
+    /// catalog is mirrored.
     pub backups: Option<LocalPath>,
 
     /// Table-name globs to mirror. Default `["*"]` — every table in the
@@ -88,31 +90,14 @@ impl Default for LightroomConfig {
     }
 }
 
-/// Where a `lightroom` source reads from.
-#[derive(Debug, Clone, Copy)]
-pub enum LightroomMethod<'a> {
-    Catalog(&'a LocalPath),
-    Backups(&'a LocalPath),
-}
-
 impl LightroomConfig {
-    /// The one method this source holds, or why there is not exactly one.
-    pub fn method(&self) -> anyhow::Result<LightroomMethod<'_>> {
-        match (&self.catalog, &self.backups) {
-            (Some(c), None) => Ok(LightroomMethod::Catalog(c)),
-            (None, Some(b)) => Ok(LightroomMethod::Backups(b)),
-            (None, None) => anyhow::bail!(
-                "lightroom: set `catalog.path` (a .lrcat or a backup .zip) \
-                 or `backups.path` (a folder of Lightroom backups)"
-            ),
-            (Some(_), Some(_)) => anyhow::bail!(
-                "lightroom: `catalog` and `backups` are both set; a source reads one of them"
-            ),
-        }
-    }
-
     pub fn validate(&self) -> anyhow::Result<()> {
-        self.method()?;
+        if self.catalog.is_none() && self.backups.is_none() {
+            anyhow::bail!(
+                "lightroom: set `catalog.path` (a .lrcat or a backup .zip), \
+                 `backups.path` (a folder of Lightroom backups), or both"
+            );
+        }
         if self.include_tables.is_empty() {
             anyhow::bail!("include_tables is empty: nothing would be mirrored");
         }
@@ -211,23 +196,19 @@ mod tests {
     }
 
     #[test]
-    fn a_source_reads_a_catalog_or_a_backups_folder_but_not_both() {
-        let catalog = LightroomConfig {
-            catalog: local("/c.lrcat"),
-            ..Default::default()
-        };
-        assert!(matches!(catalog.method(), Ok(LightroomMethod::Catalog(_))));
-        let backups = LightroomConfig {
-            backups: local("/Backups"),
-            ..Default::default()
-        };
-        assert!(matches!(backups.method(), Ok(LightroomMethod::Backups(_))));
+    fn a_source_reads_a_catalog_a_backups_folder_or_both_but_not_neither() {
+        for (catalog, backups) in [
+            (local("/c.lrcat"), None),
+            (None, local("/Backups")),
+            (local("/c.lrcat"), local("/Backups")),
+        ] {
+            let c = LightroomConfig {
+                catalog,
+                backups,
+                ..Default::default()
+            };
+            assert!(c.validate().is_ok(), "{c:?}");
+        }
         assert!(LightroomConfig::default().validate().is_err());
-        let both = LightroomConfig {
-            catalog: local("/c.lrcat"),
-            backups: local("/Backups"),
-            ..Default::default()
-        };
-        assert!(both.validate().is_err());
     }
 }

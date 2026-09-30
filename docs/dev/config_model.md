@@ -147,7 +147,9 @@ A method is *held* when its path is written and its value is neither
 complete selection), a flag such as linkedin's `export.fetch_photos`
 only when on. A provider with more than one table refuses a step
 naming two (its config's `validate`, e.g. `claude_config`'s), so a
-store is filled one way.
+store is filled one way. `lightroom` is the exception: its `backups`
+folder is the catalog's past and `catalog` its present, so a step may
+name both, and the catalog lands on top.
 
 Knobs that apply whatever the method (email's `only_extract_labels`,
 the `common.*` envelope) stay at the top level of `params`. Render

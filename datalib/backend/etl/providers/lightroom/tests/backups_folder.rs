@@ -1,11 +1,12 @@
 //! A folder of Lightroom backups, built from the TNG catalog, mirrored
 //! into one store: each backup a commit, oldest first, dated when it was
-//! taken.
+//! taken, and the live catalog on top when there is one.
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use chrono::NaiveDateTime;
 use sqlx::sqlite::SqlitePool;
 
 use datalib_etl::doltlite_raw as dr;
@@ -39,20 +40,7 @@ impl Fixture {
     async fn backup(&self, folder: &str, catalog: &str, zip: Option<&str>, edits: &[&str]) {
         let scratch = tempfile::tempdir().unwrap();
         let lrcat = scratch.path().join(catalog);
-        std::fs::copy(fixture_catalog(), &lrcat).unwrap();
-        let mut perms = std::fs::metadata(&lrcat).unwrap().permissions();
-        #[allow(clippy::permissions_set_readonly_false)]
-        perms.set_readonly(false);
-        std::fs::set_permissions(&lrcat, perms).unwrap();
-        let pool = mirror::open_sqlite(&lrcat, false).await.unwrap();
-        for e in edits {
-            // Test: `edits` are literal catalog edits written by the test.
-            sqlx::query(sqlx::AssertSqlSafe(*e))
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
-        pool.close().await;
+        write_catalog(&lrcat, edits).await;
 
         let dest = self.backups().join(folder);
         std::fs::create_dir_all(&dest).unwrap();
@@ -72,13 +60,36 @@ impl Fixture {
         }
     }
 
+    /// The live catalog, next to the backups folder: the TNG catalog with
+    /// `edits` applied, replacing what was there.
+    async fn live(&self, edits: &[&str]) -> PathBuf {
+        let path = self.dir.path().join("Live.lrcat");
+        let _ = std::fs::remove_file(&path);
+        write_catalog(&path, edits).await;
+        path
+    }
+
+    async fn sync(&self, options: &MirrorOptions) -> Result<BackupsRun> {
+        self.sync_with(options, None, NOW).await
+    }
+
     /// One sync: mirror what is new, report, and make the run's last
     /// commit, as the processor does.
-    async fn sync(&self, options: &MirrorOptions) -> Result<BackupsRun> {
+    async fn sync_with(
+        &self,
+        options: &MirrorOptions,
+        catalog: Option<&Path>,
+        now: &str,
+    ) -> Result<BackupsRun> {
         let pool = mirror::open_mirror(&self.store()).await?;
+        let inputs = backups::Inputs {
+            backups: &self.backups(),
+            catalog,
+            now: at(now),
+        };
         let run = backups::ingest(
             &pool,
-            &self.backups(),
+            inputs,
             options,
             &Progress::noop(),
             &StopFlag::default(),
@@ -96,6 +107,30 @@ impl Fixture {
     async fn read(&self) -> SqlitePool {
         mirror::open_sqlite(&self.store(), false).await.unwrap()
     }
+}
+
+/// The run's now, as the tests pin it.
+const NOW: &str = "2024-01-01T00:00:00";
+
+fn at(s: &str) -> NaiveDateTime {
+    NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S").unwrap()
+}
+
+async fn write_catalog(path: &Path, edits: &[&str]) {
+    std::fs::copy(fixture_catalog(), path).unwrap();
+    let mut perms = std::fs::metadata(path).unwrap().permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    perms.set_readonly(false);
+    std::fs::set_permissions(path, perms).unwrap();
+    let pool = mirror::open_sqlite(path, false).await.unwrap();
+    for e in edits {
+        // Test: `edits` are literal catalog edits written by the test.
+        sqlx::query(sqlx::AssertSqlSafe(*e))
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    pool.close().await;
 }
 
 fn fixture_catalog() -> PathBuf {
@@ -228,10 +263,11 @@ async fn each_backup_is_a_commit_dated_when_it_was_taken() -> Result<()> {
     .await?;
     assert_eq!(keywords, 1, "HEAD is the newest backup");
 
-    let ledger: Vec<(String, String, String)> =
-        sqlx::query_as("SELECT backup, taken_at, file FROM lightroom_backups ORDER BY taken_at")
-            .fetch_all(&pool)
-            .await?;
+    let ledger: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT snapshot, taken_at, file FROM lightroom_snapshots ORDER BY taken_at",
+    )
+    .fetch_all(&pool)
+    .await?;
     assert_eq!(
         ledger,
         [
@@ -316,7 +352,7 @@ async fn a_new_backup_is_appended_and_an_older_one_refused() -> Result<()> {
         sqlx::query_scalar("SELECT scope_key FROM problems WHERE scope_key LIKE 'record:%'")
             .fetch_all(&pool)
             .await?;
-    assert_eq!(problems, ["record:lightroom_backups:2020-01-01 0000"]);
+    assert_eq!(problems, ["record:lightroom_snapshots:2020-01-01 0000"]);
     let keywords: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM AgLibraryKeyword WHERE id_global = 'KEYWORD-9001-HOLODECK'",
     )
@@ -383,4 +419,158 @@ async fn table_exists(pool: &SqlitePool, name: &str) -> bool {
     .await
     .unwrap()
         == 1
+}
+
+const RENAME: &str =
+    "UPDATE AgLibraryKeyword SET name = 'Holodeck 3' WHERE id_global = 'KEYWORD-9001-HOLODECK'";
+
+async fn live_row(pool: &SqlitePool) -> Option<String> {
+    sqlx::query_scalar("SELECT taken_at FROM lightroom_snapshots WHERE snapshot = 'live catalog'")
+        .fetch_optional(pool)
+        .await
+        .unwrap()
+}
+
+/// With both set, the backups are history and the live catalog is HEAD:
+/// backups first, oldest first, then the catalog committed on top.
+#[tokio::test]
+async fn the_live_catalog_lands_on_top_of_the_backups() -> Result<()> {
+    let f = Fixture::new();
+    f.backup(
+        "2021-03-01 0900",
+        "TngCatalog.lrcat",
+        Some("TngCatalog.zip"),
+        &[],
+    )
+    .await;
+    f.backup(
+        "2022-06-15 1400",
+        "TngCatalog.lrcat",
+        Some("TngCatalog.zip"),
+        &[RERATE],
+    )
+    .await;
+    let live = f.live(&[RERATE, KEYWORD]).await;
+
+    let run = f.sync_with(&options(), Some(&live), NOW).await?;
+    assert_eq!(run.mirrored, ["2021-03-01 0900", "2022-06-15 1400"]);
+    assert!(run.live.is_some());
+
+    let pool = f.read().await;
+    let messages: Vec<String> = log(&pool).await.into_iter().map(|(m, _)| m).collect();
+    let order: Vec<&str> = messages
+        .iter()
+        .filter_map(|m| {
+            if m.contains(": backup ") {
+                Some("backup")
+            } else if m.contains(": catalog Live.lrcat") {
+                Some("catalog")
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(order, ["backup", "backup", "catalog"], "{messages:?}");
+    let keywords: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM AgLibraryKeyword WHERE id_global = 'KEYWORD-9001-HOLODECK'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(keywords, 1, "HEAD is the live catalog");
+    assert_eq!(live_row(&pool).await.as_deref(), Some(NOW));
+    let before = head(&pool).await;
+    pool.close().await;
+
+    // Nothing new anywhere, a month later: no commit, and the live row
+    // stays put.
+    let run = f
+        .sync_with(&options(), Some(&live), "2024-02-01T00:00:00")
+        .await?;
+    assert!(run.mirrored.is_empty());
+    assert_eq!(head(&f.read().await).await, before);
+    Ok(())
+}
+
+/// The live catalog is the newest state the store holds, so a backup
+/// taken before it was last mirrored cannot follow it; one taken after
+/// goes in, and the live catalog lands on top again.
+#[tokio::test]
+async fn a_backup_older_than_the_last_live_mirror_is_refused() -> Result<()> {
+    let f = Fixture::new();
+    f.backup(
+        "2021-03-01 0900",
+        "TngCatalog.lrcat",
+        Some("TngCatalog.zip"),
+        &[],
+    )
+    .await;
+    let live = f.live(&[KEYWORD]).await;
+    f.sync_with(&options(), Some(&live), NOW).await?;
+
+    // Taken before NOW, when the live catalog was mirrored.
+    f.backup(
+        "2023-05-05 0500",
+        "TngCatalog.lrcat",
+        Some("TngCatalog.zip"),
+        &[RERATE],
+    )
+    .await;
+    // Taken after it.
+    f.backup(
+        "2025-02-02 0200",
+        "TngCatalog.lrcat",
+        Some("TngCatalog.zip"),
+        &[KEYWORD, RENAME],
+    )
+    .await;
+    let run = f.sync_with(&options(), Some(&live), NOW).await?;
+    assert_eq!(run.mirrored, ["2025-02-02 0200"]);
+    let refused: Vec<&str> = run.problems.iter().map(|p| p.id.as_str()).collect();
+    assert_eq!(refused, ["2023-05-05 0500"]);
+    assert!(
+        run.problems[0].detail.contains("live catalog"),
+        "{}",
+        run.problems[0].detail
+    );
+
+    let pool = f.read().await;
+    let name: String = sqlx::query_scalar(
+        "SELECT name FROM AgLibraryKeyword WHERE id_global = 'KEYWORD-9001-HOLODECK'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(
+        name, "Holodeck",
+        "the live catalog, not the backup, is HEAD"
+    );
+    assert_eq!(rating_of_picard(&pool).await, Some(5));
+    pool.close().await;
+    Ok(())
+}
+
+/// With a live catalog, a changed filter reaches HEAD through it: the
+/// newest backup is not mirrored again.
+#[tokio::test]
+async fn a_changed_filter_reaches_head_through_the_live_catalog() -> Result<()> {
+    let f = Fixture::new();
+    f.backup(
+        "2021-03-01 0900",
+        "TngCatalog.lrcat",
+        Some("TngCatalog.zip"),
+        &[],
+    )
+    .await;
+    let live = f.live(&[]).await;
+    f.sync_with(&options(), Some(&live), NOW).await?;
+
+    let narrowed = MirrorOptions {
+        exclude_tables: vec!["AgOz*".into()],
+        ..options()
+    };
+    let run = f.sync_with(&narrowed, Some(&live), NOW).await?;
+    assert!(run.mirrored.is_empty(), "{:?}", run.mirrored);
+    let pool = f.read().await;
+    assert!(!table_exists(&pool, "AgOzSpaceIds").await);
+    pool.close().await;
+    Ok(())
 }

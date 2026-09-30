@@ -22,7 +22,7 @@ use datalib_obs::{init as init_obs, ObsArgs};
     about = "Mirror a Lightroom catalog (or any SQLite file) into a doltlite store, \
              so repeated runs form a deduplicated, versioned backup."
 )]
-#[command(group = clap::ArgGroup::new("input").required(true).args(["catalog", "backups"]))]
+#[command(group = clap::ArgGroup::new("input").required(true).multiple(true).args(["catalog", "backups"]))]
 struct Args {
     /// The catalog to mirror, or a backup `.zip` holding one. Any SQLite
     /// database works.
@@ -30,7 +30,8 @@ struct Args {
     catalog: Option<PathBuf>,
 
     /// A folder of Lightroom backups. Each one the store does not have
-    /// becomes a commit, oldest first, dated when it was taken.
+    /// becomes a commit, oldest first, dated when it was taken; with
+    /// `--catalog` too, the catalog is mirrored on top.
     #[arg(long)]
     backups: Option<PathBuf>,
 
@@ -113,9 +114,14 @@ async fn main() -> Result<()> {
 
     let progress = Progress::new(Arc::new(TracingSink::new("lightroom")));
     let pool = mirror::open_mirror(&args.db).await?;
-    let (summary, problems) = if args.backups.is_some() {
+    let (summary, problems) = if let Some(dir) = &args.backups {
+        let inputs = backups::Inputs {
+            backups: dir,
+            catalog: args.catalog.as_deref(),
+            now: chrono::Local::now().naive_local(),
+        };
         let stop = StopFlag::default();
-        let run = backups::ingest(&pool, &input, &options, &progress, &stop, "lightroom").await?;
+        let run = backups::ingest(&pool, inputs, &options, &progress, &stop, "lightroom").await?;
         (run.summary(), run.problems)
     } else {
         let stats = unpack::mirror_file(&pool, &input, &options, &progress).await?;

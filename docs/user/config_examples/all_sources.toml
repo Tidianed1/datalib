@@ -1520,12 +1520,12 @@ function = "ingest"
 [steps.params.catalog]
 path = "~/Pictures/Lightroom/Lightroom Catalog-v14.lrcat"
 #
-# Or replay a folder of Lightroom's backups as the catalog's history, in
-# place of `catalog`: each backup (a folder named like `2026-09-27 1650`
-# holding a .zip) becomes one commit, oldest first, dated when it was
-# taken; each sync adds the backups taken since. A backup older than the
-# newest one already in the store is left out and reported. See INGEST.md
-# §"A folder of backups".
+# Replay a folder of Lightroom's backups as the catalog's history, beside
+# `catalog` or instead of it: each backup (a folder named like
+# `2026-09-27 1650` holding a .zip) becomes one commit, oldest first, dated
+# when it was taken; each sync adds the backups taken since, then mirrors
+# the catalog on top. A backup older than the newest state already in the
+# store is left out and reported. See INGEST.md §"A folder of backups".
 # [steps.params.backups]
 # path = "~/Pictures/Lightroom/Backups"
 
