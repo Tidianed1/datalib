@@ -453,7 +453,7 @@ copy_to_bin(
 copy_to_bin(
     name = "render_preview_sources",
     srcs = [
-        "src/App.vue",
+        "src/theme.css",
         "src/cards/ChatBody.ce.vue",
         "src/cards/DocCard.ce.vue",
         "src/cards/chatSections.js",

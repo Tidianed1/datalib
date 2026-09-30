@@ -1,13 +1,20 @@
 <script setup lang="ts">
-// The Sources card as it has always looked: the typed table over the
-// manage rows. Its logic lives in sourcesCardModel.ts, shared with the
-// redesigned `sourcesNextView()`.
+// The redesigned Sources card, beside the one it may replace: the same
+// logic (sourcesCardModel.ts), the same table engine and every action
+// the old card has, drawn in the app's current look — a header that
+// says what the last sync did, notices as strips above the table, and
+// a status column that says its word before its time.
+import { computed } from "vue";
+import type { Column } from "@slickgrid-universal/common";
 import type { CardCtx } from "./types";
+import type { StatusView } from "@/api";
 import TableGrid from "./TableGrid.ce.vue";
-import { ACTION_ICONS } from "./typedColumns";
 import SourceWizard from "@/components/SourceWizard.vue";
 import ConfirmDialog from "@/components/ConfirmDialog.vue";
-import { SOURCES_HELP, useSourcesCard } from "./sourcesCardModel";
+import { SOURCES_HELP, useSourcesCard, type Row } from "./sourcesCardModel";
+import { formatRelative, formatStamp } from "@/config/timeFormat";
+import { density } from "@/density";
+import { statusTone } from "./home";
 
 const props = defineProps<{ ctx: CardCtx }>();
 
@@ -44,88 +51,114 @@ const {
   onWizardSubmit,
   asking,
 } = useSourcesCard(props.ctx);
+
+/// What the header says when no action of this card has anything to
+/// say: how the last sync went.
+const runLine = computed(() => {
+  const run = manage.value?.run;
+  if (!run) return { ok: true, text: "Not synced yet" };
+  if (run.live) return { ok: true, text: "Syncing now" };
+  return { ok: true, text: `Last sync finished ${formatRelative(run.finished_at, Date.now())}` };
+});
+const headLine = computed(() => banner.value ?? runLine.value);
+
+const configBlocked = computed(() => busy.value || !!parseError.value || !!configError.value);
+
+/// The status as a word first, then when: "Failed · 2 hours ago".
+function statusCell(s: StatusView | null): HTMLElement {
+  const wrap = document.createElement("span");
+  if (!s) return wrap;
+  wrap.className = `sx-status sx-tone-${statusTone(s.key)}`;
+  wrap.title = s.detail ? `${s.label} — ${s.detail}` : s.label;
+  const mark = document.createElement("span");
+  mark.className = s.key === "running" ? "tg-spinner sx-spinner" : "sx-dot";
+  wrap.appendChild(mark);
+  const word = document.createElement("span");
+  word.className = "sx-word";
+  word.textContent = s.label;
+  wrap.appendChild(word);
+  if (s.at) {
+    const when = document.createElement("span");
+    when.className = "sx-when";
+    when.textContent = formatRelative(s.at, Date.now());
+    when.title = formatStamp(s.at);
+    wrap.appendChild(when);
+  }
+  return wrap;
+}
+
+const columnOverrides: Record<string, Partial<Column<Row>>> = {
+  status: {
+    width: 220,
+    formatter: (_r, _c, value) => statusCell(value as StatusView | null),
+  },
+};
+
+// Rows sized to the density switch; the grid reads its height once, so
+// a switch rebuilds it.
+const rowHeight = computed(() => (density.value === "comfortable" ? 36 : 28));
 </script>
 
 <template>
-  <section ref="cardEl" class="m2 m2-card">
-    <header class="m2-head">
-      <!-- Here rather than above the table: it comes and goes with each
-           sync, and a line appearing above the table moves every row
-           under the pointer. -->
+  <section ref="cardEl" class="sx">
+    <header class="sx-head">
       <p
-        v-if="banner"
-        class="m2-msg m2-head-msg"
-        :class="banner.ok ? 'good' : 'bad'"
-        :title="banner.text"
+        class="sx-line"
+        :class="headLine.ok ? 'sx-line-ok' : 'sx-line-bad'"
+        :title="headLine.text"
         role="status"
       >
-        {{ banner.text }}
+        {{ headLine.text }}
       </p>
-      <div class="m2-head-actions">
-        <button
-          class="m2-btn m2-runall"
-          :class="{ danger: syncAll.glyph === 'stop' }"
-          :disabled="busy || !!parseError || !!configError || !!syncAll.blocked"
-          :title="syncAll.blocked ?? syncAll.label"
-          :aria-label="syncAll.label"
-          @click="
-            syncAll.stops.length > 0 ? actions.stopSyncs(syncAll.stops) : actions.runEverything()
-          "
-        >
-          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-            <path fill="currentColor" :d="ACTION_ICONS[syncAll.glyph]" />
-          </svg>
-        </button>
-        <button class="m2-add" :disabled="busy || !!parseError || !!configError" @click="openAdd">
-          + Data Source
-        </button>
-      </div>
+      <button
+        class="sx-btn"
+        :class="{ 'sx-btn-danger': syncAll.glyph === 'stop' }"
+        :disabled="configBlocked || !!syncAll.blocked"
+        :title="syncAll.blocked ?? syncAll.label"
+        @click="
+          syncAll.stops.length > 0 ? actions.stopSyncs(syncAll.stops) : actions.runEverything()
+        "
+      >
+        {{ syncAll.glyph === "stop" ? syncAll.label : "Sync all" }}
+      </button>
+      <button class="sx-btn sx-btn-primary" :disabled="configBlocked" @click="openAdd">
+        Add source
+      </button>
     </header>
 
-    <p v-if="loadError" class="m2-msg bad">Could not load the config: {{ loadError }}</p>
-    <p v-if="parseError" class="m2-msg bad">
-      The config doesn’t parse, so the table below can’t be trusted: {{ parseError }}
+    <p v-if="loadError" class="sx-strip sx-strip-bad">
+      <span class="sx-strip-text">Could not load the config: {{ loadError }}</span>
     </p>
-    <div v-else-if="configError" class="m2-msg bad m2-invalid">
-      <b>datalib won’t run this config.</b>
-      <span>{{ configError }}</span>
-      <span class="m2-invalid-why">
-        It parses as TOML, so the table below still reflects it — but nothing will sync, and applets
-        won’t start, until this is fixed. Open the config to edit it.
+    <p v-if="parseError" class="sx-strip sx-strip-bad">
+      <span class="sx-strip-text">
+        <b>The config doesn’t parse,</b> so the table below can’t be trusted: {{ parseError }}
       </span>
-      <button class="m2-btn" @click="openConfig">Show the config</button>
+    </p>
+    <div v-else-if="configError" class="sx-strip sx-strip-bad">
+      <span class="sx-strip-text">
+        <b>datalib won’t run this config.</b> {{ configError }} Nothing syncs, and applets don’t
+        start, until it is fixed.
+      </span>
+      <button class="sx-btn" @click="openConfig">Show the config</button>
     </div>
-    <!-- Entries the loader dropped. Not a whole-config error: the rest
-         of the pipeline is running, which is why this is a note above a
-         working table rather than a screen in front of it. The per-row
-         Last update column carries each reason; this says how many and where
-         to look, because a dropped row is easy to scroll past. -->
-    <div v-else-if="droppedRows.length" class="m2-msg bad m2-invalid">
-      <b>
-        {{ droppedRows.length }}
-        {{ droppedRows.length === 1 ? "entry isn’t" : "entries aren’t" }} in the pipeline.
-      </b>
-      <span class="m2-invalid-why">
-        The rest of this config loaded and still syncs. These are in the file and were not loaded —
-        each one’s Last update cell says why. Open the config to fix them, or run
-        <code>datalib-dag --check {{ configPath }}</code
+    <div v-else-if="droppedRows.length" class="sx-strip sx-strip-bad">
+      <span class="sx-strip-text">
+        <b>
+          {{ droppedRows.length }}
+          {{ droppedRows.length === 1 ? "entry isn’t" : "entries aren’t" }} in the pipeline.
+        </b>
+        The rest of the config loaded and still syncs.
+        <template v-for="(r, i) in droppedRows" :key="r.id"
+          >{{ i ? "; " : "" }}<code>{{ r.id }}</code> — {{ r.dropped?.message }}</template
+        >. You can also run <code>datalib-dag --check {{ configPath }}</code
         >.
       </span>
-      <ul class="m2-dropped">
-        <li v-for="r in droppedRows" :key="r.id">
-          <code>{{ r.id }}</code> — {{ r.dropped?.message }}
-        </li>
-      </ul>
-      <button class="m2-btn" @click="openConfig">Show the config</button>
+      <button class="sx-btn" @click="openConfig">Show the config</button>
     </div>
 
-    <div class="m2-grid">
-      <!-- The typed viewer over the rows the server assembled: a tree,
-           one group row with its steps and applets under it. Every row
-           is rendered: a config is tens of rows, and a source just
-           added lands at the bottom, where a virtualized grid would
-           have no row for it until scrolled to. -->
+    <div class="sx-grid">
       <TableGrid
+        :key="rowHeight"
         :columns="manage?.columns ?? []"
         :rows="rows"
         :tree="true"
@@ -135,6 +168,8 @@ const {
         :selectable="true"
         :openByDefault="isGroupOpenByDefault"
         :pinnedColumns="1"
+        :columnOverrides="columnOverrides"
+        :rowHeight="rowHeight"
         @ready="onGridReady"
         @cellDoubleClick="onCellDoubleClicked"
         @edit="onCellEdit"
@@ -142,20 +177,16 @@ const {
       />
     </div>
 
-    <div class="m2-foot">
-      <div v-if="emptyDiagnosis && !parseError" class="m2-msg bad m2-invalid">
-        <b>This table is empty, and it shouldn’t be.</b>
-        <span>{{ emptyDiagnosis }}</span>
-        <button class="m2-btn" @click="openConfig">Show the config</button>
-      </div>
-      <p v-else-if="rows.length === 0 && !parseError" class="m2-empty">
-        Nothing configured yet. The <b>+ Data Source</b> button walks you through one.
-      </p>
+    <div v-if="emptyDiagnosis && !parseError" class="sx-strip sx-strip-bad">
+      <span class="sx-strip-text">
+        <b>This table is empty, and it shouldn’t be.</b> {{ emptyDiagnosis }}
+      </span>
+      <button class="sx-btn" @click="openConfig">Show the config</button>
     </div>
+    <p v-else-if="rows.length === 0 && !parseError" class="sx-empty">
+      Nothing configured yet. <b>Add source</b> walks you through one.
+    </p>
 
-    <!-- The panels, out of the shadow root: their components' scoped
-         styles live in the head, and a modal belongs over the whole
-         page anyway. -->
     <Teleport to="body">
       <SourceWizard
         v-if="wizardOpen"

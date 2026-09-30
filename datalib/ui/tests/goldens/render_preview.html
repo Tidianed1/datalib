@@ -1,23 +1,49 @@
 <!doctype html>
 <html><head><meta charset="utf-8"><title>Render preview</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-/* Only there to be hidden behind the gate; lays nothing out itself. */
-.datalib-cards {
-  display: contents;
-}
+<style>/* The app's look: every colour, the type and the density, as CSS
+   custom properties. They inherit through a card's shadow root, so a
+   card that reads `var(--datalib-*)` follows the theme and the
+   density switch without knowing either exists. */
 
 :root {
   color-scheme: light dark;
+  --datalib-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  --datalib-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --datalib-radius: 6px;
+
+  /* The ground the chrome sits on, the sidebar, and the cards on it.
+     `--datalib-bg` is a card's own background, as it always was. */
+  --datalib-ground: #ececee;
+  --datalib-sidebar: #e2e2e6;
   --datalib-bg: #ffffff;
-  --datalib-fg: #1a1a1a;
-  --datalib-muted: #6b6b6b;
-  --datalib-border: #d8d8d8;
+  --datalib-surface: #ffffff;
+  --datalib-surface-2: #f5f5f7;
+  --datalib-card-bg: #f5f5f7;
+  --datalib-fg: #1d1d1f;
+  --datalib-muted: #6e6e73;
+  --datalib-faint: #86868b;
+  --datalib-border: #d2d2d7;
+  --datalib-border-soft: #e5e5ea;
   --datalib-input-bg: #ffffff;
-  --datalib-code-bg: #f4f4f4;
-  --datalib-hover: #f0f0f0;
-  --datalib-accent: #2563eb;
-  --datalib-card-bg: #fafafa;
+  --datalib-code-bg: #f2f2f5;
+  --datalib-hover: rgba(0, 0, 0, 0.05);
+  --datalib-selected: #d1d1d6;
+  --datalib-accent: #1f5fd1;
+  --datalib-on-accent: #ffffff;
+  --datalib-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+
+  /* States: what went right, what needs a person, what broke. */
+  --datalib-ok: #1f7a3a;
+  --datalib-ok-dot: #28a745;
+  --datalib-warn-fg: #8a5300;
+  --datalib-warn-bg: #fff4db;
+  --datalib-warn-border: #f0d59a;
+  --datalib-warn-dot: #e5a100;
+  --datalib-error-fg: #a3321a;
+  --datalib-error-bg: #fdeeea;
+  --datalib-error-border: #f1c4b8;
+
   /* Log severity highlights: dark shades on the light background… */
   --datalib-log-error: #991b1b;
   --datalib-log-warn: #854d0e;
@@ -26,75 +52,93 @@
 
 
 
+/* Density: the status bar's Compact / Comfortable switch (density.ts)
+   sets `data-density` on <html>. Sizes only; the content is the same. */
+:root,
+:root[data-density="compact"] {
+  --datalib-font-size: 12px;
+  --datalib-font-size-small: 11px;
+  --datalib-title-size: 13px;
+  --datalib-row-h: 24px;
+  --datalib-control-h: 24px;
+  --datalib-icon-size: 14px;
+  --datalib-pad: 8px;
+  --datalib-gap: 8px;
+  --datalib-toolbar-h: 38px;
+  --datalib-statusbar-h: 26px;
+}
+:root[data-density="comfortable"] {
+  --datalib-font-size: 14px;
+  --datalib-font-size-small: 12px;
+  --datalib-title-size: 16px;
+  --datalib-row-h: 34px;
+  --datalib-control-h: 32px;
+  --datalib-icon-size: 18px;
+  --datalib-pad: 14px;
+  --datalib-gap: 14px;
+  --datalib-toolbar-h: 50px;
+  --datalib-statusbar-h: 34px;
+}
+
 html,
 body,
 #app {
-  background: var(--datalib-bg);
+  background: var(--datalib-ground);
   color: var(--datalib-fg);
   margin: 0;
   min-height: 100vh;
 }
 
 body {
-  font-family: system-ui, sans-serif;
+  font-family: var(--datalib-font);
+  font-size: var(--datalib-font-size);
 }
 
 a {
   color: var(--datalib-accent);
 }
 
-.datalib-shell {
-  /* Viewport-pinned flex column: the toolbar takes its natural height
-     and the routed view flexes into the rest, so full-height views
-     (MillerView) reach the bottom without guessing the chrome height.
-     min-height (not height) so taller views (sync) still
-     scroll the page normally. */
-  display: flex;
-  flex-direction: column;
-  min-height: 100vh;
-  box-sizing: border-box;
-  padding: 1rem;
-}
-/* A band across the top: tinted, hairline below, full-bleed by
-   countering the shell's 1rem padding. */
-.datalib-toolbar {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  margin: -1rem -1rem 0.75rem;
-  padding: 0.4rem 1rem;
-  background: var(--datalib-card-bg);
-  border-bottom: 1px solid var(--datalib-border);
-}
-.datalib-spacer {
-  flex: 1;
-}
-.datalib-tool {
-  padding: 0.25rem 0.75rem;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--datalib-fg);
-  font: inherit;
-  line-height: 1.4;
-  cursor: pointer;
-}
-.datalib-tool:hover {
-  background: var(--datalib-hover);
-  border-color: var(--datalib-border);
+/* Section headings inside cards: small capitals, the way the Home card
+   labels its panels. */
+.datalib-section-title {
+  margin: 0;
+  font-size: var(--datalib-font-size-small);
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--datalib-muted);
 }
 
 :root.preview-dark {
-    --datalib-bg: #1a1b1e;
-    --datalib-fg: #e6e6e6;
-    --datalib-muted: #9aa0a6;
-    --datalib-border: #2f3136;
-    --datalib-input-bg: #232428;
+    --datalib-ground: #141518;
+    --datalib-sidebar: #1a1b1f;
+    --datalib-bg: #202126;
+    --datalib-surface: #202126;
+    --datalib-surface-2: #18191c;
+    --datalib-card-bg: #18191c;
+    --datalib-fg: #ececee;
+    --datalib-muted: #a0a2a9;
+    --datalib-faint: #7c7e86;
+    --datalib-border: #34363d;
+    --datalib-border-soft: #2a2c31;
+    --datalib-input-bg: #26272c;
     --datalib-code-bg: #2a2b2f;
-    --datalib-hover: #2a2b2f;
+    --datalib-hover: rgba(255, 255, 255, 0.06);
+    --datalib-selected: #2e3036;
     --datalib-accent: #6ea8fe;
-    --datalib-card-bg: #232428;
+    --datalib-on-accent: #0d1a30;
+    --datalib-shadow: none;
+
+    --datalib-ok: #7fd39a;
+    --datalib-ok-dot: #4cc47a;
+    --datalib-warn-fg: #f3c66f;
+    --datalib-warn-bg: #2e2615;
+    --datalib-warn-border: #5a4620;
+    --datalib-warn-dot: #e0a93a;
+    --datalib-error-fg: #ff9a85;
+    --datalib-error-bg: #33201c;
+    --datalib-error-border: #5c342b;
+
     /* …and light shades on the dark background. */
     --datalib-log-error: #f87171;
     --datalib-log-warn: #facc15;
@@ -230,6 +274,8 @@ code.hljs {
      scrolls away with the content instead. */
   padding: 0 1rem 0.75rem;
   box-sizing: border-box;
+  /* Reading text: never below 14px, whatever the density. */
+  font-size: max(14px, calc(var(--datalib-font-size) + 2px));
 }
 .chat-preview > .empty,
 .chat-preview > .error,
@@ -251,7 +297,7 @@ code.hljs {
   padding: 1rem;
 }
 .error {
-  color: #e35d6a;
+  color: var(--datalib-error-fg);
 }
 .problems {
   /* Above the body and the edges: what render could not do to this
@@ -376,14 +422,14 @@ code.hljs {
   cursor: default;
 }
 .remote-host {
-  font-family: ui-monospace, Menlo, monospace;
+  font-family: var(--datalib-mono);
 }
 .remote-host-count {
   margin-left: 0.3rem;
   color: var(--datalib-muted);
 }
 .remote-load-all {
-  border-color: var(--datalib-accent, #6366f1);
+  border-color: var(--datalib-accent);
 }
 .remote-rules-label {
   font-size: 0.75rem;
@@ -404,10 +450,10 @@ code.hljs {
   cursor: pointer;
 }
 .remote-rule-forget:hover {
-  color: #e35d6a;
+  color: var(--datalib-error-fg);
 }
 .remote-banner-error {
-  color: #e35d6a;
+  color: var(--datalib-error-fg);
 }
 .outgoing-edges {
   /* The doc-level outgoing edges list sits above the rendered body
@@ -442,7 +488,7 @@ code.hljs {
   transition: background-color 100ms ease-in-out;
 }
 .edge-source-link:hover {
-  background: rgba(99, 102, 241, 0.28);
+  background: color-mix(in srgb, var(--datalib-accent) 28%, transparent);
 }
 .edge-dst-title {
   color: var(--datalib-muted, #94a3b8);
@@ -460,7 +506,7 @@ code.hljs {
   background: var(--datalib-input-bg, #fff);
   color: var(--datalib-fg, #000);
   border: 1px solid var(--datalib-border, #ccc);
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
   min-width: 180px;
   padding: 4px 0;
@@ -501,12 +547,12 @@ code.hljs {
   background: #0d1117;
   color: #e6edf3;
   padding: 0.6rem 0.75rem;
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
   overflow-x: auto;
   font-size: 0.82rem;
 }
 .markdown-body code {
-  font-family: ui-monospace, Menlo, monospace;
+  font-family: var(--datalib-mono);
   font-size: 0.85em;
 }
 .markdown-body :not(pre) > code {
@@ -518,7 +564,7 @@ code.hljs {
   margin: 0.4rem 0;
   padding: 0.25rem 0.5rem;
   border: 1px solid var(--datalib-border);
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
   background: var(--datalib-card-bg);
 }
 .markdown-body details > summary {
@@ -581,7 +627,7 @@ code.hljs {
 .chat-body > [class^="diff-"] > details.tool-group {
   border: 1px solid var(--datalib-border, #d8d8d8);
   border-left-width: 3px;
-  border-radius: 8px;
+  border-radius: calc(var(--datalib-radius) + 2px);
   background: var(--datalib-card-bg, #fafafa);
   margin: 0.4rem 0;
 }
@@ -621,7 +667,7 @@ code.hljs {
   border-radius: 2px;
 }
 .chat-body .msg--claude {
-  border-left-color: var(--datalib-accent, #6366f1);
+  border-left-color: var(--datalib-accent);
 }
 .chat-body .msg--chatgpt {
   border-left-color: #16a34a;
@@ -751,7 +797,7 @@ code.hljs {
   color: var(--datalib-muted, #94a3b8);
   background: transparent;
   border: 1px solid var(--datalib-border, #d8d8d8);
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
   cursor: pointer;
 }
 .chat-body button.msg-jump:hover {
@@ -780,11 +826,11 @@ code.hljs {
 }
 .chat-body .msg.selected {
   background: var(--datalib-hover, #f0f0f0);
-  border-color: var(--datalib-accent, #6366f1);
+  border-color: var(--datalib-accent);
   /* `outline` (not a thicker border) so moving the selection doesn't
      reflow; the negative offset lays it over the card's own edge so
      the two read as one highlighted border rather than two rings. */
-  outline: 2px solid var(--datalib-accent, #6366f1);
+  outline: 2px solid var(--datalib-accent);
   outline-offset: -1px;
 }
 /* Inline span baked by ingest for sub-section edge anchors (today
@@ -814,12 +860,12 @@ code.hljs {
 }
 .chat-body span[data-section-uuid].edge-source:hover,
 .chat-body [data-section-uuid].hover-dst {
-  background: rgba(99, 102, 241, 0.28);
+  background: color-mix(in srgb, var(--datalib-accent) 28%, transparent);
   border-radius: 3px;
 }
 .chat-body span[data-section-uuid].selected {
   background: var(--datalib-card-bg, #1f2937);
-  outline: 2px solid var(--datalib-accent, #6366f1);
+  outline: 2px solid var(--datalib-accent);
   border-radius: 3px;
 }
 /* A remote image or media element held back by the sanitizer
