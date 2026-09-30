@@ -128,10 +128,10 @@ async fn hold_open_lock(path: &Path) -> Option<FileLock> {
 }
 
 /// Open the store and make sure its schema is there, emptying a file
-/// that will not read or was written by another schema version.
-/// `synchronous=Off` means an OS crash can leave an unreadable file
-/// behind, and losing old logs is a better outcome than a run that
-/// refuses to start.
+/// that will not read or was written by another schema version, after
+/// keeping a copy of it. `synchronous=Off` means an OS crash can leave
+/// an unreadable file behind, and losing old logs is a better outcome
+/// than a run that refuses to start.
 async fn open_or_recreate(path: &Path) -> Result<SqlitePool, sqlx::Error> {
     let _deciding = hold_open_lock(path).await;
     let why = match open_or_create(path).await {
@@ -152,7 +152,9 @@ async fn open_or_recreate(path: &Path) -> Result<SqlitePool, sqlx::Error> {
         Err(e) => e.to_string(),
     };
     tracing::warn!(path = %path.display(), why, "run store: emptying the file");
-    empty_in_place(path).await?;
+    let emptying = emptying_of(path)?;
+    keep_a_copy(path, &emptying).await;
+    empty_in_place(path, &emptying).await?;
     let pool = open_or_create(path).await?;
     install_schema(&pool).await?;
     write_meta(&pool).await?;
@@ -185,15 +187,68 @@ fn emptying_for(head: &[u8]) -> Emptying {
     }
 }
 
-async fn empty_in_place(path: &Path) -> Result<(), sqlx::Error> {
+fn emptying_of(path: &Path) -> Result<Emptying, sqlx::Error> {
+    use std::io::Read;
     let mut head = Vec::with_capacity(16);
-    {
-        use std::io::Read;
-        std::fs::File::open(path)
-            .and_then(|f| f.take(16).read_to_end(&mut head))
-            .map_err(sqlx::Error::Io)?;
+    std::fs::File::open(path)
+        .and_then(|f| f.take(16).read_to_end(&mut head))
+        .map_err(sqlx::Error::Io)?;
+    Ok(emptying_for(&head))
+}
+
+/// Where a file about to be emptied is kept: beside it, named for the
+/// moment it was set aside, in UTC. Not `runs.sqlite…`, which the app's
+/// file watcher reads as a write to the store.
+fn backup_path(path: &Path, now: &datalib_time::IsoOffsetTimestamp) -> PathBuf {
+    path.with_file_name(format!(
+        "runs.bak_{}.sqlite",
+        now.inner().naive_utc().format("%Y%m%dT%H%M%SZ")
+    ))
+}
+
+/// Copied, never renamed: a reader that opened the file keeps it under
+/// its new name but looks for its journal by the old one, which is the
+/// trap [`Emptying`] describes. A copy that fails costs the old lines
+/// and nothing else.
+async fn keep_a_copy(path: &Path, emptying: &Emptying) {
+    let to = backup_path(path, &datalib_time::IsoOffsetTimestamp::now_local());
+    let kept = match emptying {
+        Emptying::Reset => vacuum_into(path, &to).await.map_err(|e| e.to_string()),
+        Emptying::Truncate => std::fs::copy(path, &to)
+            .map(|_| ())
+            .map_err(|e| e.to_string()),
+    };
+    match kept {
+        Ok(()) => tracing::warn!(copy = %to.display(), "run store: kept a copy of the old file"),
+        Err(why) => tracing::error!(
+            copy = %to.display(),
+            why,
+            "run store: could not keep a copy of the old file; its lines are gone"
+        ),
     }
-    match emptying_for(&head) {
+}
+
+/// `VACUUM INTO` reads under the file's lock, so a writer of the old
+/// build still attached cannot tear the copy. The target names the
+/// plain-SQLite engine the way every open of this store does, so the
+/// copy is one a stock `sqlite3` reads.
+async fn vacuum_into(from: &Path, to: &Path) -> Result<(), sqlx::Error> {
+    use sqlx::Connection;
+
+    let bare = SqliteConnectOptions::new()
+        .filename(datalib_runtime::plain_sqlite::uri(from))
+        .busy_timeout(BUSY_TIMEOUT);
+    let mut conn = sqlx::sqlite::SqliteConnection::connect_with(&bare).await?;
+    let copied = sqlx::query("VACUUM INTO ?")
+        .bind(datalib_runtime::plain_sqlite::uri(to))
+        .execute(&mut conn)
+        .await;
+    conn.close().await?;
+    copied.map(|_| ())
+}
+
+async fn empty_in_place(path: &Path, emptying: &Emptying) -> Result<(), sqlx::Error> {
+    match emptying {
         Emptying::Reset => reset(path).await,
         Emptying::Truncate => {
             let mut journal = path.as_os_str().to_os_string();
@@ -1885,13 +1940,32 @@ mod tests {
         writer.close().await;
     }
 
+    /// The bytes of a file that is not a database are kept as they
+    /// were, beside the file emptied for the new store.
     #[tokio::test]
     async fn a_file_that_is_not_a_database_is_emptied_and_opens() {
         let td = tempfile::tempdir().unwrap();
         let path = td.path().join("runs.sqlite");
-        std::fs::write(&path, b"this is not a database, sqlite or otherwise").unwrap();
+        let junk = b"this is not a database, sqlite or otherwise";
+        std::fs::write(&path, junk).unwrap();
         let pool = open_or_recreate(&path).await.expect("open the store");
         assert!(schema_matches(&pool).await.unwrap());
         pool.close().await;
+        let kept: Vec<_> = std::fs::read_dir(td.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .filter(|n| n.starts_with("runs.bak_"))
+            .collect();
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert_eq!(std::fs::read(td.path().join(&kept[0])).unwrap(), junk);
+    }
+
+    #[test]
+    fn the_copy_is_named_for_the_moment_in_utc() {
+        let at = datalib_time::parse_strict("2026-09-30T10:15:02-04:00").unwrap();
+        assert_eq!(
+            backup_path(Path::new("/r/system/runs/runs.sqlite"), &at),
+            Path::new("/r/system/runs/runs.bak_20260930T141502Z.sqlite")
+        );
     }
 }

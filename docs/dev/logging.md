@@ -58,7 +58,11 @@ Retention is `[run_history]` in `config.toml`
 one, `process_log_days` / `process_log_lines` for the lines outside
 any run — the server's and the pages'. The store is not load-bearing:
 one that will not open is emptied and remade, and a schema bump does
-the same. A writer that cannot open it at all is refused at the start,
+the same. The old file is copied first to `runs.bak_<UTC stamp>.sqlite`
+beside it, so its lines can still be read with `sqlite3`; nothing
+deletes those copies, so remove them by hand when you are done with
+them. A copy that fails is an ERROR and costs the old lines, never the
+new store. A writer that cannot open it at all is refused at the start,
 with an ERROR saying why, and the caller says nothing will be recorded.
 
 ## Every line has an author

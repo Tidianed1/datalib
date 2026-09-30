@@ -559,7 +559,8 @@ fn a_store_that_will_not_open_starts_no_writer() {
 }
 
 /// A store written by another schema version is remade, not migrated
-/// and not fatal — the same trade as a corrupt file.
+/// and not fatal — the same trade as a corrupt file. The old file is
+/// kept beside it first, as plain SQLite a stock `sqlite3` can open.
 #[tokio::test]
 async fn a_store_from_another_schema_version_is_replaced() {
     let td = tempfile::tempdir().unwrap();
@@ -580,6 +581,28 @@ async fn a_store_from_another_schema_version_is_replaced() {
     }
     assert!(log_after(td.path(), "run-1", None, 0, 10).await.is_empty());
     assert_eq!(log_after(td.path(), "run-2", None, 0, 10).await.len(), 1);
+
+    let dir = path.parent().unwrap();
+    let kept: Vec<_> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| {
+            p.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("runs.bak_")
+        })
+        .collect();
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    let head = std::fs::read(&kept[0]).unwrap();
+    assert!(head.starts_with(b"SQLite format 3\0"), "not plain SQLite");
+    let copy = datalib_runs::open_or_create(&kept[0]).await.unwrap();
+    let msgs: Vec<String> = sqlx::query_scalar("SELECT msg FROM log")
+        .fetch_all(&copy)
+        .await
+        .unwrap();
+    copy.close().await;
+    assert_eq!(msgs, ["from before"]);
 }
 
 /// A rate needs two points. The writer samples a series when its value
