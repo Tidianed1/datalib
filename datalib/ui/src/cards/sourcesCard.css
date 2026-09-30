@@ -1,4 +1,4 @@
-/* The redesigned Sources card (SourcesNextCard.ce.vue). A plain file,
+/* The Sources card (SourcesCard.ce.vue). A plain file,
    handed to the card as a style source after tableGrid.css: the grid
    draws its cells outside Vue, so a scoped style would never reach
    them, and everything here is scoped under `.sx` instead. */

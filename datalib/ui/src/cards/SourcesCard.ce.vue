@@ -1,9 +1,9 @@
 <script setup lang="ts">
-// The redesigned Sources card, beside the one it may replace: the same
-// logic (sourcesCardModel.ts), the same table engine and every action
-// the old card has, drawn in the app's current look — a header that
-// says what the last sync did, notices as strips above the table, and
-// a status column that says its word before its time.
+// The Sources card: the tree of what config.toml declares over
+// `GET /api/manage/rows`, drawn by TableGrid — a header that says what
+// the last sync did, notices as strips above the table, and a status
+// column that says its word before its time. Its logic is
+// sourcesCardModel.ts.
 import { computed } from "vue";
 import type { Column } from "@slickgrid-universal/common";
 import type { CardCtx } from "./types";
@@ -64,22 +64,28 @@ const headLine = computed(() => banner.value ?? runLine.value);
 
 const configBlocked = computed(() => busy.value || !!parseError.value || !!configError.value);
 
-/// The status as a word first, then when: "Failed · 2 hours ago".
+/// The status as a word first, then when: "Failed · 2 hours ago". The
+/// mark carries the word for assistive tech (`role="img"`), and the
+/// cell keeps the shared `tg-status*` classes the tests read it by.
 function statusCell(s: StatusView | null): HTMLElement {
   const wrap = document.createElement("span");
   if (!s) return wrap;
-  wrap.className = `sx-status sx-tone-${statusTone(s.key)}`;
+  const key = s.key.replace(/[\s_]+/g, "-");
+  wrap.className = `tg-status tg-status-${key} sx-status sx-tone-${statusTone(s.key)}`;
   wrap.title = s.detail ? `${s.label} — ${s.detail}` : s.label;
   const mark = document.createElement("span");
   mark.className = s.key === "running" ? "tg-spinner sx-spinner" : "sx-dot";
+  mark.setAttribute("role", "img");
+  mark.setAttribute("aria-label", s.label);
   wrap.appendChild(mark);
   const word = document.createElement("span");
   word.className = "sx-word";
+  word.setAttribute("aria-hidden", "true");
   word.textContent = s.label;
   wrap.appendChild(word);
   if (s.at) {
     const when = document.createElement("span");
-    when.className = "sx-when";
+    when.className = "tg-status-at sx-when";
     when.textContent = formatRelative(s.at, Date.now());
     when.title = formatStamp(s.at);
     wrap.appendChild(when);
@@ -119,7 +125,7 @@ const rowHeight = computed(() => (density.value === "comfortable" ? 36 : 28));
           syncAll.stops.length > 0 ? actions.stopSyncs(syncAll.stops) : actions.runEverything()
         "
       >
-        {{ syncAll.glyph === "stop" ? syncAll.label : "Sync all" }}
+        {{ syncAll.label }}
       </button>
       <button class="sx-btn sx-btn-primary" :disabled="configBlocked" @click="openAdd">
         Add source

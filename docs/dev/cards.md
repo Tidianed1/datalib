@@ -392,7 +392,7 @@ programs against:
   newest documents by their own timestamps. It reads only
   `GET /api/manage/rows` and the search; its decisions are
   `cards/home.ts`.
-- `searchView(opts?: { q? })` — the friendly search
+- `searchView(opts?: { q? })` — "Unified Search (new)", the friendly search
   (`cards/SearchCard.ce.vue`): a box that takes words and filters, a
   "Meaning only" switch that moves the free text into a `qmd_vsearch:`
   predicate, chips for the sources the results come from with their
@@ -454,7 +454,10 @@ programs against:
   (`cards/SourcesCard.ce.vue`): the tree of what `config.toml` declares
   over `GET /api/manage/rows`, drawn by `TableGrid`, with the row
   actions and the dialogs they open — the wizard, a removal's confirm —
-  teleported to `<body>`. Through `host.openCards` it opens beside
+  teleported to `<body>`. Its header says how the last sync went, the
+  config's notices are strips above the table, its status column reads
+  word first ("Failed · 2 hours ago"), and its rows follow the density
+  switch. Through `host.openCards` it opens beside
   itself a `gridView(...)` for Browse or a problems count, a
   `logView(...)` for a step's log or the server's, a `historyView(...)`
   for a row's commit history, a `syncDashboardView(...)` for a group's
@@ -463,13 +466,7 @@ programs against:
   what needs the config's text — edit, rename, remove, compare. The
   `/data_sources` route is this card alone at 1.6× width (`MANAGE_STACK`
   in `router/index.ts`). The card's logic is `cards/sourcesCardModel.ts`
-  (`useSourcesCard`), shared with `sourcesNextView`.
-- `sourcesNextView()` — the redesigned Sources card
-  (`cards/SourcesNextCard.ce.vue`), beside `sourcesView` until it
-  replaces it: the same logic and the same `TableGrid`, with a header
-  that says how the last sync went, the config's notices as strips,
-  a status column that reads word first, and rows sized by the density
-  switch. Home's "Open Sources" opens it.
+  (`useSourcesCard`); the component holds only the template and styles.
 - `syncDashboardView({ group, step })` — one group's sync
   (`cards/SyncDashboardCard.ce.vue`): the group's Manage row at the top
   and each step's row under it, laid out vertically, each with a

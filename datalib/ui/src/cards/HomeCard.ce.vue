@@ -252,7 +252,7 @@ onBeforeUnmount(() => {
       <section class="panel" aria-label="Sources">
         <h2 class="panel-head">
           <span class="section-title">Sources</span>
-          <button class="link" @click="open('sourcesNextView()')">Open Sources</button>
+          <button class="link" @click="open('sourcesView()')">Open Sources</button>
         </h2>
         <div class="grid grid-head">
           <span /><span>Name</span><span>Status</span><span>Updated</span
@@ -368,11 +368,13 @@ onBeforeUnmount(() => {
   text-transform: uppercase;
   color: var(--datalib-muted);
 }
+/* Clipped, so a tinted header keeps the panel's rounded corners. */
 .panel {
   flex: 0 0 auto;
   background: var(--datalib-bg);
   border: 1px solid var(--datalib-border-soft);
   border-radius: var(--datalib-radius);
+  overflow: hidden;
 }
 .panel-warn {
   border-color: var(--datalib-warn-border);

@@ -1,8 +1,6 @@
 // The Sources card's logic — the config it edits, the rows it shows,
-// the wizard, removal, the menu and the row actions — shared by the
-// two cards that draw it: `sourcesView()` (SourcesCard.ce.vue) and
-// `sourcesNextView()` (SourcesNextCard.ce.vue). Each card owns only its
-// template and styles.
+// the wizard, removal, the menu and the row actions. SourcesCard.ce.vue
+// owns only the template and the styles.
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { TOPIC_CONFIG_WRITTEN, type CardCtx } from "./types";
 import { UNIFIED_INDEX, type ManageResponse, type ManageRow } from "@/api";

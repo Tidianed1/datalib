@@ -159,7 +159,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     await expect(row(page, "unified_index/qmd_aggregator")).toHaveCount(0);
 
     // ── 4-6. the wizard ──────────────────────────────────────────────
-    await page.getByRole("button", { name: "+ Data Source" }).click();
+    await page.getByRole("button", { name: "Add source" }).click();
     const wizard = page.getByRole("dialog");
     await wizard.getByRole("searchbox").fill("pdf");
     await wizard.getByRole("button", { name: /PDFs/ }).click();
@@ -322,7 +322,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
 
     // ── 1. add Signal through the wizard ─────────────────────────────
     const wizard = page.getByRole("dialog");
-    await page.getByRole("button", { name: "+ Data Source" }).click();
+    await page.getByRole("button", { name: "Add source" }).click();
     await wizard.getByRole("searchbox").fill("signal");
     await wizard
       .locator(".wiz-tile", { hasText: "Decrypt and mirror an Android Signal backup" })

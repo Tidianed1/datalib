@@ -61,7 +61,10 @@ test.describe("new-card gallery (non-dev mode)", () => {
   test("gallery's Unified Search entry becomes a second grid", async ({ page }) => {
     await page.goto(GRID);
     await page.locator(".miller-add").click();
-    await page.locator(".gv-row", { hasText: "Unified Search" }).first().click();
+    // By its exact title: "Unified Search (new)" is the Search card.
+    await page
+      .locator(".gv-row", { has: page.locator(".gv-title", { hasText: /^Unified Search$/ }) })
+      .click();
     // Two grid columns now: the default one and the freshly picked one.
     await expect(page.locator(".grid-box .slickgrid-container")).toHaveCount(2, {
       timeout: 10_000,

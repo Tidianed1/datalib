@@ -117,8 +117,6 @@ export type EdgeHoverPayload = {
 // CardRender. These are the names in scope when card source is
 // evaluated; `gridView()` in a card's source calls ViewLibs.gridView.
 export type ViewLibs = {
-  // The redesigned Sources card, beside sourcesView until it replaces it.
-  sourcesNextView: () => CardRender;
   // Where a person starts: what needs them, the library, the sources
   // and the newest documents. The card a new window opens on.
   homeView: () => CardRender;

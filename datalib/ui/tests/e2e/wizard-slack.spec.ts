@@ -102,7 +102,7 @@ async function openManager(page: Page) {
 }
 
 async function pickSlack(page: Page) {
-  await page.getByRole("button", { name: "+ Data Source" }).click();
+  await page.getByRole("button", { name: "Add source" }).click();
   await page.locator(".wiz-filter").fill("slack");
   await wizard(page)
     .locator(".wiz-tile", { hasText: "Mirror channels and DMs from one Slack workspace." })

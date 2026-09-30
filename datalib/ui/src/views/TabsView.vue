@@ -741,17 +741,13 @@ function resetSidebarWidth() {
   background: var(--datalib-hover);
   color: var(--datalib-fg);
 }
-/* The card floats on the ground, inset by the gutter. */
+/* The one card fills the space beside the sidebar, edge to edge. */
 .tabs-main {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  margin: var(--datalib-pad);
   background: var(--datalib-surface);
-  border: 1px solid var(--datalib-border);
-  border-radius: calc(var(--datalib-radius) + 2px);
-  box-shadow: var(--datalib-shadow);
   overflow: hidden;
 }
 .tabs-chrome {

@@ -35,14 +35,8 @@ export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
     icon: "sources",
     gallery: "sourcesView()",
   },
-  sourcesNextView: {
-    title: "Sources (new)",
-    description: "The redesigned sources card: everything the old one does, in the new look.",
-    icon: "sources",
-    gallery: "sourcesNextView()",
-  },
   searchView: {
-    title: "Search",
+    title: "Unified Search (new)",
     description: "Find anything in your library by its words or its meaning, and read it in place.",
     icon: "search",
     gallery: "searchView()",

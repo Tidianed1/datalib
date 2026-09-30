@@ -51,7 +51,7 @@ watch(
   input,
   (i) => {
     props.ctx.host.setState(encodeSearchState(i));
-    props.ctx.setTitle(i.text ? `Search: ${i.text}` : "Search");
+    props.ctx.setTitle(i.text ? `Search: ${i.text}` : "Unified Search (new)");
   },
   { immediate: true, deep: true },
 );
