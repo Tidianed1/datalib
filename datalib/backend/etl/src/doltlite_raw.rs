@@ -1556,18 +1556,35 @@ fn stamp_run_with(msg: &str, run_id: Option<&str>) -> String {
 }
 
 pub async fn commit_run(pool: &SqlitePool, msg: &str) -> Result<Option<String>> {
+    commit_run_dated(pool, msg, None).await
+}
+
+/// [`commit_run`], with the commit's date pinned to `date`
+/// (`YYYY-MM-DDTHH:MM:SS` plus `Z` or `±HH:MM`) rather than the wall
+/// clock: for a source whose input is a series of past states, each
+/// committed as of when it was taken.
+pub async fn commit_run_dated(
+    pool: &SqlitePool,
+    msg: &str,
+    date: Option<&str>,
+) -> Result<Option<String>> {
     if !has_dolt_extensions(pool).await {
         return Ok(None);
     }
     let started = std::time::Instant::now();
     let store = store_label(pool);
+    let query = match date {
+        None => sqlx::query_scalar::<_, Option<String>>("SELECT dolt_commit('-Am', ?)")
+            .bind(stamp_run(msg)),
+        Some(date) => {
+            sqlx::query_scalar::<_, Option<String>>("SELECT dolt_commit('-Am', ?, '--date', ?)")
+                .bind(stamp_run(msg))
+                .bind(date)
+        }
+    };
     // "nothing to commit" is a legitimate outcome: a pass that fetched
     // nothing new leaves the working set clean.
-    let hash = match sqlx::query_scalar::<_, Option<String>>("SELECT dolt_commit('-Am', ?)")
-        .bind(stamp_run(msg))
-        .fetch_optional(pool)
-        .await
-    {
+    let hash = match query.fetch_optional(pool).await {
         Ok(opt) => opt.flatten(),
         Err(e) if e.to_string().contains("nothing to commit") => None,
         Err(e) => return Err(anyhow::Error::new(e).context("dolt_commit")),

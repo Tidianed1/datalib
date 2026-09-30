@@ -1457,7 +1457,7 @@ inputs = ["media/ingest"]
 # --- lightroom (Adobe Lightroom Classic catalog backup) -----------------
 
 # File-backed: point `catalog.path` at a `.lrcat`, which is an ordinary
-# SQLite database. Every table is mirrored into the source's doltlite raw
+# SQLite database, or at one of Lightroom's backup `.zip` files. Every table is mirrored into the source's doltlite raw
 # store, and doltlite's content-addressed storage does the deduplication —
 # so re-running after a day of editing stores only the rows that changed,
 # while every prior state stays queryable via `dolt_log`,
@@ -1519,6 +1519,16 @@ function = "ingest"
 # gc = false
 [steps.params.catalog]
 path = "~/Pictures/Lightroom/Lightroom Catalog-v14.lrcat"
+#
+# Replay a folder of Lightroom's backups as the catalog's history, beside
+# `catalog` or instead of it: each backup (a folder named like
+# `2026-09-27 1650` holding a .zip) becomes one commit, oldest first, dated
+# when it was taken; each sync adds the backups taken since, then mirrors
+# the catalog on top. A backup that turns up late, older than what is
+# already committed, is replayed too, and the newest state goes back on
+# top after it. See INGEST.md §"A folder of backups".
+# [steps.params.backups]
+# path = "~/Pictures/Lightroom/Backups"
 
 # --- apple_photos (Apple Photos library backup) --------------------------
 

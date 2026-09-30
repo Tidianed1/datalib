@@ -395,7 +395,8 @@ test("a hand-written render step under a download-only type is called out, then 
     .locator(".wiz-tile", { hasText: "Mirror a Lightroom Classic catalog" })
     .click();
   await nameField(page).fill("Photos");
-  await wizard(page).locator("input.wiz-path").fill("/tmp/cat.lrcat");
+  // The catalog; the backups folder below it stays empty.
+  await wizard(page).locator("input.wiz-path").first().fill("/tmp/cat.lrcat");
   await expect(wizard(page).locator(".wiz-section-head")).toHaveCount(0);
   await wizard(page).getByRole("button", { name: "Add source" }).click();
   await expect(page.getByText("Added Photos.")).toBeVisible();

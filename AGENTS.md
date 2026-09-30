@@ -571,6 +571,16 @@ Everything that identifies, filters or joins uses the id, and the field
 is `source_id` everywhere. `source_name` survives in one place because a
 **person** types it: the `source_name:` search filter.
 
+## A local file or folder: ask `fsscan` what changed
+
+**Don't walk a folder or re-read an input yourself to learn whether it
+changed; ask `datalib_etl::fsscan`.** It hashes each file once per host
+(a shared fingerprint cache), so an unchanged input costs a `stat` —
+milliseconds, where re-reading costs seconds — and `file_checkpoint`
+keeps this source's `path → blake3` cursor to diff against. The recipe
+is `datalib/backend/etl/README.md` §"Answering "did it change?" for a
+file-backed source"; `lightroom`'s `ingest/sync.rs` is a small example.
+
 ## A cursor is only valid under the config that set it
 
 A provider that resumes from a stored cursor never re-reads the config

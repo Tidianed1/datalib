@@ -164,6 +164,10 @@ export type CatalogEntry = {
   /// Order matters: [`catalogForStep`] takes the first entry whose key
   /// is present, so a more specific key must come first in `CATALOG`.
   variantKey?: string;
+  /// Field targets of which at least one must be filled in, for a type
+  /// whose methods combine (lightroom's catalog and backups folder), so
+  /// no one of them is `required` alone.
+  requiresOneOf?: string[];
   /// Params this entry always writes, with no field to edit them.
   preset?: Preset[];
   /// Offer "Test connection", and populate any `probe:` field from
@@ -1539,7 +1543,7 @@ export const CATALOG: CatalogEntry[] = [
     type: "lightroom",
     label: "Lightroom",
     blurb: "Mirror a Lightroom Classic catalog, with full history.",
-    keywords: ["lightroom", "photos", "adobe", "catalog", "sqlite", "images"],
+    keywords: ["lightroom", "photos", "adobe", "catalog", "sqlite", "images", "backup", "zip"],
     kind: "local",
     icon: "lightroom",
     defaultName: "lightroom",
@@ -1548,20 +1552,36 @@ export const CATALOG: CatalogEntry[] = [
     // Download-only: a photo catalog isn't chat-shaped, so nothing is
     // rendered and no render step is declared.
     renderStep: false,
+    requiresOneOf: ["catalog.path", "backups.path"],
     fields: [
       {
         kind: "path",
         picks: "file",
         pickTitle: "Choose your Lightroom catalog",
-        extensions: ["lrcat"],
+        extensions: ["lrcat", "zip"],
         startIn: "~/Pictures/Lightroom",
-        required: true,
         target: "catalog.path",
         label: "Catalog file",
         help:
           "A .lrcat, which is an ordinary SQLite database — Lightroom keeps it under " +
-          "~/Pictures/Lightroom. Every table is mirrored, and " +
-          "doltlite stores only what changed between runs — so prior states stay queryable.",
+          "~/Pictures/Lightroom — or one of Lightroom's backup .zip files. Every table is " +
+          "mirrored, and doltlite stores only what changed between runs — so prior states " +
+          "stay queryable.",
+      },
+      {
+        kind: "path",
+        picks: "dir",
+        pickTitle: "Choose your Lightroom backups folder",
+        startIn: "~/Pictures/Lightroom",
+        target: "backups.path",
+        label: "Backups folder",
+        help:
+          "Optional, beside or instead of the catalog: the folder Lightroom writes its " +
+          "backups into, by default a Backups folder beside the catalog in " +
+          "~/Pictures/Lightroom. Each backup (a " +
+          "folder named for when it was taken, holding a .zip) becomes one commit, oldest " +
+          "first and dated when it was taken, so the history reaches back before your first " +
+          "sync. Each sync adds the backups taken since, then mirrors the catalog on top.",
       },
       {
         kind: "bool",

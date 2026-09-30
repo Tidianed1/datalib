@@ -355,12 +355,17 @@ const idError = computed(() => {
 /// `PathBuf` rather than an `Option<PathBuf>` — so a config missing one
 /// fails at deserialize time rather than at sync time. Caught here so
 /// the message lands under the field instead of in a job log.
-const missingRequired = computed(() =>
-  [...downloadFields.value, ...renderFields.value]
+const missingRequired = computed(() => {
+  const fields = [...downloadFields.value, ...renderFields.value];
+  const blank = (f: Field) => String(values.value[f.target] ?? "").trim() === "";
+  const missing = fields
     .filter((f) => "required" in f && f.required)
-    .filter((f) => String(values.value[f.target] ?? "").trim() === "")
-    .map((f) => f.label),
-);
+    .filter(blank)
+    .map((f) => f.label);
+  const oneOf = fields.filter((f) => chosen.value?.requiresOneOf?.includes(f.target));
+  if (oneOf.length && oneOf.every(blank)) missing.push(oneOf.map((f) => f.label).join(" or "));
+  return missing;
+});
 
 const canSubmit = computed(() => !idError.value && missingRequired.value.length === 0);
 
