@@ -33,7 +33,7 @@ import type {
   SlickDraggableGrouping,
   SlickEventData,
 } from "@slickgrid-universal/common";
-import { typedColumns, groupTitle } from "./typedColumns";
+import { copyText, typedColumns, groupTitle } from "./typedColumns";
 import {
   SEARCH,
   type AccountsMap,
@@ -57,6 +57,7 @@ import { followFrame, isDarkTheme } from "@/grid/gridFrame";
 import { keepExcludeEntries, withToken, type FilterEntry } from "@/grid/query";
 import { onAfterMenuShowFit, perOpening } from "@/grid/menu";
 import { newlyPicked } from "@/grid/selection";
+import { copySelectedRowsOnKey } from "@/grid/copyRows";
 import { markdownsToAsk, widen } from "@/grid/qmdAsk";
 import { searchCoverage, type SearchCoverage } from "@/grid/searchCoverage";
 import { keepActiveOnRecord } from "@/grid/activeCell";
@@ -540,6 +541,15 @@ function formatSlugUuid(slug: string, uuid: string): string {
   if (!UUID_RE.test(uuid)) return uuid;
   const s = slugify(slug);
   return s.length === 0 ? uuid : `${s}-${uuid}`;
+}
+
+/// What a cell copies as when its row is copied: by its declared type,
+/// and the card's own two columns as the flag's word.
+function copyCell(column: Column<Row>, row: Row): string {
+  if (column.id === "qmd_indexed") return indexFlag(qmdDocState(row)?.indexed);
+  if (column.id === "qmd_embedded") return indexFlag(qmdDocState(row)?.embedded);
+  const spec = columns.value.find((c) => c.field === column.id);
+  return spec ? copyText(spec.type, row[spec.field]) : "";
 }
 
 /// Put one id per target on the clipboard, comma-separated.
@@ -1651,6 +1661,7 @@ function createGrid() {
   grid.onClick.subscribe(onClick);
   grid.onDblClick.subscribe(onDblClick);
   grid.onViewportChanged.subscribe(onViewportChanged);
+  copySelectedRowsOnKey(grid, rowData, copyCell);
   bundle.instances?.eventPubSubService?.subscribe<GridStateChange>(
     "onGridStateChanged",
     onGridStateChanged,

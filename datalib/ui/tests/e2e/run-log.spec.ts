@@ -9,7 +9,7 @@
 // round-trip are exercised end to end.
 
 import { test, expect, type Locator, type Page } from "@playwright/test";
-import { menuEntry } from "./grid-helpers";
+import { menuEntry, stubClipboard } from "./grid-helpers";
 
 // The commit playwright.config.ts handed the backends. Node's globals
 // are not in this tsconfig, as in api-token.spec.ts.
@@ -336,6 +336,28 @@ test("a selected line opens in full beside the log, and can narrow it", async ({
   await page.keyboard.press("ArrowDown");
   const second = (await row(1).locator('.slick-cell[col-id="msg"]').textContent())?.trim();
   await expect(inspector.locator(".ll-msg")).toHaveText(second ?? "");
+});
+
+/// The copy key after a shift-click range: the grid's own Ctrl+C copies
+/// the one active cell, and the shift-click leaves a text selection
+/// across the rows, which the browser's copy would take instead.
+test("the copy key puts the selected lines on the clipboard as TSV", async ({ page }) => {
+  const dialog = await openServerLog(page);
+  await scrollLogToStart(dialog);
+  const msgCell = (n: number) =>
+    dialog.locator(`${ROWS}[data-row="${n}"] .slick-cell[col-id="msg"]`);
+  const msgs: string[] = [];
+  for (const n of [0, 1, 2]) msgs.push((await msgCell(n).textContent())?.trim() ?? "");
+  const readClipboard = await stubClipboard(page);
+
+  await msgCell(0).click();
+  await msgCell(2).click({ modifiers: ["Shift"] });
+  await page.keyboard.press("ControlOrMeta+c");
+
+  await expect.poll(readClipboard, { message: "nothing was copied" }).not.toBeNull();
+  const lines = (await readClipboard())!.split("\n");
+  expect(lines[0]).toBe("Time\tStep\tLevel\tStream\tSource\tMessage\tFields");
+  expect(lines.slice(1).map((l) => l.split("\t")[5])).toEqual(msgs);
 });
 
 // Grouping goes through the panel's `__fwRunLogApi.groupBy`, which
