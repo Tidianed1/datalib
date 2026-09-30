@@ -196,7 +196,19 @@ fn render_smoke_produces_thread_dir_with_md_and_rows() {
     assert!(md.contains("external_id: T1"), "thread_id as external_id");
     assert!(md.contains("Alice"), "sender in a message header");
     assert!(md.contains("doc.pdf"), "attachment listed");
-    assert!(md.contains("🏷 Inbox"), "mailbox label chip rendered");
+    assert!(
+        md.contains("🏷 Inbox\n"),
+        "mailbox label chip rendered: {md}"
+    );
+    assert!(
+        md.contains("🏷 Starred · Inbox"),
+        "a flagged email's line leads with Starred: {md}"
+    );
+    // The outlink is built from mailboxes, never from a flag.
+    assert!(
+        md.contains("https://app.fastmail.com/mail/Inbox/E2.T1"),
+        "fastmail outlink for the flagged email: {md}"
+    );
     // Fastmail outlink: /mail/<mailbox>/<emailId>.<threadId>.
     assert!(
         md.contains("https://app.fastmail.com/mail/Inbox/E1.T1"),
