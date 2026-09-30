@@ -57,7 +57,7 @@ const RUNNER_TARGET: &str = "datalib_dag::runner";
 
 /// The gauge of work still ahead of a step: its own, and one per
 /// producer (`queued{from=<producer>}`) that the scheduler keeps.
-const QUEUED: &str = "queued";
+const QUEUED: &str = datalib_metrics::QUEUED;
 
 impl RunStoreSink {
     /// Returns `None` when the store could not be opened. The store is
@@ -168,7 +168,7 @@ impl RunStoreSink {
             (acc.done, acc.total)
         };
         let none = BTreeMap::new();
-        self.metric(step, "done", &none, done as i64);
+        self.metric(step, datalib_metrics::DONE, &none, done as i64);
         if let Some(total) = total {
             self.metric(step, QUEUED, &none, total.saturating_sub(done) as i64);
         }

@@ -1,11 +1,19 @@
 //! The Queue and ETA cells: how much work is ahead of a step, from the
-//! `queued` gauge it reports, and when that queue empties at the pace it
-//! has shrunk over the last couple of minutes. A group sums its steps'
-//! queues and waits on the slowest of them.
+//! `queued` gauges, and when that work is done at the pace work has come
+//! off the queue lately. The pace is what came *off*, not how the queue
+//! changed: a queue the runner keeps for a consumer climbs seal by seal
+//! and falls to nothing when a pass ends, and its net change reads as
+//! growing at every peak. A group sums its steps' queues and waits on
+//! the slowest of them.
+
+use std::collections::BTreeMap;
 
 use datalib_columns::Quantity;
+use datalib_metrics::{DEQUEUED, DONE, QUEUED};
+use datalib_runs::MetricSampleRow;
+use serde::Serialize;
 
-use crate::{DagStepProgress, QueueTrend};
+use crate::{secs_between, series_key, DagStepProgress};
 
 /// How long a running step may go without a metric moving before its
 /// ETA says it has stalled rather than guessing.
@@ -47,8 +55,124 @@ fn duration(secs: i64) -> String {
     }
 }
 
-fn is_queued(name: &str) -> bool {
-    name == "queued" || name.starts_with("queued{")
+/// Whether a series key (`name` or `name{labels}`) is of this name.
+fn is_named(key: &str, name: &str) -> bool {
+    key.strip_prefix(name)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('{'))
+}
+
+fn is_queued(key: &str) -> bool {
+    is_named(key, QUEUED)
+}
+
+/// How fast a step's queues have been worked off lately.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct QueueDrain {
+    /// Work that came off the queues over `secs`.
+    pub taken: i64,
+    pub secs: f64,
+    /// What the queues held when that stretch began.
+    pub queued_then: i64,
+    /// Read off running totals of what came off — `dequeued` beside the
+    /// runner's queues, `done` beside the step's own — rather than summed
+    /// from the drops the queue's samples recorded.
+    pub counted: bool,
+    /// Nothing came off in the recent window, so the stretch reaches back
+    /// to when the step started: a consumer in a pass longer than the
+    /// window takes its work off only when the pass ends.
+    pub since_start: bool,
+}
+
+/// A step's drain from its queue series' samples (oldest first within a
+/// series, from [`datalib_runs::QUEUE_WINDOW`] back plus the one before),
+/// its current values (`name{labels}` → value), when it started, and
+/// `now`. `None` for a step with no queue, or nothing to measure from.
+pub fn queue_drain(
+    samples: &[&MetricSampleRow],
+    current: &BTreeMap<String, i64>,
+    started: Option<&str>,
+    now: &str,
+) -> Option<QueueDrain> {
+    let queues: Vec<&String> = current.keys().filter(|k| is_queued(k)).collect();
+    if queues.is_empty() {
+        return None;
+    }
+    let mut by_series: BTreeMap<String, Vec<(&str, i64)>> = BTreeMap::new();
+    for m in samples {
+        by_series
+            .entry(series_key(&m.name, &m.labels))
+            .or_default()
+            .push((m.ts_utc.as_str(), m.value));
+    }
+    let value_at = |key: &str, t: &str| -> i64 {
+        by_series
+            .get(key)
+            .and_then(|pts| pts.iter().rev().find(|(ts, _)| *ts <= t))
+            .map_or(0, |(_, v)| *v)
+    };
+    let (window_start, _) = datalib_time::parse_strict(now)
+        .ok()?
+        .bump_micros(-(datalib_runs::QUEUE_WINDOW.as_micros() as i64))
+        .to_utc_and_offset();
+    let opened = started.or_else(|| samples.iter().map(|m| m.ts_utc.as_str()).min())?;
+    let start = window_start.as_str().max(opened);
+    let queued_then = queues.iter().map(|k| value_at(k, start)).sum();
+    let secs = secs_between(start, now)?.max(0.0);
+
+    // `done` counts the step's own bar, so it is the pace only of the
+    // step's own queue, and says nothing about one the runner keeps.
+    let has_own_queue = current.contains_key(QUEUED);
+    let counters: Vec<&String> = current
+        .keys()
+        .filter(|k| is_named(k, DEQUEUED) || (has_own_queue && k.as_str() == DONE))
+        .collect();
+    if !counters.is_empty() {
+        let taken_since =
+            |t: &str| -> i64 { counters.iter().map(|k| current[*k] - value_at(k, t)).sum() };
+        let taken = taken_since(start);
+        if taken <= 0 {
+            if let Some(from) = started.filter(|s| *s < start) {
+                return Some(QueueDrain {
+                    taken: taken_since(from),
+                    secs: secs_between(from, now)?.max(0.0),
+                    queued_then,
+                    counted: true,
+                    since_start: true,
+                });
+            }
+        }
+        return Some(QueueDrain {
+            taken,
+            secs,
+            queued_then,
+            counted: true,
+            since_start: false,
+        });
+    }
+    // A step that reports only its queue: add up every fall in it.
+    let taken = queues
+        .iter()
+        .map(|k| {
+            let later = by_series
+                .get(k.as_str())
+                .into_iter()
+                .flatten()
+                .filter(|(ts, _)| *ts > start)
+                .map(|(_, v)| *v);
+            let path: Vec<i64> = std::iter::once(value_at(k, start))
+                .chain(later)
+                .chain(std::iter::once(current[*k]))
+                .collect();
+            path.windows(2).map(|w| (w[0] - w[1]).max(0)).sum::<i64>()
+        })
+        .sum();
+    Some(QueueDrain {
+        taken,
+        secs,
+        queued_then,
+        counted: false,
+        since_start: false,
+    })
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -103,7 +227,7 @@ pub fn step_cells(p: Option<&DagStepProgress>, running: bool) -> Cells {
         detail: Some(queue_detail(&queued)),
     };
     let eta = if running {
-        eta(total, p.queue_trend, p.progress_age_secs, p.log_age_secs)
+        eta(total, p.queue_drain, p.progress_age_secs, p.log_age_secs)
     } else {
         blank("seconds")
     };
@@ -132,7 +256,7 @@ fn queue_detail(queued: &[(&String, i64)]) -> String {
 
 fn eta(
     total: i64,
-    trend: Option<QueueTrend>,
+    drain: Option<QueueDrain>,
     progress_age: Option<i64>,
     log_age: Option<i64>,
 ) -> Quantity {
@@ -156,44 +280,62 @@ fn eta(
             ),
         );
     }
-    let Some(trend) = trend.filter(|t| t.secs_ago >= MEASURE_SECS) else {
+    let Some(d) = drain.filter(|d| d.secs >= MEASURE_SECS) else {
         return noted(
             MEASURING,
             format!(
-                "The estimate is how fast the queue shrinks, and it takes {} seconds of \
+                "The estimate is the pace work comes off the queue, and it takes {} seconds of \
                  watching.",
                 MEASURE_SECS as i64
             ),
         );
     };
-    let over = duration(trend.secs_ago.round() as i64);
-    let drained = trend.queued_then - total;
-    if drained <= 0 {
-        let (note, how) = if drained < 0 {
-            (GROWING, format!("grew by {}", grouped(-drained)))
+    let over = if d.since_start {
+        format!(
+            "since the step started {} ago",
+            duration(d.secs.round() as i64)
+        )
+    } else {
+        format!("over the last {}", duration(d.secs.round() as i64))
+    };
+    if d.taken <= 0 {
+        if d.counted {
+            return noted(
+                MEASURING,
+                format!(
+                    "{} queued, and none of it has come off yet this run; the estimate starts \
+                     with the first that does.",
+                    grouped(total)
+                ),
+            );
+        }
+        let (note, how) = if total > d.queued_then {
+            (
+                GROWING,
+                format!("grew by {}", grouped(total - d.queued_then)),
+            )
         } else {
-            (FLAT, "has not shrunk".to_string())
+            (FLAT, "did not move".to_string())
         };
         return noted(
             note,
             format!(
-                "{} queued. Over the last {over} the queue {how}, so there is no pace to \
-                 finish at yet.",
+                "{} queued. Nothing came off the queue {over} \u{2014} it {how} \u{2014} so there \
+                 is no pace to finish at yet.",
                 grouped(total)
             ),
         );
     }
-    let per_sec = drained as f64 / trend.secs_ago;
+    let per_sec = d.taken as f64 / d.secs;
     let secs = (total as f64 / per_sec).ceil() as i64;
     Quantity {
         value: Some(secs),
         unit: "seconds".into(),
         note: None,
         detail: Some(format!(
-            "{} queued, down {} over the last {over} (net of what arrived). At that pace the \
-             queue is empty in about {}.",
+            "{} queued; {} came off it {over}. At that pace it is empty in about {}.",
             grouped(total),
-            grouped(drained),
+            grouped(d.taken),
             duration(secs)
         )),
     }
@@ -262,7 +404,7 @@ pub fn group_cells(children: &[(&str, &Cells)]) -> Cells {
 mod tests {
     use super::*;
 
-    fn progress(metrics: &[(&str, i64)], trend: Option<(i64, f64)>) -> DagStepProgress {
+    fn progress(metrics: &[(&str, i64)], drain: Option<(i64, f64)>) -> DagStepProgress {
         DagStepProgress {
             msg: None,
             metrics: metrics.iter().map(|(k, v)| (k.to_string(), *v)).collect(),
@@ -270,18 +412,143 @@ mod tests {
             rates: Default::default(),
             progress_age_secs: Some(0),
             log_age_secs: Some(0),
-            queue_trend: trend.map(|(queued_then, secs_ago)| QueueTrend {
-                queued_then,
-                secs_ago,
+            queue_drain: drain.map(|(taken, secs)| QueueDrain {
+                taken,
+                secs,
+                queued_then: 0,
+                counted: true,
+                since_start: false,
             }),
             updated_at_utc: String::new(),
         }
     }
 
+    const NOW: &str = "2026-09-30T10:05:00.000000+00:00";
+    const STARTED: &str = "2026-09-30T10:00:00.000000+00:00";
+
+    /// `mm:ss` past 10:00, as the store stamps it.
+    fn at(mm_ss: &str) -> String {
+        format!("2026-09-30T10:{mm_ss}.000000+00:00")
+    }
+
+    fn sample(name: &str, labels: &str, mm_ss: &str, value: i64) -> MetricSampleRow {
+        MetricSampleRow {
+            name: name.into(),
+            labels: labels.into(),
+            ts_utc: at(mm_ss),
+            value,
+            ..Default::default()
+        }
+    }
+
+    /// A consumer's queue as the runner keeps it: seals pile on, and a
+    /// pass takes the whole pile off at once. 40 came off in the last two
+    /// minutes (at 03:40), and 60 are on it now.
+    fn sawtooth() -> Vec<MetricSampleRow> {
+        let from = "from=a/ingest";
+        vec![
+            sample("queued", from, "02:30", 10),
+            sample("dequeued", from, "02:30", 0),
+            sample("queued", from, "03:20", 40),
+            sample("queued", from, "03:40", 0),
+            sample("dequeued", from, "03:40", 40),
+            sample("queued", from, "04:30", 60),
+        ]
+    }
+
+    fn current(pairs: &[(&str, i64)]) -> BTreeMap<String, i64> {
+        pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect()
+    }
+
+    #[test]
+    fn a_sawtooth_is_paced_by_what_came_off_it_not_by_its_net_change() {
+        let samples = sawtooth();
+        let refs: Vec<&MetricSampleRow> = samples.iter().collect();
+        let now = current(&[
+            ("queued{from=a/ingest}", 60),
+            ("dequeued{from=a/ingest}", 40),
+        ]);
+        let d = queue_drain(&refs, &now, Some(STARTED), NOW).unwrap();
+        // The window opens at 03:00, when 10 were queued; the queue has
+        // grown since, which a net reading calls "growing".
+        assert_eq!((d.taken, d.secs, d.queued_then), (40, 120.0, 10));
+        assert!(d.counted);
+        let c = step_cells(
+            Some(&DagStepProgress {
+                queue_drain: Some(d),
+                ..progress(&[("queued{from=a/ingest}", 60)], None)
+            }),
+            true,
+        );
+        // 40 in 120s is 1 every 3s; 60 queued is 180s.
+        assert_eq!(c.eta.value, Some(180));
+
+        // A step that reports only the queue: the fall at 03:40 is summed
+        // from its samples, and reads the same.
+        let queue_only: Vec<&MetricSampleRow> =
+            samples.iter().filter(|m| m.name == "queued").collect();
+        let d = queue_drain(
+            &queue_only,
+            &current(&[("queued{from=a/ingest}", 60)]),
+            Some(STARTED),
+            NOW,
+        )
+        .unwrap();
+        assert_eq!((d.taken, d.counted), (40, false));
+    }
+
+    /// A pass longer than the window takes nothing off inside it; the
+    /// pace then comes from the whole of the step's run.
+    #[test]
+    fn a_window_with_nothing_taken_off_reaches_back_to_the_start() {
+        let samples = [
+            sample("dequeued", "from=a", "00:30", 0),
+            sample("dequeued", "from=a", "01:00", 100),
+            sample("queued", "from=a", "01:00", 0),
+            sample("queued", "from=a", "02:00", 50),
+        ];
+        let refs: Vec<&MetricSampleRow> = samples.iter().collect();
+        let now = current(&[("queued{from=a}", 50), ("dequeued{from=a}", 100)]);
+        let d = queue_drain(&refs, &now, Some(STARTED), NOW).unwrap();
+        assert_eq!((d.taken, d.secs, d.since_start), (100, 300.0, true));
+    }
+
+    /// `done` counts the step's own bar, so it paces the step's own
+    /// queue — and is not taken for the pace of a queue the runner keeps.
+    #[test]
+    fn done_paces_only_the_steps_own_queue() {
+        let samples = [
+            sample("done", "", "02:00", 10),
+            sample("queued", "from=a", "02:00", 5),
+        ];
+        let refs: Vec<&MetricSampleRow> = samples.iter().collect();
+        let own = queue_drain(
+            &refs,
+            &current(&[("queued", 5), ("done", 70)]),
+            Some(STARTED),
+            NOW,
+        )
+        .unwrap();
+        assert_eq!((own.taken, own.counted), (60, true));
+        let theirs = queue_drain(
+            &refs,
+            &current(&[("queued{from=a}", 5), ("done", 70)]),
+            Some(STARTED),
+            NOW,
+        )
+        .unwrap();
+        assert!(!theirs.counted);
+    }
+
     #[test]
     fn queue_sums_every_queued_series_and_ignores_the_rest() {
         let p = progress(
-            &[("rows", 1234), ("queued", 5), ("queued{from=a/ingest}", 7)],
+            &[
+                ("rows", 1234),
+                ("queued", 5),
+                ("queued{from=a/ingest}", 7),
+                ("queued_bytes", 9),
+            ],
             None,
         );
         let c = step_cells(Some(&p), true);
@@ -290,30 +557,26 @@ mod tests {
     }
 
     #[test]
-    fn eta_is_the_queue_over_its_net_pace() {
-        // 600 → 300 in 60s is 5/s; 300 left is 60s.
-        let p = progress(&[("queued", 300)], Some((600, 60.0)));
-        let c = step_cells(Some(&p), true);
-        assert_eq!(c.eta.value, Some(60));
-        assert_eq!(c.eta.note, None);
-    }
-
-    #[test]
-    fn a_queue_that_is_not_shrinking_gets_a_word_not_a_figure() {
-        let grew = step_cells(Some(&progress(&[("queued", 50)], Some((40, 60.0)))), true);
-        assert_eq!(
-            (grew.eta.value, grew.eta.note.as_deref()),
-            (None, Some(GROWING))
-        );
-        let flat = step_cells(Some(&progress(&[("queued", 50)], Some((50, 60.0)))), true);
-        assert_eq!(flat.eta.note.as_deref(), Some(FLAT));
-        let young = step_cells(Some(&progress(&[("queued", 50)], Some((90, 5.0)))), true);
+    fn nothing_taken_off_yet_gets_a_word_not_a_figure() {
+        let none_yet = step_cells(Some(&progress(&[("queued", 50)], Some((0, 60.0)))), true);
+        assert_eq!(none_yet.eta.note.as_deref(), Some(MEASURING));
+        let young = step_cells(Some(&progress(&[("queued", 50)], Some((10, 5.0)))), true);
         assert_eq!(young.eta.note.as_deref(), Some(MEASURING));
+        let mut drops_only = progress(&[("queued", 50)], Some((0, 60.0)));
+        drops_only.queue_drain = drops_only.queue_drain.map(|d| QueueDrain {
+            counted: false,
+            queued_then: 20,
+            ..d
+        });
+        assert_eq!(
+            step_cells(Some(&drops_only), true).eta.note.as_deref(),
+            Some(GROWING)
+        );
     }
 
     #[test]
     fn a_stall_outranks_the_estimate() {
-        let mut p = progress(&[("queued", 300)], Some((600, 60.0)));
+        let mut p = progress(&[("queued", 300)], Some((300, 60.0)));
         p.progress_age_secs = Some(90);
         p.log_age_secs = Some(5);
         let c = step_cells(Some(&p), true);
@@ -340,8 +603,8 @@ mod tests {
 
     #[test]
     fn a_group_sums_queues_and_waits_on_its_slowest_step() {
-        let fast = step_cells(Some(&progress(&[("queued", 10)], Some((20, 60.0)))), true);
-        let slow = step_cells(Some(&progress(&[("queued", 100)], Some((110, 60.0)))), true);
+        let fast = step_cells(Some(&progress(&[("queued", 10)], Some((60, 60.0)))), true);
+        let slow = step_cells(Some(&progress(&[("queued", 100)], Some((10, 60.0)))), true);
         let g = group_cells(&[("Ingest", &fast), ("Render", &slow)]);
         assert_eq!(g.queue.value, Some(110));
         assert_eq!(g.eta.value, slow.eta.value);

@@ -41,6 +41,7 @@ use status::{StatusView, StepEdges};
 pub use dashboard::get_dashboard;
 pub use items::{by_step as items_by_step, WINDOW as ITEMS_WINDOW};
 pub use problems::{counts_by_step, ProblemCounts};
+pub use queue::{queue_drain, QueueDrain};
 pub use status::dropped_detail;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -114,7 +115,7 @@ pub fn columns() -> Vec<ColumnSpec> {
         ColumnSpec::new("queue", "Queue", ColumnType::Quantity)
             .describe("How much work the step says is still ahead of it; a group's is the sum of its steps'. Hover for where it came from; double-click for the sync dashboard."),
         ColumnSpec::new("eta", "ETA", ColumnType::Quantity)
-            .describe("When the queue empties at the pace it has shrunk over the last two minutes; a group waits on its slowest step. A word instead of a time when there is no pace to go by \u{2014} stalled, growing, flat, measuring. Double-click for the sync dashboard."),
+            .describe("When the queued work is done, at the pace work has come off the queue over the last two minutes (or since the step started); a group waits on its slowest step. A word instead of a time when there is no pace to go by \u{2014} stalled, measuring, growing, flat. Double-click for the sync dashboard."),
         ColumnSpec::new("items", "Items", ColumnType::Timeseries)
             .describe("How many things this source holds \u{2014} messages, readings, events \u{2014} whole store, as of its last render, with the last few days of syncs behind it. Hover for how many documents they sit in. Blank means it has never counted."),
         ColumnSpec::new("last_synced", "Last synced", ColumnType::Timestamp)

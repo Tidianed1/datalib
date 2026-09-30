@@ -416,10 +416,11 @@ pub struct Snapshot {
     /// The two newest samples of every series — enough for a rate.
     /// Oldest first within a series.
     pub recent_samples: Vec<MetricSampleRow>,
-    /// Every `queued` sample of the last [`QUEUE_WINDOW`], plus the
-    /// newest one before it, per series: what the queue held at the
-    /// window's start and how it moved since. Oldest first within a
-    /// series.
+    /// Every sample of a queue's series — `queued`, and the running
+    /// totals of what came off it, `done` and `dequeued` — from the last
+    /// [`QUEUE_WINDOW`], plus the newest one before it, per series: where
+    /// each stood when the window opened and how it moved since. Oldest
+    /// first within a series.
     pub queue_history: Vec<MetricSampleRow>,
 }
 
@@ -729,14 +730,15 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
         .bump_micros(-(QUEUE_WINDOW.as_micros() as i64))
         .to_utc_and_offset();
     let queue_history = sqlx::query(
-        "SELECT step, labels, ts_utc, tz_offset, value FROM ( \
-           SELECT *, ROW_NUMBER() OVER (PARTITION BY step, labels ORDER BY ts_utc DESC) AS rn \
-           FROM metric_samples WHERE run_id = ?1 AND name = 'queued' AND ts_utc <= ?2) \
+        "SELECT step, name, labels, ts_utc, tz_offset, value FROM ( \
+           SELECT *, ROW_NUMBER() OVER (PARTITION BY step, name, labels ORDER BY ts_utc DESC) AS rn \
+           FROM metric_samples WHERE run_id = ?1 AND name IN ('queued', 'done', 'dequeued') \
+             AND ts_utc <= ?2) \
          WHERE rn = 1 \
          UNION ALL \
-         SELECT step, labels, ts_utc, tz_offset, value FROM metric_samples \
-           WHERE run_id = ?1 AND name = 'queued' AND ts_utc > ?2 \
-         ORDER BY step, labels, ts_utc",
+         SELECT step, name, labels, ts_utc, tz_offset, value FROM metric_samples \
+           WHERE run_id = ?1 AND name IN ('queued', 'done', 'dequeued') AND ts_utc > ?2 \
+         ORDER BY step, name, labels, ts_utc",
     )
     .bind(&run_id)
     .bind(&queue_cutoff)
@@ -746,7 +748,7 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
     .map(|r| MetricSampleRow {
         run_id: run_id.clone(),
         step: r.get("step"),
-        name: "queued".into(),
+        name: r.get("name"),
         labels: r.get("labels"),
         ts_utc: r.get("ts_utc"),
         tz_offset: r.get("tz_offset"),
@@ -1799,7 +1801,9 @@ async fn flush(
         && batch.processes.is_empty()
         && batch.logs.is_empty()
         && batch.metrics.is_empty();
-    if empty && !last {
+    let now = Instant::now();
+    let plan = plan_series(series, &batch.metrics, now, last);
+    if empty && !last && plan.samples.is_empty() {
         return Ok(());
     }
     let run_id = scope.run_id();
@@ -1881,8 +1885,6 @@ async fn flush(
         .execute(&mut *tx)
         .await?;
     }
-    let now = Instant::now();
-    let plan = plan_series(series, &batch.metrics, now, last);
     for m in batch.metrics.values() {
         sqlx::query(
             "INSERT INTO metrics (run_id, step, name, labels, value, updated_at_utc, tz_offset) \
@@ -1918,9 +1920,13 @@ struct SeriesPlan {
 }
 
 /// A sample is due when a series has moved and the floor between
-/// samples has passed — and, on the last flush of a run, once more for
-/// whatever each series ended at, however recent its previous sample:
-/// a rate drawn to the end of the run needs that point.
+/// samples has passed. A move the floor held back is written once the
+/// floor has passed, even if the series has not moved again — at the
+/// stamp it moved at: a queue that fills and then empties in one pass
+/// would otherwise keep its peak in the history until its next move. On
+/// the last flush of a run, whatever each series ended at is written
+/// however recent its previous sample: a rate drawn to the end of the
+/// run needs that point.
 fn plan_series(
     series: &HashMap<SeriesKey, SeriesState>,
     batch: &BTreeMap<SeriesKey, MetricRow>,
@@ -1958,21 +1964,20 @@ fn plan_series(
             },
         ));
     }
-    if last {
-        for (key, s) in series {
-            if batch.contains_key(key) || s.current.value == s.last_sample_value {
-                continue;
-            }
-            plan.samples.push(s.current.clone());
-            plan.next.push((
-                key.clone(),
-                SeriesState {
-                    last_sample_at: s.last_sample_at,
-                    last_sample_value: s.current.value,
-                    current: s.current.clone(),
-                },
-            ));
+    for (key, s) in series {
+        let held_back = !batch.contains_key(key) && s.current.value != s.last_sample_value;
+        if !held_back || !(last || now - s.last_sample_at >= SAMPLE_EVERY) {
+            continue;
         }
+        plan.samples.push(s.current.clone());
+        plan.next.push((
+            key.clone(),
+            SeriesState {
+                last_sample_at: now,
+                last_sample_value: s.current.value,
+                current: s.current.clone(),
+            },
+        ));
     }
     plan
 }
@@ -2005,6 +2010,55 @@ async fn insert_sample(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A queue that fills and then empties within the sample floor: the
+    /// drop is held back, then written once the floor has passed — with
+    /// nothing new in the batch, and at the stamp it happened — rather
+    /// than leaving the peak in the history until the queue next moves.
+    #[test]
+    fn a_move_the_floor_held_back_is_written_once_it_passes() {
+        let key: SeriesKey = ("s".into(), "queued".into(), String::new());
+        let row = |value: i64, at: &str| MetricRow {
+            step: "s".into(),
+            name: "queued".into(),
+            value,
+            updated_at_utc: at.into(),
+            ..Default::default()
+        };
+        let t0 = Instant::now();
+        let mut series = HashMap::new();
+        let apply = |series: &mut HashMap<SeriesKey, SeriesState>, plan: SeriesPlan| {
+            for (k, st) in plan.next {
+                series.insert(k, st);
+            }
+            plan.samples
+                .iter()
+                .map(|m| (m.value, m.updated_at_utc.clone()))
+                .collect::<Vec<_>>()
+        };
+        let batch = |m: MetricRow| BTreeMap::from([(key.clone(), m)]);
+
+        let first = plan_series(&series, &batch(row(50, "t1")), t0, false);
+        assert_eq!(apply(&mut series, first), [(50, "t1".to_string())]);
+        let inside = plan_series(
+            &series,
+            &batch(row(0, "t2")),
+            t0 + Duration::from_secs(1),
+            false,
+        );
+        assert_eq!(apply(&mut series, inside), [], "inside the floor");
+        let quiet = plan_series(
+            &series,
+            &BTreeMap::new(),
+            t0 + Duration::from_secs(3),
+            false,
+        );
+        assert_eq!(apply(&mut series, quiet), [], "still inside the floor");
+        let after = plan_series(&series, &BTreeMap::new(), t0 + SAMPLE_EVERY, false);
+        assert_eq!(apply(&mut series, after), [(0, "t2".to_string())]);
+        let again = plan_series(&series, &BTreeMap::new(), t0 + SAMPLE_EVERY * 3, false);
+        assert_eq!(apply(&mut series, again), [], "written once");
+    }
 
     /// A store from another schema version, with a reader that opened
     /// it before a writer remade it — `datalib-http`'s reads take no

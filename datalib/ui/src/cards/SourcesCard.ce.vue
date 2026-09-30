@@ -103,9 +103,12 @@ A <b>red or yellow number</b> after a name counts the errors (records dropped) a
 warnings (records kept with something lost) its store holds as of its last run; a row
 with none shows nothing. <b>Double-click the number</b> for the list.
 <b>Queue</b> is how much work a step says is still ahead of it, and <b>ETA</b> when
-that queue empties at the pace it has shrunk over the last two minutes — or a word
-when there is no pace to go by: <i>stalled</i> (nothing has moved for a minute),
-<i>growing</i>, <i>flat</i>, <i>measuring</i>. A group sums its steps' queues and
+that work is done at the pace work has come off the queue over the last two minutes
+(since the step started, when nothing came off in those two) — or a word when there
+is no pace to go by: <i>stalled</i> (nothing has moved for a minute),
+<i>measuring</i> (nothing has come off yet), <i>growing</i>, <i>flat</i>. A queue a
+step reads in passes climbs as work arrives and falls to nothing when a pass ends,
+so its ETA holds steady through the climb rather than reading it as growth. A group sums its steps' queues and
 waits on its slowest step; a stall anywhere under it shows. Hover either for how it
 was reached. <b>Double-click a Queue or ETA</b>, or pick <b>Show sync dashboard</b>
 from a row's menu, for the group's <b>sync dashboard</b>: its row and each step's,

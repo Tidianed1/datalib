@@ -32,8 +32,8 @@ props.ctx.setHelp(`
 <p>One source's sync — or the index's — laid out as a dashboard. The top
 section is the whole group, as its row in the Sources table reads: its
 status, how much is <b>queued</b> across its steps and when that is done
-(<b>ETA</b>, at the pace the queues have shrunk over the last two
-minutes), and its size. Under it, one section per step, each with its
+(<b>ETA</b>, at the pace work has come off the queues lately), and its
+size. Under it, one section per step, each with its
 own toolbar — the same actions as its row — and its charts.</p>
 <p>The charts cover one run: the newest the group took part in, or the one
 picked above. Each metric a step reports is a running total over the run
