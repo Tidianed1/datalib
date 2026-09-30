@@ -267,14 +267,9 @@ pub struct Status {
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum ChipKind {
-    Info,
-    Idle,
     Metric,
     Warning,
     Error,
-    /// Checked and found clean: a green zero, as opposed to `Idle`'s
-    /// nothing-to-do grey-green.
-    Ok,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -20,8 +20,9 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ hover: [t: number | null] }>();
 
-const HEIGHT = 84;
-const PAD = { top: 6, right: 8, bottom: 16, left: 8 };
+const HEIGHT = 92;
+/// The top pad holds the axis maximum, above the line rather than under it.
+const PAD = { top: 14, right: 8, bottom: 16, left: 8 };
 
 const box = ref<HTMLElement | null>(null);
 const width = ref(280);
@@ -137,7 +138,7 @@ const time = formatClock;
           :y1="HEIGHT - PAD.bottom"
           :y2="HEIGHT - PAD.bottom"
         />
-        <text class="tc-axis" :x="PAD.left" :y="PAD.top + 8">{{ format(range[1]) }}</text>
+        <text class="tc-axis" :x="PAD.left" :y="PAD.top - 4">{{ format(range[1]) }}</text>
         <g :clip-path="`url(#${clipId})`">
           <path
             v-for="p in paths"

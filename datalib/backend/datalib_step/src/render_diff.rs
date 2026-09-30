@@ -187,7 +187,7 @@ pub async fn run(
         removed = report.removed,
         "diff: documents written"
     );
-    progress.metric("documents_removed", &[], report.removed as i64);
+    progress.metric("documents_removed_total", &[], report.removed as i64);
     datalib_core::layout::mark_derived_cache(&rendered_root);
     Ok(crate::render::claims(&env.step, &report))
 }
@@ -322,7 +322,7 @@ pub fn render_diff_source(
                 .with_context(|| format!("store diff document {}", doc.markdown_uuid))?;
             emitted.insert(doc.markdown_uuid.clone());
             docs += 1;
-            progress.metric("documents_rendered", &[], docs as i64);
+            progress.metric("documents_rendered_total", &[], docs as i64);
         }
         // Every bucket either side rendered, with what the `to` side
         // read — the declaration a later run's reverse lookup would use,

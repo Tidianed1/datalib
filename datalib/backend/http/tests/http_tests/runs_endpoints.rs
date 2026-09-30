@@ -71,7 +71,7 @@ fn write_two_runs(root: &Path) {
         });
         w.metric(MetricRow {
             step: "slack/ingest".into(),
-            name: "rows_upserted".into(),
+            name: "rows_upserted_total".into(),
             labels: "table=slack_messages".into(),
             value: 42,
             updated_at_utc: t.into(),
@@ -138,7 +138,7 @@ async fn a_runs_steps_carry_their_numbers_and_error_counts() {
     assert_eq!(ingest["state"], "running");
     assert_eq!(ingest["progress"]["msg"], "conversations.list");
     assert_eq!(
-        ingest["progress"]["metrics"]["rows_upserted{table=slack_messages}"],
+        ingest["progress"]["metrics"]["rows_upserted_total{table=slack_messages}"],
         42
     );
     assert_eq!(ingest["progress"]["metrics"]["queued"], 7);

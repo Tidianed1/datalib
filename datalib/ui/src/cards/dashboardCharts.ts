@@ -62,9 +62,10 @@ export function sumSeries(series: Point[][]): Point[] {
   }));
 }
 
-/// `rows_upserted` → "rows upserted".
+/// `rows_upserted_total` → "rows upserted": the suffix says the series
+/// is a running total, which every chart but the queue's is.
 export function humanName(name: string): string {
-  return name.replace(/_/g, " ");
+  return name.replace(/_total$/, "").replace(/_/g, " ");
 }
 
 /// `table=messages,kind=dm` → "messages, dm": the values say which is
@@ -180,6 +181,35 @@ export function groupCharts(steps: DashboardStep[], disk: Sample[]): Chart[] {
   }
   if (weighsSomething(disk)) charts.push(diskChart(disk));
   return charts;
+}
+
+/// The time the charts span: from the first of the group's steps to
+/// start in the run to the last to finish, or now while one still runs.
+/// The group's own stretch, not the run's: a sync of everything can run
+/// an hour while this source took thirty seconds of it. And the run's
+/// start can be a pinned clock (`--now`) while the steps stamp the wall
+/// clock, which would put every point at one edge.
+export function groupSpan(
+  steps: DashboardStep[],
+  run: { started_at_utc: string; finished_at_utc: string | null } | null,
+  now: number,
+): [number, number] {
+  const ran = steps.filter((s) => s.in_run);
+  const starts = ran.flatMap((s) => (s.started_at_utc ? [Date.parse(s.started_at_utc)] : []));
+  const running = ran.some((s) => s.started_at_utc && !s.finished_at_utc);
+  const ends = ran.flatMap((s) => (s.finished_at_utc ? [Date.parse(s.finished_at_utc)] : []));
+  const start = starts.length
+    ? Math.min(...starts)
+    : run
+      ? Date.parse(run.started_at_utc)
+      : now - 60_000;
+  const end =
+    running || ends.length === 0
+      ? run?.finished_at_utc && !running
+        ? Date.parse(run.finished_at_utc)
+        : now
+      : Math.max(...ends);
+  return [start, Math.max(end, start + 1000)];
 }
 
 /// The value range a chart's y-axis covers. From zero for a count; a
