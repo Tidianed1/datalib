@@ -122,6 +122,9 @@ export type ViewLibs = {
   // Where a person starts: what needs them, the library, the sources
   // and the newest documents. The card a new window opens on.
   homeView: () => CardRender;
+  // The Search card: results as a list, the picked one read in place.
+  // The same search as gridView, which shows it as a table.
+  searchView: (opts?: { q?: string }) => CardRender;
   gridView: (opts?: { q?: string; columns?: string[]; name?: string }) => CardRender;
   documentView: (markdownUuid?: string | null, sectionUuid?: string | null) => CardRender;
   // Parameter-less gallery stand-in for documentView: lists every

@@ -277,7 +277,7 @@ onBeforeUnmount(() => {
       <section class="panel" aria-label="Latest activity">
         <h2 class="panel-head">
           <span class="section-title">Latest activity</span>
-          <button class="link" @click="open('gridView()')">All documents</button>
+          <button class="link" @click="open('searchView()')">Search everything</button>
         </h2>
         <p v-if="recent.length === 0" class="empty">Nothing indexed yet.</p>
         <button v-for="d in recent" :key="d.uuid" class="row recent" @click="openDocument(d)">

@@ -41,9 +41,15 @@ export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
     icon: "sources",
     gallery: "sourcesNextView()",
   },
+  searchView: {
+    title: "Search",
+    description: "Find anything in your library by its words or its meaning, and read it in place.",
+    icon: "search",
+    gallery: "searchView()",
+  },
   gridView: {
     title: "Unified Search",
-    description: "Search and browse everything in your library.",
+    description: "Search and browse everything in your library, as a table.",
     icon: "table",
     gallery: "gridView()",
   },

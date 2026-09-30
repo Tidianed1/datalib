@@ -26,7 +26,7 @@ export function showDataSources() {
 /// The toolbar's search box: a search card on `q`, beside whatever is
 /// showing.
 export function searchFor(q: string) {
-  const source = `gridView(${JSON.stringify({ q })})`;
+  const source = `searchView(${JSON.stringify({ q })})`;
   if (surface.value) surface.value.showCard(source);
   else void router.push(encodeColumns([{ code: source, size: null, state: "" }]));
 }
