@@ -24,10 +24,9 @@
 #                           fetch on first use (runtime.manifest)
 #
 # The last four come out of Bazel (//third-party:bundled_licenses and
-# //datalib/ui:dist). cargo-about is the one tool this needs on PATH
-# beyond bazel: `brew install cargo-about`, or the pinned download in
-# release.yml. It fetches crate sources itself, so it needs the network
-# on a cold machine. The qmd and latchkey trees in the runtime asset keep
+# //datalib/ui:dist), and so does cargo-about itself (a pinned release,
+# //third-party/cargo-about). It needs `cargo` on PATH and fetches crate
+# sources itself, so it needs the network on a cold machine. The qmd and latchkey trees in the runtime asset keep
 # each package's own LICENSE file inside node_modules and are not
 # repeated here.
 
@@ -50,8 +49,7 @@ fail() { printf 'third_party_notices: error: %s\n' "$*" >&2; exit 1; }
 # //tools:stage_tarball_test hands the two Bazel outputs over as
 # runfiles and stands in for cargo-about, which cannot run in the
 # sandbox (it needs cargo and the crate sources).
-cargo_about="${CARGO_ABOUT:-cargo-about}"
-command -v "$cargo_about" >/dev/null 2>&1 || fail "cargo-about not found on PATH (brew install cargo-about)"
+cargo_about="${CARGO_ABOUT:-}"
 
 if [[ -n "${THIRD_PARTY_NOTICES_BAZEL_BIN:-}" ]]; then
     bin="$THIRD_PARTY_NOTICES_BAZEL_BIN"
@@ -63,9 +61,16 @@ else
     else
         fail "neither bazelisk nor bazel found on PATH"
     fi
-    log "building //third-party:bundled_licenses //datalib/ui:dist"
-    (cd "$repo_root" && "$bazel" build //third-party:bundled_licenses //datalib/ui:dist >&2)
+    targets=(//third-party:bundled_licenses //datalib/ui:dist)
+    [[ -n "$cargo_about" ]] || targets+=(//third-party/cargo-about:cargo_about)
+    log "building ${targets[*]}"
+    (cd "$repo_root" && "$bazel" build "${targets[@]}" >&2)
     bin="$(cd "$repo_root" && "$bazel" info bazel-bin)"
+fi
+
+[[ -n "$cargo_about" ]] || cargo_about="$bin/third-party/cargo-about/cargo-about"
+if [[ -z "${CARGO_ABOUT:-}" ]]; then
+    command -v cargo >/dev/null 2>&1 || fail "cargo not found on PATH (cargo-about runs it)"
 fi
 
 rm -rf "$dest"

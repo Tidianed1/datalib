@@ -139,6 +139,30 @@ filegroup(
     ]
 ]
 
+# cargo-about, which writes the release's `rust-crates.md` notices
+# (scripts/third_party_notices.sh). A prebuilt release binary, pinned by
+# version and sha256; //third-party/cargo-about picks the one for the
+# host. The Linux builds are static musl, so they run on any libc.
+CARGO_ABOUT_VERSION = "0.9.2"
+
+[
+    http_archive(
+        name = "cargo_about_%s" % triple.replace("-", "_"),
+        urls = ["https://github.com/EmbarkStudios/cargo-about/releases/download/{v}/cargo-about-{v}-{t}.tar.gz".format(
+            v = CARGO_ABOUT_VERSION,
+            t = triple,
+        )],
+        sha256 = sha,
+        strip_prefix = "cargo-about-%s-%s" % (CARGO_ABOUT_VERSION, triple),
+        build_file_content = 'exports_files(["cargo-about"])',
+    )
+    for triple, sha in [
+        ("aarch64-apple-darwin", "ae72f0df0c399a1e96336f696fa55b1b28679fd725632eba8cf8e4568467cc3e"),
+        ("x86_64-unknown-linux-musl", "9099a59e820c38a68b9d65f300662a567d56562f9a10f6aa4c7e86c17c2566af"),
+        ("aarch64-unknown-linux-musl", "af5169282fb6f84e13471493f405437e43ac517744c9ae12fbe2cdf0a6f0e5a8"),
+    ]
+]
+
 # Lightroom test catalogs — four real `.lrcat` files from
 # github.com/thadd3us/lightroom_db_diff, captured as a chronological
 # progression of one library: fresh, then GPS/captions/collections/
