@@ -6,9 +6,8 @@
 //! putting a message in its chat. Identity comes from the guids beside
 //! the rowids: a chat is its `chat.guid`, a message its `message.guid`,
 //! both Apple-issued and the same in every copy of one account's
-//! database. Attachments are named, not copied: the files sit under
-//! `~/Library/Messages/Attachments/`, which a picked `chat.db` grants no
-//! access to, so each renders as a placeholder carrying its path.
+//! database. Attachments are named, not copied (INGEST.md says why), so
+//! each renders as a placeholder carrying its path.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -35,7 +34,7 @@ use crate::typedstream::attributed_body_text;
 
 /// v2: every id carries its row's `created_at` in its leading bits
 ///     (`datalib_id`'s v8 layout).
-pub const RENDER_VERSION: u32 = 2;
+pub const RENDER_VERSION: u32 = 3;
 
 pub const STAMP_PRECISION: RecordStampPrecision = RecordStampPrecision::Seconds;
 
@@ -333,6 +332,7 @@ async fn load(
             kind,
             attachments,
             reactions: Vec::new(),
+            labels: Vec::new(),
             system_note,
             source_url: None,
             kind_label: None,

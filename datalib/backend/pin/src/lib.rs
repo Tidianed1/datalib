@@ -53,10 +53,12 @@ impl Pin {
     }
 
     /// The table expression that reads `table` at this commit. Safe to
-    /// splice into SQL for a `table` that is a literal in the caller: the
-    /// hash was checked by [`Pin::at`].
+    /// splice into SQL for any table name: the module name is a quoted
+    /// identifier, which doltlite resolves case and all, and the hash was
+    /// checked by [`Pin::at`].
     pub fn table(&self, table: &str) -> String {
-        format!("dolt_at_{table}('{}')", self.0)
+        let module = format!("dolt_at_{table}").replace('"', "\"\"");
+        format!("\"{module}\"('{}')", self.0)
     }
 }
 
@@ -198,7 +200,11 @@ mod tests {
         }
         assert_eq!(
             Pin::at(HASH).unwrap().table("grid_rows"),
-            format!("dolt_at_grid_rows('{HASH}')")
+            format!("\"dolt_at_grid_rows\"('{HASH}')")
+        );
+        assert_eq!(
+            Pin::at(HASH).unwrap().table("Adobe \"x\""),
+            format!("\"dolt_at_Adobe \"\"x\"\"\"('{HASH}')")
         );
     }
 

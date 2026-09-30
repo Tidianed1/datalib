@@ -1,5 +1,6 @@
 //! `Maps/Photos and videos/*.json` + matching media file walker.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -8,6 +9,7 @@ use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::file_checkpoint;
 use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
+use datalib_etl::prune;
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::Value;
 use tracing::warn;
@@ -25,12 +27,20 @@ const SCOPE: &str = "google_takeout/maps_photos";
 /// each tuple to [`CasInsert`] for the batched `put_many`.
 type PendingCas = (String, Vec<u8>, Option<String>);
 
-/// `(rows_upserted, blobs_stored)`.
+#[derive(Debug, Default, Clone)]
+pub struct MapsPhotosSummary {
+    pub rows: usize,
+    pub blobs: usize,
+    /// Photos whose sidecar is gone.
+    pub removed: usize,
+    pub files_removed: usize,
+}
+
 pub async fn ingest(
     db: &RawDb,
     scan: &fsscan::Scan,
     progress: &Progress,
-) -> Result<(usize, usize)> {
+) -> Result<MapsPhotosSummary> {
     let prev = file_checkpoint::load_cursor(db.pool(), SCOPE).await?;
     let changes = scan.changes_since(&prev);
 
@@ -84,7 +94,43 @@ pub async fn ingest(
         file_checkpoint::record_file(&mut tx, SCOPE, f).await?;
     }
     tx.commit().await.context("commit maps_photos tx")?;
-    Ok((row_count, blob_count))
+
+    // A photo row is keyed by its sidecar's stem, so a gone sidecar takes
+    // its row, unless a sidecar with that stem is still here.
+    let present: HashSet<&str> = scan
+        .files
+        .iter()
+        .filter(|f| is_sidecar(&f.rel))
+        .filter_map(|f| stem(&f.rel))
+        .collect();
+    let gone = if super::product_exported(scan, DIR_REL) {
+        changes.gone()
+    } else {
+        Vec::new()
+    };
+    let rows_gone: Vec<String> = gone
+        .iter()
+        .filter(|rel| is_sidecar(rel))
+        .filter_map(|rel| stem(rel))
+        .filter(|s| !present.contains(s))
+        .map(str::to_string)
+        .collect();
+    let removed = prune::delete_owned(db.pool(), "maps_photos", "id", &rows_gone).await? as usize;
+    file_checkpoint::forget_files(db.pool(), SCOPE, &gone).await?;
+    Ok(MapsPhotosSummary {
+        rows: row_count,
+        blobs: blob_count,
+        removed,
+        files_removed: gone.len(),
+    })
+}
+
+fn is_sidecar(rel: &str) -> bool {
+    fsscan::is_under(rel, DIR_REL) && rel.ends_with(".json")
+}
+
+fn stem(rel: &str) -> Option<&str> {
+    Path::new(rel).file_stem()?.to_str()
 }
 
 fn ingest_one(json_path: &Path) -> Result<Option<(MapsPhotoRow, Option<PendingCas>)>> {

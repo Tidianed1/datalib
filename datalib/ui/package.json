@@ -17,6 +17,7 @@
     "@slickgrid-universal/common": "10.11.0",
     "@slickgrid-universal/event-pub-sub": "10.10.0",
     "@slickgrid-universal/vanilla-bundle": "10.11.0",
+    "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-dialog": "^2.7.3",
     "@tauri-apps/plugin-opener": "^2.5.5",
     "dompurify": "3.4.16",

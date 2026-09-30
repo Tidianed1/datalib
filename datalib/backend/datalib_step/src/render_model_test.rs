@@ -352,6 +352,7 @@ fn to_rendered(id: &str, doc: &Doc, md_path: PathBuf, version: u32) -> RenderedM
                 .markdown_uuid(Some(id.to_string()))
                 // The synthetic document's first row stands for it.
                 .is_document(*uuid == doc.rows[0].0)
+                .item_count(Some(1))
                 .build()
                 .expect("row")
         })

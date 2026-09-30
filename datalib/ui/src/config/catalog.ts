@@ -50,6 +50,11 @@ export type Field =
         /// typed input stays the escape hatch for anything the filter
         /// wrongly excludes.
         extensions?: string[];
+        /// The folder the thing is almost always in, where the app that
+        /// owns it keeps it (`~/Library/Messages`). The picker opens
+        /// there while the field is empty, and the help text, which must
+        /// name it, shows it with a copy button beside it.
+        startIn?: string;
       })
   /// A closed set of values — one Rust enum, one dropdown. Prefer this
   /// over `text` whenever the backend parses the string against a fixed
@@ -159,6 +164,10 @@ export type CatalogEntry = {
   /// Order matters: [`catalogForStep`] takes the first entry whose key
   /// is present, so a more specific key must come first in `CATALOG`.
   variantKey?: string;
+  /// Field targets of which at least one must be filled in, for a type
+  /// whose methods combine (lightroom's catalog and backups folder), so
+  /// no one of them is `required` alone.
+  requiresOneOf?: string[];
   /// Params this entry always writes, with no field to edit them.
   preset?: Preset[];
   /// Offer "Test connection", and populate any `probe:` field from
@@ -1179,13 +1188,13 @@ export const CATALOG: CatalogEntry[] = [
       {
         kind: "bool",
         target: "common.always_clear_before_ingest",
-        label: "Treat each export as complete",
-        default: true,
+        label: "Empty the mirror before each sync",
+        default: false,
         help:
-          "Each sync rewrites the mirror from the export as it is now, so what a newer " +
-          "export no longer holds drops out (the store's history keeps it). Only for a " +
-          "full export: pointed at one you requested a single product from, it would drop " +
-          "everything that export simply doesn't mention.",
+          "Not needed: every feed already drops what a newer export no longer holds " +
+          "(the store's history keeps it). Turned on, each sync empties the mirror and " +
+          "rewrites it from the export, so an export requested without some product " +
+          "loses that product's records.",
       },
     ],
   },
@@ -1534,7 +1543,7 @@ export const CATALOG: CatalogEntry[] = [
     type: "lightroom",
     label: "Lightroom",
     blurb: "Mirror a Lightroom Classic catalog, with full history.",
-    keywords: ["lightroom", "photos", "adobe", "catalog", "sqlite", "images"],
+    keywords: ["lightroom", "photos", "adobe", "catalog", "sqlite", "images", "backup", "zip"],
     kind: "local",
     icon: "lightroom",
     defaultName: "lightroom",
@@ -1543,19 +1552,36 @@ export const CATALOG: CatalogEntry[] = [
     // Download-only: a photo catalog isn't chat-shaped, so nothing is
     // rendered and no render step is declared.
     renderStep: false,
+    requiresOneOf: ["catalog.path", "backups.path"],
     fields: [
       {
         kind: "path",
         picks: "file",
         pickTitle: "Choose your Lightroom catalog",
-        extensions: ["lrcat"],
-        required: true,
+        extensions: ["lrcat", "zip"],
+        startIn: "~/Pictures/Lightroom",
         target: "catalog.path",
         label: "Catalog file",
         help:
           "A .lrcat, which is an ordinary SQLite database — Lightroom keeps it under " +
-          "~/Pictures/Lightroom. Every table is mirrored, and " +
-          "doltlite stores only what changed between runs — so prior states stay queryable.",
+          "~/Pictures/Lightroom — or one of Lightroom's backup .zip files. Every table is " +
+          "mirrored, and doltlite stores only what changed between runs — so prior states " +
+          "stay queryable.",
+      },
+      {
+        kind: "path",
+        picks: "dir",
+        pickTitle: "Choose your Lightroom backups folder",
+        startIn: "~/Pictures/Lightroom",
+        target: "backups.path",
+        label: "Backups folder",
+        help:
+          "Optional, beside or instead of the catalog: the folder Lightroom writes its " +
+          "backups into, by default a Backups folder beside the catalog in " +
+          "~/Pictures/Lightroom. Each backup (a " +
+          "folder named for when it was taken, holding a .zip) becomes one commit, oldest " +
+          "first and dated when it was taken, so the history reaches back before your first " +
+          "sync. Each sync adds the backups taken since, then mirrors the catalog on top.",
       },
       {
         kind: "bool",
@@ -1593,29 +1619,29 @@ export const CATALOG: CatalogEntry[] = [
     keywords: ["apple", "messages", "imessage", "sms", "texts", "chat.db", "iphone"],
     kind: "local",
     icon: "apple_messages",
-    defaultName: "messages",
+    defaultName: "apple-messages",
     nameHint: "Messages on this Mac",
     wizard: true,
     fields: [
       {
         kind: "path",
-        // Choosing the file here is what grants the app access to it on
+        // Choosing the folder here is what grants the app access to it on
         // macOS (docs/dev/wizard_file_pickers.md) — the same wall Photos
-        // sits behind.
-        picks: "file",
-        pickTitle: "Choose your Messages database",
-        extensions: ["db"],
+        // sits behind. Not the file: picking chat.db grants that one file,
+        // and the snapshot also reads chat.db-wal beside it.
+        picks: "dir",
+        pickTitle: "Choose your Messages folder",
+        startIn: "~/Library/Messages",
         required: true,
-        target: "database.path",
-        label: "Messages database",
+        target: "messages.path",
+        label: "Messages folder",
         help:
-          "The chat.db the Messages app keeps at ~/Library/Messages; press Cmd-Shift-G in the " +
-          "picker and paste that path to reach it. Choose it with the picker rather than " +
-          "typing the path: macOS protects the folder, and picking the file is what lets Datalib " +
-          'read it. If a sync still fails with "Operation not permitted", grant Datalib ' +
-          "Full Disk Access in System Settings. Attachments (photos, videos, files) are " +
-          "listed by name and path only — their bytes are not copied, since picking " +
-          "chat.db grants access to that one file.",
+          "The folder the Messages app keeps its database in, ~/Library/Messages. Choose it " +
+          "with the picker rather than typing the path: macOS protects the folder, and picking it is " +
+          'what lets Datalib read it. If a sync still fails with "Operation not permitted", ' +
+          "grant Datalib Full Disk Access in System Settings. A copied chat.db file works too, " +
+          "typed in here. Attachments (photos, videos, files) are listed by name and path " +
+          "only — their bytes are not copied.",
       },
       {
         kind: "bool",
@@ -1667,11 +1693,12 @@ export const CATALOG: CatalogEntry[] = [
         picks: "file",
         pickTitle: "Choose your Photos library",
         extensions: ["photoslibrary"],
+        startIn: "~/Pictures",
         required: true,
         target: "library.path",
         label: "Photos library",
         help:
-          "The library bundle, usually ~/Pictures/Photos Library.photoslibrary; its " +
+          "The library bundle, usually Photos Library.photoslibrary in ~/Pictures; its " +
           "database/Photos.sqlite is what gets mirrored. Choose it " +
           "with the picker rather than typing the path: macOS protects the library, and " +
           "picking it is what lets Datalib read it. If a sync still fails with " +

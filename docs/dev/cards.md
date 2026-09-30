@@ -370,7 +370,10 @@ programs against:
   its free text (`RowsSpec`); the qmd columns and ranking appear only
   for the search. Row click opens the row's document via
   `host.openCards`; double-click opens it as a standalone single-column
-  page in a new tab. Persists `q`/`sel`/`cols` state.
+  page in a new tab. Persists `q`/`sel`/`cols` state. A search given
+  no `q` opens on `is:document`, one row per document; with no
+  `placeholder`, the empty bar suggests filters on the biggest source
+  the index holds (`cards/searchDefaults.ts`).
 - `documentView(markdownUuid?, sectionUuid?)` — renders one document
   (`/applet/unified_index/chat/{markdownUuid}`), highlighting and scrolling to
   `sectionUuid`. A different selection is a different card: the grid
@@ -431,8 +434,13 @@ programs against:
   moves; a commit's run opens its `logView`. With `source`, two
   commits of that source's download store can be selected and
   compared, which adds a diff group to the config and syncs it;
-  `compare: true` opens with the newest two set up. The pairing rules
-  are `config/compareCommits.ts`.
+  `compare: true` opens with the newest two set up. The compare bar
+  names each side by the minute it was made and counts what the
+  commits between them added, deleted and modified, each summed on
+  its own. Every count on
+  the card is over the tables that hold records, not datalib's own
+  (`datalib_history::holds_records`). The pairing rules are
+  `config/compareCommits.ts`.
 - `logLineView(seq)` — one log line in full (`cards/LogLineCard.ce.vue`,
   over `/api/log/{seq}`): the message, the fields as a tree
   (`cards/JsonTree.ce.vue`), the source link at the process's commit,
@@ -484,6 +492,10 @@ again, and the only ones that should know the grid's DOM or options:
   four places a grid is built.
 - `grid/menu.ts` and `grid/rowKeys.ts` — the row menu and the `data-key`
   a row carries; `grid/query.ts` knows no grid at all.
+- `grid/copyRows.ts` — ⌘C (Ctrl+C) on a grid copies its selected rows
+  as TSV, a header line first, in the columns shown; a text selection
+  inside one selected row copies as the browser would. Each grid says
+  what a cell copies as (`copyText` in `cards/typedColumns.ts` by type).
 - `grid/rowHover.ts` — lights both halves of a row that pinned columns
   split in two; the theme's `:hover` reaches only the half under the
   pointer.
@@ -510,7 +522,7 @@ own layout shape and decodes to nothing when it cannot be read.
 | `bytes` | an integer | a base-10 size, exact figure on hover |
 | `timestamp` | an ISO stamp about *now* (when something last ran) | "7 days ago", exact stamp on hover; sorts on the instant |
 | `datetime` | an ISO stamp that is the record's (when a message was sent) | the date and time it names; sorts on the instant |
-| `timeseries` | `{value, unit, samples, detail}` | the value and its change over the window, over a sparkline scaled to its own range |
+| `timeseries` | `{value, unit, samples, detail, window_secs}` | the value and its change over the window, over a sparkline scaled to its own range; each value names its own window, so minutes of bytes and days of items share a table |
 | `identity` | `{id, label, icon, detail}` | icon + label, id on hover; the icon is a *token* (`slack`, `step:ingest`) the viewer maps to an asset |
 | `status` | `{key, label, at, last_success_at, detail}` | a glyph for the key (a spinner while running), when it got there, the reason on hover |
 | `chips` | `[{kind, text, title}]` | a row of chips |

@@ -1,7 +1,7 @@
 // The forms for Google Takeout, LinkedIn, SMS Backup & Restore and
 // `contacts` from .vcf files. What each must get right: write the table
 // that names its ingest method, and read back the configs people have
-// written by hand, which all carry `always_clear_before_ingest`.
+// written by hand, which may carry `always_clear_before_ingest`.
 import { describe, expect, it } from "vitest";
 import { CATALOG } from "../src/config/catalog";
 import type { CatalogEntry } from "../src/config/catalog";
@@ -46,7 +46,6 @@ inputs = ["s/ingest"]
 describe("the snapshot switch", () => {
   it("starts on for every file-backed form, and is written", () => {
     for (const entry of [
-      byType("google_takeout"),
       byType("linkedin"),
       byType("sms_backup_restore"),
       byType("contacts", "vcf"),
@@ -94,13 +93,29 @@ describe("Google Takeout", () => {
     expect(on).toContain("google_voice_include_spam = true");
   });
 
-  it("can edit the config the examples show", () => {
+  /// Every feed drops what a newer export lost, so the wipe would only add
+  /// the partial-export trap.
+  it("starts with the wipe off", () => {
+    expect(seedFieldValues(TAKEOUT)["common.always_clear_before_ingest"]).toBe(false);
+    expect(toml(TAKEOUT)).toContain("always_clear_before_ingest = false");
+  });
+
+  it("can edit a config that still turns the wipe on", () => {
     const steps = ingestStep(
       "google_takeout",
       `[steps.params.common]
 always_clear_before_ingest = true
 
 [steps.params.export]
+path = "~/backups/Takeout"`,
+    );
+    expect(paramsAreRepresentable(steps[0], TAKEOUT)).toEqual({ ok: true });
+  });
+
+  it("can edit the config the examples show", () => {
+    const steps = ingestStep(
+      "google_takeout",
+      `[steps.params.export]
 path = "~/backups/Takeout"
 google_chat = true
 google_voice = true

@@ -2,7 +2,8 @@
 //!
 //! Every source's render wave ends here, including the ones that render
 //! no documents of their own — which is how `fsindex` and `media` get a
-//! place in the UI at all.
+//! place in the UI at all, and where their Items count comes from
+//! (`SourceType::item_table`).
 //!
 //! **Scope is the raw store, not the whole tree.** `<group>/render_markdown`
 //! is datalib's own output, `system/usage.doltlite_db` already tracks it
@@ -201,6 +202,17 @@ async fn row_count(pool: &SqlitePool, table: &str) -> Result<i64> {
         .await
         .with_context(|| format!("count {table}"))?;
     row.try_get::<i64, _>(0).context("read count")
+}
+
+/// Rows in `table` of the source's own store, as `scan` counted them.
+/// `None` when the store was not counted or has no such table — which
+/// is "never counted", not zero.
+pub fn table_rows(subjects: &[Subject], table: &str) -> Option<i64> {
+    let suffix = format!(".doltlite_db#{table}");
+    subjects
+        .iter()
+        .find(|s| s.kind == MeasurementKind::Table && s.path.ends_with(&suffix))
+        .and_then(|s| s.items)
 }
 
 /// Measure one source's raw store — the tree at `raw_rel`, each database

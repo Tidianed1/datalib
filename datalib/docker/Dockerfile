@@ -194,7 +194,7 @@ RUN set -eux; \
     datalib-dag /opt/datalib/demo/config.toml --now 2369-04-15T00:00:00+00:00; \
     mv /opt/datalib/demo/config.full.toml /opt/datalib/demo/config.toml; \
     datalib-dag --check /opt/datalib/demo/config.toml; \
-    test -s /opt/datalib/demo/unified_index/qmd_index/qmd/index.sqlite; \
+    test -s /opt/datalib/demo/unified_index/qmd_aggregator/qmd/index.sqlite; \
     datalib-doltlite -readonly /opt/datalib/demo/unified_index/grid_index/db.doltlite_db \
         "SELECT provider, count(*) FROM grid_rows GROUP BY 1;" \
         | tee /dev/stderr | grep -q .

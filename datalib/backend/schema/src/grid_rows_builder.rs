@@ -13,15 +13,16 @@ use crate::providers::Provider;
 /// How many characters of a body the `preview` column keeps.
 pub const PREVIEW_CHARS: usize = 240;
 
-/// The first [`PREVIEW_CHARS`] characters of `body`, newlines as spaces so
-/// the grid stays one line per row, and `…` when there was more.
+/// The first [`PREVIEW_CHARS`] characters of `body` as plain text on one
+/// line (`crate::plain_text`), and `…` when there was more.
 pub fn preview(body: &str) -> String {
-    let end = body
+    let text = crate::plain_text::plain_text(body, PREVIEW_CHARS);
+    let end = text
         .char_indices()
         .nth(PREVIEW_CHARS)
-        .map_or(body.len(), |(i, _)| i);
-    let mut out = body[..end].replace('\n', " ");
-    if end < body.len() {
+        .map_or(text.len(), |(i, _)| i);
+    let mut out = text[..end].to_string();
+    if end < text.len() {
         out.push('…');
     }
     out

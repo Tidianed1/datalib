@@ -30,7 +30,7 @@ use crate::ids;
 
 /// v2: every id carries its row's `created_at` in its leading bits
 ///     (`datalib_id`'s v8 layout).
-pub const RENDER_VERSION: u32 = 2;
+pub const RENDER_VERSION: u32 = 3;
 
 fn profile() -> RenderProfile {
     RenderProfile {

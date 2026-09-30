@@ -19,8 +19,9 @@ pub use datalib_runtime::build_id::{
 pub use query::{log_query, LogCursor, LogQuery, QueryError};
 pub use store::{
     canonical_labels, close_abandoned_run, last_log_seq, latest_metric, log_after, log_line,
-    new_process_id, open_or_create, process, process_log_after, processes, runs, snapshot,
-    snapshot_of, versions, ClosedRun, LogLine, LogSink, ProcessLogWriter, RunWriter, Snapshot,
+    metric_history, new_process_id, open_or_create, process, process_log_after, processes, runs,
+    snapshot, snapshot_of, versions, ClosedRun, LogLine, LogSink, ProcessLogWriter, RunWriter,
+    Snapshot,
 };
 pub use tracing_layer::{default_filter, filter_at, StoreLayer, DEFAULT_LEVEL};
 
@@ -105,7 +106,7 @@ impl Default for Retention {
 /// version is emptied and remade rather than migrated: nothing in it is
 /// load-bearing, and a migration is code that would exist only to keep
 /// old log lines.
-pub const SCHEMA_VERSION: i32 = 9;
+pub const SCHEMA_VERSION: i32 = 10;
 
 /// The indexes, beside the tables' own DDL. `log.seq` is the rowid, so
 /// a reader tailing "everything after N" needs no timestamp arithmetic;

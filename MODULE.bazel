@@ -26,6 +26,12 @@ module(
     version = "0.0.1",
 )
 
+# Apple's C/C++ toolchain, so a mac builds the doltlite amalgamation with
+# the Xcode clang it has rather than Bazel's autodetected one. Already in
+# the graph at this version through rules_cc; declared first so its
+# toolchains are registered ahead of that autodetected one.
+bazel_dep(name = "apple_support", version = "2.3.0")
+
 # Rules Shell — provides sh_binary etc. (split out of bazel core in Bazel 8/9).
 bazel_dep(name = "rules_shell", version = "0.8.0")
 

@@ -143,19 +143,24 @@ far each time it moves; `labels` is optional and splits one name into
 series (`table=messages`). A value that goes down is simply a gauge, and
 the one gauge the UI looks for is **`queued`** — how much work is ahead
 of you right now, which you usually know even when you cannot know the
-total. Absolute values are what make the runner's coalescing lossless:
-it keeps the newest value per series, and a dropped position costs
-nothing where a dropped increment would be lost work.
+total. You need not send a last `queued` of zero: when you end, however
+you end, the runner sets it to zero for you. Absolute values are what
+make the runner's coalescing lossless: it keeps the newest value per
+series, and a dropped position costs nothing where a dropped increment
+would be lost work.
 
-Two names are read by name rather than just drawn. **`documents`** is
-how many documents your output store holds — whole store, not this run
-— and fills the Manage screen's Documents column; **`problems`**, with
+Three names are read by name rather than just drawn. **`items`** is
+how many things your output store holds — messages, readings, events;
+whole store, not this run — and fills the Manage screen's Items column
+and its sparkline; **`documents`** is how many documents those items
+sit in, for that cell's hover; **`problems`**, with
 a `severity=error` or `severity=warning` label, fills the red and
 yellow counts after a row's name. Report each one every run, zero
 included: the screen shows the newest value a step reported, so a
 count left out keeps last run's. A step that counts neither leaves no
-series, and draws a blank Documents cell and no counts. They are
-`datalib_metrics::DOCUMENTS` and `datalib_problems::METRIC` in the
+series, and draws a blank Items cell and no counts. They are
+`datalib_metrics::ITEMS`, `datalib_metrics::DOCUMENTS` and
+`datalib_problems::METRIC` in the
 tree; nothing else makes the reporter and the screen agree on the
 spelling.
 

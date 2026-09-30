@@ -49,6 +49,9 @@ const KEYS: &[(&str, &str)] = &[
     // the app, or a run's runner.
     ("process_id", "l.process_id"),
     ("step", "l.step"),
+    // Every step of one `[[groups]]` entry: a source's ingest, render and
+    // index steps together.
+    ("group", "l.group_id"),
     // With `step:`, the lines about one attempt of it: what came out of
     // the attempt, and what the runner said about it.
     ("attempt", "l.attempt"),
@@ -320,12 +323,20 @@ mod tests {
         );
     }
 
+    /// `group:` is the stored group, not a prefix of the step id: a
+    /// step outside any group has none, whatever its id looks like.
+    #[test]
+    fn the_group_key_reads_the_stored_group() {
+        let c = compile(&q("group:slack")).unwrap();
+        assert_eq!(c.clauses[1], "l.group_id = ?");
+    }
+
     #[test]
     fn an_unknown_key_is_refused_by_name() {
         let e = compile(&q("author:thad")).unwrap_err();
         assert!(e.0.contains("`author:`"), "{e}");
         assert!(
-            e.0.contains("run, process, process_id, step, attempt, level"),
+            e.0.contains("run, process, process_id, step, group, attempt, level"),
             "{e}"
         );
         assert!(e.0.ends_with("min_level"), "{e}");

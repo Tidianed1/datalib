@@ -226,4 +226,12 @@ impl ParsedGarmin {
     pub fn latest_weigh_in(&self) -> Option<&WeighIn> {
         self.weigh_ins.last()
     }
+
+    /// The page's item count: every day of a metric Garmin had data
+    /// for, every weigh-in and every activity. A day Garmin answered
+    /// with nothing is a row, but not a measurement.
+    pub fn measurements(&self) -> i64 {
+        let days: i64 = self.metrics.iter().map(|m| m.days_with_data).sum();
+        days + self.weigh_ins.len() as i64 + self.activities
+    }
 }

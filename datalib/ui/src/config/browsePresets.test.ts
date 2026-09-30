@@ -16,10 +16,18 @@ describe("browseColumns", () => {
   });
 
   /// The text column is the reason the grid is worth looking at. No
-  /// preset may drop it, and it reads last because it is the widest.
-  it("always ends with the contents column", () => {
-    for (const type of [...browsePresetTypes(), "some_type_we_never_heard_of"]) {
-      expect(browseColumns(type)!.at(-1)).toBe("snippet");
+  /// preset may drop it, and only what the row is and what it is called
+  /// come before it, so it is on screen however narrow the card.
+  it("shows the contents right after the row's kind and name", () => {
+    for (const type of [...browsePresetTypes(), "some_type_we_never_heard_of", "diff"]) {
+      const cols = browseColumns(type)!;
+      const before = cols.slice(0, cols.indexOf("snippet"));
+      expect(cols).toContain("snippet");
+      expect(
+        before.filter(
+          (c) => !["kind", "conversation_name", "diff_status", "diff_changed_columns"].includes(c),
+        ),
+      ).toEqual([]);
     }
   });
 
@@ -109,7 +117,6 @@ describe("browseQuery", () => {
     expect(browseQuery("slack-diff", "diff")).toBe("source_id:slack-diff -change:unchanged");
     const cols = browseColumns("diff")!;
     expect(cols.slice(0, 2)).toEqual(["diff_status", "diff_changed_columns"]);
-    expect(cols.at(-1)).toBe("snippet");
   });
 });
 

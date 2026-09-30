@@ -2,7 +2,8 @@
 //! lines of the rendered markdown around a match, under a `@@ -N,M @@`
 //! header and, from the MCP daemon, with each line numbered. This keeps
 //! the words a person would read: a front-matter field says nothing but
-//! its title, and a body line loses its markup. An empty answer means the
+//! its title, and a body line loses its markup the way a row's preview
+//! does (`datalib_schema::plain_text`). An empty answer means the
 //! hit showed nothing readable, and the row keeps its own preview.
 //!
 //! The test samples keep the exact shapes qmd 2.8.3 returns, daemon and
@@ -13,7 +14,7 @@ pub fn display_snippet(raw: &str) -> String {
         let rest = first.trim_start_matches(|c: char| c.is_ascii_digit());
         rest.len() < first.len() && rest.starts_with(": @@ ")
     });
-    let words: Vec<String> = raw
+    let lines: Vec<&str> = raw
         .lines()
         .map(|line| {
             if numbered {
@@ -25,12 +26,7 @@ pub fn display_snippet(raw: &str) -> String {
         .filter(|line| !line.starts_with("@@ "))
         .filter_map(readable)
         .collect();
-    let one_line = words
-        .join(" ")
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    let mut out = datalib_schema::grid_rows::preview(&one_line);
+    let mut out = datalib_schema::grid_rows::preview(&lines.join("\n"));
     if raw.trim_end().ends_with("...") && !out.is_empty() && !out.ends_with('…') {
         out.push('…');
     }
@@ -43,17 +39,17 @@ fn without_line_number(line: &str) -> &str {
     rest.strip_prefix(' ').unwrap_or(rest)
 }
 
-fn readable(line: &str) -> Option<String> {
+/// A front-matter field says only its title; any other line is the
+/// markdown `preview` reads, less qmd's own truncation mark.
+fn readable(line: &str) -> Option<&str> {
     let line = line.trim();
-    if line.is_empty() || line == "---" {
+    if line == "---" {
         return None;
     }
     if let Some((key, value)) = front_matter_field(line) {
-        return (key == "title").then(|| unquote(value).to_string());
+        return (key == "title").then(|| unquote(value));
     }
-    let line = line.trim_start_matches(['#', '>']).trim_start();
-    let line = line.strip_suffix("...").unwrap_or(line);
-    Some(without_tags(&without_link_targets(&unescaped(line))))
+    Some(line.strip_suffix("...").unwrap_or(line))
 }
 
 /// `key: value` with a lowercase snake-case key: the shape every renderer's
@@ -74,59 +70,6 @@ fn unquote(value: &str) -> &str {
         .strip_prefix('"')
         .and_then(|v| v.strip_suffix('"'))
         .unwrap_or(value)
-}
-
-/// The rendered bodies carry escaped HTML (`&lt;br&gt;`) as well as real
-/// tags; unescaping first lets one pass strip both. `&amp;` goes last so
-/// `&amp;lt;` stays the text `&lt;`.
-fn unescaped(line: &str) -> String {
-    line.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&nbsp;", " ")
-        .replace("&amp;", "&")
-}
-
-/// A link's target, ` (https://…)` or `](https://…)`, is noise in a cell.
-fn without_link_targets(line: &str) -> String {
-    let mut out = String::with_capacity(line.len());
-    let mut rest = line;
-    while let Some(at) = rest.find("(http") {
-        let Some(close) = rest[at..].find(')') else {
-            break;
-        };
-        out.push_str(rest[..at].trim_end());
-        rest = &rest[at + close + 1..];
-    }
-    out.push_str(rest);
-    out.replace(['[', ']'], "")
-}
-
-/// Tags go; one that breaks a line (`<br>`, `</p>`, `<div …>`) leaves a
-/// space so the words either side do not run together.
-fn without_tags(line: &str) -> String {
-    const BREAKS: &[&str] = &[
-        "br", "p", "div", "li", "tr", "td", "th", "h1", "h2", "h3", "h4", "h5", "h6",
-    ];
-    let mut out = String::with_capacity(line.len());
-    let mut tag: Option<String> = None;
-    for c in line.chars() {
-        match (&mut tag, c) {
-            (None, '<') => tag = Some(String::new()),
-            (Some(name), '>') => {
-                let name = name.trim_start_matches('/');
-                let name = name.split([' ', '/']).next().unwrap_or("");
-                if BREAKS.contains(&name.to_ascii_lowercase().as_str()) {
-                    out.push(' ');
-                }
-                tag = None;
-            }
-            (Some(name), c) => name.push(c),
-            (None, c) => out.push(c),
-        }
-    }
-    out
 }
 
 #[cfg(test)]

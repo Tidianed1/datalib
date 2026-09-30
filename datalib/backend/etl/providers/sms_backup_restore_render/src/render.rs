@@ -30,7 +30,7 @@ use datalib_schema::providers::Provider;
 ///     backpointer, and a message's id carries its stamp in its leading
 ///     bits (`datalib_id`'s v8 layout). Every uuid moved, `chat_uuid`
 ///     among them.
-pub const RENDER_VERSION: u32 = 3;
+pub const RENDER_VERSION: u32 = 4;
 
 /// Projection for [`BlobBundle::load_many`] over the SMS CAS edge: the
 /// `ref_name` ({message_id}/{partname}) is the bundle key; `content_type`
@@ -317,6 +317,7 @@ fn item(source_id: &str, v: &Value) -> NormalizedChatItem {
                 kind: ItemKind::System,
                 attachments: Vec::new(),
                 reactions: Vec::new(),
+                labels: Vec::new(),
                 system_note: Some(call_note(call_type, duration, display)),
                 source_url: None,
                 kind_label: None,
@@ -382,6 +383,7 @@ fn item(source_id: &str, v: &Value) -> NormalizedChatItem {
                 },
                 attachments,
                 reactions: Vec::new(),
+                labels: Vec::new(),
                 system_note: None,
                 source_url: None,
                 kind_label: None,

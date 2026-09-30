@@ -29,7 +29,7 @@ use datalib_etl_agent_sessions_render::{
 
 use crate::ids;
 
-pub const RENDER_VERSION: u32 = 1;
+pub const RENDER_VERSION: u32 = 2;
 
 fn profile() -> RenderProfile {
     RenderProfile {

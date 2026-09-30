@@ -281,7 +281,9 @@ measurement below is what notices.
   belong in `ingest/schema_raw.rs` and the render crate names them
   through the download crate.
 - **A source that renders nothing has no `_render` crate.** `ingest_only!`
-  in `datalib_step/src/dispatch.rs` says so once.
+  in `datalib_step/src/dispatch.rs` says so once, and
+  `SourceType::item_table` names the raw table whose rows are its
+  Items count, since it has no documents to count them.
 
 The measurement that checks it:
 
@@ -412,15 +414,19 @@ one; a crate with only a `BUILD.bazel` does not (the `<p>_config`
 crates and `datalib_problems` are the pattern). A `Cargo.toml` is
 needed only when something outside bazel has to see the crate.
 
-## Push early, open the PR early, and watch CI
+## Push early, open the PR early, watch CI, and turn on autofix
 
 Push the branch and open a PR as soon as there is something to test —
-CI's runners are free. After pushing, check `gh pr view <n> --json
-mergeable,mergeStateStatus` and follow the run to its end. If it fails,
-read the failure; if the failed target looks like a flake (the
-doltlite-timing ones, or anything `scripts/flaky_tests.py` lists),
-re-run the failed jobs once before digging in. Before pushing a
-follow-up, confirm the PR is still open — a merged PR does not reopen.
+CI's runners are free — as long as nothing in it is private data
+(§"Real data stays out of the repo"). Then turn on autofix for the PR,
+so a red run, a merge conflict or a review comment comes back to the
+agent that wrote it instead of waiting for a person. After pushing,
+check `gh pr view <n> --json mergeable,mergeStateStatus` and follow the
+run to its end. If it fails, read the failure; if the failed target
+looks like a flake (the doltlite-timing ones, or anything
+`scripts/flaky_tests.py` lists), re-run the failed jobs once before
+digging in. Before pushing a follow-up, confirm the PR is still open —
+a merged PR does not reopen.
 
 **A PR lands as a merge commit**: `gh pr merge <n> --merge`, or
 "Create a merge commit" on GitHub — not squash, not rebase. The
@@ -564,6 +570,16 @@ survivor is the `anthropic` search keyword in `ui/src/config/catalog.ts`.
 Everything that identifies, filters or joins uses the id, and the field
 is `source_id` everywhere. `source_name` survives in one place because a
 **person** types it: the `source_name:` search filter.
+
+## A local file or folder: ask `fsscan` what changed
+
+**Don't walk a folder or re-read an input yourself to learn whether it
+changed; ask `datalib_etl::fsscan`.** It hashes each file once per host
+(a shared fingerprint cache), so an unchanged input costs a `stat` —
+milliseconds, where re-reading costs seconds — and `file_checkpoint`
+keeps this source's `path → blake3` cursor to diff against. The recipe
+is `datalib/backend/etl/README.md` §"Answering "did it change?" for a
+file-backed source"; `lightroom`'s `ingest/sync.rs` is a small example.
 
 ## A cursor is only valid under the config that set it
 

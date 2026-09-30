@@ -45,9 +45,6 @@ const props = withDefaults(
     tree?: boolean;
     /// Which tree rows start open; default all closed.
     openByDefault?: (row: T) => boolean;
-    /// How far back a `timeseries` cell's samples reach, in seconds —
-    /// read from the producer so the plot and the data agree.
-    windowSecs?: number;
     /// What each action id does when its button is pressed. An id with
     /// no handler here draws no button.
     actions?: Record<string, (row: T) => void>;
@@ -69,7 +66,6 @@ const props = withDefaults(
   {
     rowKey: "key",
     tree: false,
-    windowSecs: 300,
     selectable: false,
     virtualizeRows: true,
     pinnedColumns: 0,
@@ -220,7 +216,6 @@ defineExpose({ api: () => api });
 function buildColumns(): Column<T>[] {
   const typed = typedColumns<T>(props.columns, {
     tree: props.tree,
-    windowSecs: props.windowSecs,
     actions: props.actions,
     onOpenDocument: (uuid) => emit("openDocument", uuid),
     overrides: props.columnOverrides,

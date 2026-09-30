@@ -101,6 +101,11 @@ pub struct NormalizedChatItem {
     pub kind: ItemKind,
     pub attachments: Vec<NormalizedAttachment>,
     pub reactions: Vec<NormalizedReaction>,
+    /// Where the item is filed upstream — an email's mailboxes and
+    /// labels. Drawn as one `🏷 a · b` line above the body; not part of
+    /// the item's grid text, which is what it says. Empty for every
+    /// provider but email.
+    pub labels: Vec<String>,
     /// Free-form note rendered in italics under the body. Used today
     /// only for system events ("Worf joined", "ephemeral disappearing
     /// messages enabled", …); empty for everything else.
@@ -128,8 +133,8 @@ pub struct NormalizedChatItem {
     /// transcript reads as what was said with the plumbing tucked
     /// away. `false` for anything a person or an assistant actually
     /// said, which is the default for every provider that doesn't set
-    /// it. Layout only: an aside still gets its own anchor and its own
-    /// grid_row.
+    /// it. An aside still gets its own anchor and its own grid_row, but
+    /// is left out of its document row's text.
     pub is_aside: bool,
     /// The account has not read this item upstream, by the provider's
     /// own reckoning — past a conversation's read marker, a mail
@@ -144,6 +149,15 @@ pub struct NormalizedChatItem {
     /// document, keyed to this item, when the grid rows are built. See
     /// [`crate::own_stamp_ms`] for the common case.
     pub problems: Vec<Problem>,
+}
+
+impl NormalizedChatItem {
+    /// One of the things a conversation's `item_count` counts: what a
+    /// person or an assistant said. A tool call, its result and a
+    /// system note are in the transcript but are not messages.
+    pub fn is_message(&self) -> bool {
+        !self.is_aside && !matches!(self.kind, ItemKind::System)
+    }
 }
 
 /// A record's own stamp, or `None` — with the difference between the

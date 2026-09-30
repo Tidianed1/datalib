@@ -165,3 +165,135 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
 
     Ok(())
 }
+
+/// #898: a backup file that is gone takes with it the records no other
+/// file still holds, and only those. Snapshots overlap, so deleting an
+/// older copy of the same messages deletes nothing.
+#[test]
+fn a_deleted_backup_takes_only_what_no_other_file_holds() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let raw_dir = tmp.path().join("raw");
+    let input = tmp.path().join("input");
+    fs::create_dir_all(&raw_dir)?;
+    fs::create_dir_all(&input)?;
+    let sms = fs::read(fixture_root().join("sms-2369041512000.xml"))?;
+    fs::write(input.join("sms-2369041512000.xml"), &sms)?;
+    fs::write(input.join("sms-2369040112000.xml"), &sms)?;
+    fs::copy(
+        fixture_root().join("calls-2369041512000.xml"),
+        input.join("calls-2369041512000.xml"),
+    )?;
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?;
+    rt.block_on(async {
+        let db = RawDb::open(&db_path_for(&raw_dir)).await?;
+        let fetch = |db: &RawDb| {
+            let db = db.clone();
+            let input = input.clone();
+            let cache = tmp.path().join("fpcache.sqlite");
+            async move {
+                ingest::fetch(FetchOptions {
+                    db,
+                    input_path: input,
+                    cache: FingerprintCache::open(&cache).await?,
+                    progress: Progress::noop(),
+                    control: Default::default(),
+                })
+                .await
+            }
+        };
+        let count = |db: &RawDb, table: &'static str| {
+            let pool = db.pool().clone();
+            async move {
+                sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(format!(
+                    "SELECT count(*) FROM {table}"
+                )))
+                .fetch_one(&pool)
+                .await
+            }
+        };
+        fetch(&db).await?;
+        assert_eq!(count(&db, "sms_messages").await?, 6);
+        assert_eq!(count(&db, "sms_calls").await?, 3);
+
+        fs::remove_file(input.join("sms-2369040112000.xml"))?;
+        let older_gone = fetch(&db).await?;
+        assert_eq!(older_gone.files_removed, 1);
+        assert_eq!(
+            older_gone.removed, 0,
+            "the newer backup holds every message"
+        );
+        assert_eq!(count(&db, "sms_messages").await?, 6);
+        assert_eq!(count(&db, "sms_attachments").await?, 3);
+
+        fs::remove_file(input.join("calls-2369041512000.xml"))?;
+        let calls_gone = fetch(&db).await?;
+        assert_eq!(calls_gone.removed, 3);
+        assert_eq!(count(&db, "sms_calls").await?, 0);
+        assert_eq!(count(&db, "sms_messages").await?, 6);
+
+        // A backup rewritten in place is the whole of that snapshot: a
+        // message the new one no longer carries was deleted.
+        let path = input.join("sms-2369041512000.xml");
+        let xml = fs::read_to_string(&path)?;
+        let first_sms = xml.find("<sms ").expect("an <sms> element");
+        let end = first_sms + xml[first_sms..].find("/>").expect("self-closing <sms>") + 2;
+        fs::write(&path, format!("{}{}", &xml[..first_sms], &xml[end..]))?;
+        let rewritten = fetch(&db).await?;
+        assert_eq!(rewritten.removed, 1);
+        assert_eq!(count(&db, "sms_messages").await?, 5);
+
+        // Nothing is gone any more, so a quiet run reads nothing.
+        let quiet = fetch(&db).await?;
+        assert_eq!((quiet.files, quiet.files_removed), (0, 0));
+        db.close().await;
+        Ok::<_, anyhow::Error>(())
+    })
+}
+
+/// A walk that could not read an entry cannot tell a deleted backup from
+/// one it failed to see, so nothing is deleted.
+#[cfg(unix)]
+#[test]
+fn a_walk_error_deletes_nothing() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let raw_dir = tmp.path().join("raw");
+    let input = tmp.path().join("input");
+    fs::create_dir_all(&raw_dir)?;
+    fs::create_dir_all(&input)?;
+    fs::copy(
+        fixture_root().join("calls-2369041512000.xml"),
+        input.join("calls-2369041512000.xml"),
+    )?;
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?;
+    rt.block_on(async {
+        let db = RawDb::open(&db_path_for(&raw_dir)).await?;
+        let cache = tmp.path().join("fpcache.sqlite");
+        let opts = |db: &RawDb, cache: FingerprintCache| FetchOptions {
+            db: db.clone(),
+            input_path: input.clone(),
+            cache,
+            progress: Progress::noop(),
+            control: Default::default(),
+        };
+        ingest::fetch(opts(&db, FingerprintCache::open(&cache).await?)).await?;
+
+        fs::remove_file(input.join("calls-2369041512000.xml"))?;
+        std::os::unix::fs::symlink(input.join("nowhere"), input.join("sms-dangling.xml"))?;
+        let s = ingest::fetch(opts(&db, FingerprintCache::open(&cache).await?)).await?;
+        assert_eq!(s.removed, 0);
+        let calls: i64 = sqlx::query_scalar("SELECT count(*) FROM sms_calls")
+            .fetch_one(db.pool())
+            .await?;
+        assert_eq!(calls, 3);
+        db.close().await;
+        Ok::<_, anyhow::Error>(())
+    })
+}

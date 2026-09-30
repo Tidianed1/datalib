@@ -3,7 +3,7 @@
 use datalib_etl::fsscan;
 
 use anyhow::{Context, Result};
-use datalib_etl::file_checkpoint::{self};
+use datalib_etl::file_checkpoint::{self, SnapshotCounts};
 use datalib_etl::progress::Progress;
 use serde_json::Value;
 use tracing::warn;
@@ -15,16 +15,20 @@ use datalib_etl::doltlite_raw::WirePayload;
 const FILE_REL: &str = "Maps (your places)/Reviews.json";
 const SCOPE: &str = "google_takeout/maps_reviews";
 
-pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Result<usize> {
-    let n = file_checkpoint::ingest_changed(db.pool(), SCOPE, scan.file(FILE_REL), |bytes| {
+pub async fn ingest(
+    db: &RawDb,
+    scan: &fsscan::Scan,
+    progress: &Progress,
+) -> Result<SnapshotCounts> {
+    let n = file_checkpoint::ingest_snapshot(db.pool(), SCOPE, scan.file(FILE_REL), |bytes| {
         let geo: Value = serde_json::from_slice(bytes).context("parse Reviews.json")?;
         let Some(features) = geo.get("features").and_then(|v| v.as_array()) else {
             warn!(
                 event = "maps_reviews_no_features",
                 path = FILE_REL,
-                "the reviews file has no features"
+                "the reviews file has no features list; nothing was ingested or deleted"
             );
-            return Ok(Vec::new());
+            return Ok(None);
         };
         let mut rows: Vec<MapsReviewRow> = Vec::with_capacity(features.len());
         for f in features {
@@ -52,10 +56,10 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
                 when_ts: Some(date.to_string()),
             });
         }
-        Ok(rows)
+        Ok(Some(rows))
     })
     .await?;
-    progress.set_message(&format!("maps_reviews: {n}"));
+    progress.set_message(&format!("maps_reviews: {}", n.written));
     Ok(n)
 }
 

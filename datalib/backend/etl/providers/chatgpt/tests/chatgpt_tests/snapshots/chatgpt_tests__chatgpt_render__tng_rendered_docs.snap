@@ -5,7 +5,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-84b7-85ef-23cb38507f8b ===
 {
   "edges": [],
-  "render_version": 9,
+  "render_version": 11,
   "rows": [
     {
       "account": "data@enterprise.starfleet.test",
@@ -135,7 +135,7 @@ expression: docs_bundle(&docs)
       "notion_page_uuid": null,
       "org_name": null,
       "org_uuid": null,
-      "preview": "Upon the bridge, where duty bids us stand, A tabby of the warmest tangerine, With feline grace defies the captain's hand And treads the helm with footfall light, serene.  No Klingon foe nor anomaly arrayed Can match the menace of his sudden…",
+      "preview": "Upon the bridge, where duty bids us stand, A tabby of the warmest tangerine, With feline grace defies the captain's hand And treads the helm with footfall light, serene. No Klingon foe nor anomaly arrayed Can match the menace of his sudden …",
       "project": null,
       "provider": "chatgpt",
       "qmd_path": "chatgpt_api/render_markdown/00000000-0000-84b7-85ef-23cb38507f8b/all.md",
@@ -184,10 +184,122 @@ expression: docs_bundle(&docs)
     }
   ]
 }
+=== 00000000-0000-86dd-be81-c87daeff7764 ===
+{
+  "edges": [],
+  "render_version": 11,
+  "rows": [
+    {
+      "account": "data@enterprise.starfleet.test",
+      "author": null,
+      "byte_size": 638,
+      "channel": "Holodeck Cave on Risa",
+      "content_hash": "9611603923c2eebc5d0207dcffd97169d96ae44ddea9e503385a3edc5bcd6630",
+      "conversation_name": "Holodeck Cave on Risa",
+      "conversation_uuid": "00000000-0000-86dd-be81-c87daeff7764",
+      "created_at": "2370-10-27T08:00:00+00:00",
+      "diff_changed_columns": null,
+      "diff_status": null,
+      "entire_chat": "/chat/00000000-0000-86dd-be81-c87daeff7764",
+      "git_sha": null,
+      "is_document": true,
+      "item_count": 2,
+      "kind": "Chat",
+      "markdown_uuid": "00000000-0000-86dd-be81-c87daeff7764",
+      "message_index": null,
+      "modified_at": "2370-10-27T08:01:00+00:00",
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview": "What is Holodeck Cave on Risa like? I'm not aware of any lounge named \"Holodeck Cave\" on Risa. However, Risa is home to several notable resorts that offer unique experiences: Ten Forward Annex: Located in the central plaza of Risa, the anne…",
+      "project": null,
+      "provider": "chatgpt",
+      "qmd_path": "chatgpt_api/render_markdown/00000000-0000-86dd-be81-c87daeff7764/all.md",
+      "source_label": "ChatGPT",
+      "source_url": "https://chatgpt.com/c/68fa0004-fake-7000-8000-positronic0004",
+      "touched_at": "2370-10-27T08:01:00+00:00",
+      "upstream_account": null,
+      "upstream_entity_kind": "conversation",
+      "upstream_id": "68fa0004-fake-7000-8000-positronic0004",
+      "uuid": "00000000-0000-86dd-be81-c87daeff7764"
+    },
+    {
+      "account": "data@enterprise.starfleet.test",
+      "author": "User",
+      "byte_size": 35,
+      "channel": "Holodeck Cave on Risa",
+      "content_hash": "51f7817c5c2769812b87345c066be6a777bebac770a03640d25e3af53543dd29",
+      "conversation_name": "Holodeck Cave on Risa",
+      "conversation_uuid": "00000000-0000-86dd-be81-c87daeff7764",
+      "created_at": "2370-10-27T08:00:00+00:00",
+      "diff_changed_columns": null,
+      "diff_status": null,
+      "entire_chat": "/chat/00000000-0000-86dd-be81-c87daeff7764",
+      "git_sha": null,
+      "is_document": false,
+      "item_count": 1,
+      "kind": "User Input",
+      "markdown_uuid": "00000000-0000-86dd-be81-c87daeff7764",
+      "message_index": 0,
+      "modified_at": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview": "What is Holodeck Cave on Risa like?",
+      "project": null,
+      "provider": "chatgpt",
+      "qmd_path": "chatgpt_api/render_markdown/00000000-0000-86dd-be81-c87daeff7764/all.md",
+      "source_label": "ChatGPT",
+      "source_url": null,
+      "touched_at": "2370-10-27T08:00:00+00:00",
+      "upstream_account": null,
+      "upstream_entity_kind": "message",
+      "upstream_id": "msg-fake-risa-0001",
+      "uuid": "0b80fde2-8400-8c9c-96c2-5ce8909cc70d"
+    },
+    {
+      "account": "data@enterprise.starfleet.test",
+      "author": "gpt-5",
+      "byte_size": 603,
+      "channel": "Holodeck Cave on Risa",
+      "content_hash": "5d2dec5a7e602117ba3b05330f8e75fd771ce8d8da171d453c796e9273a08e9e",
+      "conversation_name": "Holodeck Cave on Risa",
+      "conversation_uuid": "00000000-0000-86dd-be81-c87daeff7764",
+      "created_at": "2370-10-27T08:01:00+00:00",
+      "diff_changed_columns": null,
+      "diff_status": null,
+      "entire_chat": "/chat/00000000-0000-86dd-be81-c87daeff7764",
+      "git_sha": null,
+      "is_document": false,
+      "item_count": 1,
+      "kind": "LLM Response",
+      "markdown_uuid": "00000000-0000-86dd-be81-c87daeff7764",
+      "message_index": 1,
+      "modified_at": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview": "I'm not aware of any lounge named \"Holodeck Cave\" on Risa. However, Risa is home to several notable resorts that offer unique experiences: Ten Forward Annex: Located in the central plaza of Risa, the annex is a lounge with a synthesizer bar…",
+      "project": null,
+      "provider": "chatgpt",
+      "qmd_path": "chatgpt_api/render_markdown/00000000-0000-86dd-be81-c87daeff7764/all.md",
+      "source_label": "ChatGPT",
+      "source_url": null,
+      "touched_at": "2370-10-27T08:01:00+00:00",
+      "upstream_account": null,
+      "upstream_entity_kind": "message",
+      "upstream_id": "msg-fake-risa-0002",
+      "uuid": "0b80fde3-6e60-8ba4-b5b7-d16ae55cf0bb"
+    }
+  ]
+}
 === 00000000-0000-888f-8dff-2bdaf3aa5faa ===
 {
   "edges": [],
-  "render_version": 9,
+  "render_version": 11,
   "rows": [
     {
       "account": "data@enterprise.starfleet.test",
@@ -299,7 +411,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-893e-9200-2f457298a582 ===
 {
   "edges": [],
-  "render_version": 9,
+  "render_version": 11,
   "rows": [
     {
       "account": "data@enterprise.starfleet.test",
@@ -324,7 +436,7 @@ expression: docs_bundle(&docs)
       "notion_page_uuid": null,
       "org_name": null,
       "org_uuid": null,
-      "preview": "Fit a degree-2 polynomial to (1,2.1),(2,4.0),(3,9.1),(4,15.8),(5,25.0) in Python. ```python import numpy as np x = np.array([1,2,3,4,5]) y = np.array([2.1, 4.0, 9.1, 15.8, 25.0]) coeffs = np.polyfit(x, y, 2) print(coeffs) ``` The fit gives …",
+      "preview": "Fit a degree-2 polynomial to (1,2.1),(2,4.0),(3,9.1),(4,15.8),(5,25.0) in Python. import numpy as np x = np.array([1,2,3,4,5]) y = np.array([2.1, 4.0, 9.1, 15.8, 25.0]) coeffs = np.polyfit(x, y, 2) print(coeffs) The fit gives approximately …",
       "project": null,
       "provider": "chatgpt",
       "qmd_path": "chatgpt_api/render_markdown/00000000-0000-893e-9200-2f457298a582/all.md",
@@ -394,7 +506,7 @@ expression: docs_bundle(&docs)
       "notion_page_uuid": null,
       "org_name": null,
       "org_uuid": null,
-      "preview": "```python import numpy as np x = np.array([1,2,3,4,5]) y = np.array([2.1, 4.0, 9.1, 15.8, 25.0]) coeffs = np.polyfit(x, y, 2) print(coeffs) ```",
+      "preview": "import numpy as np x = np.array([1,2,3,4,5]) y = np.array([2.1, 4.0, 9.1, 15.8, 25.0]) coeffs = np.polyfit(x, y, 2) print(coeffs)",
       "project": null,
       "provider": "chatgpt",
       "qmd_path": "chatgpt_api/render_markdown/00000000-0000-893e-9200-2f457298a582/all.md",

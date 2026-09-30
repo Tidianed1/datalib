@@ -3,5 +3,6 @@
 
 mod embedding_map;
 mod interrupt;
+mod item_table;
 mod reset;
 mod runtime_fetch;

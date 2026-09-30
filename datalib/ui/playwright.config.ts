@@ -527,6 +527,8 @@ export default defineConfig({
         /data-sources-history\.spec\.ts/,
         // The run-log panel's grid, menu and drag-to-group bar.
         /run-log\.spec\.ts/,
+        // WebKit alone activates a <label> after a drag-select in it.
+        /wizard-help-select\.spec\.ts/,
       ],
     },
   ],

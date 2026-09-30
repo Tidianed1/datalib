@@ -28,6 +28,7 @@ import { parseTOML, getStaticTOMLValue } from "toml-eslint-parser";
 import { formatBytes, parseByteSize } from "./byteSize";
 import { catalogForStep } from "./catalog";
 import type { CatalogEntry, Field, FieldPhase, Preset } from "./catalog";
+import { editStringArray, quote } from "./tomlText";
 
 /// Which wave a step belongs to, for display and for picking the right
 /// half of a catalog entry's fields. Read off the step's `function`.
@@ -623,23 +624,6 @@ function tomlValue(field: Field | undefined, value: unknown): string {
   }
 }
 
-/// TOML basic string. Dates are quoted too: a bare `2026-01-01` parses
-/// as a TOML date, and the providers validate a *string*.
-function quote(s: string): string {
-  const escaped = s
-    .replace(/\\/g, "\\\\")
-    .replace(/"/g, '\\"')
-    .replace(/\n/g, "\\n")
-    .replace(/\r/g, "\\r")
-    .replace(/\t/g, "\\t")
-    // Everything else TOML calls a control char, as \uXXXX.
-    .replace(
-      /[\u0000-\u001f\u007f]/g,
-      (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
-    );
-  return `"${escaped}"`;
-}
-
 /// The function a step of this phase performs within its group, which
 /// is also the directory it writes under the group's.
 export function functionOf(phase: FieldPhase): string {
@@ -856,7 +840,7 @@ const RENDER_FAN_INS: FanInFunction[] = ["grid_index"];
 /// in any order, so the body is *tested* rather than pattern-matched.
 const STEP_TABLE = /(\[\[steps\]\])([\s\S]*?)(?=\n[ \t]*\[|$)/g;
 
-const INPUTS_ARRAY = /(inputs\s*=\s*\[)([^\]]*)(\])/;
+const INPUTS_OPEN = /^[ \t]*inputs[ \t]*=[ \t]*\[/m;
 
 /// Is this step body a fan-in — filed under the `unified_index` group,
 /// or, for a custom step, writing an `unified_index/…` id — and, when
@@ -871,24 +855,19 @@ function isFanIn(body: string, only?: FanInFunction[]): boolean {
 
 /// Rewrite the `inputs` of the fan-ins `only` selects — all of them
 /// when it is absent — leaving every other table, and every other key
-/// in theirs, exactly as written.
+/// in theirs, exactly as written, and the array laid out as it was.
 function editFanInInputs(
   text: string,
   only: FanInFunction[] | undefined,
   edit: (ids: string[]) => string[],
 ): string {
+  // A function replacer: an id is user text, and as a replacement
+  // *string* `$1`, `$&` and `$$` in it would be expanded.
   return text.replace(STEP_TABLE, (whole, head: string, body: string) => {
     if (!isFanIn(body, only)) return whole;
-    // Function replacers throughout: an id is user text, and as a
-    // replacement *string* `$1`, `$&` and `$$` in it would be expanded.
-    const next = body.replace(INPUTS_ARRAY, (_m, open: string, list: string, close: string) => {
-      const ids = list
-        .split(",")
-        .map((t) => t.trim())
-        .filter(Boolean);
-      return `${open}${edit(ids).join(", ")}${close}`;
-    });
-    return `${head}${next}`;
+    const found = INPUTS_OPEN.exec(body);
+    if (!found) return whole;
+    return `${head}${editStringArray(body, found.index + found[0].length - 1, edit)}`;
   });
 }
 
@@ -901,7 +880,7 @@ function editFanInInputs(
 /// to say why.
 export function wireIntoFanIns(text: string, stepId: string, only?: FanInFunction): string {
   return editFanInInputs(text, only ? [only] : RENDER_FAN_INS, (ids) =>
-    ids.includes(quote(stepId)) ? ids : [...ids, quote(stepId)],
+    ids.includes(stepId) ? ids : [...ids, stepId],
   );
 }
 
@@ -910,9 +889,7 @@ export function wireIntoFanIns(text: string, stepId: string, only?: FanInFunctio
 /// step that no longer exists costs the step that names it, so deleting
 /// a source has to take its edges with it.
 export function unwireFromFanIns(text: string, stepId: string, only?: FanInFunction): string {
-  return editFanInInputs(text, only ? [only] : undefined, (ids) =>
-    ids.filter((t) => t !== quote(stepId)),
-  );
+  return editFanInInputs(text, only ? [only] : undefined, (ids) => ids.filter((t) => t !== stepId));
 }
 
 /// Which fan-in a step is, or null for a step that is not one. A

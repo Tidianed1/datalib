@@ -5,6 +5,8 @@
 
 pub mod artifact;
 pub mod config;
+pub mod config_array;
+pub mod config_lex;
 pub mod config_order;
 pub mod diagnostics;
 pub mod events;

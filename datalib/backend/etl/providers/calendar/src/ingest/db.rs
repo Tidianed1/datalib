@@ -140,6 +140,50 @@ impl RawDb {
         self.delete_ids("ics_objects", &ids).await
     }
 
+    /// Drop the calendar an `.ics` file was, with its events and sidecar
+    /// rows, and forget the file's cursor entry — in one transaction, so a
+    /// crash leaves the file stamped and the next run retries. Returns how
+    /// many events went.
+    pub async fn delete_file_calendar(
+        &self,
+        calendar_id: &str,
+        checkpoint_scope: &str,
+        rel: &str,
+    ) -> Result<usize> {
+        let mut tx = self
+            .pool()
+            .begin()
+            .await
+            .context("begin delete calendar tx")?;
+        sqlx::query(
+            "DELETE FROM ics_objects_bookkeeping WHERE id IN \
+             (SELECT id FROM ics_objects WHERE calendar_id = ?)",
+        )
+        .bind(calendar_id)
+        .execute(&mut *tx)
+        .await
+        .context("delete the calendar's event sidecars")?;
+        let events = sqlx::query("DELETE FROM ics_objects WHERE calendar_id = ?")
+            .bind(calendar_id)
+            .execute(&mut *tx)
+            .await
+            .context("delete the calendar's events")?
+            .rows_affected();
+        for sql in [
+            "DELETE FROM calendars WHERE id = ?",
+            "DELETE FROM calendars_bookkeeping WHERE id = ?",
+        ] {
+            sqlx::query(sql)
+                .bind(calendar_id)
+                .execute(&mut *tx)
+                .await
+                .context("delete calendar")?;
+        }
+        datalib_etl::file_checkpoint::forget_file(&mut tx, checkpoint_scope, rel).await?;
+        tx.commit().await.context("commit delete calendar tx")?;
+        Ok(events as usize)
+    }
+
     // ── google_events ───────────────────────────────────────────────
 
     pub async fn upsert_google_events(&self, rows: &[GoogleEventRow]) -> Result<()> {

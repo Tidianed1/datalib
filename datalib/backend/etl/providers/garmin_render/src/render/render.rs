@@ -276,6 +276,7 @@ fn build_grid_rows(
         .kind("Garmin Weight")
         .source_label("Garmin")
         .is_document(true)
+        .item_count(Some(parsed.measurements()))
         .created_at(
             parsed
                 .weigh_ins

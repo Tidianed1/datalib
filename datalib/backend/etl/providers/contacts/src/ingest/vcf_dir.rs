@@ -1,12 +1,13 @@
 //! Local-filesystem vCard ingest.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use tracing::warn;
 
 use datalib_etl::control::DownloadControl;
+use datalib_etl::download_problems;
 use datalib_etl::file_checkpoint;
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan;
@@ -37,8 +38,11 @@ pub struct FetchSummary {
     pub addressbooks: usize,
     pub contacts_new: usize,
     pub contacts_updated: usize,
-    /// Contacts a re-read `.vcf` file no longer carried, dropped.
+    /// Contacts dropped: those a re-read `.vcf` file no longer carried, and
+    /// every contact of a file that is gone.
     pub contacts_deleted: usize,
+    /// `.vcf` files that are gone, their address books with them.
+    pub files_removed: usize,
     /// `.vcf` files whose contents matched the resume cursor and were
     /// skipped without re-parsing.
     pub files_skipped: usize,
@@ -85,14 +89,24 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     opts.progress.set_length(Some(scan.files.len() as u64));
     opts.progress.inc(changes.unchanged as u64);
 
-    for f in changes.needs_reading() {
+    let mut read: BTreeSet<&str> = BTreeSet::new();
+    for f in changes.needs_reading_by_path() {
         opts.progress
             .set_message(&format!("ingesting {}", f.path.display()));
-        match ingest_one(&db, &opts.input_path, &f.path, &account_id, &mut summary).await {
+        match ingest_one(
+            &db,
+            &scan.given_resolved,
+            &f.path,
+            &account_id,
+            &mut summary,
+        )
+        .await
+        {
             Ok(()) => {
                 // Stamp only after a clean ingest, so a crash mid-file
                 // leaves no cursor and the next run re-ingests it.
                 file_checkpoint::record_file_pool(db.pool(), CHECKPOINT_SCOPE, f).await?;
+                read.insert(f.rel.as_str());
             }
             Err(e) => {
                 summary.errors += 1;
@@ -106,6 +120,18 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         }
         opts.progress.inc(1);
     }
+
+    // A `.vcf` file is a whole address book, so a file that is gone takes
+    // its address book with it.
+    for rel in changes.gone_by_path(&read) {
+        let href = relative_href(&scan.given_resolved, &scan.root.join(rel));
+        let book_id = addressbook_pk(&account_id, &href);
+        summary.contacts_deleted += db
+            .delete_file_addressbook(&book_id, CHECKPOINT_SCOPE, rel)
+            .await?;
+        summary.files_removed += 1;
+    }
+    download_problems::report_run(db.pool(), &scan.walk_problems()).await;
 
     // Through the handle's own CAS, so nothing here opens a second
     // store. `None` is a reader, which never reaches this path.
@@ -394,6 +420,125 @@ mod tests {
         let book_id = addressbook_pk("local", &relative_href(dir.path(), &vcf));
         let left = db.contact_uids(&book_id).await.unwrap();
         assert_eq!(left, HashSet::from(["riker".to_string()]));
+        db.close().await;
+    }
+
+    const BRIDGE: &str = "BEGIN:VCARD\nVERSION:3.0\nUID:picard\nFN:Jean-Luc Picard\nEND:VCARD\n";
+    const BORG: &str = "BEGIN:VCARD\nVERSION:3.0\nUID:locutus\nFN:Locutus\nEND:VCARD\n\
+         BEGIN:VCARD\nVERSION:3.0\nUID:hugh\nFN:Hugh\nEND:VCARD\n";
+
+    async fn uids(db: &RawDb) -> Vec<String> {
+        sqlx::query_scalar("SELECT uid FROM contacts ORDER BY uid")
+            .fetch_all(db.pool())
+            .await
+            .unwrap()
+    }
+
+    async fn addressbook_hrefs(db: &RawDb) -> Vec<String> {
+        sqlx::query_scalar("SELECT href FROM addressbooks ORDER BY href")
+            .fetch_all(db.pool())
+            .await
+            .unwrap()
+    }
+
+    /// #898: deleting a whole `.vcf` file left its contacts in the store.
+    #[tokio::test]
+    async fn a_deleted_file_takes_its_contacts_with_it() {
+        let input = tempfile::tempdir().unwrap();
+        std::fs::write(input.path().join("Bridge.vcf"), BRIDGE).unwrap();
+        std::fs::write(input.path().join("Borg.vcf"), BORG).unwrap();
+        let store = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&store.path().join("c.doltlite_db"))
+            .await
+            .unwrap();
+        let cache = test_cache().await;
+        let opts = || options(&db, input.path(), cache.clone());
+        fetch(opts()).await.unwrap();
+        assert_eq!(uids(&db).await, vec!["hugh", "locutus", "picard"]);
+
+        std::fs::remove_file(input.path().join("Borg.vcf")).unwrap();
+        let second = fetch(opts()).await.unwrap();
+        assert_eq!(second.contacts_deleted, 2);
+        assert_eq!(second.files_removed, 1);
+        assert_eq!(uids(&db).await, vec!["picard"]);
+        assert_eq!(addressbook_hrefs(&db).await, vec!["Bridge.vcf"]);
+
+        // The file's cursor entry went with it, so it is not removed twice.
+        let third = fetch(opts()).await.unwrap();
+        assert_eq!(third.files_removed, 0);
+        assert_eq!(third.files_skipped, 1);
+        db.close().await;
+    }
+
+    /// A moved file is an address book at its new path, and none at the old
+    /// — reached through a symlink, because keying against the unresolved
+    /// input once gave `Borg.vcf` and `unimatrix/Borg.vcf` one key, and the
+    /// move deleted what it had just written.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_moved_file_keeps_its_contacts_under_the_new_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let input = tmp.path().join("link");
+        std::os::unix::fs::symlink(&real, &input).unwrap();
+        std::fs::write(real.join("Borg.vcf"), BORG).unwrap();
+        let db = RawDb::open(&tmp.path().join("c.doltlite_db"))
+            .await
+            .unwrap();
+        let cache = test_cache().await;
+        let opts = || options(&db, &input, cache.clone());
+        fetch(opts()).await.unwrap();
+
+        std::fs::create_dir(real.join("unimatrix")).unwrap();
+        std::fs::rename(real.join("Borg.vcf"), real.join("unimatrix/Borg.vcf")).unwrap();
+        fetch(opts()).await.unwrap();
+        assert_eq!(uids(&db).await, vec!["hugh", "locutus"]);
+        assert_eq!(addressbook_hrefs(&db).await, vec!["unimatrix/Borg.vcf"]);
+        db.close().await;
+    }
+
+    /// A walk that could not read an entry cannot tell a deleted file from
+    /// one it failed to see, so nothing is deleted and the run says why.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_walk_error_deletes_nothing() {
+        let input = tempfile::tempdir().unwrap();
+        std::fs::write(input.path().join("Bridge.vcf"), BRIDGE).unwrap();
+        std::fs::write(input.path().join("Borg.vcf"), BORG).unwrap();
+        let store = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&store.path().join("c.doltlite_db"))
+            .await
+            .unwrap();
+        let cache = test_cache().await;
+        let opts = || options(&db, input.path(), cache.clone());
+        fetch(opts()).await.unwrap();
+
+        std::fs::remove_file(input.path().join("Borg.vcf")).unwrap();
+        std::os::unix::fs::symlink(
+            input.path().join("nowhere"),
+            input.path().join("Dangling.vcf"),
+        )
+        .unwrap();
+        let second = fetch(opts()).await.unwrap();
+        assert_eq!(second.contacts_deleted, 0);
+        assert_eq!(uids(&db).await, vec!["hugh", "locutus", "picard"]);
+        let problems: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(problems, vec!["listing:files"]);
+
+        // Once the walk completes, the deletion happens and the problem clears.
+        std::fs::remove_file(input.path().join("Dangling.vcf")).unwrap();
+        let third = fetch(opts()).await.unwrap();
+        assert_eq!(third.contacts_deleted, 2);
+        assert_eq!(uids(&db).await, vec!["picard"]);
+        let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM problems")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(left, 0);
         db.close().await;
     }
 

@@ -513,6 +513,7 @@ fn build_item(
         kind,
         attachments,
         reactions,
+        labels: Vec::new(),
         system_note: None,
         source_url: None,
         kind_label: None,

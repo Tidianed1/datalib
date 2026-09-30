@@ -162,6 +162,44 @@ async fn latest_metric_is_the_newest_report_per_step_and_label() {
         .is_empty());
 }
 
+/// `metric_history` is what a sparkline over several runs draws: every
+/// sample inside the window, oldest first, and the one value the series
+/// held when the window opened — without which a series that last moved
+/// before it would draw nothing.
+#[tokio::test]
+async fn metric_history_is_the_window_and_the_value_it_opened_at() {
+    let td = tempfile::tempdir().unwrap();
+    let at = |stamp: &str, step: &str, value: i64| MetricRow {
+        updated_at_utc: stamp.into(),
+        ..metric(step, "items", value)
+    };
+    for (run, stamp, value) in [
+        ("run-1", "2026-09-01T00:00:00.000000+00:00", 10),
+        ("run-2", "2026-09-02T00:00:00.000000+00:00", 20),
+        ("run-3", "2026-09-03T00:00:00.000000+00:00", 30),
+    ] {
+        let w = start(td.path(), run);
+        w.metric(at(stamp, "slack/render_markdown", value));
+        w.metric(at(stamp, "mail/render_markdown", value * 100));
+    }
+    let history =
+        datalib_runs::metric_history(td.path(), "items", "2026-09-01T12:00:00.000000+00:00").await;
+    let of = |step: &str| {
+        history
+            .iter()
+            .filter(|s| s.step == step)
+            .map(|s| s.value)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(of("slack/render_markdown"), [10, 20, 30]);
+    assert_eq!(of("mail/render_markdown"), [1000, 2000, 3000]);
+    assert!(
+        datalib_runs::metric_history(td.path(), "nothing", "2026-09-01")
+            .await
+            .is_empty()
+    );
+}
+
 /// The tail contract: a reader that remembers the last `seq` it saw
 /// gets only what came after.
 #[tokio::test]
@@ -521,7 +559,8 @@ fn a_store_that_will_not_open_starts_no_writer() {
 }
 
 /// A store written by another schema version is remade, not migrated
-/// and not fatal — the same trade as a corrupt file.
+/// and not fatal — the same trade as a corrupt file. The old file is
+/// kept beside it first, as plain SQLite a stock `sqlite3` can open.
 #[tokio::test]
 async fn a_store_from_another_schema_version_is_replaced() {
     let td = tempfile::tempdir().unwrap();
@@ -542,6 +581,28 @@ async fn a_store_from_another_schema_version_is_replaced() {
     }
     assert!(log_after(td.path(), "run-1", None, 0, 10).await.is_empty());
     assert_eq!(log_after(td.path(), "run-2", None, 0, 10).await.len(), 1);
+
+    let dir = path.parent().unwrap();
+    let kept: Vec<_> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| {
+            p.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("runs.bak_")
+        })
+        .collect();
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    let head = std::fs::read(&kept[0]).unwrap();
+    assert!(head.starts_with(b"SQLite format 3\0"), "not plain SQLite");
+    let copy = datalib_runs::open_or_create(&kept[0]).await.unwrap();
+    let msgs: Vec<String> = sqlx::query_scalar("SELECT msg FROM log")
+        .fetch_all(&copy)
+        .await
+        .unwrap();
+    copy.close().await;
+    assert_eq!(msgs, ["from before"]);
 }
 
 /// A rate needs two points. The writer samples a series when its value

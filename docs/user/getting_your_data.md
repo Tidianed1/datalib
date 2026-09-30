@@ -58,15 +58,17 @@ copy without it, and `name` to override what the device says.
 ## Apple Messages
 
 `type = "apple_messages"` — reads the Messages app's own `chat.db` on a
-Mac, or a copy of it (`database.path`). Mirrors iMessage and SMS chats
+Mac, or a copy of it (`messages.path`). Mirrors iMessage and SMS chats
 with tapbacks; attachments are listed by name, their bytes are not
 copied.
 
-The file is `~/Library/Messages/chat.db`. An iPhone backup's
-`3d0d7e5fb2ce288813306e4d4636395e047a3d28` is the same database and
-works too. macOS protects `~/Library/Messages`: in the app, choose the
-file with the picker — that is what grants Datalib access (Cmd-Shift-G
-in the dialog reaches the folder). From a terminal, the terminal needs
+Point it at the folder, `~/Library/Messages`, or at a `chat.db` file
+directly. An iPhone backup's `3d0d7e5fb2ce288813306e4d4636395e047a3d28`
+is the same database and works too. macOS protects `~/Library/Messages`:
+in the app, choose the folder with the picker — that is what grants
+Datalib access (Cmd-Shift-G in the dialog reaches it). Choosing
+`chat.db` alone is not enough, because the database's `chat.db-wal`
+sits beside it and has to be read too. From a terminal, the terminal needs
 Full Disk Access (System Settings → Privacy & Security); an ingest that
 reports "Operation not permitted" is missing that, not the file.
 
@@ -265,10 +267,9 @@ Mirrors your address book. Fastmail has a section of its own:
 [Fastmail Contacts](#fastmail-contacts).
 
 - **A `.vcf` export.** Most address books export vCards; point
-  `vcf.path` at a directory of them. No credentials. The directory is
-  the whole address book, so `all_sources.toml` sets
-  `always_clear_before_ingest = true` to let a missing `.vcf` mean a
-  missing contact.
+  `vcf.path` at a directory of them. No credentials. Each file is an
+  address book, so deleting a `.vcf` deletes its contacts on the next
+  sync.
 - **A CardDAV server.** Put it in `carddav.server_url` — the host alone
   is usually enough, since discovery tries `/.well-known/carddav`. The
   login is latchkey's: register a service for the server's host
@@ -505,7 +506,13 @@ feed is off until its flag beside `export.path` turns it on
 holds whatever you asked Google for; [Google Chat](#google-chat) and
 [Google Voice](#google-voice) have sections of their own. A Takeout is
 a complete snapshot, so it is also the way to notice what Google has
-deleted since the last one.
+deleted since the last one: unpack a newer export in its place, and
+what it no longer holds leaves the mirror on the next sync. A product
+the newer export does not have at all deletes nothing, so an export
+requested for one product leaves the others alone. The one thing this
+cannot tell apart: a large Takeout comes as several zips, and a product
+unpacked from only some of them looks smaller, not missing, so unpack
+every part.
 
 ## Google Voice
 
@@ -532,6 +539,14 @@ snapshot is taken before reading. Only changed rows are stored on each
 run, every prior state stays queryable through `dolt_history_<table>`
 and `dolt_diff_<table>`, and an unchanged catalog produces no commit.
 Query the raw store directly with `datalib-doltlite`.
+
+`catalog.path` can also be one of Lightroom's backup `.zip` files. And
+`backups.path`, beside the catalog or instead of it, is the folder
+Lightroom writes its backups into (by default a `Backups` folder beside
+the catalog): each backup becomes one commit, oldest first and dated
+when it was taken, so the store holds the catalog's history from before
+you started syncing it. Every later sync adds the backups taken since,
+then mirrors the catalog on top.
 
 ## LinkedIn
 

@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { clickRowByUuid } from "./grid-helpers";
+import { EVERY_ROW, clickRowByUuid } from "./grid-helpers";
 
 // Regression test for the off-by-one bug: clicking a grid row in the
 // message list highlighted a *different* message in the document pane
@@ -34,7 +34,7 @@ test("clicked grid row highlights the section with the matching uuid", async ({
   expect(resp.ok()).toBeTruthy();
   const data = (await resp.json()) as { rows: Row[] };
 
-  await page.goto("/");
+  await page.goto(EVERY_ROW);
   await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
 
   // Build the set of rows we'll exercise: every non-Chat row whose

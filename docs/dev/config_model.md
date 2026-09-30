@@ -132,11 +132,12 @@ its own `path`. There is no global vocabulary — each provider's
 | contacts | `carddav`, `vcf` |
 | email | `jmap`, `gmail`, `mbox` |
 | calendar | `google`, `fastmail`, `caldav`, `ics` |
+| lightroom | `catalog`, `backups` |
 | airvisual, facebook, google_takeout | `export` |
 | linkedin | `export`, plus `export.fetch_photos` |
 | signal, sms_backup_restore, whatsapp | `backup` |
 | fsindex, media, pdf | `fswalk` |
-| beeper `texts` · apple_messages `database` · apple_photos `library` · lightroom `catalog` · claude_code `sessions` · codex `sessions` · perseus `github` | |
+| beeper `texts` · apple_messages `database` · apple_photos `library` · claude_code `sessions` · codex `sessions` · perseus `github` | |
 
 That table is `ui/src/config/ingestMethods.json`, the one place to
 read the list from.
@@ -146,7 +147,9 @@ A method is *held* when its path is written and its value is neither
 complete selection), a flag such as linkedin's `export.fetch_photos`
 only when on. A provider with more than one table refuses a step
 naming two (its config's `validate`, e.g. `claude_config`'s), so a
-store is filled one way.
+store is filled one way. `lightroom` is the exception: its `backups`
+folder is the catalog's past and `catalog` its present, so a step may
+name both, and the catalog lands on top.
 
 Knobs that apply whatever the method (email's `only_extract_labels`,
 the `common.*` envelope) stay at the top level of `params`. Render
@@ -340,6 +343,14 @@ group each step after the steps it reads. Nothing else moves, and the
 comments above an entry move with it. Where two groups read each other
 it orders the steps one by one instead.
 
+The UI and the qmd upgrade edit the text rather than re-serializing it.
+An `inputs` array is edited where it stands (`dag/src/config_array.rs` on the
+server, `ui/src/config/tomlText.ts` in the UI): one id per line stays one
+id per line, with its indentation, trailing comma and comments, and a
+one-line array stays on one line. Both cut the text with the same small
+lexer (`dag/src/config_lex.rs` beside the sorter; the UI keeps a copy),
+and refuse an edit that does not read back as what was asked for.
+
 ## The retired shapes
 
 `datalib-migrate-config` (`datalib/backend/migrate_config/`) is the
@@ -350,6 +361,6 @@ retired type words become the current ones, and `sync` /
 their own `path` (`convert.rs`). The rewrite is value-level, so comments do not
 survive. The loader and `datalib-step` recognize the old shapes only
 well enough to name the tool. The one rewrite made without asking is the
-qmd steps', a text edit that keeps comments: `datalib-http` makes it
-through `upgrade_qmd_steps`, which refuses a result that would drop an
-entry the original ran.
+qmd steps', a text edit that keeps comments and leaves the file in
+data-flow order: `datalib-http` makes it through `upgrade_qmd_steps`,
+which refuses a result that would drop an entry the original ran.

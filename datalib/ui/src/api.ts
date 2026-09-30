@@ -101,6 +101,9 @@ export type QueryEcho = {
   // Set when a free-text search failed in qmd; the response then has no
   // rows, and the grid says why in a banner.
   qmd_error?: string | null;
+  // True when free text was asked before any sync built a qmd index: no
+  // rows, and not a failure.
+  qmd_index_missing?: boolean;
   [key: string]: unknown;
 };
 
@@ -546,8 +549,9 @@ export type GroupsResponse<Row = SearchRow> = {
   // More groups than one answer carries; the rest are left out.
   truncated: boolean;
   at: string | null;
-  // Only the search has one.
+  // Only the search has these two.
   qmd_error?: string | null;
+  qmd_index_missing?: boolean;
   errors: string[];
 };
 
@@ -962,6 +966,9 @@ export type Timeseries = {
   unit: string;
   /// Oldest first; compacted, so a step function rather than a grid.
   samples: Sample[];
+  /// How far back the plot reaches, in seconds; each series says its
+  /// own.
+  window_secs: number;
   detail?: string | null;
 };
 
@@ -1021,10 +1028,10 @@ export type ManageRow = {
   /// red and yellow chips, a green zero, or nothing when it has never
   /// counted. A group shows its last counting step's.
   problems: Chip[];
-  /// Documents the step's store holds, as of the run it last counted
-  /// in. Null — drawn blank — for every row but a render step and the
-  /// group above it.
-  documents: number | null;
+  /// The items the step's store holds, as of the run it last counted
+  /// in, with the series behind them. No value — drawn blank — for
+  /// every row but a render step and the group above it.
+  items: Timeseries;
   last_synced: string | null;
   last_success: string | null;
   disk: Timeseries;
@@ -1090,6 +1097,9 @@ export function fetchTable(url: string, signal?: AbortSignal): Promise<TableResp
 /// `datalib_history::TableState`.
 export type HistoryTable = {
   table: string;
+  /// The source's records rather than datalib's own bookkeeping
+  /// (`datalib_history::holds_records`): what a commit's totals count.
+  records: boolean;
   /// Rows after the commit.
   rows: number;
   added: number;
@@ -1258,6 +1268,9 @@ export type RunLogLine = {
   process: LogProcess | string | null;
   // Null for a line about the run, or the server, rather than one step.
   step: string | null;
+  // The config's `[[groups]]` entry the step is filed under; null for a
+  // line with no step, or a step outside any group.
+  group_id: string | null;
   attempt: number;
   // The line's own clock when it carried one, else when the runner read
   // it. UTC; `tz_offset` is the offset that clock was in.

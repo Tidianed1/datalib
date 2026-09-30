@@ -32,7 +32,7 @@ use datalib_schema::providers::Provider;
 ///     backpointer, and a message's id carries its stamp in its leading
 ///     bits (`datalib_id`'s v8 layout). Every uuid moved, `chat_uuid`
 ///     among them.
-pub const RENDER_VERSION: u32 = 3;
+pub const RENDER_VERSION: u32 = 4;
 
 /// Projection for [`BlobBundle::load_many`] over the Voice CAS edge: the
 /// `ref_name` (attachment filename) is the bundle key; `content_type`
@@ -318,6 +318,7 @@ fn build_chats(
                     kind: ItemKind::Text,
                     attachments: Vec::new(),
                     reactions: Vec::new(),
+                    labels: Vec::new(),
                     system_note: None,
                     source_url: None,
                     kind_label: None,
@@ -576,6 +577,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 },
                 attachments,
                 reactions: Vec::new(),
+                labels: Vec::new(),
                 system_note: None,
                 source_url: None,
                 kind_label: None,
@@ -608,6 +610,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 kind: ItemKind::Attachment,
                 attachments,
                 reactions: Vec::new(),
+                labels: Vec::new(),
                 system_note: None,
                 source_url: None,
                 kind_label: None,
@@ -635,6 +638,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 kind: ItemKind::System,
                 attachments: Vec::new(),
                 reactions: Vec::new(),
+                labels: Vec::new(),
                 system_note: Some(format!("{note} — {}", party_display(party))),
                 source_url: None,
                 kind_label: None,

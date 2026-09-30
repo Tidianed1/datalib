@@ -11,6 +11,10 @@ pub mod grid_rows {
     include!("grid_rows_builder.rs");
 }
 
+pub mod plain_text {
+    include!("plain_text.rs");
+}
+
 pub mod edges {
     include!("edges.rs");
 }
@@ -109,6 +113,7 @@ mod tests {
     title TEXT,
     created_at VARCHAR(40),
     modified_at VARCHAR(40),
+    item_count BIGINT,
     md_path VARCHAR(1024),
     upstream_cursor VARCHAR(64),
     renderer_version VARCHAR(32),

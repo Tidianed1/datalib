@@ -30,6 +30,7 @@
  * `invoke` throws a bare `TypeError` rather than degrading.
  */
 
+import { homeDir } from "@tauri-apps/api/path";
 import { confirm as confirmDialog, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
@@ -183,8 +184,10 @@ export interface PathPickRequest {
   picks: "file" | "dir";
   /** Dialog title. Name the thing being chosen, not the widget. */
   title: string;
-  /** Where to open. Ignored unless it looks like a real path (below). */
+  /** Where to open: the field's current value, when it names a place. */
   startAt?: string;
+  /** Where to open when `startAt` does not: the field's `startIn`. */
+  startIn?: string;
   /** For `picks: "file"`, extensions to filter on, without the dot. */
   extensions?: string[];
 }
@@ -210,7 +213,7 @@ export async function pickPath(req: PathPickRequest): Promise<PathPick> {
       title: req.title,
       directory: req.picks === "dir",
       multiple: false,
-      defaultPath: startDirectory(req.startAt),
+      defaultPath: await startDirectory([req.startAt, req.startIn]),
       filters:
         req.picks === "file" && req.extensions?.length
           ? [{ name: "Supported files", extensions: req.extensions }]
@@ -228,20 +231,43 @@ export async function pickPath(req: PathPickRequest): Promise<PathPick> {
   }
 }
 
+async function startDirectory(candidates: (string | undefined)[]): Promise<string | undefined> {
+  let home: string | undefined;
+  if (candidates.some((c) => c?.trim().startsWith("~"))) {
+    try {
+      home = await homeDir();
+    } catch (e) {
+      // The capability lacks `core:path:allow-resolve-directory`: a `~`
+      // path is then no start at all, and the dialog opens where it likes.
+      console.warn("home directory unavailable", e);
+    }
+  }
+  for (const c of candidates) {
+    const at = absoluteStart(c, home);
+    if (at) return at;
+  }
+  return undefined;
+}
+
 /**
- * Sanitize a typed path into something worth opening the dialog at.
+ * A typed path as something worth opening the dialog at, or nothing.
  *
- * The field this comes from is free text, so it may hold a half-typed
- * path or a `~` prefix. Tauri passes `defaultPath` to the platform
- * dialog verbatim — no shell is involved, so nothing expands `~`, and
- * a literal `~/backups` is a *relative* path that resolves against the
- * process's working directory. Handing that over opens the dialog
- * somewhere arbitrary, which is worse than not asking for a start
- * directory at all.
+ * The field is free text, so it may hold a half-typed path or a `~`
+ * prefix. Tauri passes `defaultPath` to the platform dialog verbatim —
+ * no shell is involved, so nothing expands `~`, and a literal
+ * `~/backups` is a *relative* path that resolves against the process's
+ * working directory. That opens the dialog somewhere arbitrary, which
+ * is worse than not asking for a start directory at all.
  */
-function startDirectory(typed: string | undefined): string | undefined {
+export function absoluteStart(
+  typed: string | undefined,
+  home: string | undefined,
+): string | undefined {
   const t = typed?.trim();
-  if (!t || t.startsWith("~")) return undefined;
+  if (!t) return undefined;
+  if (t === "~" || t.startsWith("~/")) {
+    return home ? home.replace(/\/+$/, "") + t.slice(1) : undefined;
+  }
   // POSIX absolute, or a Windows drive/UNC path.
   return t.startsWith("/") || /^[A-Za-z]:[\\/]/.test(t) || t.startsWith("\\\\") ? t : undefined;
 }

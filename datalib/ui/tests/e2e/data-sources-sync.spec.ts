@@ -720,17 +720,21 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
     ).toHaveAttribute("title", succeeded!);
   });
 
-  test("Reset empties a source, and its documents leave the rows at once", async ({ page }) => {
+  test("Reset empties a source, and its items leave the rows at once", async ({ page }) => {
     await writeConfigAndOpenGroups(page, config());
     const render = "pdfs/render_markdown";
-    const documents = async () =>
-      (await row(page, render).locator('[col-id="documents"]').innerText()).trim();
+    // The number alone: the cell also draws its change, and a cell that
+    // has never counted has no number at all.
+    const items = async () =>
+      (await row(page, render).locator('[col-id="items"] .tg-plot-value').allInnerTexts())
+        .join("")
+        .trim();
 
     const was = await stampsBefore(page, ["pdfs/ingest", render]);
     await syncBtn(page, "pdfs/ingest").click();
     await settleRow(page, "pdfs/ingest", was["pdfs/ingest"]);
     await settleRow(page, render, was[render]);
-    await expect.poll(documents, { message: "the sync counted no documents" }).not.toMatch(/^0?$/);
+    await expect.poll(items, { message: "the sync counted no items" }).not.toMatch(/^0?$/);
 
     // The confirm says what a reset does, and the history is why it can
     // be a menu entry at all.
@@ -746,25 +750,27 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
     // Nothing more to click: the render catches up on the emptied store
     // by itself and takes its documents out.
     expect(await settleRow(page, render, rendered[render])).toMatch(/^(Succeeded|Up to date)$/);
-    await expect.poll(documents, { message: "the documents stayed after a reset" }).toBe("0");
+    await expect.poll(items, { message: "the items stayed after a reset" }).toBe("0");
     // The download keeps no history of its own: its next Sync starts from
     // nothing.
     expect(await statusOf(page, "pdfs/ingest")).toBe("Never run");
     await settleRunner(page);
   });
 
-  test("Reset on a render renders its documents again at once", async ({ page }) => {
+  test("Reset on a render renders its items again at once", async ({ page }) => {
     await writeConfigAndOpenGroups(page, config());
     const render = "pdfs/render_markdown";
-    const documents = async () =>
-      (await row(page, render).locator('[col-id="documents"]').innerText()).trim();
+    const items = async () =>
+      (await row(page, render).locator('[col-id="items"] .tg-plot-value').allInnerTexts())
+        .join("")
+        .trim();
 
     const was = await stampsBefore(page, ["pdfs/ingest", render]);
     await syncBtn(page, "pdfs/ingest").click();
     await settleRow(page, "pdfs/ingest", was["pdfs/ingest"]);
     await settleRow(page, render, was[render]);
-    await expect.poll(documents, { message: "the sync counted no documents" }).not.toMatch(/^0?$/);
-    const counted = await documents();
+    await expect.poll(items, { message: "the sync counted no items" }).not.toMatch(/^0?$/);
+    const counted = await items();
 
     page.on("dialog", (d) => void d.accept());
     const rendered = await stampsBefore(page, [render]);
@@ -772,7 +778,7 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
     // Rebuilt from what is downloaded, with nothing more to click; the
     // download itself is untouched.
     expect(await settleRow(page, render, rendered[render])).toBe("Succeeded");
-    await expect.poll(documents).toBe(counted);
+    await expect.poll(items).toBe(counted);
     expect(await statusOf(page, "pdfs/ingest")).toBe("Succeeded");
     await settleRunner(page);
   });

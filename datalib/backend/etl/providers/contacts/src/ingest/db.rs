@@ -275,6 +275,11 @@ impl RawDb {
                 .execute(&mut *tx)
                 .await
                 .context("delete contact bookkeeping")?;
+            sqlx::query("DELETE FROM contact_photos WHERE owner_id = ?")
+                .bind(&id)
+                .execute(&mut *tx)
+                .await
+                .context("delete contact photo edge")?;
         }
         tx.commit().await.context("commit delete contact tx")?;
         Ok(())
@@ -308,9 +313,62 @@ impl RawDb {
                 .execute(&mut *tx)
                 .await
                 .context("delete contact bookkeeping")?;
+            sqlx::query("DELETE FROM contact_photos WHERE owner_id = ?")
+                .bind(&id)
+                .execute(&mut *tx)
+                .await
+                .context("delete contact photo edge")?;
         }
         tx.commit().await.context("commit delete contacts tx")?;
         Ok(())
+    }
+
+    /// Drop the address book a `.vcf` file was, with its contacts, their
+    /// photo edges and sidecar rows, and forget the file's cursor entry — in
+    /// one transaction, so a crash leaves the file stamped and the next run
+    /// retries. Returns how many contacts went.
+    pub async fn delete_file_addressbook(
+        &self,
+        addressbook_id: &str,
+        checkpoint_scope: &str,
+        rel: &str,
+    ) -> Result<usize> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("begin delete addressbook tx")?;
+        for sql in [
+            "DELETE FROM contact_photos WHERE owner_id IN \
+             (SELECT id FROM contacts WHERE addressbook_id = ?)",
+            "DELETE FROM contacts_bookkeeping WHERE id IN \
+             (SELECT id FROM contacts WHERE addressbook_id = ?)",
+        ] {
+            sqlx::query(sql)
+                .bind(addressbook_id)
+                .execute(&mut *tx)
+                .await
+                .context("delete the addressbook's contact edges")?;
+        }
+        let contacts = sqlx::query("DELETE FROM contacts WHERE addressbook_id = ?")
+            .bind(addressbook_id)
+            .execute(&mut *tx)
+            .await
+            .context("delete the addressbook's contacts")?
+            .rows_affected();
+        for sql in [
+            "DELETE FROM addressbooks WHERE id = ?",
+            "DELETE FROM addressbooks_bookkeeping WHERE id = ?",
+        ] {
+            sqlx::query(sql)
+                .bind(addressbook_id)
+                .execute(&mut *tx)
+                .await
+                .context("delete addressbook")?;
+        }
+        datalib_etl::file_checkpoint::forget_file(&mut tx, checkpoint_scope, rel).await?;
+        tx.commit().await.context("commit delete addressbook tx")?;
+        Ok(contacts as usize)
     }
 
     /// Snapshot every contact row for the render pass, joined

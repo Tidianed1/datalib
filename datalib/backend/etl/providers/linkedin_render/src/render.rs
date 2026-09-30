@@ -29,7 +29,7 @@ use datalib_schema::providers::Provider;
 ///     bits (`datalib_id`'s v8 layout). The raw `connections` key is the
 ///     profile URL now, so an existing root resets and downloads again;
 ///     every uuid moved.
-pub const RENDER_VERSION: u32 = 4;
+pub const RENDER_VERSION: u32 = 5;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -199,6 +199,7 @@ fn build_chats(
                     kind: ItemKind::Text,
                     attachments: Vec::new(),
                     reactions: Vec::new(),
+                    labels: Vec::new(),
                     system_note: None,
                     source_url: None,
                     kind_label: None,

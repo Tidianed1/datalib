@@ -53,10 +53,18 @@ export function none(): HTMLElement {
   return span;
 }
 
-function windowPhrase(secs: number): string {
-  return secs % 60 === 0
-    ? `the last ${secs / 60} minute${secs === 60 ? "" : "s"}`
-    : `the last ${secs} seconds`;
+export function windowPhrase(secs: number): string {
+  for (const [unit, size] of [
+    ["day", 86_400],
+    ["hour", 3_600],
+    ["minute", 60],
+  ] as const) {
+    if (secs >= size && secs % size === 0) {
+      const n = secs / size;
+      return n === 1 ? `the last ${unit}` : `the last ${n} ${unit}s`;
+    }
+  }
+  return `the last ${secs} seconds`;
 }
 
 const SPARK = { width: 120, height: 18 };
@@ -242,10 +250,7 @@ export function renderTimestamp(iso: string | null | undefined): HTMLElement {
   return span;
 }
 
-export function renderTimeseries(
-  v: Timeseries | null | undefined,
-  windowSecs: number,
-): HTMLElement {
+export function renderTimeseries(v: Timeseries | null | undefined): HTMLElement {
   const wrap = document.createElement("span");
   wrap.className = "tg-series";
   if (!v || v.value === null) {
@@ -255,7 +260,7 @@ export function renderTimeseries(
     if (v?.detail) wrap.title = v.detail;
     return wrap;
   }
-  const track = sparkTrack(v.value, v.unit, v.samples, windowSecs);
+  const track = sparkTrack(v.value, v.unit, v.samples, v.window_secs);
   wrap.title = `${v.detail ?? formatUnit(v.value, v.unit)}\n${track.change}`;
   wrap.appendChild(track.el);
   return wrap;

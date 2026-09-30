@@ -20,6 +20,7 @@ pub(crate) fn rows_for(
     let entire_chat = format!("/chat/{}", cr.uuid);
     let version = profile.render_version;
 
+    let comments: Vec<&Comment> = ordered(comments).flat().collect();
     let mut rows: Vec<GridRow> = Vec::new();
     rows.extend(
         GridRow::builder()
@@ -28,6 +29,7 @@ pub(crate) fn rows_for(
             .kind(profile.doc_kind)
             .source_label(profile.source_label)
             .is_document(true)
+            .item_count(Some(1 + comments.len() as i64))
             .created_at(cr.created_at.clone())
             .modified_at(cr.updated_at.clone())
             .author(cr.author.clone())
@@ -52,13 +54,14 @@ pub(crate) fn rows_for(
             .build_or_record(stanza, &cr.uuid, version, problems),
     );
 
-    for (idx, c) in ordered(comments).flat().enumerate() {
+    for (idx, c) in comments.into_iter().enumerate() {
         rows.extend(
             GridRow::builder()
                 .uuid(c.uuid.clone())
                 .provider(profile.provider)
                 .kind(c.kind)
                 .source_label(profile.source_label)
+                .item_count(Some(1))
                 .created_at(Some(c.created_at.clone()))
                 // Both forges stamp `updated_at` on every comment, equal
                 // to `created_at` until it is edited; only an edit is a

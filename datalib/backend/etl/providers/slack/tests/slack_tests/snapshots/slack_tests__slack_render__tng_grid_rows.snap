@@ -306,7 +306,7 @@ expression: rows
     "notion_page_uuid": null,
     "org_name": "USS Enterprise NCC-1701-D",
     "org_uuid": "T_NCC1701D",
-    "preview": "Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 271 mark 4.",
+    "preview": "Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 271 mark 4.",
     "project": null,
     "provider": "slack",
     "qmd_path": "slack_api/render_markdown/00000000-0000-8d68-b7dc-08d9ae2795f6/all.md",
@@ -866,7 +866,7 @@ expression: rows
     "notion_page_uuid": null,
     "org_name": "USS Enterprise NCC-1701-D",
     "org_uuid": "T_NCC1701D",
-    "preview": "Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 271 mark 4.",
+    "preview": "Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 271 mark 4.",
     "project": null,
     "provider": "slack",
     "qmd_path": "slack_api/render_markdown/00000000-0000-8d68-b7dc-08d9ae2795f6/all.md",
