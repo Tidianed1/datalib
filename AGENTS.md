@@ -414,15 +414,19 @@ one; a crate with only a `BUILD.bazel` does not (the `<p>_config`
 crates and `datalib_problems` are the pattern). A `Cargo.toml` is
 needed only when something outside bazel has to see the crate.
 
-## Push early, open the PR early, and watch CI
+## Push early, open the PR early, watch CI, and turn on autofix
 
 Push the branch and open a PR as soon as there is something to test —
-CI's runners are free. After pushing, check `gh pr view <n> --json
-mergeable,mergeStateStatus` and follow the run to its end. If it fails,
-read the failure; if the failed target looks like a flake (the
-doltlite-timing ones, or anything `scripts/flaky_tests.py` lists),
-re-run the failed jobs once before digging in. Before pushing a
-follow-up, confirm the PR is still open — a merged PR does not reopen.
+CI's runners are free — as long as nothing in it is private data
+(§"Real data stays out of the repo"). Then turn on autofix for the PR,
+so a red run, a merge conflict or a review comment comes back to the
+agent that wrote it instead of waiting for a person. After pushing,
+check `gh pr view <n> --json mergeable,mergeStateStatus` and follow the
+run to its end. If it fails, read the failure; if the failed target
+looks like a flake (the doltlite-timing ones, or anything
+`scripts/flaky_tests.py` lists), re-run the failed jobs once before
+digging in. Before pushing a follow-up, confirm the PR is still open —
+a merged PR does not reopen.
 
 **A PR lands as a merge commit**: `gh pr merge <n> --merge`, or
 "Create a merge commit" on GitHub — not squash, not rebase. The
