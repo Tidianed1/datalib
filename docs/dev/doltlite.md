@@ -472,6 +472,12 @@ and `doc/doltlite/refs.md` in the doltlite repo at `v0.50.13`.
   names them** (0.50.12 and later). So `pragma_module_list` is no census
   of what a commit holds, and a table another process commits after this
   connection opened reads through `dolt_at_<table>` without a reopen.
+- **A per-table module is named as its table is**: case-insensitively,
+  and as a quoted identifier when the table's name needs quoting
+  (`"dolt_at_odd ""name"""('HEAD')`). A missing one is `no such table:
+  dolt_at_<table>` either way. `datalib_pin::Pin::table` always quotes,
+  so upstream names a mirror keeps, such as Lightroom's
+  `Adobe_AdditionalMetadata`, read like any other.
 - **A `BEGIN` on a read-only connection holds one commit** for the whole
   transaction: plain tables read that commit, use their indexes, and the
   writer seals underneath untouched.

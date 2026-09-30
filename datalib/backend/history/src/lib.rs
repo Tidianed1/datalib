@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use datalib_pin::{head, is_missing_table, open_reader, Pin};
 use serde::Serialize;
 use sqlx::sqlite::SqlitePool;
@@ -188,12 +188,9 @@ async fn table_sizes(pool: &SqlitePool, pin: &Pin) -> Result<BTreeMap<String, i6
     .context("sqlite_master")?;
     let mut sizes = BTreeMap::new();
     for name in names {
-        if !is_table_name(&name) {
-            bail!("table name {name:?} cannot be read through dolt_at_");
-        }
-        // `name` passed `is_table_name` and `Pin::at` checked the hash, so
-        // both splice safely; there is nothing to bind in a table-valued
-        // function's name.
+        // `Pin::table` quotes the name and splices a hash `Pin::at`
+        // checked; there is nothing to bind in a table-valued function's
+        // name.
         let sql = format!("SELECT COUNT(*) FROM {}", pin.table(&name));
         let rows: i64 = match sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
             .fetch_one(pool)
@@ -206,18 +203,6 @@ async fn table_sizes(pool: &SqlitePool, pin: &Pin) -> Result<BTreeMap<String, i6
         sizes.insert(name, rows);
     }
     Ok(sizes)
-}
-
-/// What `dolt_at_<name>` accepts: the identifier character set our DDL
-/// uses. Anything else is refused rather than quoted, since a module
-/// name cannot be quoted.
-fn is_table_name(s: &str) -> bool {
-    !s.is_empty()
-        && s.bytes()
-            .next()
-            .is_some_and(|b| b.is_ascii_lowercase() || b == b'_')
-        && s.bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
 }
 
 /// `(added, deleted, modified)` per table with a data change between the
@@ -537,6 +522,46 @@ mod tests {
         assert!(table(top, "contacts").records);
         assert!(!table(top, "contacts_bookkeeping").records);
         assert!(!table(top, "ingested_files").records);
+    }
+
+    /// A mirrored SQLite file keeps upstream's table names — Lightroom's
+    /// are `Adobe_AdditionalMetadata` and the like. The history read them
+    /// through `dolt_at_` and once refused any name that was not
+    /// lowercase, which failed the whole request.
+    #[tokio::test]
+    async fn upstream_table_names_are_read_as_they_are() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.doltlite_db");
+        let pool = writer(&path).await;
+        if !is_doltlite(&pool).await {
+            return;
+        }
+        exec(
+            &pool,
+            "CREATE TABLE Adobe_AdditionalMetadata (id INTEGER PRIMARY KEY)",
+        )
+        .await;
+        exec(
+            &pool,
+            "CREATE TABLE \"odd \"\"name\"\"\" (id INTEGER PRIMARY KEY)",
+        )
+        .await;
+        commit(&pool, "schema").await;
+        exec(
+            &pool,
+            "INSERT INTO Adobe_AdditionalMetadata VALUES (1), (2)",
+        )
+        .await;
+        exec(&pool, "INSERT INTO \"odd \"\"name\"\"\" VALUES (1)").await;
+        commit(&pool, "load").await;
+        pool.close().await;
+
+        let h = read(&path, 100).await.unwrap();
+        let top = &h.commits[0];
+        let adobe = table(top, "Adobe_AdditionalMetadata");
+        assert_eq!((adobe.rows, adobe.added), (2, 2));
+        let odd = table(top, "odd \"name\"");
+        assert_eq!((odd.rows, odd.added), (1, 1));
     }
 
     #[test]
