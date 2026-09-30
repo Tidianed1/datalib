@@ -7,18 +7,18 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
 use crate::run_state::RunState;
-use crate::step::{FailureKind, StepId};
+use crate::step::{FailureKind, StepId, StepSpec};
 
 /// One event on the stream. `step` tags every event so a single
 /// multiplexed stream (the orchestrator's view) stays attributable.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
-    /// First event of a run: every step id, in topological order. Lets
+    /// First event of a run: every step, in topological order. Lets
     /// a consumer render the full task board (with pending cells)
     /// before anything has started.
     RunPlan {
-        steps: Vec<StepId>,
+        steps: Vec<PlannedStep>,
     },
     /// The scheduler decided to run this step.
     StepStart {
@@ -160,6 +160,25 @@ pub enum Event {
     RunSummary {
         steps: Vec<StepSummary>,
     },
+}
+
+/// Per-step entry in [`Event::RunPlan`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlannedStep {
+    pub step: StepId,
+    /// The `[[groups]]` entry the step is filed under; `None` for a
+    /// custom step outside any group.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+}
+
+impl PlannedStep {
+    pub fn of(spec: &StepSpec) -> Self {
+        Self {
+            step: spec.id.clone(),
+            group: spec.group.clone(),
+        }
+    }
 }
 
 /// Per-step entry in [`Event::RunSummary`].

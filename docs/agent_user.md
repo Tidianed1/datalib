@@ -131,8 +131,8 @@ wrote in a shape this one cannot keep; nothing was changed, and if
 upstream still has the data, `--reset <source>/ingest --sync
 <source>/ingest` is the way through.
 
-**The stderr stream is NDJSON and made for you**: `run_plan` (all step
-ids in topo order), then `step_start` / `progress_*` / `log` / `hint` /
+**The stderr stream is NDJSON and made for you**: `run_plan` (every step's
+id and group, in topo order), then `step_start` / `progress_*` / `log` / `hint` /
 `step_finish` per step, closed by one `run_summary` — parse it instead
 of scraping human output. Failures carry a kind
 (`transient` / `rate_limited` / `auth` / `data` / `cancelled`); the

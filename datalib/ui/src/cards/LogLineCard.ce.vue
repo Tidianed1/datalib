@@ -155,6 +155,19 @@ async function copyLine() {
       <pre class="ll-msg">{{ line.msg }}</pre>
 
       <dl class="ll-meta">
+        <template v-if="line.group_id">
+          <dt>group</dt>
+          <dd>
+            <button
+              class="ll-chip"
+              type="button"
+              title="Keep only this group"
+              @click="narrowBy('group', line.group_id!, false)"
+            >
+              {{ line.group_id }}
+            </button>
+          </dd>
+        </template>
         <template v-if="line.step">
           <dt>step</dt>
           <dd>

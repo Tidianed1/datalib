@@ -841,8 +841,8 @@ impl std::ops::Deref for LogLine {
 
 /// The columns [`log_line_from`] reads, for a query that selects them
 /// itself: `log` as `l`, joined to `processes` as `p`.
-pub(crate) const LOG_LINE_COLUMNS: &str = "l.seq, l.run_id, l.process_id, l.step, l.attempt, \
-     l.ts_utc, l.tz_offset, l.stream, l.level, l.target, l.thread, l.msg, l.fields, \
+pub(crate) const LOG_LINE_COLUMNS: &str = "l.seq, l.run_id, l.process_id, l.step, l.group_id, \
+     l.attempt, l.ts_utc, l.tz_offset, l.stream, l.level, l.target, l.thread, l.msg, l.fields, \
      p.process, p.git_hash";
 
 pub(crate) fn log_line_from(r: &sqlx::sqlite::SqliteRow) -> LogLine {
@@ -852,6 +852,7 @@ pub(crate) fn log_line_from(r: &sqlx::sqlite::SqliteRow) -> LogLine {
             run_id: r.get("run_id"),
             process_id: r.get("process_id"),
             step: r.get("step"),
+            group_id: r.get("group_id"),
             attempt: r.get("attempt"),
             ts_utc: r.get("ts_utc"),
             tz_offset: r.get("tz_offset"),
@@ -1688,13 +1689,14 @@ async fn flush(
             l.process_id.as_str()
         };
         sqlx::query(
-            "INSERT INTO log (run_id, process_id, step, attempt, ts_utc, tz_offset, stream, level, \
-                              target, thread, msg, fields) \
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO log (run_id, process_id, step, group_id, attempt, ts_utc, tz_offset, \
+                              stream, level, target, thread, msg, fields) \
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         )
         .bind(run_id)
         .bind(process_id)
         .bind(&l.step)
+        .bind(&l.group_id)
         .bind(l.attempt)
         .bind(&l.ts_utc)
         .bind(&l.tz_offset)

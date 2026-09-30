@@ -78,7 +78,10 @@ when something saw, and the commit it was built from — what a line's
 
 A line also keeps its **subject** — `run_id`, `step`, `attempt` — which
 is not the same thing: the runner's line "step X failed" is authored by
-the runner and about step X.
+the runner and about step X. A line about a step also carries the step's
+`group_id`, the `[[groups]]` entry it is filed under, as the runner's
+plan said, so a source's lines can be read together whatever step wrote
+them.
 
 The commit belongs to the process, not the store, because lines from
 different builds sit in one file — the server restarts between
@@ -158,13 +161,13 @@ earlier ones, and the pages of the app); Manage opens it through
 on a Failed row. Selecting a line
 opens `logLineView(seq)` beside it: the whole message, the fields as a
 tree with copy and keep / exclude, the source link at the process's
-commit, both clocks. The grid shows Time, Step, Level, Stream, Source,
-Message and Fields; the columns that would say the same thing on line
+commit, both clocks. The grid shows Time, Group, Step, Level, Stream,
+Source, Message and Fields; the columns that would say the same thing on line
 after line of one process's log — run, process, commit, thread, target
 — start hidden, and the grid menu at the top right puts any of them
 back. The search bar takes the grammar every grid
-shares: the keys are the columns — `run`, `process`, `step`, `level`,
-`stream`, `target`, `thread`, `msg` — plus `process_id` and `attempt`,
+shares: the keys are the columns — `run`, `process`, `step`, `group`,
+`level`, `stream`, `target`, `thread`, `msg` — plus `process_id` and `attempt`,
 `min_level:warn` (this level and above) and `commit:0fc29cb` (prefix).
 The pickers above the grid are views of the query: picking a run, a
 launch or a step's attempt writes `run:`, `process_id:` or `step:` and
