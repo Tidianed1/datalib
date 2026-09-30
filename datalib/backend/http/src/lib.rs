@@ -1071,10 +1071,6 @@ pub struct DagStepProgress {
     pub metrics: std::collections::BTreeMap<String, i64>,
     /// `warn` and `error` log lines so far this run.
     pub errors: i64,
-    /// Per series, the change per second between its two newest samples
-    /// — only for a series that has two, so a number here is measured,
-    /// never assumed.
-    pub rates: std::collections::BTreeMap<String, f64>,
     /// For a running step: seconds since any of its metrics last moved
     /// (since it started, if none ever did). Long means "not advancing";
     /// `log_age_secs` says whether it is at least still talking.
@@ -1103,7 +1099,7 @@ pub(crate) fn secs_between(earlier: &str, later: &str) -> Option<f64> {
 }
 
 /// A run's per-step numbers, keyed by step, from a store snapshot, with
-/// rates and ages derived as of `now` (UTC, ISO).
+/// ages and queue drains derived as of `now` (UTC, ISO).
 fn progress_by_step(
     snap: &datalib_runs::Snapshot,
     now: &str,
@@ -1133,7 +1129,6 @@ fn progress_by_step(
                     msg: p.msg.clone(),
                     metrics: Default::default(),
                     errors: snap.errors.get(&p.step).copied().unwrap_or(0),
-                    rates: Default::default(),
                     progress_age_secs: age(last_move),
                     log_age_secs: age(snap.last_log_at.get(&p.step).map(String::as_str)),
                     queue_drain: None,
@@ -1156,23 +1151,6 @@ fn progress_by_step(
                 .collect();
             p.queue_drain =
                 manage::queue_drain(&history, &p.metrics, st.started_at_utc.as_deref(), now);
-        }
-    }
-    // Two newest samples per series, oldest first: the rate is their
-    // slope. One sample is a point, not a line, so it says nothing.
-    for pair in snap.recent_samples.windows(2) {
-        let (a, b) = (&pair[0], &pair[1]);
-        if a.step != b.step || a.name != b.name || a.labels != b.labels {
-            continue;
-        }
-        let Some(dt) = secs_between(&a.ts_utc, &b.ts_utc).filter(|dt| *dt > 0.0) else {
-            continue;
-        };
-        if let Some(p) = by_step.get_mut(&b.step) {
-            p.rates.insert(
-                series_key(&b.name, &b.labels),
-                (b.value - a.value) as f64 / dt,
-            );
         }
     }
     by_step
@@ -1864,7 +1842,6 @@ async fn run_steps(State(s): State<AppState>, Path(run): Path<String>) -> Json<R
                 msg: None,
                 metrics: Default::default(),
                 errors: 0,
-                rates: Default::default(),
                 progress_age_secs: None,
                 log_age_secs: None,
                 queue_drain: None,
@@ -2011,21 +1988,13 @@ mod tests {
         );
     }
 
-    /// The rate is the slope of a series' two newest samples; the ages
-    /// are how long a running step has gone without a metric moving and
-    /// without logging — the two together being #136's "busy but not
+    /// The ages are how long a running step has gone without a metric
+    /// moving and without logging — the two together being #136's "busy but not
     /// advancing" (long progress age, short log age) as distinct from
     /// "silent" (both long). A finished step has no ages.
     #[test]
-    fn rates_and_ages_are_derived_from_the_snapshot() {
-        use datalib_runs::{MetricRow, MetricSampleRow, StepRunRow};
-        let sample = |step: &str, name: &str, ts: &str, value: i64| MetricSampleRow {
-            step: step.into(),
-            name: name.into(),
-            ts_utc: ts.into(),
-            value,
-            ..Default::default()
-        };
+    fn ages_are_derived_from_the_snapshot() {
+        use datalib_runs::{MetricRow, StepRunRow};
         let snap = datalib_runs::Snapshot {
             run_id: Some("r".into()),
             steps: vec![
@@ -2055,39 +2024,11 @@ mod tests {
             )]
             .into_iter()
             .collect(),
-            recent_samples: vec![
-                sample(
-                    "a/ingest",
-                    "rows_upserted_total",
-                    "2026-09-14T10:00:50.000000+00:00",
-                    500,
-                ),
-                sample(
-                    "a/ingest",
-                    "rows_upserted_total",
-                    "2026-09-14T10:01:00.000000+00:00",
-                    700,
-                ),
-                // A lone sample is a point, not a slope.
-                sample(
-                    "a/ingest",
-                    "api_requests_total",
-                    "2026-09-14T10:01:00.000000+00:00",
-                    9,
-                ),
-            ],
             ..Default::default()
         };
         let by = progress_by_step(&snap, "2026-09-14T10:03:00.000000+00:00");
         let a = &by["a/ingest"];
         assert_eq!(a.metrics["rows_upserted_total{table=t}"], 700);
-        assert_eq!(
-            a.rates.get("rows_upserted_total"),
-            Some(&20.0),
-            "{:?}",
-            a.rates
-        );
-        assert!(!a.rates.contains_key("api_requests_total"));
         assert_eq!(
             a.progress_age_secs,
             Some(120),
@@ -2100,6 +2041,61 @@ mod tests {
             (None, None),
             "not running"
         );
+    }
+
+    /// The queue's series go through the real writer, the real store and
+    /// the snapshot's query into the drain the ETA reads. The counter's
+    /// value when the window opened is what makes the pace right: if the
+    /// query ever stopped returning `dequeued_total` samples — a name
+    /// spelled two ways — the drain would read the run's whole 140 as
+    /// taken off in two minutes, and this fails.
+    #[tokio::test]
+    async fn the_eta_reads_the_queue_series_the_runner_writes() {
+        use datalib_metrics::{DEQUEUED, QUEUED};
+        let root = tempfile::tempdir().unwrap();
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
+        let ago = |secs: i64| now.bump_micros(-secs * 1_000_000).to_utc_and_offset().0;
+        {
+            let w = datalib_runs::RunWriter::start(
+                root.path(),
+                "r",
+                &ago(300),
+                None,
+                datalib_runs::Retention::default(),
+            )
+            .unwrap();
+            w.step(datalib_runs::StepRunRow {
+                step: "s".into(),
+                state: "running".into(),
+                attempt: 1,
+                started_at_utc: Some(ago(300)),
+                updated_at_utc: ago(300),
+                ..Default::default()
+            });
+            let metric = |name: &str, value: i64, at: String| datalib_runs::MetricRow {
+                step: "s".into(),
+                name: name.into(),
+                labels: "from=p".into(),
+                value,
+                updated_at_utc: at,
+                ..Default::default()
+            };
+            w.metric(metric(QUEUED, 10, ago(200)));
+            w.metric(metric(DEQUEUED, 100, ago(200)));
+            // Sampled on its own flush, so the later values are samples
+            // of their own rather than coalescing with these.
+            w.flush().await;
+            w.metric(metric(QUEUED, 60, ago(30)));
+            w.metric(metric(DEQUEUED, 140, ago(30)));
+        }
+        let snap = datalib_runs::snapshot(root.path()).await;
+        let by = progress_by_step(&snap, &now_utc());
+        let drain = by["s"]
+            .queue_drain
+            .expect("a queue with samples has a drain");
+        assert!(drain.counted, "{drain:?}");
+        assert_eq!((drain.taken, drain.queued_then), (40, 10), "{drain:?}");
+        assert!((119.0..130.0).contains(&drain.secs), "{drain:?}");
     }
 
     fn fringe_of(text: &str) -> Vec<String> {

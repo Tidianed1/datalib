@@ -240,6 +240,10 @@ What it serves (`http/src/prometheus.rs`):
 - **`datalib_tree_bytes{tree=…}`** and **`datalib_root_bytes`**: what
   the usage sampler last measured.
 
+`//tests/fixtures:metrics_export_e2e_test` scrapes a real server and
+parses the answer with `prometheus_client`, the Prometheus project's
+own parser, so a line a scraper would refuse fails CI.
+
 Its history starts when something begins scraping; the app's own views
 read the run store, which has every run it keeps. Labels are step and
 group ids and what a step labels its series with (a table name, a

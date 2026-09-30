@@ -32,7 +32,7 @@ pub enum Kind {
 
 impl Kind {
     fn of(name: &str) -> Self {
-        if name.ends_with("_total") {
+        if datalib_metrics::is_counter(name) {
             Kind::Counter
         } else {
             Kind::Gauge

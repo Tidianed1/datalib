@@ -49,3 +49,10 @@ pub const CHECKPOINTS: &str = "checkpoints_total";
 /// grows loses nothing to sampling, and is what the ETA column reads
 /// the pace off.
 pub const DEQUEUED: &str = "dequeued_total";
+
+/// Whether a series is a running total — a counter — by the naming rule
+/// above. `GET /metrics` types a series by this, and the runner warns
+/// when one goes down within a step's attempt.
+pub fn is_counter(name: &str) -> bool {
+    name.ends_with("_total")
+}

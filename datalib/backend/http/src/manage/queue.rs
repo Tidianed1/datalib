@@ -409,7 +409,6 @@ mod tests {
             msg: None,
             metrics: metrics.iter().map(|(k, v)| (k.to_string(), *v)).collect(),
             errors: 0,
-            rates: Default::default(),
             progress_age_secs: Some(0),
             log_age_secs: Some(0),
             queue_drain: drain.map(|(taken, secs)| QueueDrain {

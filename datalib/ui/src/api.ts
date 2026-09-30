@@ -739,7 +739,7 @@ export type DagStep = {
 };
 
 // A step's live numbers and words. `metrics` is the current value per
-// series, keyed `name` or `name{labels}`; `done` and `queued` are the
+// series, keyed `name` or `name{labels}`; `done_total` and `queued` are the
 // two the runner derives for a step reporting a plain count, and the
 // pair a bar can be drawn from. Empty means the step has only spoken.
 export type DagStepProgress = {
@@ -747,9 +747,6 @@ export type DagStepProgress = {
   metrics: Record<string, number>;
   // `warn` and `error` log lines so far this run.
   errors: number;
-  // Per series, the change per second between its two newest samples;
-  // absent for a series with fewer than two.
-  rates: Record<string, number>;
   // For a running step: seconds since any metric moved (since it
   // started, if none did), and since it last logged. A long progress
   // age with a short log age is "busy but not advancing".
@@ -999,7 +996,7 @@ export type StatusView = {
   detail: string | null;
 };
 
-export type ChipKind = "info" | "idle" | "metric" | "warning" | "error" | "ok";
+export type ChipKind = "metric" | "warning" | "error";
 export type Chip = { kind: ChipKind; text: string; title: string };
 
 /// A button on a row. Data decides whether it appears and what it says;
@@ -1041,8 +1038,8 @@ export type ManageRow = {
   /// slowest step's, or a stall anywhere.
   eta: Quantity;
   /// Errors and warnings the step's store holds, as of its last run:
-  /// red and yellow chips, a green zero, or nothing when it has never
-  /// counted. A group shows its last counting step's.
+  /// a red and a yellow chip, each only when above zero. A group shows
+  /// its last counting step's.
   problems: Chip[];
   /// The items the step's store holds, as of the run it last counted
   /// in, with the series behind them. No value — drawn blank — for

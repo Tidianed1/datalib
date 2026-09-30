@@ -35,6 +35,25 @@ struct Acc {
     /// The labels of every `queued` series written for the step, so its
     /// finish can empty them all.
     queued: BTreeSet<String>,
+    /// This attempt's last value of each running total (`name`, labels),
+    /// and whether it has already been caught going down.
+    counters: HashMap<(String, String), (i64, bool)>,
+}
+
+/// Record a running total's new value, and say what it was if this is
+/// the first time within the attempt it has gone down.
+fn counter_fell(
+    counters: &mut HashMap<(String, String), (i64, bool)>,
+    name: &str,
+    labels: &str,
+    value: i64,
+) -> Option<i64> {
+    let entry = counters
+        .entry((name.to_string(), labels.to_string()))
+        .or_insert((value, false));
+    let (last, warned) = *entry;
+    *entry = (value, warned || value < last);
+    (value < last && !warned).then_some(last)
 }
 
 /// An [`EventSink`] that keeps the run store current.
@@ -108,12 +127,52 @@ impl RunStoreSink {
 
     fn metric(&self, step: &StepId, name: &str, labels: &BTreeMap<String, String>, value: i64) {
         let labels = canonical_labels(labels);
-        if name == QUEUED {
+        let fell_from = {
             let mut steps = self.steps.lock().expect("run store sink mutex");
             let acc = steps.entry(step.clone()).or_default();
-            acc.queued.insert(labels.clone());
+            if name == QUEUED {
+                acc.queued.insert(labels.clone());
+            }
+            if datalib_metrics::is_counter(name) {
+                counter_fell(&mut acc.counters, name, &labels, value)
+            } else {
+                None
+            }
+        };
+        if let Some(before) = fell_from {
+            self.warn_counter_fell(step, name, &labels, before, value);
         }
         self.write_metric(step, name, labels, value);
+    }
+
+    /// A running total that went down is a step naming a gauge as a
+    /// counter: `GET /metrics` would serve it as a counter, and a scraper
+    /// would read each fall as a reset and count the climb back twice.
+    fn warn_counter_fell(&self, step: &StepId, name: &str, labels: &str, before: i64, now: i64) {
+        let series = if labels.is_empty() {
+            name.to_string()
+        } else {
+            format!("{name}{{{labels}}}")
+        };
+        let (ts_utc, tz_offset) = now_split();
+        self.writer.log(LogRow {
+            step: Some(step.clone()),
+            group_id: self.group_of(step),
+            attempt: self.attempt_of(step),
+            ts_utc,
+            tz_offset,
+            level: LogLevel::Warn.as_str().into(),
+            target: Some(RUNNER_TARGET.into()),
+            msg: format!(
+                "{series} went down, {before} to {now}, but a name ending in `_total` says it only \
+                 grows; name it without the suffix if it can fall (docs/dev/step_protocol.md)"
+            ),
+            fields: Some(
+                serde_json::json!({ "counter_fell": series, "from": before, "to": now })
+                    .to_string(),
+            ),
+            ..Default::default()
+        });
     }
 
     fn write_metric(&self, step: &StepId, name: &str, labels: String, value: i64) {
@@ -208,6 +267,7 @@ impl EventSink for RunStoreSink {
                     ..Default::default()
                 };
                 self.writer.process(process.clone());
+                // `counters` goes with the rest: a retry counts from zero.
                 self.update(step, |a| {
                     *a = Acc {
                         queued: std::mem::take(&mut a.queued),
@@ -823,6 +883,43 @@ mod tests {
                 ("table=channels".to_string(), 2),
                 ("table=messages".to_string(), 25)
             ])
+        );
+    }
+
+    /// A series named as a running total that goes down is a gauge
+    /// under a counter's name, which `GET /metrics` would serve wrong: the
+    /// runner says so in the step's log, once per series, and still
+    /// records the value. A gauge going down says nothing.
+    #[tokio::test]
+    async fn a_running_total_that_goes_down_is_warned_about_once() {
+        let m = |name: &str, v: i64| Event::Metric {
+            step: "slack/raw".into(),
+            name: name.into(),
+            labels: BTreeMap::new(),
+            value: v,
+        };
+        let (td, snap) = run(&[
+            m("api_requests_total", 5),
+            m("api_requests_total", 3),
+            m("api_requests_total", 2),
+            m("queued", 9),
+            m("queued", 1),
+        ])
+        .await;
+        assert_eq!(
+            metric_value(&snap, "slack/raw", "api_requests_total"),
+            Some(2)
+        );
+        let log = log_after(td.path(), "run-1", Some("slack/raw"), 0, 100).await;
+        let warned: Vec<&str> = log
+            .iter()
+            .filter(|l| l.level == "warn")
+            .map(|l| l.msg.as_str())
+            .collect();
+        assert_eq!(warned.len(), 1, "{warned:?}");
+        assert!(
+            warned[0].starts_with("api_requests_total went down, 5 to 3"),
+            "{warned:?}"
         );
     }
 

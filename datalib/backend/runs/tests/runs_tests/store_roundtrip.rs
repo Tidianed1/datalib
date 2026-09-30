@@ -605,15 +605,13 @@ async fn a_store_from_another_schema_version_is_replaced() {
     assert_eq!(msgs, ["from before"]);
 }
 
-/// A rate needs two points. The writer samples a series when its value
-/// changed and the floor between samples has passed, and always once
-/// more at the end — so a series that moved twice inside the floor still
-/// leaves its first and last values. The snapshot carries the newest two
-/// per series, oldest first, from the last few minutes only — a rate is
-/// a live question, and the query runs on every `manage.rows` frame —
-/// and when each step last logged.
+/// A chart over the run needs its ends. The writer samples a series
+/// when its value changed and the floor between samples has passed, and
+/// always once more at the end — so a series that moved twice inside the
+/// floor still leaves its first and last values. The snapshot says when
+/// each step last logged.
 #[tokio::test]
-async fn the_snapshot_carries_two_recent_samples_per_series_and_the_last_log_time() {
+async fn a_series_keeps_its_first_and_last_values_and_the_snapshot_its_last_log_time() {
     let td = tempfile::tempdir().unwrap();
     let now = datalib_time::IsoOffsetTimestamp::now_local();
     let recent = |secs_ago: i64| now.bump_micros(-secs_ago * 1_000_000).to_utc_and_offset().0;
@@ -622,11 +620,6 @@ async fn the_snapshot_carries_two_recent_samples_per_series_and_the_last_log_tim
         w.metric(MetricRow {
             updated_at_utc: recent(30),
             ..metric("a", "rows", 1)
-        });
-        // A series that last moved an hour ago has no live rate to give.
-        w.metric(MetricRow {
-            updated_at_utc: recent(3600),
-            ..metric("a", "stale", 100)
         });
         w.log(line("a", "info", "first"));
         // The first value has to reach the store before the second is
@@ -645,16 +638,12 @@ async fn the_snapshot_carries_two_recent_samples_per_series_and_the_last_log_tim
         });
     }
     let snap = snapshot(td.path()).await;
-    let values: Vec<(String, i64)> = snap
-        .recent_samples
-        .iter()
-        .map(|s| (s.name.clone(), s.value))
-        .collect();
+    let samples = datalib_runs::step_samples(td.path(), "run-1", "a").await;
+    let values: Vec<(String, i64)> = samples.iter().map(|s| (s.name.clone(), s.value)).collect();
     assert_eq!(
         values,
         vec![("rows".to_string(), 1), ("rows".to_string(), 7)],
-        "{:?}",
-        snap.recent_samples
+        "{samples:?}"
     );
     assert_eq!(
         snap.last_log_at.get("a").map(String::as_str),

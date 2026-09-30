@@ -147,7 +147,11 @@ app") and reads its type off it:
 
 - A running total that only grows ends in **`_total`** and is served as
   a counter: `rows_upserted_total`, `api_requests_total`. It may start
-  again from zero next run; a reader of a counter expects that.
+  again from zero next run; a reader of a counter expects that. One
+  that goes down within a run is a gauge under a counter's name, and
+  the runner says so with a warning in your log.
+- A count of what the last pass did, which the next pass replaces, is
+  a gauge named for it: `last_pass_rows_inserted`.
 - Anything that can go down does not, and is served as a gauge:
   `queued`, `items`.
 - A unit goes before that suffix, in base units: `fetched_bytes_total`,

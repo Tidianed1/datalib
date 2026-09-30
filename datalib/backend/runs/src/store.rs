@@ -20,12 +20,6 @@ use app_schema::runs::{
 /// the write (~0.3ms per row on a plain-SQLite file, measured).
 const FLUSH_EVERY: Duration = Duration::from_millis(200);
 
-/// How far back a snapshot looks for samples. A rate is a live
-/// question, and the snapshot is read on every `manage.rows` frame —
-/// several times a second during a run — so the window query must not
-/// scan a day-long run's every sample each time.
-const RATE_WINDOW: Duration = Duration::from_secs(10 * 60);
-
 /// How far back a snapshot reads the `queued` gauge, for an estimate of
 /// when a step's queue empties. Long enough that one slow page does not
 /// swing it, short enough that it follows a step that changes pace.
@@ -413,11 +407,8 @@ pub struct Snapshot {
     /// When each step last logged anything (UTC), for telling a step
     /// that is busy but not advancing from one that has gone silent.
     pub last_log_at: BTreeMap<String, String>,
-    /// The two newest samples of every series — enough for a rate.
-    /// Oldest first within a series.
-    pub recent_samples: Vec<MetricSampleRow>,
-    /// Every sample of a queue's series — `queued`, and the running
-    /// totals of what came off it, `done_total` and `dequeued_total` — from the last
+    /// Every sample of a queue's series — `datalib_metrics::QUEUED`, and
+    /// the running totals of what came off it, `DONE` and `DEQUEUED` — from the last
     /// [`QUEUE_WINDOW`], plus the newest one before it, per series: where
     /// each stood when the window opened and how it moved since. Oldest
     /// first within a series.
@@ -709,50 +700,28 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
     .iter()
     .map(|r| (r.get::<String, _>("step"), r.get::<String, _>("ts_utc")))
     .collect();
-    // The two newest per series, by a window over the run's recent
-    // samples only. Text order is instant order, so `ts` sorts and the
-    // cutoff is a plain comparison.
-    let (cutoff, _) = datalib_time::IsoOffsetTimestamp::now_local()
-        .bump_micros(-(RATE_WINDOW.as_micros() as i64))
-        .to_utc_and_offset();
-    let recent_samples = sqlx::query(
-        "SELECT step, name, labels, ts_utc, tz_offset, value FROM ( \
-           SELECT *, ROW_NUMBER() OVER \
-             (PARTITION BY step, name, labels ORDER BY ts_utc DESC) AS rn \
-           FROM metric_samples WHERE run_id = ? AND ts_utc > ?) \
-         WHERE rn <= 2 ORDER BY step, name, labels, ts_utc",
-    )
-    .bind(&run_id)
-    .bind(&cutoff)
-    .fetch_all(pool)
-    .await?
-    .iter()
-    .map(|r| MetricSampleRow {
-        run_id: run_id.clone(),
-        step: r.get("step"),
-        name: r.get("name"),
-        labels: r.get("labels"),
-        ts_utc: r.get("ts_utc"),
-        tz_offset: r.get("tz_offset"),
-        value: r.get("value"),
-    })
-    .collect();
     let (queue_cutoff, _) = datalib_time::IsoOffsetTimestamp::now_local()
         .bump_micros(-(QUEUE_WINDOW.as_micros() as i64))
         .to_utc_and_offset();
+    // The names are bound from `datalib_metrics`, the one spelling the
+    // runner writes and the ETA reads: a series this query missed would
+    // not fail, it would make the estimate count a whole run as taken
+    // off inside the window.
     let queue_history = sqlx::query(
         "SELECT step, name, labels, ts_utc, tz_offset, value FROM ( \
            SELECT *, ROW_NUMBER() OVER (PARTITION BY step, name, labels ORDER BY ts_utc DESC) AS rn \
-           FROM metric_samples WHERE run_id = ?1 AND name IN ('queued', 'done_total', 'dequeued_total') \
-             AND ts_utc <= ?2) \
+           FROM metric_samples WHERE run_id = ?1 AND name IN (?3, ?4, ?5) AND ts_utc <= ?2) \
          WHERE rn = 1 \
          UNION ALL \
          SELECT step, name, labels, ts_utc, tz_offset, value FROM metric_samples \
-           WHERE run_id = ?1 AND name IN ('queued', 'done_total', 'dequeued_total') AND ts_utc > ?2 \
+           WHERE run_id = ?1 AND name IN (?3, ?4, ?5) AND ts_utc > ?2 \
          ORDER BY step, name, labels, ts_utc",
     )
     .bind(&run_id)
     .bind(&queue_cutoff)
+    .bind(datalib_metrics::QUEUED)
+    .bind(datalib_metrics::DONE)
+    .bind(datalib_metrics::DEQUEUED)
     .fetch_all(pool)
     .await?
     .iter()
@@ -775,7 +744,6 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
         metrics,
         errors,
         last_log_at,
-        recent_samples,
         queue_history,
     })
 }
