@@ -1009,7 +1009,7 @@ impl PipelineRun {
 fn run_pipeline(
     bin: &Path,
     cfg_path: &Path,
-    log_dir: &Path,
+    run_root: &Path,
     now: &str,
     extra_args: &[&str],
 ) -> PipelineRun {
@@ -1019,6 +1019,9 @@ fn run_pipeline(
         .arg("--now")
         .arg(now)
         .args(extra_args)
+        // The run's own fingerprint cache, so run 1 is cold on every host
+        // and the host cache never sees this test.
+        .env("DATALIB_CACHE_DIR", run_root.join("fingerprint_cache"))
         .stdin(std::process::Stdio::null())
         .output()
         .expect("spawn datalib-dag");
@@ -1030,7 +1033,7 @@ fn run_pipeline(
     // run and only the last 40 lines survive a failure — which is precisely
     // when you want to ask "why did that take 18 minutes?". It goes
     // beside the data root, not in it: the root is what the app serves.
-    let log = log_dir.join(format!("{}.ndjson", now.replace(':', "-")));
+    let log = run_root.join(format!("{}.ndjson", now.replace(':', "-")));
     if let Err(e) = std::fs::write(&log, &stderr) {
         eprintln!("[test] WARNING: could not write {}: {e}", log.display());
     } else {

@@ -580,6 +580,16 @@ is the part Unison gets wrong: its `fpcache` is per replica *pair*, so
 syncing one tree against two peers hashes the same bytes twice, and scanning
 a directory tells you nothing about its parent.
 
+It lives at `$DATALIB_CACHE_DIR/fingerprints.sqlite`, else under
+`$XDG_CACHE_HOME/datalib`, else `~/Library/Caches/datalib` (macOS) or
+`~/.cache/datalib`. **A test names its own `DATALIB_CACHE_DIR`**, and under
+a bazel test (`TEST_TMPDIR` set, which the processes a test spawns inherit)
+`default_cache_path` refuses to fall through to the host's. A test scans a
+sandbox path that is gone by the next run, so in the host cache every one
+stays as a dead row: one mac measured 191k of them, 94% of its cache. The
+fixture pipeline (`tests/fixtures/run_sync_pipeline.py`) keeps its cache
+inside the data root it builds.
+
 ## Event store: order is part of the contract
 
 `load_latest_by_key` returns a `Vec` in **first-seen order** — the order
