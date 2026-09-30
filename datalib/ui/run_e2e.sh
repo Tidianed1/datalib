@@ -369,5 +369,9 @@ if [[ ! -f "$QMD_ENTRY" ]]; then
 fi
 export DATALIB_RUNTIME_DIR="$RUNTIME_STAGE"
 
+# The specs' syncs scan roots under this run dir, gone by the next run;
+# in the host's fingerprint cache every path would stay as a dead row.
+export DATALIB_CACHE_DIR="$DATALIB_TEST_E2E_RUN_DIR/fingerprint_cache"
+
 cd "$UI_DIR"
 exec "${PLAYWRIGHT_CMD[@]}" "$@"
