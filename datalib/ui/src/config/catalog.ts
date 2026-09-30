@@ -50,6 +50,11 @@ export type Field =
         /// typed input stays the escape hatch for anything the filter
         /// wrongly excludes.
         extensions?: string[];
+        /// The folder the thing is almost always in, where the app that
+        /// owns it keeps it (`~/Library/Messages`). The picker opens
+        /// there while the field is empty, and the help text, which must
+        /// name it, shows it with a copy button beside it.
+        startIn?: string;
       })
   /// A closed set of values — one Rust enum, one dropdown. Prefer this
   /// over `text` whenever the backend parses the string against a fixed
@@ -1549,6 +1554,7 @@ export const CATALOG: CatalogEntry[] = [
         picks: "file",
         pickTitle: "Choose your Lightroom catalog",
         extensions: ["lrcat"],
+        startIn: "~/Pictures/Lightroom",
         required: true,
         target: "catalog.path",
         label: "Catalog file",
@@ -1605,13 +1611,13 @@ export const CATALOG: CatalogEntry[] = [
         // and the snapshot also reads chat.db-wal beside it.
         picks: "dir",
         pickTitle: "Choose your Messages folder",
+        startIn: "~/Library/Messages",
         required: true,
         target: "messages.path",
         label: "Messages folder",
         help:
-          "The folder the Messages app keeps its database in, ~/Library/Messages; press " +
-          "Cmd-Shift-G in the picker and paste that path to reach it. Choose it with the " +
-          "picker rather than typing the path: macOS protects the folder, and picking it is " +
+          "The folder the Messages app keeps its database in, ~/Library/Messages. Choose it " +
+          "with the picker rather than typing the path: macOS protects the folder, and picking it is " +
           'what lets Datalib read it. If a sync still fails with "Operation not permitted", ' +
           "grant Datalib Full Disk Access in System Settings. A copied chat.db file works too, " +
           "typed in here. Attachments (photos, videos, files) are listed by name and path " +
@@ -1667,11 +1673,12 @@ export const CATALOG: CatalogEntry[] = [
         picks: "file",
         pickTitle: "Choose your Photos library",
         extensions: ["photoslibrary"],
+        startIn: "~/Pictures",
         required: true,
         target: "library.path",
         label: "Photos library",
         help:
-          "The library bundle, usually ~/Pictures/Photos Library.photoslibrary; its " +
+          "The library bundle, usually Photos Library.photoslibrary in ~/Pictures; its " +
           "database/Photos.sqlite is what gets mirrored. Choose it " +
           "with the picker rather than typing the path: macOS protects the library, and " +
           "picking it is what lets Datalib read it. If a sync still fails with " +

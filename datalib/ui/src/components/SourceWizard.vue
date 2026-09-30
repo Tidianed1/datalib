@@ -62,7 +62,8 @@ import {
   type ByteUnit,
 } from "@/config/byteSize";
 import ProbeItemPicker from "@/components/ProbeItemPicker.vue";
-import { STATUS_GLYPHS } from "@/config/glyphs";
+import { PATH_GLYPHS, STATUS_GLYPHS } from "@/config/glyphs";
+import { copyToClipboard } from "@/clipboard";
 
 const {
   latchkeyService,
@@ -426,6 +427,7 @@ async function browse(f: Field) {
     title: f.pickTitle ?? f.label,
     // Re-editing a source reopens near its current value.
     startAt: String(values.value[f.target] ?? ""),
+    startIn: f.startIn,
     extensions: f.extensions,
   });
   if (result.outcome === "picked") {
@@ -435,6 +437,43 @@ async function browse(f: Field) {
     pickFailed.value[f.target] = result.reason;
   }
   // Canceled: leave the field exactly as it was, and say nothing.
+}
+
+/// A path field's help split around its `startIn`, so the path can
+/// carry a copy button: Cmd-Shift-G in the picker, or a terminal, is
+/// where it gets pasted.
+function helpAroundStart(f: Field): { before: string; path: string; after: string } | null {
+  if (f.kind !== "path" || !f.startIn || !f.help) return null;
+  const at = f.help.indexOf(f.startIn);
+  if (at < 0) return null;
+  return {
+    before: f.help.slice(0, at),
+    path: f.startIn,
+    after: f.help.slice(at + f.startIn.length),
+  };
+}
+
+const copiedStart = ref<string | null>(null);
+
+async function copyStart(f: Field) {
+  if (f.kind !== "path" || !f.startIn) return;
+  if (await copyToClipboard(f.startIn)) {
+    copiedStart.value = f.target;
+    setTimeout(() => {
+      if (copiedStart.value === f.target) copiedStart.value = null;
+    }, 1500);
+  }
+}
+
+/// Every field is a <label>, so a click anywhere in one activates its
+/// control — including the click that ends a drag across the help text,
+/// which moves focus to the input and drops the selection. Help text is
+/// there to be read and copied from.
+function keepHelpSelectable(e: MouseEvent) {
+  const t = e.target instanceof Element ? e.target : null;
+  if (t?.closest("label .wiz-help") && !t.closest("a, button, input, select, textarea")) {
+    e.preventDefault();
+  }
 }
 
 // Connection: which latchkey account, and what it can reach
@@ -927,6 +966,7 @@ function submit() {
       role="dialog"
       aria-modal="true"
       :aria-label="isEdit ? 'Edit source' : 'Add data source'"
+      @click="keepHelpSelectable"
     >
       <header class="wiz-head dialog-head">
         <h2>{{ isEdit ? `Edit ${name || id}` : "Add a data source" }}</h2>
@@ -1456,7 +1496,26 @@ function submit() {
               @input="values[f.target] = ($event.target as HTMLInputElement).value"
             />
 
-            <small v-if="f.help" class="wiz-help">{{ f.help }}</small>
+            <small v-if="helpAroundStart(f)" class="wiz-help"
+              >{{ helpAroundStart(f)!.before
+              }}<span class="wiz-startin"
+                ><code>{{ helpAroundStart(f)!.path }}</code
+                ><button
+                  type="button"
+                  class="wiz-copy"
+                  :title="copiedStart === f.target ? 'Copied' : 'Copy this path'"
+                  :aria-label="`Copy ${helpAroundStart(f)!.path}`"
+                  @click="copyStart(f)"
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path
+                      :d="copiedStart === f.target ? STATUS_GLYPHS.succeeded : PATH_GLYPHS.copy"
+                      fill="currentColor"
+                    />
+                  </svg></button></span
+              >{{ helpAroundStart(f)!.after }}</small
+            >
+            <small v-else-if="f.help" class="wiz-help">{{ f.help }}</small>
             <small v-if="pickFailed[f.target]" class="wiz-error">
               Couldn’t open the file picker ({{ pickFailed[f.target] }}). Type or paste the path
               instead.
@@ -1780,6 +1839,30 @@ function submit() {
 }
 .wiz-browse {
   white-space: nowrap;
+}
+.wiz-startin {
+  white-space: nowrap;
+}
+.wiz-startin code {
+  font-size: 11px;
+  user-select: all;
+}
+.wiz-copy {
+  display: inline-flex;
+  vertical-align: -3px;
+  margin-left: 2px;
+  padding: 1px;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.wiz-copy:hover {
+  color: var(--datalib-fg);
+}
+.wiz-copy svg {
+  width: 13px;
+  height: 13px;
 }
 .wiz-foot-note {
   margin-right: auto;

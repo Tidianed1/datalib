@@ -17,6 +17,9 @@ importers:
       '@slickgrid-universal/vanilla-bundle':
         specifier: 10.11.0
         version: 10.11.0
+      '@tauri-apps/api':
+        specifier: ^2.11.1
+        version: 2.11.1
       '@tauri-apps/plugin-dialog':
         specifier: ^2.7.3
         version: 2.7.3
