@@ -52,7 +52,9 @@ def wait_for_file(path: Path, proc: subprocess.Popen[bytes], log: Path) -> str:
     deadline = time.monotonic() + DEADLINE_SECS
     while time.monotonic() < deadline:
         if proc.poll() is not None:
-            raise AssertionError(f"datalib-http exited {proc.returncode}:\n{log.read_text()}")
+            raise AssertionError(
+                f"datalib-http exited {proc.returncode}:\n{log.read_text()}"
+            )
         if path.is_file() and (text := path.read_text()):
             return text
         time.sleep(0.05)
@@ -114,14 +116,18 @@ class MetricsExport(unittest.TestCase):
 
     def test_a_scrape_parses_with_every_series_typed_by_its_name(self) -> None:
         content_type, text = self.scrape()
-        self.assertTrue(content_type.startswith("text/plain; version=0.0.4"), content_type)
+        self.assertTrue(
+            content_type.startswith("text/plain; version=0.0.4"), content_type
+        )
 
         # Raises on anything a scraper would refuse.
         families = {f.name: f for f in text_string_to_metric_families(text)}
 
         def sample(family: str, sample_name: str, **labels: str) -> float:
             for s in families[family].samples:
-                if s.name == sample_name and all(s.labels.get(k) == v for k, v in labels.items()):
+                if s.name == sample_name and all(
+                    s.labels.get(k) == v for k, v in labels.items()
+                ):
                     return s.value
             self.fail(f"no {sample_name}{labels} in:\n{text}")
 
@@ -129,15 +135,24 @@ class MetricsExport(unittest.TestCase):
         rows = "datalib_step_rows_upserted"
         self.assertEqual(families[rows].type, "counter", text)
         self.assertEqual(
-            sample(rows, "datalib_step_rows_upserted_total", step="fake/raw", table="t"), 12
+            sample(
+                rows, "datalib_step_rows_upserted_total", step="fake/raw", table="t"
+            ),
+            12,
         )
         self.assertEqual(families["datalib_step_done"].type, "counter", text)
-        self.assertEqual(sample("datalib_step_done", "datalib_step_done_total", step="fake/raw"), 4)
+        self.assertEqual(
+            sample("datalib_step_done", "datalib_step_done_total", step="fake/raw"), 4
+        )
 
         self.assertEqual(families["datalib_step_items"].type, "gauge", text)
-        self.assertEqual(sample("datalib_step_items", "datalib_step_items", step="fake/raw"), 7)
+        self.assertEqual(
+            sample("datalib_step_items", "datalib_step_items", step="fake/raw"), 7
+        )
         # The runner empties a finished step's queue.
-        self.assertEqual(sample("datalib_step_queued", "datalib_step_queued", step="fake/raw"), 0)
+        self.assertEqual(
+            sample("datalib_step_queued", "datalib_step_queued", step="fake/raw"), 0
+        )
 
         # One state per step reads 1.
         states = [
