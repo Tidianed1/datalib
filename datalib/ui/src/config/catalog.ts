@@ -1532,6 +1532,7 @@ export const CATALOG: CatalogEntry[] = [
   },
   {
     type: "lightroom",
+    variantKey: "catalog",
     label: "Lightroom",
     blurb: "Mirror a Lightroom Classic catalog, with full history.",
     keywords: ["lightroom", "photos", "adobe", "catalog", "sqlite", "images"],
@@ -1548,14 +1549,15 @@ export const CATALOG: CatalogEntry[] = [
         kind: "path",
         picks: "file",
         pickTitle: "Choose your Lightroom catalog",
-        extensions: ["lrcat"],
+        extensions: ["lrcat", "zip"],
         required: true,
         target: "catalog.path",
         label: "Catalog file",
         help:
           "A .lrcat, which is an ordinary SQLite database — Lightroom keeps it under " +
-          "~/Pictures/Lightroom. Every table is mirrored, and " +
-          "doltlite stores only what changed between runs — so prior states stay queryable.",
+          "~/Pictures/Lightroom — or one of Lightroom's backup .zip files. Every table is " +
+          "mirrored, and doltlite stores only what changed between runs — so prior states " +
+          "stay queryable.",
       },
       {
         kind: "bool",
@@ -1574,6 +1576,53 @@ export const CATALOG: CatalogEntry[] = [
         help:
           "Take a VACUUM INTO copy first, so a catalog Lightroom has open can't be read " +
           "half-written.",
+      },
+      {
+        kind: "bool",
+        target: "gc",
+        label: "Collect unreachable chunks each run",
+        default: false,
+        help:
+          "Much smaller store, history unaffected — but it rewrites the whole chunk store " +
+          "every run.",
+      },
+    ],
+  },
+  {
+    type: "lightroom",
+    variantKey: "backups",
+    label: "Lightroom backups",
+    blurb: "Replay a folder of Lightroom Classic backups as the catalog's history.",
+    keywords: ["lightroom", "photos", "adobe", "catalog", "backup", "zip", "history"],
+    kind: "local",
+    icon: "lightroom",
+    defaultName: "lightroom_backups",
+    nameHint: "Lightroom backups",
+    wizard: true,
+    renderStep: false,
+    fields: [
+      {
+        kind: "path",
+        picks: "dir",
+        pickTitle: "Choose your Lightroom backups folder",
+        required: true,
+        target: "backups.path",
+        label: "Backups folder",
+        help:
+          "The folder Lightroom writes its backups into — by default a Backups folder beside " +
+          "the catalog, e.g. ~/Pictures/Lightroom/Backups. Each backup is a folder named for " +
+          "when it was taken, holding a .zip (or an unpacked .lrcat). Every backup becomes " +
+          "one commit, oldest first and dated when it was taken, so doltlite can diff any " +
+          "two; each sync adds the backups taken since.",
+      },
+      {
+        kind: "bool",
+        target: "skip_xmp",
+        label: "Skip XMP packets and search indexes",
+        default: false,
+        help:
+          "The bulkiest columns in a catalog, and wholly derived from columns that stay. " +
+          "Off by default: a backup should be faithful unless you say otherwise.",
       },
       {
         kind: "bool",

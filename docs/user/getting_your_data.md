@@ -538,6 +538,13 @@ run, every prior state stays queryable through `dolt_history_<table>`
 and `dolt_diff_<table>`, and an unchanged catalog produces no commit.
 Query the raw store directly with `datalib-doltlite`.
 
+`catalog.path` can also be one of Lightroom's backup `.zip` files. Or
+set `backups.path` instead, to the folder Lightroom writes its backups
+into (by default a `Backups` folder beside the catalog): each backup
+becomes one commit, oldest first and dated when it was taken, so the
+store holds the catalog's history from before you started syncing it,
+and every later sync adds the backups taken since.
+
 ## LinkedIn
 
 `type = "linkedin"` — LinkedIn's "Get a copy of your data" export

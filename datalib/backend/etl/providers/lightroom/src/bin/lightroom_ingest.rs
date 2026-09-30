@@ -1,12 +1,18 @@
-//! `lightroom-ingest` — mirror a Lightroom catalog into a doltlite store.
+//! `lightroom-ingest` — mirror a Lightroom catalog, or a folder of its
+//! backups, into a doltlite store.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Result;
 use clap::Parser;
-use datalib_etl_lightroom::ingest::{self, MirrorOptions};
+use datalib_etl::doltlite_raw as dr;
+use datalib_etl::download_problems;
+use datalib_etl::progress::{Progress, TracingSink};
+use datalib_etl::stop::StopFlag;
+use datalib_etl_lightroom::ingest::{backups, mirror, unpack, MirrorOptions};
 use datalib_etl_lightroom_config::XMP_COLUMN_PATTERNS;
 use datalib_obs::{init as init_obs, ObsArgs};
 
@@ -16,10 +22,17 @@ use datalib_obs::{init as init_obs, ObsArgs};
     about = "Mirror a Lightroom catalog (or any SQLite file) into a doltlite store, \
              so repeated runs form a deduplicated, versioned backup."
 )]
+#[command(group = clap::ArgGroup::new("input").required(true).args(["catalog", "backups"]))]
 struct Args {
-    /// The catalog to mirror. Any SQLite database works.
+    /// The catalog to mirror, or a backup `.zip` holding one. Any SQLite
+    /// database works.
     #[arg(long)]
-    catalog: PathBuf,
+    catalog: Option<PathBuf>,
+
+    /// A folder of Lightroom backups. Each one the store does not have
+    /// becomes a commit, oldest first, dated when it was taken.
+    #[arg(long)]
+    backups: Option<PathBuf>,
 
     /// Output doltlite db path. Created if missing.
     #[arg(long)]
@@ -73,8 +86,13 @@ async fn main() -> Result<()> {
     if args.skip_xmp {
         exclude_columns.extend(XMP_COLUMN_PATTERNS.iter().map(|s| s.to_string()));
     }
+    let input = args
+        .catalog
+        .clone()
+        .or(args.backups.clone())
+        .expect("clap requires one");
     let options = MirrorOptions {
-        source_path: args.catalog.clone(),
+        source_path: input.clone(),
         snapshot: !args.no_snapshot,
         include_tables: if args.include_tables.is_empty() {
             vec!["*".to_string()]
@@ -93,5 +111,23 @@ async fn main() -> Result<()> {
         sidecar_tables: Vec::new(),
     };
 
-    ingest::fetch_and_commit(&args.db, options, "lightroom", started).await
+    let progress = Progress::new(Arc::new(TracingSink::new("lightroom")));
+    let pool = mirror::open_mirror(&args.db).await?;
+    let (summary, problems) = if args.backups.is_some() {
+        let stop = StopFlag::default();
+        let run = backups::ingest(&pool, &input, &options, &progress, &stop, "lightroom").await?;
+        (run.summary(), run.problems)
+    } else {
+        let stats = unpack::mirror_file(&pool, &input, &options, &progress).await?;
+        (stats.summary(), Vec::new())
+    };
+    download_problems::report_records(&pool, &problems).await;
+    let commit = dr::commit_run(&pool, &format!("download lightroom: {summary}")).await?;
+    pool.close().await;
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    match commit {
+        Some(hash) => tracing::info!(elapsed_ms, commit = %hash, "{summary}"),
+        None => tracing::info!(elapsed_ms, "{summary} (no further changes)"),
+    }
+    Ok(())
 }

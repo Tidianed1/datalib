@@ -17,8 +17,9 @@ pub const XMP_COLUMN_PATTERNS: &[&str] = &[
     "AgMetadataSearchIndex.searchIndex",
 ];
 
-/// The lightroom-owned slice of a `lightroom` source. The catalog is
-/// `catalog.path`; the doltlite mirror lands in the ingest step's tree.
+/// The lightroom-owned slice of a `lightroom` source: one catalog
+/// (`catalog.path`) or a folder of Lightroom's backups (`backups.path`),
+/// never both. The doltlite mirror lands in the ingest step's tree.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LightroomConfig {
@@ -26,8 +27,13 @@ pub struct LightroomConfig {
     /// resolved by the orchestrator's `normalize()`.
     pub common: SourceCommon,
 
-    /// The `.lrcat` to mirror.
+    /// The `.lrcat` to mirror, or one backup `.zip` holding it.
     pub catalog: Option<LocalPath>,
+
+    /// A folder of Lightroom's backups: one subfolder per backup, named
+    /// for when it was taken (`2026-09-27 1650`). Each backup not yet in
+    /// the store becomes a commit of its own, oldest first.
+    pub backups: Option<LocalPath>,
 
     /// Table-name globs to mirror. Default `["*"]` — every table in the
     /// catalog. Matched against the bare table name; `*` and `?` are the
@@ -69,6 +75,7 @@ impl Default for LightroomConfig {
         Self {
             common: SourceCommon::default(),
             catalog: None,
+            backups: None,
             include_tables: vec!["*".to_string()],
             exclude_tables: Vec::new(),
             exclude_columns: Vec::new(),
@@ -81,8 +88,31 @@ impl Default for LightroomConfig {
     }
 }
 
+/// Where a `lightroom` source reads from.
+#[derive(Debug, Clone, Copy)]
+pub enum LightroomMethod<'a> {
+    Catalog(&'a LocalPath),
+    Backups(&'a LocalPath),
+}
+
 impl LightroomConfig {
+    /// The one method this source holds, or why there is not exactly one.
+    pub fn method(&self) -> anyhow::Result<LightroomMethod<'_>> {
+        match (&self.catalog, &self.backups) {
+            (Some(c), None) => Ok(LightroomMethod::Catalog(c)),
+            (None, Some(b)) => Ok(LightroomMethod::Backups(b)),
+            (None, None) => anyhow::bail!(
+                "lightroom: set `catalog.path` (a .lrcat or a backup .zip) \
+                 or `backups.path` (a folder of Lightroom backups)"
+            ),
+            (Some(_), Some(_)) => anyhow::bail!(
+                "lightroom: `catalog` and `backups` are both set; a source reads one of them"
+            ),
+        }
+    }
+
     pub fn validate(&self) -> anyhow::Result<()> {
+        self.method()?;
         if self.include_tables.is_empty() {
             anyhow::bail!("include_tables is empty: nothing would be mirrored");
         }
@@ -119,8 +149,10 @@ pub type LightroomRenderConfig = datalib_source_common::BareRenderConfig;
 pub use datalib_source_common::glob_match;
 
 impl datalib_source_common::IngestMethods for LightroomConfig {
-    const METHODS: &'static [datalib_source_common::IngestMethod] =
-        &[datalib_source_common::IngestMethod::local("catalog")];
+    const METHODS: &'static [datalib_source_common::IngestMethod] = &[
+        datalib_source_common::IngestMethod::local("catalog"),
+        datalib_source_common::IngestMethod::local("backups"),
+    ];
 }
 
 #[cfg(test)]
@@ -164,12 +196,38 @@ mod tests {
         assert!(!c.wants_table("Adobe_images"));
     }
 
+    fn local(p: &str) -> Option<LocalPath> {
+        Some(LocalPath { path: p.into() })
+    }
+
     #[test]
     fn empty_include_list_is_rejected() {
         let c = LightroomConfig {
+            catalog: local("/c.lrcat"),
             include_tables: Vec::new(),
             ..Default::default()
         };
         assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn a_source_reads_a_catalog_or_a_backups_folder_but_not_both() {
+        let catalog = LightroomConfig {
+            catalog: local("/c.lrcat"),
+            ..Default::default()
+        };
+        assert!(matches!(catalog.method(), Ok(LightroomMethod::Catalog(_))));
+        let backups = LightroomConfig {
+            backups: local("/Backups"),
+            ..Default::default()
+        };
+        assert!(matches!(backups.method(), Ok(LightroomMethod::Backups(_))));
+        assert!(LightroomConfig::default().validate().is_err());
+        let both = LightroomConfig {
+            catalog: local("/c.lrcat"),
+            backups: local("/Backups"),
+            ..Default::default()
+        };
+        assert!(both.validate().is_err());
     }
 }

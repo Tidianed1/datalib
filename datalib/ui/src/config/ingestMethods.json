@@ -137,6 +137,10 @@
     {
       "path": "catalog",
       "reach": "local"
+    },
+    {
+      "path": "backups",
+      "reach": "local"
     }
   ],
   "linkedin": [
