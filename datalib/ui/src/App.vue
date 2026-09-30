@@ -9,7 +9,7 @@ import ConfigErrorView from "@/views/ConfigErrorView.vue";
 import NewerRootView from "@/views/NewerRootView.vue";
 import { fetchConfig, type ConfigResponse } from "@/api";
 import { subscribeLive } from "@/live";
-import { newCard, showDataSources } from "@/surface";
+import CommandBox from "@/components/CommandBox.vue";
 import { isDesktopApp } from "@/desktop";
 
 // The app window has no browser chrome, so it draws the two buttons a
@@ -85,31 +85,45 @@ onUnmounted(() => stop?.());
 
 <template>
   <main class="datalib-shell" data-feedback-root>
-    <!-- The toolbar: the two places a person starts from. -->
-    <nav v-if="!gate" class="datalib-toolbar" aria-label="Cards">
-      <template v-if="desktop">
-        <button class="datalib-tool" title="back (⌘[)" @click="goBack">←</button>
-        <button class="datalib-tool" title="forward (⌘])" @click="goForward">→</button>
-      </template>
-      <button class="datalib-tool" @click="showDataSources">Data sources</button>
-      <button class="datalib-tool" @click="newCard">＋ New card</button>
-      <div class="datalib-spacer" />
+    <!-- The toolbar: back and forward in the desktop app, the name,
+         and the search box. -->
+    <nav v-if="!gate" class="datalib-toolbar" aria-label="App">
+      <div class="datalib-toolbar-start">
+        <template v-if="desktop">
+          <button class="datalib-tool" title="back (⌘[)" aria-label="Back" @click="goBack">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="currentColor" d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z" />
+            </svg>
+          </button>
+          <button class="datalib-tool" title="forward (⌘])" aria-label="Forward" @click="goForward">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="currentColor" d="M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z" />
+            </svg>
+          </button>
+        </template>
+        <div class="datalib-brand"><span class="datalib-brand-mark" />Datalib</div>
+      </div>
+      <div class="datalib-toolbar-center"><CommandBox /></div>
       <!-- Lightweight sync indicator in the toolbar's flexible space —
            appearing/disappearing never shifts the page layout. -->
-      <SyncProgressChrome />
+      <div class="datalib-toolbar-end"><SyncProgressChrome /></div>
     </nav>
 
-    <FirstRunView
-      v-if="gate === 'first-run' && config"
-      :config="config"
-      @initialized="onInitialized"
-    />
-    <NewerRootView v-else-if="gate === 'newer-root' && config" :config="config" />
-    <ConfigErrorView
-      v-else-if="gate === 'config-error' && config"
-      :config="config"
-      @saved="refresh"
-    />
+    <!-- The gates had the shell's padding before the cards went
+         edge to edge; they keep it here. -->
+    <div v-if="gate" class="datalib-gate">
+      <FirstRunView
+        v-if="gate === 'first-run' && config"
+        :config="config"
+        @initialized="onInitialized"
+      />
+      <NewerRootView v-else-if="gate === 'newer-root' && config" :config="config" />
+      <ConfigErrorView
+        v-else-if="gate === 'config-error' && config"
+        :config="config"
+        @saved="refresh"
+      />
+    </div>
     <div v-if="cardsShown" v-show="!gate" class="datalib-cards">
       <RouterView />
     </div>
@@ -126,58 +140,6 @@ onUnmounted(() => stop?.());
   display: contents;
 }
 
-:root {
-  color-scheme: light dark;
-  --datalib-bg: #ffffff;
-  --datalib-fg: #1a1a1a;
-  --datalib-muted: #6b6b6b;
-  --datalib-border: #d8d8d8;
-  --datalib-input-bg: #ffffff;
-  --datalib-code-bg: #f4f4f4;
-  --datalib-hover: #f0f0f0;
-  --datalib-accent: #2563eb;
-  --datalib-card-bg: #fafafa;
-  /* Log severity highlights: dark shades on the light background… */
-  --datalib-log-error: #991b1b;
-  --datalib-log-warn: #854d0e;
-  --datalib-log-ok: #166534;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --datalib-bg: #1a1b1e;
-    --datalib-fg: #e6e6e6;
-    --datalib-muted: #9aa0a6;
-    --datalib-border: #2f3136;
-    --datalib-input-bg: #232428;
-    --datalib-code-bg: #2a2b2f;
-    --datalib-hover: #2a2b2f;
-    --datalib-accent: #6ea8fe;
-    --datalib-card-bg: #232428;
-    /* …and light shades on the dark background. */
-    --datalib-log-error: #f87171;
-    --datalib-log-warn: #facc15;
-    --datalib-log-ok: #4ade80;
-  }
-}
-
-html,
-body,
-#app {
-  background: var(--datalib-bg);
-  color: var(--datalib-fg);
-  margin: 0;
-  min-height: 100vh;
-}
-
-body {
-  font-family: system-ui, sans-serif;
-}
-
-a {
-  color: var(--datalib-accent);
-}
-
 .datalib-shell {
   /* Viewport-pinned flex column: the toolbar takes its natural height
      and the routed view flexes into the rest, so full-height views
@@ -188,32 +150,74 @@ a {
   flex-direction: column;
   min-height: 100vh;
   box-sizing: border-box;
+}
+.datalib-gate {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
   padding: 1rem;
 }
-/* A band across the top: tinted, hairline below, full-bleed by
-   countering the shell's 1rem padding. */
 .datalib-toolbar {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  margin: -1rem -1rem 0.75rem;
-  padding: 0.4rem 1rem;
-  background: var(--datalib-card-bg);
+  gap: 4px;
+  height: var(--datalib-toolbar-h);
+  box-sizing: border-box;
+  padding: 0 10px;
+  background: var(--datalib-ground);
   border-bottom: 1px solid var(--datalib-border);
 }
-.datalib-spacer {
-  flex: 1;
+.datalib-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 6px;
+  font-size: var(--datalib-title-size);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.datalib-brand-mark {
+  width: calc(var(--datalib-icon-size) + 2px);
+  height: calc(var(--datalib-icon-size) + 2px);
+  border-radius: 5px;
+  background: var(--datalib-accent);
+}
+/* The search box centred on the window, whatever sits either side:
+   the two ends share the leftover width equally. */
+.datalib-toolbar-start {
+  flex: 1 1 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.datalib-toolbar-center {
+  flex: 0 1 440px;
+  display: flex;
+  justify-content: center;
+}
+.datalib-toolbar-end {
+  flex: 1 1 0;
+  display: flex;
+  justify-content: flex-end;
 }
 .datalib-tool {
-  padding: 0.25rem 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--datalib-control-h);
+  height: var(--datalib-control-h);
+  padding: 0;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
   background: transparent;
   color: var(--datalib-fg);
-  font: inherit;
-  line-height: 1.4;
   cursor: pointer;
+}
+.datalib-tool svg {
+  width: calc(var(--datalib-icon-size) + 4px);
+  height: calc(var(--datalib-icon-size) + 4px);
 }
 .datalib-tool:hover {
   background: var(--datalib-hover);

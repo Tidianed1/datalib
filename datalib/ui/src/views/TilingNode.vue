@@ -13,6 +13,7 @@
 // and recurses.
 import { inject } from "vue";
 import CardControls from "@/components/CardControls.vue";
+import CardIcon from "@/components/CardIcon.vue";
 import { growSourceBox, vAutoGrow } from "@/components/autoGrow";
 import { devMode } from "@/devMode";
 import { TILING_API } from "./tilingApi";
@@ -54,7 +55,7 @@ const tabLabel = (child: TileNode) =>
       title="drag to move this card"
       @pointerdown="(e) => api.startDrag(node.id, e)"
     />
-    <div class="tiling-chrome card-chrome" :class="{ 'card-chrome--title': !devMode }">
+    <div class="tiling-chrome card-chrome">
       <textarea
         v-if="devMode"
         v-auto-grow
@@ -66,7 +67,10 @@ const tabLabel = (child: TileNode) =>
         @input="growSourceBox($event.target as HTMLTextAreaElement)"
         @keydown.enter.exact.prevent="api.commitSource(node, $event)"
       />
-      <div v-else class="tiling-title card-title">{{ api.titleFor(node) }}</div>
+      <div v-else class="tiling-title card-title">
+        <CardIcon class="card-title-icon" :source="node.source" />
+        <span class="card-title-text">{{ api.titleFor(node) }}</span>
+      </div>
       <CardControls :source="node.source" :ctx="api.ctxFor(node)" />
     </div>
     <!-- Empty slot: the host teleports this leaf's persistent card here
@@ -200,7 +204,7 @@ const tabLabel = (child: TileNode) =>
   flex-direction: column;
   box-sizing: border-box;
   background: var(--datalib-bg);
-  border: 1px solid #888;
+  border: 1px solid var(--datalib-border);
   border-radius: 4px;
   overflow: hidden;
 }

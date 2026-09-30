@@ -10,6 +10,7 @@
 import { computed, reactive, ref, nextTick, useTemplateRef, onMounted, onBeforeUnmount } from "vue";
 import ShadowCard from "@/components/ShadowCard.vue";
 import CardControls from "@/components/CardControls.vue";
+import CardIcon from "@/components/CardIcon.vue";
 import { growSourceBox, vAutoGrow } from "@/components/autoGrow";
 import { createBus } from "@/cards/bus";
 import { layoutTree, type Rect } from "./treeLayout";
@@ -533,11 +534,7 @@ function onChromeDown(node: TreeNode, ev: PointerEvent) {
             height: node.height + 'px',
           }"
         >
-          <div
-            class="tree-node-chrome card-chrome"
-            :class="{ 'card-chrome--title': !devMode }"
-            @pointerdown="(e) => onChromeDown(node, e)"
-          >
+          <div class="tree-node-chrome card-chrome" @pointerdown="(e) => onChromeDown(node, e)">
             <textarea
               v-if="devMode"
               v-auto-grow
@@ -552,7 +549,8 @@ function onChromeDown(node: TreeNode, ev: PointerEvent) {
             <!-- Not an interactive element, so the chrome's grab-to-move drag
                  (onChromeDown) works across it. -->
             <div v-else class="tree-node-title card-title">
-              {{ displayTitle(node.source, node.title) }}
+              <CardIcon class="card-title-icon" :source="node.source" />
+              <span class="card-title-text">{{ displayTitle(node.source, node.title) }}</span>
             </div>
             <CardControls :source="node.source" :ctx="ctxFor(node)" />
           </div>
@@ -639,7 +637,7 @@ function onChromeDown(node: TreeNode, ev: PointerEvent) {
   flex-direction: column;
   box-sizing: border-box;
   background: var(--datalib-bg);
-  border: 1px solid #888;
+  border: 1px solid var(--datalib-border);
   border-radius: 6px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
   overflow: hidden;
