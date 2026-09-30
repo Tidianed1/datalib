@@ -762,6 +762,15 @@ function columnSet(): Column<RunLogLine>[] {
       ...groupable("Commit", "git_hash"),
     },
     {
+      id: "group_id",
+      name: "Group",
+      field: "group_id",
+      width: 90,
+      formatter: plain,
+      sortable: true,
+      ...groupable("Group", "group_id"),
+    },
+    {
       id: "step",
       name: "Step",
       field: "step",
@@ -847,6 +856,7 @@ const QUERY_KEYS: Partial<Record<keyof RunLogLine, string>> = {
   run_id: "run",
   process: "process",
   git_hash: "commit",
+  group_id: "group",
   step: "step",
   level: "level",
   stream: "stream",
@@ -967,7 +977,8 @@ function gridOptions(): GridOption {
     showPreHeaderPanel: true,
     preHeaderPanelHeight: 30,
     draggableGrouping: {
-      dropPlaceHolderText: "Drag a column here to group the lines by it — Step, Level, Stream",
+      dropPlaceHolderText:
+        "Drag a column here to group the lines by it — Group, Step, Level, Stream",
       hideToggleAllButton: false,
       toggleAllButtonText: "Expand / collapse all",
       // The theme ships these icons but draws nothing for the plugin's

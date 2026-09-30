@@ -16,7 +16,7 @@ use super::tick::{
     StepFacts, StepShape, StepState as Row, Tick, Wait,
 };
 use crate::artifact::ArtifactPath;
-use crate::events::{Event, StepProgress};
+use crate::events::{Event, PlannedStep, StepProgress};
 use crate::graph::Graph;
 use crate::scheduler::{
     fresh_version, invoke_with_retry, mark_running, new_run_id, now_stamp, reported_version,
@@ -206,10 +206,10 @@ impl Runner {
             deferred: BTreeMap::new(),
             stopped: Vec::new(),
         };
-        let plan: Vec<String> = graph
+        let plan: Vec<PlannedStep> = graph
             .topo
             .iter()
-            .map(|&i| graph.steps[i].id.clone())
+            .map(|&i| PlannedStep::of(&graph.steps[i]))
             .collect();
         self.sink.emit(&Event::RunPlan { steps: plan });
         let mut record = Recorded::load(store).await?;
@@ -378,7 +378,7 @@ impl Runner {
                         let id = &graph.steps[i].id;
                         match o {
                             None => {
-                                added.push(id.clone());
+                                added.push(PlannedStep::of(&graph.steps[i]));
                                 self.note(id, "added to the config during this sync".into());
                             }
                             Some(o) if old.fingerprints[*o] != graph.fingerprints[i] => {

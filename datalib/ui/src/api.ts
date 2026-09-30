@@ -1268,6 +1268,9 @@ export type RunLogLine = {
   process: LogProcess | string | null;
   // Null for a line about the run, or the server, rather than one step.
   step: string | null;
+  // The config's `[[groups]]` entry the step is filed under; null for a
+  // line with no step, or a step outside any group.
+  group_id: string | null;
   attempt: number;
   // The line's own clock when it carried one, else when the runner read
   // it. UTC; `tz_offset` is the offset that clock was in.
