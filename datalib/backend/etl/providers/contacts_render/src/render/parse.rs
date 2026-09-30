@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use datalib_etl_contacts::ingest::api::{
-    split_vcards, vcard_all, vcard_created, vcard_fn, vcard_is_group, vcard_members,
-    vcard_n_family_given, vcard_rev, vcard_uid, VcardProp,
+    split_vcards, vcard_all, vcard_categories, vcard_created, vcard_fn, vcard_is_group,
+    vcard_members, vcard_n_family_given, vcard_rev, vcard_uid, VcardProp,
 };
 use datalib_etl_contacts::ingest::db::{LoadedRawContact, RawDb};
 use datalib_etl_render::inputs::{changed_rows, Input, RawRange};
@@ -38,6 +38,9 @@ pub struct ParsedContact {
     /// A contact group, whose `members` name the cards in it.
     pub is_group: bool,
     pub members: Vec<String>,
+    /// `CATEGORIES`, as written: Google's export files a contact under
+    /// its labels this way rather than with group cards.
+    pub categories: Vec<String>,
     /// Multi-valued properties surfaced in document order.
     pub emails: Vec<VcardProp>,
     pub phones: Vec<VcardProp>,
@@ -203,6 +206,7 @@ fn parse_block(block: &str, source_path: &Path, addressbook: &str) -> Result<Par
         created: vcard_created(block),
         is_group: vcard_is_group(block),
         members: vcard_members(block),
+        categories: vcard_categories(block),
         emails,
         phones,
         addresses,

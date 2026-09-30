@@ -28,8 +28,9 @@ use datalib_schema::providers::Provider;
 /// the configured source and every row gained its backpointer — every uuid
 /// moved; to 5 when labels came from `X-ABLabel` and every `TYPE`,
 /// `CREATED` became `created_at`, and groups listed their members; to 7
-/// when a card listed the groups it is in.
-pub const RENDER_VERSION: u32 = 7;
+/// when a card listed the groups it is in, and to 8 when its `CATEGORIES`
+/// joined them.
+pub const RENDER_VERSION: u32 = 8;
 
 /// Every card by `(addressbook, UID)`, for a group to name its members.
 type Cards<'a> = HashMap<(&'a str, &'a str), &'a ParsedContact>;
@@ -136,16 +137,24 @@ fn normalize(
     let mut inputs = contact.inputs.clone();
     // The group's name is on this page, and its card is where the
     // membership lives: a member added or dropped re-renders this card.
+    let mut group_names: Vec<String> = Vec::new();
     for group in groups
         .get(&(contact.addressbook.as_str(), contact.uid.as_str()))
         .into_iter()
         .flatten()
     {
         inputs.extend(group.inputs.iter().cloned());
-        let name = group
-            .display_name
-            .clone()
-            .unwrap_or_else(|| group.uid.clone());
+        group_names.push(
+            group
+                .display_name
+                .clone()
+                .unwrap_or_else(|| group.uid.clone()),
+        );
+    }
+    group_names.extend(contact.categories.iter().filter_map(|c| category_name(c)));
+    let mut seen = std::collections::HashSet::new();
+    group_names.retain(|name| seen.insert(name.clone()));
+    for name in group_names {
         fields.push(ContactField::new("Group", name));
     }
     for member in &contact.members {
@@ -220,6 +229,17 @@ fn normalize(
     }
 }
 
+/// How a `CATEGORIES` name reads on the card. Google files every contact
+/// in the address book under `myContacts`, which says nothing on one
+/// card; `starred` is its star. Any other name is the person's own.
+fn category_name(category: &str) -> Option<String> {
+    match category {
+        "myContacts" => None,
+        "starred" => Some("Starred".to_string()),
+        other => Some(other.to_string()),
+    }
+}
+
 fn field_label(base: &str, label: &Option<String>) -> String {
     match label {
         Some(s) if !s.is_empty() => format!("{base} ({s})"),
@@ -282,6 +302,7 @@ mod tests {
             created: None,
             is_group: false,
             members: Vec::new(),
+            categories: Vec::new(),
             emails: vec![prop("jlp@enterprise", Some("WORK"))],
             phones: vec![prop("+1-555", Some("WORK"))],
             addresses: vec![prop(";;Ready Room;Deck 1;;;", Some("WORK"))],
@@ -419,6 +440,38 @@ mod tests {
         );
         let rows: Vec<&str> = n.inputs.iter().map(|i| i.id.as_str()).collect();
         assert_eq!(rows, vec!["row-picard", "row-g1", "row-g2"]);
+    }
+
+    /// Google's labels arrive as `CATEGORIES`; they list beside the
+    /// groups, `starred` reads as a star, `myContacts` (every contact has
+    /// it) not at all, and a name both a group card and a category give
+    /// lists once.
+    #[test]
+    fn categories_list_beside_the_groups() {
+        let mut c = sample();
+        c.categories = vec![
+            "myContacts".to_string(),
+            "starred".to_string(),
+            "Bridge crew".to_string(),
+            "Away Team".to_string(),
+        ];
+        let away = ParsedContact {
+            uid: "g1".to_string(),
+            display_name: Some("Away Team".to_string()),
+            is_group: true,
+            members: vec!["urn:uuid:tng-picard".to_string()],
+            ..sample()
+        };
+        let contacts = vec![c, away];
+        let groups = groups_by_member(&contacts);
+        let n = normalize(&contacts[0], "tng_contacts", &Cards::new(), &groups);
+        let listed: Vec<&str> = n
+            .fields
+            .iter()
+            .filter(|f| f.label == "Group")
+            .map(|f| f.value.as_str())
+            .collect();
+        assert_eq!(listed, vec!["Away Team", "Starred", "Bridge crew"]);
     }
 
     #[test]

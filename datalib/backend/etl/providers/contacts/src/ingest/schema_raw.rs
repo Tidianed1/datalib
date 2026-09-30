@@ -8,7 +8,7 @@ use sqlx::sqlite::SqliteArguments;
 use sqlx::Sqlite;
 use uuid::Uuid;
 
-use super::api::{split_vcards, vcard_is_group, vcard_members};
+use super::api::{split_vcards, vcard_categories, vcard_is_group, vcard_members};
 
 pub const DATA_TABLES: &[&str] = &["accounts", "addressbooks", "contacts"];
 
@@ -227,6 +227,46 @@ impl GroupMemberRow {
     }
 }
 
+// contact_categories
+
+/// `contact_categories` — one row per name in a card's `CATEGORIES`, the
+/// way Google's export files a contact under its labels (`myContacts`,
+/// `starred`, and the ones a person made). Stored as written; derived
+/// from the card on every write of it, like [`GroupMemberRow`].
+#[derive(Debug, Clone, PartialEq, Eq, RawTable)]
+#[raw_table(
+    table = "contact_categories",
+    index = "contact_categories_by_contact:contact_id",
+    index = "contact_categories_by_category:category"
+)]
+pub struct ContactCategoryRow {
+    pub id: String,
+    pub contact_id: String,
+    pub addressbook_id: String,
+    pub category: String,
+}
+
+impl ContactCategoryRow {
+    pub fn for_contact(row: &ContactRow) -> Vec<Self> {
+        Self::from_vcard(&row.id_and_payload.id, &row.addressbook_id, &row.vcard())
+    }
+
+    pub fn from_vcard(contact_id: &str, addressbook_id: &str, vcard: &str) -> Vec<Self> {
+        let mut out: Vec<Self> = vcard_categories(vcard)
+            .into_iter()
+            .map(|category| Self {
+                id: format!("{contact_id}#{category}"),
+                contact_id: contact_id.to_string(),
+                addressbook_id: addressbook_id.to_string(),
+                category,
+            })
+            .collect();
+        out.sort_by(|a, b| a.id.cmp(&b.id));
+        out.dedup_by(|a, b| a.id == b.id);
+        out
+    }
+}
+
 /// The UID a group member names: `urn:uuid:<UID>`, or a bare UID. `None`
 /// for any other URI (`mailto:`), which names no card.
 pub fn member_uid(member: &str) -> Option<&str> {
@@ -238,46 +278,84 @@ pub fn member_uid(member: &str) -> Option<&str> {
 }
 
 /// The raw store's migration ladder (etl/README.md §"The migration
-/// ladder").
-pub const LADDER: &[Migration] = &[Migration {
-    version: 1,
-    name: "contact_group_members from the group cards",
-    apply: |conn| {
-        Box::pin(async move {
-            // Created here rather than by the DDL, so the open does not see
-            // a new table and clear the cursors: an address book's
-            // sync-token would still say "caught up", and nothing would
-            // ever fill it.
-            for ddl in GroupMemberRow::all_ddl() {
-                // Audited: the derive's own DDL; nothing from upstream.
-                sqlx::query(sqlx::AssertSqlSafe(ddl))
-                    .execute(&mut *conn)
-                    .await?;
-            }
-            let groups: Vec<(String, String, String)> = sqlx::query_as(
-                "SELECT id, addressbook_id, json_extract(payload, '$.vcard') FROM contacts",
-            )
-            .fetch_all(&mut *conn)
-            .await?;
-            for (id, book, vcard) in groups {
-                for m in GroupMemberRow::from_vcard(&id, &book, &vcard) {
-                    sqlx::query(
-                        "INSERT INTO contact_group_members \
-                         (id, group_id, addressbook_id, member, member_id) VALUES (?, ?, ?, ?, ?)",
-                    )
-                    .bind(&m.id)
-                    .bind(&m.group_id)
-                    .bind(&m.addressbook_id)
-                    .bind(&m.member)
-                    .bind(&m.member_id)
-                    .execute(&mut *conn)
-                    .await?;
+/// ladder"). Each rung adds a table derived from the cards, and fills it
+/// from the cards already stored.
+pub const LADDER: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "contact_group_members from the group cards",
+        apply: |conn| {
+            Box::pin(async move {
+                create(conn, GroupMemberRow::all_ddl()).await?;
+                for (id, book, vcard) in stored_cards(conn).await? {
+                    for m in GroupMemberRow::from_vcard(&id, &book, &vcard) {
+                        sqlx::query(
+                            "INSERT INTO contact_group_members \
+                             (id, group_id, addressbook_id, member, member_id) \
+                             VALUES (?, ?, ?, ?, ?)",
+                        )
+                        .bind(&m.id)
+                        .bind(&m.group_id)
+                        .bind(&m.addressbook_id)
+                        .bind(&m.member)
+                        .bind(&m.member_id)
+                        .execute(&mut *conn)
+                        .await?;
+                    }
                 }
-            }
-            Ok(())
-        })
+                Ok(())
+            })
+        },
     },
-}];
+    Migration {
+        version: 2,
+        name: "contact_categories from the cards",
+        apply: |conn| {
+            Box::pin(async move {
+                create(conn, ContactCategoryRow::all_ddl()).await?;
+                for (id, book, vcard) in stored_cards(conn).await? {
+                    for c in ContactCategoryRow::from_vcard(&id, &book, &vcard) {
+                        sqlx::query(
+                            "INSERT INTO contact_categories \
+                             (id, contact_id, addressbook_id, category) VALUES (?, ?, ?, ?)",
+                        )
+                        .bind(&c.id)
+                        .bind(&c.contact_id)
+                        .bind(&c.addressbook_id)
+                        .bind(&c.category)
+                        .execute(&mut *conn)
+                        .await?;
+                    }
+                }
+                Ok(())
+            })
+        },
+    },
+];
+
+/// A rung creates its table rather than leaving it to the DDL, so the
+/// open does not see a new table and clear the cursors: an address book's
+/// sync-token would still say "caught up", and nothing would ever fill it.
+async fn create(conn: &mut sqlx::SqliteConnection, ddl: Vec<String>) -> anyhow::Result<()> {
+    for stmt in ddl {
+        // Audited: the derive's own DDL; nothing from upstream.
+        sqlx::query(sqlx::AssertSqlSafe(stmt))
+            .execute(&mut *conn)
+            .await?;
+    }
+    Ok(())
+}
+
+/// Every stored card: its row id, address book and vCard text.
+async fn stored_cards(
+    conn: &mut sqlx::SqliteConnection,
+) -> anyhow::Result<Vec<(String, String, String)>> {
+    Ok(
+        sqlx::query_as("SELECT id, addressbook_id, json_extract(payload, '$.vcard') FROM contacts")
+            .fetch_all(&mut *conn)
+            .await?,
+    )
+}
 
 /// Frozen UUIDv5 namespace for synthesized contacts identity. Changing
 /// these bytes re-keys every UID-less contact we have ever ingested, so
@@ -344,6 +422,7 @@ pub fn full_ddl() -> Vec<String> {
         datalib_etl::file_checkpoint::INGESTED_FILES_DDL.to_string(),
     ];
     out.extend(GroupMemberRow::all_ddl());
+    out.extend(ContactCategoryRow::all_ddl());
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));
     }
