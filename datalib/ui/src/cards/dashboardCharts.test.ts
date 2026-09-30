@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { DashboardStep } from "@/api";
 import {
   MAX_LINES,
+  groupSpan,
   labelText,
   stepCharts,
   stepPath,
@@ -101,6 +102,29 @@ describe("a step's charts", () => {
   it("names a line by its label values", () => {
     expect(labelText("")).toBe("total");
     expect(labelText("table=messages,kind=dm")).toBe("messages, dm");
+  });
+});
+
+describe("the time axis", () => {
+  const run = { started_at_utc: "2026-05-21T20:10:00Z", finished_at_utc: null };
+  it("spans the group's own steps, not a run started on a pinned clock", () => {
+    const span = groupSpan(
+      [
+        step({ started_at_utc: at(10), finished_at_utc: at(40) }),
+        step({ id: "b", started_at_utc: at(20), finished_at_utc: at(50) }),
+        step({ id: "c", in_run: false, started_at_utc: null }),
+      ],
+      run,
+      Date.parse(at(59)),
+    );
+    expect(span).toEqual([Date.parse(at(10)), Date.parse(at(50))]);
+  });
+  it("runs to now while a step is still going", () => {
+    const now = Date.parse(at(59));
+    expect(groupSpan([step({ started_at_utc: at(10) })], run, now)).toEqual([
+      Date.parse(at(10)),
+      now,
+    ]);
   });
 });
 

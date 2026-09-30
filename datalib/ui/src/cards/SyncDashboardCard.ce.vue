@@ -16,7 +16,7 @@ import { formatShortStamp, formatStamp } from "@/config/timeFormat";
 import { formatBytes } from "@/config/bytes";
 import RunLogPanel from "@/components/RunLogPanel.ce.vue";
 import TimeChart from "./TimeChart.ce.vue";
-import { groupCharts, stepCharts, type Chart } from "./dashboardCharts";
+import { groupCharts, groupSpan, stepCharts, type Chart } from "./dashboardCharts";
 import { menuTarget, rowActions, withBrowse, type ActionRow } from "./rowActions";
 import { renderIdentity, renderQuantity, renderStatus } from "./cellRenderers";
 import { logLineSource } from "./libs/logLineView";
@@ -123,13 +123,9 @@ async function runEntry(action: MenuAction, row: ActionRow) {
 // ── The run and its time axis ────────────────────────────────────────
 
 const run = computed(() => dash.value?.run ?? null);
-const domain = computed<[number, number]>(() => {
-  const r = run.value;
-  if (!r) return [now.value - 60_000, now.value];
-  const start = Date.parse(r.started_at_utc);
-  const end = r.finished_at_utc ? Date.parse(r.finished_at_utc) : now.value;
-  return [start, Math.max(end, start + 1000)];
-});
+const domain = computed<[number, number]>(() =>
+  groupSpan(dash.value?.steps ?? [], run.value, now.value),
+);
 
 /// Where a step's lines stop: when it finished, or the run's end.
 function endOf(stepId: string | null): number {
