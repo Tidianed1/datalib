@@ -62,7 +62,7 @@ else
         fail "neither bazelisk nor bazel found on PATH"
     fi
     targets=(//third-party:bundled_licenses //datalib/ui:dist)
-    [[ -n "$cargo_about" ]] || targets+=(//third-party/cargo-about)
+    [[ -n "$cargo_about" ]] || targets+=(//third-party/cargo-about:cargo_about)
     log "building ${targets[*]}"
     (cd "$repo_root" && "$bazel" build "${targets[@]}" >&2)
     bin="$(cd "$repo_root" && "$bazel" info bazel-bin)"

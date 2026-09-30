@@ -33,7 +33,7 @@ config_setting(
 )
 
 copy_file(
-    name = "cargo-about",
+    name = "cargo_about",
     src = select({
         ":darwin_aarch64": "@cargo_about_aarch64_apple_darwin//:cargo-about",
         ":linux_x86_64": "@cargo_about_x86_64_unknown_linux_musl//:cargo-about",
