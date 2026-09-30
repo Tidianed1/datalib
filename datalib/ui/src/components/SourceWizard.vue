@@ -52,7 +52,7 @@ import { useApi } from "@/cards/cardApi";
 import { iconUrl } from "@/config/icons";
 import { SECRET, credentialShape, pastedCredential } from "@/config/credentialShape";
 import { ingestReach } from "@/config/ingestMethods";
-import { isDesktopApp, pickPath } from "@/desktop";
+import { isDesktopApp, pickPath, sqliteSelection } from "@/desktop";
 import {
   BYTE_UNITS,
   DEFAULT_BYTE_UNIT,
@@ -420,6 +420,9 @@ const canPick = isDesktopApp();
 /// like a dead button.
 const pickFailed = ref<Record<string, string>>({});
 
+/// Keyed by field target: a `sqlite` pick that came without the `-wal`.
+const pickedWithoutWal = ref<Record<string, string>>({});
+
 async function browse(f: Field) {
   if (f.kind !== "path") return;
   const result = await pickPath({
@@ -431,8 +434,15 @@ async function browse(f: Field) {
     extensions: f.extensions,
   });
   if (result.outcome === "picked") {
-    values.value[f.target] = result.path;
     delete pickFailed.value[f.target];
+    delete pickedWithoutWal.value[f.target];
+    if (f.picks === "sqlite") {
+      const { database, withWal } = sqliteSelection(result.paths);
+      values.value[f.target] = database;
+      if (!withWal) pickedWithoutWal.value[f.target] = database.split("/").pop() ?? database;
+    } else {
+      values.value[f.target] = result.path;
+    }
   } else if (result.outcome === "unavailable") {
     pickFailed.value[f.target] = result.reason;
   }
@@ -1459,7 +1469,13 @@ function submit() {
                 @input="values[f.target] = ($event.target as HTMLInputElement).value"
               />
               <button v-if="canPick" type="button" class="btn ghost wiz-browse" @click="browse(f)">
-                {{ f.picks === "file" ? "Choose file…" : "Choose folder…" }}
+                {{
+                  f.picks === "sqlite"
+                    ? "Choose files…"
+                    : f.picks === "file"
+                      ? "Choose file…"
+                      : "Choose folder…"
+                }}
               </button>
             </span>
             <span v-else-if="f.kind === 'string_list'" class="wiz-listfield">
@@ -1516,6 +1532,11 @@ function submit() {
               >{{ helpAroundStart(f)!.after }}</small
             >
             <small v-else-if="f.help" class="wiz-help">{{ f.help }}</small>
+            <small v-if="pickedWithoutWal[f.target]" class="wiz-error">
+              Only {{ pickedWithoutWal[f.target] }} was chosen. If
+              {{ pickedWithoutWal[f.target] }}-wal is beside it, choose again and select both:
+              Datalib can read only the files you pick, and the newest rows are in the -wal.
+            </small>
             <small v-if="pickFailed[f.target]" class="wiz-error">
               Couldn’t open the file picker ({{ pickFailed[f.target] }}). Type or paste the path
               instead.

@@ -6,6 +6,7 @@ import {
   isDesktopApp,
   pickPath,
   revealActionLabel,
+  sqliteSelection,
   revealInFileManager,
 } from "../src/desktop";
 
@@ -133,6 +134,7 @@ describe("pickPath", () => {
     await expect(pickPath(folder)).resolves.toEqual({
       outcome: "picked",
       path: "/Users/x/backups/WhatsApp",
+      paths: ["/Users/x/backups/WhatsApp"],
     });
     const [cmd, args] = invoke.mock.calls[0];
     expect(cmd).toBe("plugin:dialog|open");
@@ -157,6 +159,28 @@ describe("pickPath", () => {
     expect((invoke.mock.calls[0][1] as any).options).toMatchObject({
       directory: false,
       filters: [{ name: "Supported files", extensions: ["lrcat"] }],
+    });
+  });
+
+  it("picks a database and its -wal in one dialog, unfiltered", async () => {
+    // A filter on `db` would hide `chat.db-wal`, the one file that has to
+    // be picked beside the database.
+    const invoke = fakeTauri(() =>
+      Promise.resolve([
+        "/Users/tng/Library/Messages/chat.db-wal",
+        "/Users/tng/Library/Messages/chat.db",
+      ]),
+    );
+    const result = await pickPath({ picks: "sqlite", title: "Choose chat.db and chat.db-wal" });
+    expect((invoke.mock.calls[0][1] as any).options).toMatchObject({
+      directory: false,
+      multiple: true,
+      filters: undefined,
+    });
+    if (result.outcome !== "picked") throw new Error("unreachable");
+    expect(sqliteSelection(result.paths)).toEqual({
+      database: "/Users/tng/Library/Messages/chat.db",
+      withWal: true,
     });
   });
 
@@ -236,6 +260,23 @@ describe("pickPath", () => {
       await expect(startAtOf("   ")).resolves.toBeUndefined();
       await expect(startAtOf("backups/WhatsApp")).resolves.toBeUndefined();
     });
+  });
+});
+
+describe("sqliteSelection", () => {
+  it("names the database whatever order the files came back in", () => {
+    expect(sqliteSelection(["/m/chat.db-shm", "/m/chat.db", "/m/chat.db-wal"])).toEqual({
+      database: "/m/chat.db",
+      withWal: true,
+    });
+  });
+
+  it("says when the -wal was not picked", () => {
+    expect(sqliteSelection(["/m/chat.db"])).toEqual({ database: "/m/chat.db", withWal: false });
+  });
+
+  it("finds the database from its -wal alone", () => {
+    expect(sqliteSelection(["/m/chat.db-wal"])).toEqual({ database: "/m/chat.db", withWal: true });
   });
 });
 

@@ -42,7 +42,10 @@ export type Field =
   /// substitute, since a browser never yields a filesystem path.
   | ({ kind: "path" } & FieldBase & {
         required?: boolean;
-        picks?: "file" | "dir";
+        /// `sqlite`: the database and its `-wal`, chosen together; the
+        /// field takes the database. For a SQLite file macOS protects,
+        /// where access is granted file by file.
+        picks?: "file" | "dir" | "sqlite";
         /// Dialog title. Name the thing being chosen ("Choose your
         /// WhatsApp backup folder"), not the widget ("Select folder").
         pickTitle?: string;
@@ -1605,23 +1608,23 @@ export const CATALOG: CatalogEntry[] = [
     fields: [
       {
         kind: "path",
-        // Choosing the folder here is what grants the app access to it on
-        // macOS (docs/dev/wizard_file_pickers.md) — the same wall Photos
-        // sits behind. Not the file: picking chat.db grants that one file,
-        // and the snapshot also reads chat.db-wal beside it.
-        picks: "dir",
-        pickTitle: "Choose your Messages folder",
+        // macOS grants the app exactly the files picked here, and nothing
+        // beside them — not even for a picked folder
+        // (docs/dev/wizard_file_pickers.md). The snapshot reads chat.db
+        // and chat.db-wal, so both are picked.
+        picks: "sqlite",
+        pickTitle: "Choose chat.db and chat.db-wal",
         startIn: "~/Library/Messages",
         required: true,
         target: "messages.path",
-        label: "Messages folder",
+        label: "Messages database",
         help:
-          "The folder the Messages app keeps its database in, ~/Library/Messages. Choose it " +
-          "with the picker rather than typing the path: macOS protects the folder, and picking it is " +
-          'what lets Datalib read it. If a sync still fails with "Operation not permitted", ' +
-          "grant Datalib Full Disk Access in System Settings. A copied chat.db file works too, " +
-          "typed in here. Attachments (photos, videos, files) are listed by name and path " +
-          "only — their bytes are not copied.",
+          "In ~/Library/Messages, select chat.db and chat.db-wal together (Cmd-click both). " +
+          "macOS protects the folder and lets Datalib read exactly the files you pick, and the " +
+          "newest messages sit in chat.db-wal until Messages folds them into chat.db. If a " +
+          'sync later fails with "Operation not permitted", choose the two again. A copied ' +
+          "chat.db, or a folder holding one, works too, typed in here. Attachments (photos, " +
+          "videos, files) are listed by name and path only — their bytes are not copied.",
       },
       {
         kind: "bool",

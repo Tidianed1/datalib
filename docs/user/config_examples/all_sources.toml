@@ -1584,19 +1584,18 @@ path = "~/Pictures/Photos Library.photoslibrary"
 
 # --- apple_messages (the Messages app's own database) --------------------
 
-# File-backed: point `messages.path` at the Messages folder, where the app
-# keeps its SQLite database `chat.db` — or at a `chat.db` file directly (a
-# copy of it; an iPhone backup's `3d0d7e5fb2ce288813306e4d4636395e047a3d28`
-# is the same database). The engine is the one apple_photos uses, so the
+# File-backed: point `messages.path` at Messages' `chat.db`, the SQLite
+# file the app keeps for itself (or a copy of it — an iPhone backup's
+# `3d0d7e5fb2ce288813306e4d4636395e047a3d28` is the same database — or a
+# folder holding a `chat.db`). The engine is the one apple_photos uses, so the
 # same properties hold, and unlike Photos this one renders: every chat
 # becomes a page a month, with tapbacks on their messages and attachments
 # listed by name. Attachment bytes are not copied.
 # See datalib/backend/etl/providers/apple_messages/INGEST.md.
 #
-# macOS protects `~/Library/Messages`. In the app, choose the folder with
-# the picker: that is what grants Datalib access (Cmd-Shift-G in the
-# dialog reaches it). Choosing `chat.db` alone is not enough — the
-# snapshot also reads the `chat.db-wal` beside it. From a terminal, the terminal needs Full
+# macOS protects `~/Library/Messages` and lets Datalib read only the files
+# picked there. In the app, choose `chat.db` and `chat.db-wal` together in
+# the picker: the newest messages are in the `-wal`. From a terminal, the terminal needs Full
 # Disk Access (System Settings → Privacy & Security); an ingest that
 # reports "Operation not permitted" is missing that, not the file.
 [[groups]]
@@ -1626,7 +1625,7 @@ function = "ingest"
 # Collect unreachable chunks each run; see lightroom above.
 # gc = false
 [steps.params.messages]
-path = "~/Library/Messages"
+path = "~/Library/Messages/chat.db"
 
 [[steps]]
 group = "apple-messages"

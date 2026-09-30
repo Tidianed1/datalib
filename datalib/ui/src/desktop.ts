@@ -175,13 +175,18 @@ export async function confirmAction(message: string): Promise<boolean> {
  * with no user-visible signal of its own.
  */
 export type PathPick =
-  | { outcome: "picked"; path: string }
+  | { outcome: "picked"; path: string; paths: string[] }
   | { outcome: "canceled" }
   | { outcome: "unavailable"; reason: string };
 
 /** What kind of thing the dialog should let the user choose. */
 export interface PathPickRequest {
-  picks: "file" | "dir";
+  /**
+   * `sqlite`: a database and the files beside it, chosen together in one
+   * multi-select dialog. On macOS a picked file is readable and nothing
+   * next to it is, and a WAL database's newest rows are in its `-wal`.
+   */
+  picks: "file" | "dir" | "sqlite";
   /** Dialog title. Name the thing being chosen, not the widget. */
   title: string;
   /** Where to open: the field's current value, when it names a place. */
@@ -212,18 +217,16 @@ export async function pickPath(req: PathPickRequest): Promise<PathPick> {
     const chosen = await openDialog({
       title: req.title,
       directory: req.picks === "dir",
-      multiple: false,
+      multiple: req.picks === "sqlite",
       defaultPath: await startDirectory([req.startAt, req.startIn]),
       filters:
         req.picks === "file" && req.extensions?.length
           ? [{ name: "Supported files", extensions: req.extensions }]
           : undefined,
     });
-    // `multiple: false` makes this `string | null`; the array arm of
-    // the plugin's return type is unreachable, and narrowing rather
-    // than casting keeps that true if the option ever changes.
-    const path = Array.isArray(chosen) ? chosen[0] : chosen;
-    return path ? { outcome: "picked", path } : { outcome: "canceled" };
+    const paths = chosen === null ? [] : Array.isArray(chosen) ? chosen : [chosen];
+    if (paths.length === 0) return { outcome: "canceled" };
+    return { outcome: "picked", path: paths[0], paths };
   } catch (e) {
     // Reachable with the bridge present but the command unauthorized.
     console.warn("dialog open failed", e);
@@ -247,6 +250,13 @@ async function startDirectory(candidates: (string | undefined)[]): Promise<strin
     if (at) return at;
   }
   return undefined;
+}
+
+/** Of the files picked for a `sqlite` field, the database, and whether its `-wal` came too. */
+export function sqliteSelection(paths: string[]): { database: string; withWal: boolean } {
+  const sidecar = /-(wal|shm|journal)$/;
+  const database = paths.find((p) => !sidecar.test(p)) ?? paths[0].replace(sidecar, "");
+  return { database, withWal: paths.includes(`${database}-wal`) };
 }
 
 /**

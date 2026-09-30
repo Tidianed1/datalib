@@ -89,20 +89,23 @@ The rendered page lists each attachment by name, size and path and
 draws chat-common's "(not yet fetched)" placeholder; no bytes reach the
 CAS. The tree under `~/Library/Messages/Attachments/` is often tens of
 gigabytes of video, so nothing copies it yet. A registry like WhatsApp's
-`wa_media_files` is the shape if it is wanted; whether the folder the
-wizard picks also opens `Attachments/` to the app has not been measured.
+`wa_media_files` is the shape if it is wanted, and `Attachments/` is
+behind the same wall: picking files in it would be the way in.
 
 ## macOS permissions
 
 `~/Library/Messages` is a location macOS protects: a process without
 access gets `Operation not permitted` on a plain `ls`, and `sudo` does
-not help. In the app, choosing the folder in the picker is what grants
-access (`docs/dev/wizard_file_pickers.md`; Cmd-Shift-G in the dialog
-reaches it), which is why `messages.path` names the folder and the
-database is found inside it. Choosing `chat.db` alone grants that one
-file: the snapshot's `VACUUM INTO` then fails, since SQLite has to open
-`chat.db-wal` and `chat.db-shm` to read a WAL database, and so does the
-file copy it falls back to, on the `-wal`. Full Disk Access (System Settings → Privacy &
-Security) is the durable fallback, and what a terminal needs to run
+not help. In the app, the wizard's picker opens there and has the user
+select `chat.db` and `chat.db-wal` together: macOS then lets Datalib
+read exactly those two files (`docs/dev/wizard_file_pickers.md` has
+what was measured — picking the folder grants nothing inside it). The
+snapshot's `VACUUM INTO` still fails, since SQLite opens a WAL
+database's `-shm` too, and the file copy it falls back to takes
+`chat.db` and `chat.db-wal` and leaves `-shm` to be rebuilt. If a sync
+later reports `Operation not permitted`, the two are picked again.
+`messages.path` also takes a folder holding a `chat.db`, for a copy.
+Full Disk Access (System Settings → Privacy & Security) is the durable
+fallback, and what a terminal needs to run
 `datalib-dag` against the config directly — Finder already has it, so
 dragging a copy out works when the terminal cannot.
