@@ -79,12 +79,12 @@ id = "unified_index"
 [[steps]]
 group = "unified_index"
 function = "grid_index"
-inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "claude-code/render_markdown", "codex/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "fastmail-contacts/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "google-calendar/render_markdown", "fastmail-calendar/render_markdown", "icloud-calendar/render_markdown", "ics-calendar/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "garmin/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "facebook/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown", "ship-air/render_markdown", "messages/render_markdown"]
+inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "claude-code/render_markdown", "codex/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "fastmail-contacts/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "google-calendar/render_markdown", "fastmail-calendar/render_markdown", "icloud-calendar/render_markdown", "ics-calendar/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "garmin/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "facebook/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown", "ship-air/render_markdown", "apple-messages/render_markdown"]
 
 [[steps]]
 group = "unified_index"
 function = "qmd_aggregator"
-inputs = ["claude-api/keyword_index", "claude-api/embed", "claude-export/keyword_index", "claude-export/embed", "claude-code/keyword_index", "claude-code/embed", "codex/keyword_index", "codex/embed", "chatgpt/keyword_index", "chatgpt/embed", "slack/keyword_index", "slack/embed", "github/keyword_index", "github/embed", "gitlab/keyword_index", "gitlab/embed", "notion/keyword_index", "notion/embed", "fastmail/keyword_index", "fastmail/embed", "gmail/keyword_index", "gmail/embed", "gmail-takeout/keyword_index", "gmail-takeout/embed", "fastmail-contacts/keyword_index", "fastmail-contacts/embed", "icloud-contacts/keyword_index", "icloud-contacts/embed", "vcard-contacts/keyword_index", "vcard-contacts/embed", "google-calendar/keyword_index", "google-calendar/embed", "fastmail-calendar/keyword_index", "fastmail-calendar/embed", "icloud-calendar/keyword_index", "icloud-calendar/embed", "ics-calendar/keyword_index", "ics-calendar/embed", "beeper/keyword_index", "beeper/embed", "perseus/keyword_index", "perseus/embed", "yolink/keyword_index", "yolink/embed", "garmin/keyword_index", "garmin/embed", "ship-air/keyword_index", "ship-air/embed", "signal/keyword_index", "signal/embed", "whatsapp/keyword_index", "whatsapp/embed", "facebook/keyword_index", "facebook/embed", "linkedin/keyword_index", "linkedin/embed", "google-takeout/keyword_index", "google-takeout/embed", "sms-backup-restore/keyword_index", "sms-backup-restore/embed", "pdfs/keyword_index", "pdfs/embed", "messages/keyword_index", "messages/embed"]
+inputs = ["claude-api/keyword_index", "claude-api/embed", "claude-export/keyword_index", "claude-export/embed", "claude-code/keyword_index", "claude-code/embed", "codex/keyword_index", "codex/embed", "chatgpt/keyword_index", "chatgpt/embed", "slack/keyword_index", "slack/embed", "github/keyword_index", "github/embed", "gitlab/keyword_index", "gitlab/embed", "notion/keyword_index", "notion/embed", "fastmail/keyword_index", "fastmail/embed", "gmail/keyword_index", "gmail/embed", "gmail-takeout/keyword_index", "gmail-takeout/embed", "fastmail-contacts/keyword_index", "fastmail-contacts/embed", "icloud-contacts/keyword_index", "icloud-contacts/embed", "vcard-contacts/keyword_index", "vcard-contacts/embed", "google-calendar/keyword_index", "google-calendar/embed", "fastmail-calendar/keyword_index", "fastmail-calendar/embed", "icloud-calendar/keyword_index", "icloud-calendar/embed", "ics-calendar/keyword_index", "ics-calendar/embed", "beeper/keyword_index", "beeper/embed", "perseus/keyword_index", "perseus/embed", "yolink/keyword_index", "yolink/embed", "garmin/keyword_index", "garmin/embed", "ship-air/keyword_index", "ship-air/embed", "signal/keyword_index", "signal/embed", "whatsapp/keyword_index", "whatsapp/embed", "facebook/keyword_index", "facebook/embed", "linkedin/keyword_index", "linkedin/embed", "google-takeout/keyword_index", "google-takeout/embed", "sms-backup-restore/keyword_index", "sms-backup-restore/embed", "pdfs/keyword_index", "pdfs/embed", "apple-messages/keyword_index", "apple-messages/embed"]
 
 # --- Claude / Anthropic -------------------------------------------------
 
@@ -1600,11 +1600,11 @@ path = "~/Pictures/Photos Library.photoslibrary"
 # Disk Access (System Settings → Privacy & Security); an ingest that
 # reports "Operation not permitted" is missing that, not the file.
 [[groups]]
-id = "messages"
+id = "apple-messages"
 type = "apple_messages"
 
 [[steps]]
-group = "messages"
+group = "apple-messages"
 function = "ingest"
 [steps.params]
 # Leave out the app's counters and settings, the Spotlight and CloudKit
@@ -1629,19 +1629,19 @@ function = "ingest"
 path = "~/Library/Messages"
 
 [[steps]]
-group = "messages"
+group = "apple-messages"
 function = "render_markdown"
-inputs = ["messages/ingest"]
+inputs = ["apple-messages/ingest"]
 
 [[steps]]
-group = "messages"
+group = "apple-messages"
 function = "keyword_index"
-inputs = ["messages/render_markdown"]
+inputs = ["apple-messages/render_markdown"]
 
 [[steps]]
-group = "messages"
+group = "apple-messages"
 function = "embed"
-inputs = ["messages/keyword_index"]
+inputs = ["apple-messages/keyword_index"]
 
 # The app's own surface: `unified_index` serves the grid, the document
 # view and the document picker. Without it the UI has no search — it is

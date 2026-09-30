@@ -1599,7 +1599,7 @@ export const CATALOG: CatalogEntry[] = [
     keywords: ["apple", "messages", "imessage", "sms", "texts", "chat.db", "iphone"],
     kind: "local",
     icon: "apple_messages",
-    defaultName: "messages",
+    defaultName: "apple-messages",
     nameHint: "Messages on this Mac",
     wizard: true,
     fields: [
