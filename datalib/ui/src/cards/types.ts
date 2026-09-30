@@ -183,4 +183,8 @@ export type ViewLibs = {
   // step so like sits near like; filter with the grid's grammar, colour
   // by a field, hover to preview, click to open. See cards/UmapCard.ce.vue.
   umapView: (opts?: { q?: string; by?: string }) => CardRender;
+  // One group's sync as a dashboard: its row and each step's, laid out
+  // vertically with their actions, charts over the run and the group's
+  // log. See cards/SyncDashboardCard.ce.vue.
+  syncDashboardView: (opts: { group: string; step?: string }) => CardRender;
 };

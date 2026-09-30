@@ -3,11 +3,19 @@
 // glyph, a sparkline for a time series. Plain DOM, owned by no grid;
 // `typedColumns.ts` maps a `ColumnSpec` onto them. Nothing here knows
 // what the rows are.
-import type { Chip, ColumnSpec, ColumnType, Identity, StatusView, Timeseries } from "@/api";
+import type {
+  Chip,
+  ColumnSpec,
+  ColumnType,
+  Identity,
+  Quantity,
+  StatusView,
+  Timeseries,
+} from "@/api";
 import { iconUrl } from "@/config/icons";
 import { STATUS_GLYPHS, STEP_GLYPHS, glyphSvg } from "@/config/glyphs";
 import { ownRange, sparkline, windowDelta, type Sample } from "@/config/sparkline";
-import { formatRelative, formatStamp } from "@/config/timeFormat";
+import { formatDuration, formatRelative, formatStamp } from "@/config/timeFormat";
 import { formatBytes } from "@/config/bytes";
 
 /// The fields of one type among the specs. A `timestamp` cell reads "5
@@ -266,6 +274,26 @@ export function renderTimeseries(v: Timeseries | null | undefined): HTMLElement 
   return wrap;
 }
 
+/// A quantity's figure as the cell shows it.
+export function quantityText(q: Quantity | null | undefined): string {
+  if (!q || q.value == null) return q?.note ?? "";
+  return q.unit === "seconds" ? formatDuration(q.value) : q.value.toLocaleString();
+}
+
+export function renderQuantity(q: Quantity | null | undefined): HTMLElement {
+  const span = document.createElement("span");
+  span.className = "tg-quantity";
+  if (!q || (q.value == null && !q.note)) {
+    span.appendChild(none());
+    if (q?.detail) span.title = q.detail;
+    return span;
+  }
+  span.textContent = quantityText(q);
+  if (q.value == null) span.classList.add(`tg-quantity-note`, `tg-quantity-${q.note}`);
+  if (q.detail) span.title = q.detail;
+  return span;
+}
+
 export const WIDTH: Record<ColumnType, number> = {
   text: 150,
   count: 90,
@@ -274,6 +302,7 @@ export const WIDTH: Record<ColumnType, number> = {
   timestamp: 150,
   datetime: 165,
   timeseries: 170,
+  quantity: 80,
   identity: 120,
   status: 150,
   chips: 260,

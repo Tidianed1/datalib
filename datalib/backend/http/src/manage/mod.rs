@@ -9,11 +9,12 @@
 //! whether the form can edit a row, what Browse opens, and an ingest
 //! step's Download/Import label.
 
-mod activity;
 mod buttons;
+mod dashboard;
 mod group;
 mod items;
 mod problems;
+mod queue;
 mod status;
 
 use std::collections::HashMap;
@@ -22,7 +23,7 @@ use std::path::Path;
 use axum::extract::{Query, State};
 use axum::Json;
 use datalib_columns::{
-    source_catalog, Action, Chip, ColumnSpec, ColumnType, Identity, Sample, Timeseries,
+    source_catalog, Action, Chip, ColumnSpec, ColumnType, Identity, Quantity, Sample, Timeseries,
 };
 use datalib_dag::supervisor::record::StepRecord;
 use datalib_dag::supervisor::store::RequestRow;
@@ -37,6 +38,7 @@ use buttons::SyncOffer;
 use group::{Child, ChildKind, ChildStamp, ChildStatus};
 use status::{StatusView, StepEdges};
 
+pub use dashboard::get_dashboard;
 pub use items::{by_step as items_by_step, WINDOW as ITEMS_WINDOW};
 pub use problems::{counts_by_step, ProblemCounts};
 pub use status::dropped_detail;
@@ -109,8 +111,10 @@ pub fn columns() -> Vec<ColumnSpec> {
             .describe("Browse this row's data, and sync it \u{2014} or stop the sync in progress."),
         ColumnSpec::new("status", "Last update", ColumnType::Status)
             .describe("What it is doing now, or did last, and when it got there. Hover for why; double-click for the log."),
-        ColumnSpec::new("activity", "Activity", ColumnType::Chips)
-            .describe("What a running step has reported: what is queued ahead of it, what it has counted, and how fast."),
+        ColumnSpec::new("queue", "Queue", ColumnType::Quantity)
+            .describe("How much work the step says is still ahead of it; a group's is the sum of its steps'. Hover for where it came from; double-click for the sync dashboard."),
+        ColumnSpec::new("eta", "ETA", ColumnType::Quantity)
+            .describe("When the queue empties at the pace it has shrunk over the last two minutes; a group waits on its slowest step. A word instead of a time when there is no pace to go by \u{2014} stalled, growing, flat, measuring. Double-click for the sync dashboard."),
         ColumnSpec::new("items", "Items", ColumnType::Timeseries)
             .describe("How many things this source holds \u{2014} messages, readings, events \u{2014} whole store, as of its last render, with the last few days of syncs behind it. Hover for how many documents they sit in. Blank means it has never counted."),
         ColumnSpec::new("last_synced", "Last synced", ColumnType::Timestamp)
@@ -167,8 +171,10 @@ pub struct ManageRow {
     /// For a group row, the child whose status it shows — the row a
     /// double-click on Status opens the log of.
     pub status_from: Option<String>,
-    /// What the step has reported in the run in flight.
-    pub activity: Vec<Chip>,
+    /// The work the step says is ahead of it, summed over a group.
+    pub queue: Quantity,
+    /// When that work is done at its recent pace — see `manage::queue`.
+    pub eta: Quantity,
     /// The errors and warnings its store holds, drawn after the name —
     /// see `manage::problems`. A group shows its render step's, the
     /// union for the source.
@@ -571,7 +577,8 @@ impl Snapshot<'_> {
             dropped: None,
             status: StatusView::default(),
             status_from: None,
-            activity: vec![],
+            queue: Quantity::default(),
+            eta: Quantity::default(),
             problems: vec![],
             items: Timeseries::default(),
             last_synced: None,
@@ -999,15 +1006,11 @@ impl RowCtx<'_> {
             ),
         };
 
-        let activity = match e {
-            Entry::Step(_) => self
-                .snap
-                .record
-                .progress
-                .get(&id)
-                .map(activity::chips)
-                .unwrap_or_default(),
-            Entry::Applet(_) => vec![],
+        let cells = match e {
+            Entry::Step(_) => {
+                queue::step_cells(self.snap.record.progress.get(&id), status.key == "running")
+            }
+            Entry::Applet(_) => queue::step_cells(None, false),
         };
         let problems = match e {
             Entry::Step(_) => problems::chips(self.snap.record.problems.get(&id)),
@@ -1066,7 +1069,8 @@ impl RowCtx<'_> {
             last_success: status.last_success_at.clone(),
             status,
             status_from: None,
-            activity,
+            queue: cells.queue,
+            eta: cells.eta,
             problems,
             items,
             disk,
@@ -1270,12 +1274,21 @@ impl RowCtx<'_> {
                     .then(|| "Nothing under this group runs.".into())
             }),
         );
-        let activity = ordered
+        let child_cells: Vec<(&str, queue::Cells)> = ordered
             .iter()
             .map(|c| row_of(c.id()))
-            .find(|r| r.status.key == "running")
-            .map(|r| r.activity.clone())
-            .unwrap_or_default();
+            .map(|r| {
+                (
+                    r.name.label.as_str(),
+                    queue::Cells {
+                        queue: r.queue.clone(),
+                        eta: r.eta.clone(),
+                    },
+                )
+            })
+            .collect();
+        let cells =
+            queue::group_cells(&child_cells.iter().map(|(l, c)| (*l, c)).collect::<Vec<_>>());
         // The last step in the pipeline that has counted: render's store
         // is the union of everything upstream of it for this source, and
         // the index's is the union of every source.
@@ -1332,7 +1345,8 @@ impl RowCtx<'_> {
             dropped: dropped.cloned(),
             status,
             status_from,
-            activity,
+            queue: cells.queue,
+            eta: cells.eta,
             problems,
             items,
             last_synced,

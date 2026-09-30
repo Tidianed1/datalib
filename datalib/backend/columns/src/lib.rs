@@ -48,6 +48,10 @@ pub enum ColumnType {
     /// A [`Timeseries`]: its latest value over a sparkline of recent
     /// samples, calibrated across the column.
     Timeseries,
+    /// A [`Quantity`]: one figure, drawn by its unit (`count` as grouped
+    /// digits, `seconds` as "25 min"), a short note in its place when
+    /// there is no figure to give, and the reasoning on hover.
+    Quantity,
     /// An [`Identity`]: something resolved to a label and an icon token
     /// by whoever serves the row, shown as icon + label with the id on
     /// hover.
@@ -211,6 +215,21 @@ pub struct Timeseries {
     /// minutes and items over days sit side by side in one table.
     pub window_secs: u64,
     /// The breakdown behind the number, for its hover.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// One figure with the reasoning behind it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Quantity {
+    /// `None` when there is no figure to give; then `note` says why in a
+    /// word or two, or the cell is blank.
+    pub value: Option<i64>,
+    /// `count` or `seconds`; the viewer formats by it.
+    pub unit: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    /// How the figure was reached, for its hover.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
 }

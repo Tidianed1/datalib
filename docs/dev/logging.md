@@ -150,8 +150,9 @@ on screen.
   travels with the data and reaches the Manage counts and the document
   banner. A `warn!` reaches nobody who is not reading the log.
 - **A number** — rows written, requests made, queue depth — is a
-  `metric` event, not a sentence with a number in it. The Activity
-  column and the rates come from `metric_samples`.
+  `metric` event, not a sentence with a number in it. The Manage
+  screen's Queue and ETA and the sync dashboard's charts come from
+  `metric_samples`.
 - **A secret.** The request log drops `?token=`; a line you write must
   not carry a credential either.
 

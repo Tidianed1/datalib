@@ -26,6 +26,11 @@ const FLUSH_EVERY: Duration = Duration::from_millis(200);
 /// scan a day-long run's every sample each time.
 const RATE_WINDOW: Duration = Duration::from_secs(10 * 60);
 
+/// How far back a snapshot reads the `queued` gauge, for an estimate of
+/// when a step's queue empties. Long enough that one slow page does not
+/// swing it, short enough that it follows a step that changes pace.
+pub const QUEUE_WINDOW: Duration = Duration::from_secs(2 * 60);
+
 /// The floor between two samples of one metric series. A series that
 /// changes every flush would otherwise write five rows a second for as
 /// long as the step runs; a rate drawn from five-second samples is the
@@ -411,6 +416,11 @@ pub struct Snapshot {
     /// The two newest samples of every series — enough for a rate.
     /// Oldest first within a series.
     pub recent_samples: Vec<MetricSampleRow>,
+    /// Every `queued` sample of the last [`QUEUE_WINDOW`], plus the
+    /// newest one before it, per series: what the queue held at the
+    /// window's start and how it moved since. Oldest first within a
+    /// series.
+    pub queue_history: Vec<MetricSampleRow>,
 }
 
 pub async fn snapshot(data_root: &Path) -> Snapshot {
@@ -715,6 +725,34 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
         value: r.get("value"),
     })
     .collect();
+    let (queue_cutoff, _) = datalib_time::IsoOffsetTimestamp::now_local()
+        .bump_micros(-(QUEUE_WINDOW.as_micros() as i64))
+        .to_utc_and_offset();
+    let queue_history = sqlx::query(
+        "SELECT step, labels, ts_utc, tz_offset, value FROM ( \
+           SELECT *, ROW_NUMBER() OVER (PARTITION BY step, labels ORDER BY ts_utc DESC) AS rn \
+           FROM metric_samples WHERE run_id = ?1 AND name = 'queued' AND ts_utc <= ?2) \
+         WHERE rn = 1 \
+         UNION ALL \
+         SELECT step, labels, ts_utc, tz_offset, value FROM metric_samples \
+           WHERE run_id = ?1 AND name = 'queued' AND ts_utc > ?2 \
+         ORDER BY step, labels, ts_utc",
+    )
+    .bind(&run_id)
+    .bind(&queue_cutoff)
+    .fetch_all(pool)
+    .await?
+    .iter()
+    .map(|r| MetricSampleRow {
+        run_id: run_id.clone(),
+        step: r.get("step"),
+        name: "queued".into(),
+        labels: r.get("labels"),
+        ts_utc: r.get("ts_utc"),
+        tz_offset: r.get("tz_offset"),
+        value: r.get("value"),
+    })
+    .collect();
     Ok(Snapshot {
         run_id: Some(run_id),
         started_at_utc: run.get("started_at_utc"),
@@ -725,7 +763,86 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
         errors,
         last_log_at,
         recent_samples,
+        queue_history,
     })
+}
+
+/// Recent runs that any of `steps` took part in, newest first: the runs
+/// a group's dashboard can show.
+pub async fn runs_of_steps(data_root: &Path, steps: &[String], limit: i64) -> Vec<RunRow> {
+    let mut out: Vec<RunRow> = Vec::new();
+    for step in steps {
+        for r in runs(data_root, Some(step), limit).await {
+            if !out.iter().any(|x| x.run_id == r.run_id) {
+                out.push(r);
+            }
+        }
+    }
+    out.sort_by(|a, b| b.started_at_utc.cmp(&a.started_at_utc));
+    out.truncate(limit.max(0) as usize);
+    out
+}
+
+/// Every sample of every series one step reported in one run, oldest
+/// first within a series.
+pub async fn step_samples(data_root: &Path, run_id: &str, step: &str) -> Vec<MetricSampleRow> {
+    let path = runs_path(data_root);
+    if !path.exists() {
+        return Vec::new();
+    }
+    let Ok(pool) = open_existing(&path).await else {
+        return Vec::new();
+    };
+    let rows = sqlx::query(
+        "SELECT name, labels, ts_utc, tz_offset, value FROM metric_samples \
+         WHERE run_id = ? AND step = ? ORDER BY name, labels, ts_utc",
+    )
+    .bind(run_id)
+    .bind(step)
+    .fetch_all(&pool)
+    .await
+    .unwrap_or_default();
+    pool.close().await;
+    rows.iter()
+        .map(|r| MetricSampleRow {
+            run_id: run_id.to_string(),
+            step: step.to_string(),
+            name: r.get("name"),
+            labels: r.get("labels"),
+            ts_utc: r.get("ts_utc"),
+            tz_offset: r.get("tz_offset"),
+            value: r.get("value"),
+        })
+        .collect()
+}
+
+/// When each `warn` and `error` line one step wrote in one run was
+/// written, oldest first, as `(level, ts_utc)`.
+pub async fn step_problem_lines(
+    data_root: &Path,
+    run_id: &str,
+    step: &str,
+) -> Vec<(String, String)> {
+    let path = runs_path(data_root);
+    if !path.exists() {
+        return Vec::new();
+    }
+    let Ok(pool) = open_existing(&path).await else {
+        return Vec::new();
+    };
+    let rows = sqlx::query(
+        "SELECT level, ts_utc FROM log \
+         WHERE run_id = ? AND step = ? AND level IN ('warn', 'error') ORDER BY ts_utc",
+    )
+    .bind(run_id)
+    .bind(step)
+    .fetch_all(&pool)
+    .await
+    .unwrap_or_default();
+    pool.close().await;
+    rows.iter()
+        .map(|r| (r.get::<String, _>("level"), r.get::<String, _>("ts_utc")))
+        .collect()
 }
 
 /// One line by its `seq`, with what its process says about it.

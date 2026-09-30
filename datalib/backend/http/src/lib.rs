@@ -176,6 +176,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/probe", post(connect::probe))
         .route("/api/dag", get(get_dag))
         .route("/api/manage/rows", get(manage::get_manage_rows))
+        .route(
+            "/api/manage/groups/{id}/dashboard",
+            get(manage::get_dashboard),
+        )
         .route("/api/lib/{name}", get(get_lib).put(put_lib))
         .route("/api/lib/{name}/rename", post(rename_lib))
         .route("/agent/cards.md", get(agent_cards_guide))
@@ -1073,7 +1077,42 @@ pub struct DagStepProgress {
     pub progress_age_secs: Option<i64>,
     /// For a running step: seconds since it last logged a line.
     pub log_age_secs: Option<i64>,
+    /// What the step's queue held a little while ago, for an estimate of
+    /// when it empties. `None` until a `queued` series has a sample.
+    pub queue_trend: Option<QueueTrend>,
     pub updated_at_utc: String,
+}
+
+/// The step's `queued` series, summed, at the start of the window the
+/// estimate looks over: the later of [`datalib_runs::QUEUE_WINDOW`] ago
+/// and the first sample. A series with no sample by then held nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct QueueTrend {
+    pub queued_then: i64,
+    pub secs_ago: f64,
+}
+
+/// One step's `queued` samples, oldest first within a series, as of
+/// `now`.
+fn queue_trend(samples: &[&datalib_runs::MetricSampleRow], now: &str) -> Option<QueueTrend> {
+    let (window_start, _) = datalib_time::parse_strict(now)
+        .ok()?
+        .bump_micros(-(datalib_runs::QUEUE_WINDOW.as_micros() as i64))
+        .to_utc_and_offset();
+    let first = samples.iter().map(|m| m.ts_utc.as_str()).min()?;
+    let start = if first > window_start.as_str() {
+        first
+    } else {
+        window_start.as_str()
+    };
+    let mut at_start: std::collections::BTreeMap<&str, i64> = Default::default();
+    for m in samples.iter().filter(|m| m.ts_utc.as_str() <= start) {
+        at_start.insert(m.labels.as_str(), m.value);
+    }
+    Some(QueueTrend {
+        queued_then: at_start.values().sum(),
+        secs_ago: secs_between(start, now)?.max(0.0),
+    })
 }
 
 fn series_key(name: &str, labels: &str) -> String {
@@ -1124,6 +1163,14 @@ fn progress_by_step(
                     rates: Default::default(),
                     progress_age_secs: age(last_move),
                     log_age_secs: age(snap.last_log_at.get(&p.step).map(String::as_str)),
+                    queue_trend: queue_trend(
+                        &snap
+                            .queue_history
+                            .iter()
+                            .filter(|m| m.step == p.step)
+                            .collect::<Vec<_>>(),
+                        now,
+                    ),
                     updated_at_utc: p.updated_at_utc.clone(),
                 },
             )
@@ -1843,6 +1890,7 @@ async fn run_steps(State(s): State<AppState>, Path(run): Path<String>) -> Json<R
                 rates: Default::default(),
                 progress_age_secs: None,
                 log_age_secs: None,
+                queue_trend: None,
                 updated_at_utc: st.updated_at_utc.clone(),
             }),
         })
@@ -2070,6 +2118,34 @@ mod tests {
             (None, None),
             "not running"
         );
+    }
+
+    /// The window opens two minutes back, or at the first sample if the
+    /// queue is younger; each series contributes what it last held by
+    /// then, and one that had not yet reported contributes nothing.
+    #[test]
+    fn queue_trend_reads_each_series_at_the_window_start() {
+        let q = |labels: &str, ts: &str, value: i64| datalib_runs::MetricSampleRow {
+            labels: labels.into(),
+            ts_utc: format!("2026-09-14T10:{ts}.000000+00:00"),
+            value,
+            ..Default::default()
+        };
+        let now = "2026-09-14T10:05:00.000000+00:00";
+        let old = [
+            q("", "00:00", 900),
+            q("", "02:30", 800),
+            q("", "04:00", 500),
+            q("from=a", "04:30", 40),
+        ];
+        let t = queue_trend(&old.iter().collect::<Vec<_>>(), now).unwrap();
+        assert_eq!(t.queued_then, 800, "at 10:03 the queue held 02:30's value");
+        assert_eq!(t.secs_ago, 120.0);
+
+        let young = [q("", "04:40", 50), q("", "04:50", 30)];
+        let t = queue_trend(&young.iter().collect::<Vec<_>>(), now).unwrap();
+        assert_eq!((t.queued_then, t.secs_ago), (50, 20.0));
+        assert_eq!(queue_trend(&[], now), None);
     }
 
     fn fringe_of(text: &str) -> Vec<String> {

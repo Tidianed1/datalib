@@ -107,7 +107,8 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
             "identity",
             "actions",
             "status",
-            "chips",
+            "quantity",
+            "quantity",
             "timeseries",
             "timestamp",
             "timestamp",
@@ -410,6 +411,78 @@ async fn problem_counts_reach_the_rows_from_the_run_store() {
         "counted none: nothing drawn"
     );
     assert_eq!(chips("group:unified_index"), vec![]);
+}
+
+/// The dashboard reads one run for a group: each step that took part
+/// with every series it reported and its warning and error lines
+/// counted up, and a step that did not, marked absent — in config order.
+#[tokio::test]
+async fn a_groups_dashboard_charts_the_run_its_steps_took_part_in() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_root(tmp.path(), CONFIG, None).await;
+    {
+        let w = datalib_runs::RunWriter::start(
+            tmp.path(),
+            "r1",
+            "2026-08-31T09:00:00.000000+00:00",
+            None,
+            datalib_runs::Retention::default(),
+        )
+        .unwrap();
+        w.step(datalib_runs::StepRunRow {
+            run_id: "r1".into(),
+            step: "slack/ingest".into(),
+            state: "succeeded".into(),
+            attempt: 1,
+            started_at_utc: Some("2026-08-31T09:00:01.000000+00:00".into()),
+            finished_at_utc: Some("2026-08-31T09:00:09.000000+00:00".into()),
+            updated_at_utc: "2026-08-31T09:00:09.000000+00:00".into(),
+            ..Default::default()
+        });
+        w.metric(datalib_runs::MetricRow {
+            run_id: "r1".into(),
+            step: "slack/ingest".into(),
+            name: "api_requests".into(),
+            labels: String::new(),
+            value: 7,
+            updated_at_utc: "2026-08-31T09:00:05.000000+00:00".into(),
+            tz_offset: None,
+        });
+        for (level, ts) in [("warn", "02"), ("error", "03"), ("warn", "04")] {
+            w.log(datalib_runs::LogRow {
+                run_id: Some("r1".into()),
+                step: Some("slack/ingest".into()),
+                level: level.into(),
+                ts_utc: format!("2026-08-31T09:00:{ts}.000000+00:00"),
+                msg: "made up".into(),
+                ..Default::default()
+            });
+        }
+    }
+
+    let got = rows_of_at(tmp.path(), "/api/manage/groups/slack/dashboard").await;
+    assert_eq!(got["run"]["run_id"], "r1", "{got}");
+    assert_eq!(got["runs"].as_array().unwrap().len(), 1);
+    let steps = got["steps"].as_array().unwrap();
+    let ids: Vec<&str> = steps.iter().map(|s| s["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["slack/ingest", "slack/render_markdown"]);
+    let ingest = &steps[0];
+    assert_eq!(ingest["in_run"], true);
+    assert_eq!(ingest["state"], "succeeded");
+    assert_eq!(ingest["series"][0]["name"], "api_requests");
+    assert_eq!(ingest["series"][0]["points"][0]["value"], 7);
+    let last = |k: &str| ingest[k].as_array().unwrap().last().unwrap()["value"].clone();
+    assert_eq!(last("warnings"), 2);
+    assert_eq!(last("errors"), 1);
+    assert_eq!(steps[1]["in_run"], false);
+
+    // A group none of whose steps ever ran has no run to show.
+    let idx = rows_of_at(tmp.path(), "/api/manage/groups/unified_index/dashboard").await;
+    assert_eq!(idx["run"], serde_json::Value::Null);
+}
+
+async fn rows_of_at(root: &Path, uri: &str) -> serde_json::Value {
+    rows_at(state(root).await, uri).await
 }
 
 /// An entry the loader drops still has a row — it is still in the

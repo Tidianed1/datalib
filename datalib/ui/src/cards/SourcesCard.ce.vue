@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { TOPIC_CONFIG_WRITTEN, type CardCtx } from "./types";
-import { UNIFIED_INDEX, type Action, type ManageResponse, type ManageRow } from "@/api";
+import { UNIFIED_INDEX, type ManageResponse, type ManageRow } from "@/api";
 import { useApi } from "@/cards/cardApi";
 import {
   listGroups,
@@ -34,45 +34,24 @@ import type { TableGridApi } from "./tableGridApi";
 import type { MenuEntry } from "@/grid/menu";
 import { catalogForStep, type CatalogEntry } from "@/config/catalog";
 import { ingestLabel } from "@/config/ingestMethods";
-import { copyToClipboard } from "@/clipboard";
-import { browseColumns, browseName, browseQuery } from "@/config/browsePresets";
-import { logSource } from "./libs/logView";
-import { historySource } from "./libs/historyView";
-import { pushToast } from "@/toasts";
-import {
-  RAW_STORE_BROWSE_LABEL,
-  notComparableReason,
-  rowMenu,
-  type MenuAction,
-  type MenuTarget,
-} from "@/config/rowMenu";
+import { rowMenu, type MenuAction } from "@/config/rowMenu";
+import { menuTarget, rowActions, withBrowse, type ActionRow } from "./rowActions";
 import { changed, subscribeLive } from "@/live";
 import SourceWizard from "@/components/SourceWizard.vue";
 import ConfirmDialog from "@/components/ConfirmDialog.vue";
 
 const props = defineProps<{ ctx: CardCtx }>();
-import {
-  confirmAction,
-  isDesktopApp,
-  openRawStore,
-  revealActionLabel,
-  revealInFileManager,
-} from "@/desktop";
+import { confirmAction, isDesktopApp, revealActionLabel } from "@/desktop";
 
+const api = useApi();
 const {
   fetchConfig,
   fetchConfigScaffold,
   saveConfig,
   fetchManageRows,
   fetchRequests,
-  fetchRuns,
-  openRequest,
-  stopRequest,
-  turnOffStep,
-  turnOnStep,
-  resetSteps,
   purgeGroups,
-} = useApi();
+} = api;
 
 props.ctx.setTitle("Sources");
 props.ctx.setHelp(`
@@ -123,8 +102,16 @@ search; on a group row, the log of the step its status came from.
 A <b>red or yellow number</b> after a name counts the errors (records dropped) and
 warnings (records kept with something lost) its store holds as of its last run; a row
 with none shows nothing. <b>Double-click the number</b> for the list.
-<b>Activity</b> is what a running step has reported: how much is queued ahead of
-it, what it has counted so far, and how many warnings and errors it has logged.</p>
+<b>Queue</b> is how much work a step says is still ahead of it, and <b>ETA</b> when
+that queue empties at the pace it has shrunk over the last two minutes — or a word
+when there is no pace to go by: <i>stalled</i> (nothing has moved for a minute),
+<i>growing</i>, <i>flat</i>, <i>measuring</i>. A group sums its steps' queues and
+waits on its slowest step; a stall anywhere under it shows. Hover either for how it
+was reached. <b>Double-click a Queue or ETA</b>, or pick <b>Show sync dashboard</b>
+from a row's menu, for the group's <b>sync dashboard</b>: its row and each step's,
+laid out one under another with the same actions, charts over the run — what was
+queued and done, rows written, requests made, checkpoints, warnings and errors
+logged, size on disk — and the group's log.</p>
 <p><b>Browse</b>, <b>Sync</b> and the switch are on the row: they are what a row
 does often. <b>Right-click a row</b> for everything it can do — sync, edit, rename,
 the log, reveal, <b>Reset</b>, remove — and its <b>commit history</b>: every store
@@ -283,18 +270,12 @@ function renderSiblingOf(fetchId: string): ConfiguredStep | undefined {
 /// (`GET /api/manage/rows`), typed by the columns it declares; what is
 /// added here is what needs the wizard's descriptors, which live in
 /// the browser.
-type Row = ManageRow & {
+type Row = ActionRow & {
   /// Null when the wizard can edit this row; otherwise why not.
   editBlocked: string | null;
   /// The group whose form Edit opens: the row's own group, or for a
   /// step under one, that group. Null where there is no form.
   editGroup: string | null;
-  /// The card source a Browse of this row opens, or null where the
-  /// row's `browse` action says there is nothing to browse.
-  browseSource: string | null;
-  /// The raw store Browse opens instead of a card: a download step's,
-  /// in the desktop app, which is the only host that can open one.
-  rawStore: string | null;
 };
 
 /// The tree the grid shows, as the server assembled it, with the
@@ -308,26 +289,14 @@ const rows = computed<Row[]>(() => {
 const syncAll = computed(() => syncAllButton(rows.value));
 
 function decorate(r: ManageRow, groups: Map<string, ManageRow>): Row {
-  // `system/` is not a config entry: nothing to edit, and Browse is
-  // the run log over every run.
+  const browsing = withBrowse(r, groups, canReveal);
+  // `system/` is not a config entry: nothing to edit.
   if (r.kind === "system") {
-    return {
-      ...r,
-      editBlocked: "Not a config entry.",
-      editGroup: null,
-      browseSource: browseAction(r)?.enabled ? "logView()" : null,
-      rawStore: null,
-    };
+    return { ...browsing, editBlocked: "Not a config entry.", editGroup: null };
   }
   if (r.kind === "group") {
     const editBlocked = groupEditBlocked(r.id);
-    return {
-      ...r,
-      editBlocked,
-      editGroup: editBlocked ? null : r.id,
-      browseSource: groupBrowse(r),
-      rawStore: null,
-    };
+    return { ...browsing, editBlocked, editGroup: editBlocked ? null : r.id };
   }
   // Edit: the wizard's one form describes a source — a group and its two
   // steps — so a step under a group edits through its group. Everything
@@ -348,54 +317,15 @@ function decorate(r: ManageRow, groups: Map<string, ManageRow>): Row {
   }
   // "Download" or "Import", read off the step's params against what its
   // provider declares; the server's "Ingest" only when they name no method.
-  const group = r.group ? groups.get(r.group) : undefined;
   const ingestLabelled =
     r.group && r.phase === "ingest" ? ingestLabel(r.type?.id ?? null, r.params) : null;
-  const rawStore = canReveal ? r.raw_store_path : null;
   return {
-    ...r,
+    ...browsing,
     name: ingestLabelled ? { ...r.name, label: ingestLabelled } : r.name,
-    actions: rawStore
-      ? r.actions.map((a) => (a.id === "browse" ? RAW_STORE_BROWSE : a))
-      : r.actions,
     editBlocked,
     editGroup: editBlocked ? null : r.group,
-    // A step's rows are its source's: Browse opens the group's view.
-    browseSource: r.kind === "step" && group ? groupBrowse(group) : null,
-    rawStore,
   };
 }
-
-/// Browse on a download step with a raw store: enabled whatever the
-/// group's Browse says, since a source that renders nothing still has
-/// the tables it downloaded.
-const RAW_STORE_BROWSE: Action = {
-  id: "browse",
-  label: RAW_STORE_BROWSE_LABEL,
-  enabled: true,
-  hint:
-    "Open what this step downloaded, read-only: in DB Browser for SQLite when that " +
-    "opens .doltlite_db files here, otherwise in a doltlite shell.",
-  disabled_reason: null,
-};
-
-/// What a Browse of this group opens. Whether it can — the group has a
-/// render step, and is in the pipeline — is the server's word, carried
-/// by the row's `browse` action; this is only the card behind it. The
-/// index group has no type: browsing it is the unified projection
-/// across every source, which is the card the app already opens on.
-function groupBrowse(g: ManageRow): string | null {
-  if (!browseAction(g)?.enabled) return null;
-  const type = g.type?.id ?? null;
-  if (!type) return "gridView()";
-  const columns = browseColumns(type);
-  const args: string[] = [`q: ${JSON.stringify(browseQuery(g.id, type))}`];
-  if (columns) args.push(`columns: ${JSON.stringify(columns)}`);
-  args.push(`name: ${JSON.stringify(browseName(g.name.label, type))}`);
-  return `gridView({ ${args.join(", ")} })`;
-}
-
-const browseAction = (r: ManageRow) => r.actions.find((a) => a.id === "browse");
 
 /// Why a group has no form, or null when the wizard can edit it. A
 /// source is edited as one thing, so the verdict is the group's and
@@ -435,20 +365,22 @@ function groupEntry(g: ConfiguredGroup, steps: SourceSteps): CatalogEntry | unde
   return step ? entryForStep(step, sources.value) : catalogForStep(g.type, {});
 }
 
-/// What each Actions-column button does. The rows say which buttons a
-/// row carries and whether each is enabled; this is the code behind
-/// the id.
-const rowActions: Record<string, (row: Row) => void> = {
-  browse: (row) => openBrowse(row),
-  sync: (row) => void runRow(row),
-  stop: (row) => {
-    if (row.stop_request_ids.length > 0) void stopSyncs(row.stop_request_ids);
-  },
-  in_syncs: (row) => {
-    const on = row.actions.find((a) => a.id === "in_syncs")?.on;
-    void setTurnedOff([row], !!on);
-  },
-};
+/// The actions every Manage row offers, shared with the sync dashboard.
+/// A step's banner name is the one the config gives it.
+const actions = rowActions<Row>({
+  api,
+  host: props.ctx.host,
+  rows: () => rows.value,
+  run: () => manage.value?.run ?? null,
+  say,
+  clear: clearBanner,
+  busy,
+  reload: (fresh) => loadRows(fresh),
+  shownName: (row) =>
+    row.kind === "group"
+      ? row.name.label
+      : (sources.value.find((s) => s.id === row.id)?.name ?? row.id),
+});
 
 let gridApi: TableGridApi<Row> | null = null;
 function onGridReady(api: TableGridApi<Row>) {
@@ -477,102 +409,17 @@ function freshest<T>(commit: (value: T) => void) {
   return run as typeof run & { invalidate: () => void };
 }
 
-// ── One step's log. A red status says *that* a step failed; the next
-// question is always what it was doing. Double-clicking the cell opens
-// the run store's lines for that step, in the run it last took part in
-// — or the one in flight — as a grid that follows the run while it goes.
-
-/// The run whose log answers "what was this step doing": the one in
-/// flight if the step is in it, else the one its record names, else —
-/// for a record from before runs had ids — the newest run the store says
-/// it took part in.
-async function runFor(row: Row): Promise<{ runId: string; live: boolean } | null> {
-  if (row.live_run_id) return { runId: row.live_run_id, live: true };
-  if (row.last_run_id) return { runId: row.last_run_id, live: false };
-  const [newest] = await fetchRuns({ step: row.id, limit: 1 });
-  return newest ? { runId: newest.run_id, live: !newest.finished_at_utc } : null;
-}
-
-/// A step's log as a card beside this one. With `runId`, that run's;
-/// without, the run in flight if the step is in it, else the one it
-/// last took part in.
-async function openStepLog(row: Row, runId: string | null = null) {
-  try {
-    const run = runId
-      ? { runId, live: !!manage.value?.run?.live && manage.value.run.run_id === runId }
-      : await runFor(row);
-    if (!run) {
-      pushToast("This step has not taken part in any run the store remembers.");
-      return;
-    }
-    // Open at the line that says how the step ended, for a row whose
-    // status is the outcome of a run — the hover on Failed or Stopped
-    // promises exactly that.
-    const jumpToEnd = !run.live && !runId && ["failed", "stopped"].includes(row.status.key);
-    props.ctx.host.openCards(logSource({ run: run.runId, step: row.id, jumpToEnd }));
-  } catch (e) {
-    pushToast((e as Error).message);
-  }
-}
-
-// ── The status bar ───────────────────────────────────────────────────
-
-/// The root's series, scaled to its own range rather than to zero.
+/// Double-clicking a status opens the log it came from; a problems count,
+/// the problems; a queue or an ETA, the sync dashboard.
 function onCellDoubleClicked(data: Row, field: string) {
-  if (field === "problems") {
-    openProblems(data);
-    return;
-  }
-  if (field !== "status") return;
-  // A group's status is one child's, and that child's log is the answer.
-  const row =
-    data.kind === "group"
-      ? rows.value.find((r) => r.kind !== "group" && r.id === data.status_from)
-      : data;
-  if (row) void openStepLog(row);
-}
-
-/// The problems behind a row's count, as a grid over the index's
-/// `problems` table, its search bar holding the row's source. A step's
-/// problems are its group's — the render store is where a source's
-/// live — so a step row opens the same grid as its group. The index
-/// group shows every source's.
-function openProblems(row: Row) {
-  const sourceId = row.kind === "group" ? row.id : (row.group ?? row.id);
-  const q = sourceId === "unified_index" ? "" : `source_id:${sourceId}`;
-  const source =
-    row.kind === "group" ? row : rows.value.find((r) => r.kind === "group" && r.id === sourceId);
-  const name =
-    sourceId === "unified_index" ? "Problems" : `Problems: ${source?.name.label ?? sourceId}`;
-  const opts = {
-    url: `${UNIFIED_INDEX}/problems`,
-    q,
-    name,
-    placeholder: "search problems…  (try: severity:error, -stage:fetch, after:2026-01-01)",
-  };
-  props.ctx.host.openCards(`gridView(${JSON.stringify(opts)})`);
+  if (field === "problems") actions.openProblems(data, `${UNIFIED_INDEX}/problems`);
+  else if (field === "status") void actions.openStepLog(data);
+  else if (field === "queue" || field === "eta") actions.openDashboard(data);
 }
 
 /// An in-place edit of the Name cell: a group's rename.
 function onCellEdit(row: Row, field: string, value: string) {
   if (field === "name" && row.kind === "group") void renameRow(row, value);
-}
-
-/// Rows' commit history, as a card beside this one. On one source it is
-/// also where two of its versions are compared; `compare` opens it with
-/// the newest two set up.
-function openHistory(targets: Row[], compare: boolean) {
-  const [first] = targets;
-  const source =
-    targets.length === 1 && notComparableReason(menuTarget(first)) === null ? first.id : null;
-  props.ctx.host.openCards(
-    historySource({
-      trees: targets.map((r) => r.id),
-      title: targets.map((r) => r.name.label).join(", "),
-      source,
-      compare: compare && source !== null,
-    }),
-  );
 }
 
 // ── The right-click menu. Every action a row offers, in one place,
@@ -581,32 +428,10 @@ function openHistory(targets: Row[], compare: boolean) {
 // the selection stays as it was. An entry that does not apply stays,
 // disabled, with the reason as its tooltip — see `config/rowMenu.ts`.
 
-/// The rows a right-click acts on, in table order: the selection when
-/// the row under the pointer is in it, that row alone when it is not.
-/// The selection itself is never touched — as in Lightroom, a
-/// right-click aims the action, it does not re-select.
-function menuTarget(row: Row): MenuTarget {
-  return {
-    id: row.id,
-    name: row.name.label,
-    kind: row.kind,
-    type: row.type?.id ?? null,
-    func: row.function,
-    runBlocked: row.actions.find((a) => a.id === "sync")?.disabled_reason ?? null,
-    editBlocked: row.editBlocked,
-    revealBlocked: row.reveal_blocked,
-    browseBlocked: browseAction(row)?.disabled_reason ?? null,
-    rawStore: row.rawStore !== null,
-    stopRequestIds: row.stop_request_ids,
-    turnedOffBy: row.turned_off_by,
-    statusFrom: row.status_from,
-    revealPath: row.reveal_path,
-  };
-}
-
 function contextMenuItems(anchor: Row, targets: Row[]): MenuEntry[] {
   if (targets.length === 0) return [];
-  return rowMenu(targets.map(menuTarget), { canReveal, revealLabel }).map((entry) =>
+  const target = (t: Row) => menuTarget(t, t.editBlocked);
+  return rowMenu(targets.map(target), { canReveal, revealLabel }).map((entry) =>
     entry.separator
       ? { name: "", separator: true }
       : {
@@ -618,63 +443,25 @@ function contextMenuItems(anchor: Row, targets: Row[]): MenuEntry[] {
   );
 }
 
+/// What only this card can do — it holds the config's text and the
+/// wizard — and otherwise what every row card does.
 async function runMenuAction(action: MenuAction, targets: Row[], anchor: Row) {
   const [first] = targets;
   switch (action) {
-    case "browse":
-      openBrowse(first);
-      return;
-    case "sync":
-      await runRows(targets);
-      return;
-    case "stop":
-      // One stop per request: several rows can be wanted by the same one.
-      await stopSyncs([...new Set(targets.flatMap((t) => t.stop_request_ids))]);
-      return;
-    case "turn_off":
-    case "turn_on":
-      await setTurnedOff(targets, action === "turn_off");
-      return;
     case "edit":
       if (first.editGroup) await openEdit(first.editGroup);
       return;
     case "compare":
-      openHistory([first], true);
+      actions.openHistory([first], true);
       return;
     case "rename":
       gridApi?.startEditing(anchor, "name");
       return;
-    case "copy_id":
-      await copyToClipboard(targets.map((t) => t.id).join("\n"));
-      return;
-    case "copy_path":
-      await copyToClipboard(
-        targets
-          .map((t) => t.reveal_path)
-          .filter((p): p is string => !!p)
-          .join("\n"),
-      );
-      return;
-    case "log": {
-      const row =
-        first.kind === "group"
-          ? rows.value.find((r) => r.kind !== "group" && r.id === first.status_from)
-          : first;
-      if (row) void openStepLog(row);
-      return;
-    }
-    case "history":
-      openHistory(targets, false);
-      return;
-    case "reveal":
-      for (const t of targets) await reveal(t.key);
-      return;
-    case "reset":
-      await resetRows(targets);
-      return;
     case "remove":
       await deleteRows(targets);
       return;
+    default:
+      await actions.runMenuAction(action, targets);
   }
 }
 
@@ -1091,201 +878,6 @@ async function deleteRows(targets: Row[]) {
   await removeAndPurge(next, `Removed ${targets.length} entries.`, purge);
 }
 
-/// Leave the Manage screen for this row's data: one card, the grid,
-/// already filtered to the source and carrying its type's columns — or,
-/// for a download step in the app, its raw store in another program.
-///
-/// A card stack IS the URL (see router/columns.ts), so this is an
-/// ordinary navigation — the card is bookmarkable, shareable, and the
-/// back button returns here.
-function openBrowse(row: Row) {
-  if (row.rawStore) {
-    void browseRawStore(row.rawStore);
-    return;
-  }
-  if (!row.browseSource) return;
-  // Beside this card, in whatever layout is showing it.
-  props.ctx.host.openCards(row.browseSource);
-}
-
-async function browseRawStore(path: string) {
-  const res = await openRawStore(path);
-  banner.value = res.ok
-    ? { ok: true, text: `Opened ${path} read-only in ${res.openedIn}.` }
-    : { ok: false, text: `Could not open ${path}: ${res.reason}` };
-}
-
-async function reveal(key: string) {
-  const path = rows.value.find((r) => r.key === key)?.reveal_path;
-  if (!path) return;
-  await revealPath(path);
-}
-
-/// Show a path where it lives. Shared by the row action and the config
-/// file's own button — both fail the same way, and both should say so
-/// rather than doing nothing.
-async function revealPath(path: string) {
-  const ok = await revealInFileManager(path);
-  if (!ok) {
-    banner.value = { ok: false, text: `Could not open ${path} in the file manager.` };
-  }
-}
-
-/// Sync what a row stands for. A step is its own seed; a group's seeds
-/// are its source steps, all in one request.
-function runRow(row: Row) {
-  return runRows([row]);
-}
-
-/// Several rows at once, so their downstream steps run once. The server
-/// opens one request per source among them, each with its own Stop.
-async function runRows(targets: Row[]) {
-  const seeds = [...new Set(targets.flatMap((r) => r.seeds))];
-  if (seeds.length === 0) return;
-  const shown = targets
-    .map((row) => {
-      const step = sources.value.find((s) => s.id === row.id);
-      return row.kind === "group" ? row.name.label : (step?.name ?? row.id);
-    })
-    .join(", ");
-  await queueSync(seeds, shown);
-}
-
-async function queueSync(seeds: string[], shown: string) {
-  busy.value = true;
-  clearBanner();
-  try {
-    const requests = await openRequest(seeds);
-    say(
-      true,
-      `Queued a sync for ${shown}.`,
-      requests.map((r) => r.id),
-    );
-    // The loop's record moving refetches too; this is for a page whose
-    // stream is down.
-    await loadRows();
-  } catch (e) {
-    banner.value = { ok: false, text: (e as Error).message };
-  } finally {
-    busy.value = false;
-  }
-}
-
-/// The steps a reset of these rows empties: a step is itself; a group is
-/// its download, what it renders following — or, for a comparison, which
-/// downloads nothing, its render. A download's blob store keeps its
-/// bytes (`docs/dev/step_protocol.md` § Reset).
-function resetTargets(targets: Row[]): string[] {
-  const steps = targets.flatMap((t) => {
-    if (t.kind !== "group") return [t];
-    const under = stepsUnder(t);
-    const downloads = under.filter((r) => r.function === "ingest");
-    return downloads.length ? downloads : under.filter((r) => r.function === "render_markdown");
-  });
-  const ids = steps
-    .filter((r) => r.function === "ingest" || r.function === "render_markdown")
-    .map((r) => r.id);
-  return [...new Set(ids)];
-}
-
-/// Empty what these rows wrote, keeping the history. A render is rebuilt
-/// from what it reads at once; a download is not refilled, but what reads
-/// it catches up, so its documents leave the grid
-/// (`docs/dev/plans/supervisor.md` §2.10). The server runs it once no sync
-/// is running, and refuses it while one is.
-async function resetRows(targets: Row[]) {
-  const ids = resetTargets(targets);
-  const shown = targets.map((t) => t.name.label).join(", ");
-  if (ids.length === 0) {
-    say(false, `Nothing under ${shown} keeps anything to reset.`);
-    return;
-  }
-  const download = ids.some((id) => rows.value.find((r) => r.id === id)?.function === "ingest");
-  const what =
-    `Reset ${shown}?\n\n` +
-    `Every row goes, and the history keeps them. ` +
-    (download
-      ? `Its documents leave the grid, and the next Sync downloads it all again from nothing. ` +
-        `Attachments already downloaded are kept.`
-      : `Its documents are rendered again from what it has downloaded, now.`);
-  if (!(await confirmAction(what))) return;
-  busy.value = true;
-  clearBanner();
-  try {
-    say(true, `Resetting ${shown}…`);
-    await resetSteps(ids);
-    say(true, `Reset ${shown}.`);
-    await loadRows(true);
-  } catch (e) {
-    banner.value = { ok: false, text: (e as Error).message };
-  } finally {
-    busy.value = false;
-  }
-}
-
-/// Sync everything the config declares: one request per source, in one
-/// run.
-async function runEverything() {
-  busy.value = true;
-  clearBanner();
-  try {
-    const requests = await openRequest([]);
-    say(
-      true,
-      "Queued a sync of everything.",
-      requests.map((r) => r.id),
-    );
-    await loadRows();
-  } catch (e) {
-    banner.value = { ok: false, text: (e as Error).message };
-  } finally {
-    busy.value = false;
-  }
-}
-
-/// Stop requests. Their steps checkpoint and exit; the rows say Stopping
-/// until they have.
-async function stopSyncs(requestIds: string[]) {
-  if (requestIds.length === 0) return;
-  busy.value = true;
-  clearBanner();
-  try {
-    for (const id of requestIds) await stopRequest(id);
-    say(
-      true,
-      `Stopping ${requestIds.length === 1 ? "the sync" : `${requestIds.length} syncs`}. ` +
-        "Steps in flight checkpoint what they have and exit.",
-      requestIds,
-    );
-    await loadRows();
-  } catch (e) {
-    banner.value = { ok: false, text: (e as Error).message };
-  } finally {
-    busy.value = false;
-  }
-}
-
-/// The steps a group row stands for.
-function stepsUnder(group: ManageRow): ManageRow[] {
-  return rows.value.filter((r) => r.kind === "step" && r.group === group.id);
-}
-
-/// Turn off or on what these rows stand for: a step itself, a group
-/// every step under it.
-async function setTurnedOff(targets: Row[], off: boolean) {
-  const steps = targets.flatMap((t) => (t.kind === "group" ? stepsUnder(t) : [t]));
-  busy.value = true;
-  clearBanner();
-  try {
-    for (const s of steps) await (off ? turnOffStep(s.id) : turnOnStep(s.id));
-    await loadRows();
-  } catch (e) {
-    banner.value = { ok: false, text: (e as Error).message };
-  } finally {
-    busy.value = false;
-  }
-}
-
 let unsubscribe: (() => void) | null = null;
 const cardEl = ref<HTMLElement | null>(null);
 
@@ -1356,7 +948,9 @@ onUnmounted(() => {
           :disabled="busy || !!parseError || !!configError || !!syncAll.blocked"
           :title="syncAll.blocked ?? syncAll.label"
           :aria-label="syncAll.label"
-          @click="syncAll.stops.length > 0 ? stopSyncs(syncAll.stops) : runEverything()"
+          @click="
+            syncAll.stops.length > 0 ? actions.stopSyncs(syncAll.stops) : actions.runEverything()
+          "
         >
           <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
             <path fill="currentColor" :d="ACTION_ICONS[syncAll.glyph]" />
@@ -1416,7 +1010,7 @@ onUnmounted(() => {
         :rows="rows"
         :tree="true"
         :virtualizeRows="false"
-        :actions="rowActions"
+        :actions="actions.buttons"
         :menu="contextMenuItems"
         :selectable="true"
         :openByDefault="isGroupOpenByDefault"

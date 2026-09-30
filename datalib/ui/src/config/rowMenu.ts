@@ -37,6 +37,9 @@ export type MenuTarget = {
   turnedOffBy: string | null;
   /// For a group, the step whose status it shows; the log to open.
   statusFrom: string | null;
+  /// The group a step is filed under, or the group itself: whose sync
+  /// dashboard the row opens. Null for a step outside any group.
+  dashboardGroup: string | null;
   revealPath: string | null;
 };
 
@@ -70,6 +73,7 @@ export type MenuAction =
   | "copy_id"
   | "copy_path"
   | "log"
+  | "dashboard"
   | "history"
   | "reveal"
   | "reset"
@@ -238,6 +242,7 @@ export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
           ? "No step under this group has run yet"
           : null),
   );
+  add("dashboard", "Show sync dashboard", one && only.dashboardGroup ? null : ABSENT);
   separator();
 
   if (opts.canReveal) {

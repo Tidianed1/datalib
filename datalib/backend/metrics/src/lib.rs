@@ -1,7 +1,7 @@
 //! The metric names a step reports and the server reads back by name.
 //!
-//! A metric whose only reader is a person looking at the Activity cell
-//! needs no name here — that cell draws whatever series it is handed.
+//! A metric whose only reader is a person looking at the sync dashboard
+//! needs no name here — it charts whatever series it is handed.
 //! A name belongs here once a *column* is keyed on it, because then
 //! the reporter and the reader have to spell it the same way and
 //! nothing else makes them.
