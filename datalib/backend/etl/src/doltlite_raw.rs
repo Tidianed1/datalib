@@ -2131,7 +2131,7 @@ pub async fn bulk_upsert_with_tape_split<T: crate::bulk::BulkUpsertable>(
     Ok(())
 }
 
-async fn set_volatile_payloads_in_tx(
+pub async fn set_volatile_payloads_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     table: &str,
     volatile: &[(&str, &serde_json::Value)],

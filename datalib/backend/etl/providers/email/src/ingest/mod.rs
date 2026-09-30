@@ -10,7 +10,7 @@ pub mod mbox;
 pub mod schema_raw;
 pub mod session;
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
@@ -28,8 +28,9 @@ use tracing::{debug, info, warn};
 pub use db::{block_on_load_all, db_path_for, LoadedRaw, RawDb};
 
 use api::call;
+use datalib_etl::doltlite_raw as dr;
 use db::refresh_email_joins;
-use schema_raw::{AccountRow, EmailRow, EmlBlobRow, MailboxRow, ThreadRow};
+use schema_raw::{AccountRow, EmailRow, EmlBlobRow, MailboxRow, ThreadRow, MAILBOX_VOLATILE_PATHS};
 
 async fn upsert_account(
     db: &RawDb,
@@ -53,14 +54,87 @@ async fn upsert_mailboxes(
     if payloads.is_empty() {
         return Ok(());
     }
-    let rows: Vec<MailboxRow> = payloads
-        .iter()
-        .map(|p| MailboxRow::from_jmap_payload(account_id, p))
-        .collect::<Result<Vec<_>>>()?;
+    let mut rows: Vec<MailboxRow> = Vec::with_capacity(payloads.len());
+    let mut volatile: Vec<(String, Value)> = Vec::new();
+    for p in payloads {
+        let (content, counts) = dr::split_volatile(p, MAILBOX_VOLATILE_PATHS);
+        let row = MailboxRow::from_jmap_payload(account_id, &content)?;
+        if let Some(counts) = counts {
+            volatile.push((row.id_and_payload.id.clone(), counts));
+        }
+        rows.push(row);
+    }
+    let volatile: Vec<(&str, &Value)> = volatile.iter().map(|(id, v)| (id.as_str(), v)).collect();
     let mut tx = db.pool().begin().await.context("begin mailboxes tx")?;
     bulk_upsert_in_tx(&mut tx, &rows, now).await?;
+    dr::set_volatile_payloads_in_tx(&mut tx, "mailboxes", &volatile).await?;
     tx.commit().await.context("commit mailboxes tx")?;
     Ok(())
+}
+
+/// Move every email filed under each `from` mailbox to its `to`, or off
+/// it when `to` is `None`, then drop the `from` row. Payload and join rows
+/// move together, so the `emails` diff and the `email_mailboxes` diff tell
+/// the same story. Returns how many emails moved.
+///
+/// For a label that went away upstream (`None`), and for a row whose id
+/// changed recipe while the label stayed (`Some`).
+pub(crate) async fn refile_mailboxes(
+    db: &RawDb,
+    now: &IsoOffsetTimestamp,
+    moves: &[(String, Option<String>)],
+) -> Result<usize> {
+    let mut moved = 0;
+    for (from, to) in moves {
+        let rows: Vec<EmailRow> = db
+            .emails_filed_under(from)
+            .await?
+            .into_iter()
+            .filter_map(|(account, payload)| {
+                EmailRow::from_jmap_envelope(&account, &refiled(payload, from, to.as_deref()))
+            })
+            .collect();
+        for batch in rows.chunks(REFILE_BATCH) {
+            upsert_emails(db, now, batch).await?;
+        }
+        moved += rows.len();
+    }
+    let gone: Vec<String> = moves.iter().map(|(from, _)| from.clone()).collect();
+    db.delete_mailboxes(&gone).await?;
+    if !gone.is_empty() {
+        info!(
+            event = "email_mailboxes_refiled",
+            mailboxes = gone.len(),
+            emails = moved,
+            "moved emails off mailboxes that are gone or re-keyed",
+        );
+    }
+    Ok(moved)
+}
+
+/// Emails per transaction when [`refile_mailboxes`] rewrites them.
+const REFILE_BATCH: usize = 500;
+
+fn refiled(mut payload: Value, from: &str, to: Option<&str>) -> Value {
+    if let Some(ids) = payload.get_mut("mailboxIds").and_then(Value::as_object_mut) {
+        ids.remove(from);
+        if let Some(to) = to {
+            ids.insert(to.to_string(), Value::Bool(true));
+        }
+    }
+    payload
+}
+
+/// The mailbox rows a complete listing of an account's mailboxes leaves
+/// behind: every row of `held` it did not name.
+fn unlisted_mailboxes<'a>(
+    held: impl IntoIterator<Item = &'a String>,
+    listed: &HashSet<String>,
+) -> Vec<(String, Option<String>)> {
+    held.into_iter()
+        .filter(|id| !listed.contains(*id))
+        .map(|id| (id.clone(), None))
+        .collect()
 }
 
 async fn upsert_threads(db: &RawDb, now: &IsoOffsetTimestamp, rows: &[ThreadRow]) -> Result<()> {
@@ -509,6 +583,23 @@ async fn sync_mailboxes(
     let list = jmap_list(&resp);
     summary.mailboxes_upserted += list.len();
     upsert_mailboxes(db, now, account_id, &list).await?;
+    // A full list names every mailbox the account has, so a row it did
+    // not name is one upstream destroyed while we were not replaying
+    // `Mailbox/changes`.
+    let listed: HashSet<String> = list
+        .iter()
+        .filter_map(|m| m.get("id").and_then(Value::as_str).map(str::to_string))
+        .collect();
+    // An empty list is a server that answered oddly, not an account with
+    // no Inbox; it must not strip every label off every email.
+    let held = db.mailbox_names(account_id).await?;
+    let gone = if listed.is_empty() {
+        Vec::new()
+    } else {
+        unlisted_mailboxes(held.keys(), &listed)
+    };
+    summary.mailboxes_destroyed += gone.len();
+    refile_mailboxes(db, now, &gone).await?;
     if let Some(state) = resp.get("state").and_then(|v| v.as_str()) {
         db.save_state(account_id, "Mailbox", state).await?;
     }
@@ -550,7 +641,9 @@ async fn incremental_mailboxes(
 
         if !destroyed.is_empty() {
             summary.mailboxes_destroyed += destroyed.len();
-            db.delete_mailboxes(&destroyed).await?;
+            let moves: Vec<(String, Option<String>)> =
+                destroyed.into_iter().map(|id| (id, None)).collect();
+            refile_mailboxes(db, now, &moves).await?;
         }
 
         let new_state = changes
@@ -613,7 +706,7 @@ async fn sync_emails(
                 // A widened label filter additionally needs the mail
                 // that did *not* change in the newly-admitted mailboxes.
                 if let Some(scope) = backfill {
-                    full_enumerate_emails(
+                    let seen = full_enumerate_emails(
                         db,
                         sealer,
                         now,
@@ -625,6 +718,7 @@ async fn sync_emails(
                         &mut touched_threads,
                     )
                     .await?;
+                    prune_to_enumeration(db, account_id, scope.as_ref(), seen, summary).await?;
                 }
                 return Ok(touched_threads);
             }
@@ -636,7 +730,7 @@ async fn sync_emails(
         }
     }
 
-    full_enumerate_emails(
+    let seen = full_enumerate_emails(
         db,
         sealer,
         now,
@@ -648,7 +742,33 @@ async fn sync_emails(
         &mut touched_threads,
     )
     .await?;
+    prune_to_enumeration(db, account_id, mailbox_filter, seen, summary).await?;
     Ok(touched_threads)
+}
+
+/// Delete the emails a finished, unfiltered `Email/query` walk did not
+/// list: they were destroyed while no `Email/changes` cursor was
+/// replaying. A walk narrowed to some mailboxes, or one that stopped
+/// part-way, says nothing about the mail it did not reach.
+async fn prune_to_enumeration(
+    db: &RawDb,
+    account_id: &str,
+    mailbox_filter: Option<&HashSet<String>>,
+    seen: Option<BTreeSet<String>>,
+    summary: &mut FetchSummary,
+) -> Result<()> {
+    match (mailbox_filter, seen) {
+        (None, Some(seen)) => {
+            summary.emails_destroyed += db.prune_emails_to(account_id, &seen).await?;
+        }
+        (filter, seen) => info!(
+            event = "jmap_prune_skipped",
+            label_filtered = filter.is_some(),
+            finished = seen.is_some(),
+            "the enumeration did not list the whole account; not treating unlisted emails as destroyed",
+        ),
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -749,7 +869,7 @@ async fn full_enumerate_emails(
     bar: &RunBar,
     summary: &mut FetchSummary,
     touched_threads: &mut HashSet<String>,
-) -> Result<()> {
+) -> Result<Option<BTreeSet<String>>> {
     bar.doing("enumerating");
     // `total` below is this walk's own size, so the run total is it
     // plus whatever a preceding incremental pass already announced.
@@ -762,7 +882,7 @@ async fn full_enumerate_emails(
             // Label filter resolved to zero mailboxes (all paths
             // unmatched). Nothing can match — skip enumeration rather
             // than send a degenerate empty-OR filter.
-            return Ok(());
+            return Ok(None);
         }
         Some(set) if set.len() == 1 => {
             json!({"inMailbox": set.iter().next().unwrap()})
@@ -781,6 +901,10 @@ async fn full_enumerate_emails(
     // enumerates the rest.
     let mut live_state: Option<String> = None;
     let mut query_state: Option<String> = None;
+    // Every id any page listed. A restart after a `queryState` shift
+    // keeps what it had: those emails existed when listed, and a later
+    // destroy reaches us through the next `Email/changes`.
+    let mut seen: BTreeSet<String> = BTreeSet::new();
     loop {
         let mut args = json!({
             "accountId": account_id,
@@ -832,6 +956,7 @@ async fn full_enumerate_emails(
             bar.expect_at_least(before + total.max(0) as u64);
         }
         position += ids.len() as i64;
+        seen.extend(ids.iter().cloned());
 
         for batch in ids.chunks(EMAIL_GET_BATCH) {
             // Asked to stop: the batch that just landed sealed; with no
@@ -842,7 +967,7 @@ async fn full_enumerate_emails(
                     phase = "Email/query",
                     "told to stop; leaving the rest of this phase for the next run"
                 );
-                return Ok(());
+                return Ok(None);
             }
             let getresp = email_get(session, account_id, batch).await?;
             let list = jmap_list(&getresp);
@@ -879,7 +1004,7 @@ async fn full_enumerate_emails(
     if let Some(state) = live_state {
         db.save_state(account_id, "Email", &state).await?;
     }
-    Ok(())
+    Ok(Some(seen))
 }
 
 async fn email_get(session: &Session, account_id: &str, ids: &[String]) -> Result<Value> {
@@ -1162,4 +1287,166 @@ fn string_array(v: &Value, key: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn tmp_db() -> (tempfile::TempDir, RawDb) {
+        let d = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&d.path().join("j.doltlite_db")).await.unwrap();
+        (d, db)
+    }
+
+    fn now() -> IsoOffsetTimestamp {
+        IsoOffsetTimestamp::now_local()
+    }
+
+    fn email(id: &str, mailboxes: &[&str]) -> EmailRow {
+        let ids: serde_json::Map<String, Value> = mailboxes
+            .iter()
+            .map(|m| (m.to_string(), Value::Bool(true)))
+            .collect();
+        EmailRow::from_jmap_envelope(
+            "A",
+            &json!({"id": id, "blobId": "B", "threadId": "T", "mailboxIds": ids}),
+        )
+        .unwrap()
+    }
+
+    async fn payload_mailboxes(db: &RawDb, id: &str) -> Vec<String> {
+        let p: String = sqlx::query_scalar("SELECT json(payload) FROM emails WHERE id = ?")
+            .bind(id)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        let v: Value = serde_json::from_str(&p).unwrap();
+        let mut ids: Vec<String> = v["mailboxIds"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    async fn joined_mailboxes(db: &RawDb, id: &str) -> Vec<String> {
+        let mut ids = db
+            .load_email_joins()
+            .await
+            .unwrap()
+            .mailboxes
+            .remove(id)
+            .unwrap_or_default();
+        ids.sort();
+        ids
+    }
+
+    /// The counts go to the sidecar, so a new message in the Inbox leaves
+    /// the `mailboxes` row exactly as it was, and `dolt_diff_mailboxes`
+    /// says nothing about it.
+    #[tokio::test]
+    async fn a_mailbox_count_changing_is_not_a_change_to_the_mailbox() {
+        let (_d, db) = tmp_db().await;
+        let inbox = |n: i64| json!({"id": "M1", "name": "Inbox", "role": "inbox", "totalEmails": n, "unreadEmails": n});
+        upsert_mailboxes(&db, &now(), "A", &[inbox(1)])
+            .await
+            .unwrap();
+        dr::commit_run(db.pool(), "one").await.unwrap();
+        upsert_mailboxes(&db, &now(), "A", &[inbox(2)])
+            .await
+            .unwrap();
+        dr::commit_run(db.pool(), "two").await.unwrap();
+
+        let content: String = sqlx::query_scalar("SELECT json(payload) FROM mailboxes")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert!(!content.contains("totalEmails"), "{content}");
+        let counts: String = sqlx::query_scalar(
+            "SELECT json(volatile_payload) FROM mailboxes_bookkeeping WHERE id = 'M1'",
+        )
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&counts).unwrap(),
+            json!({"totalEmails": 2, "unreadEmails": 2})
+        );
+        let changed: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM dolt_diff_mailboxes WHERE from_ref = 'HEAD~1' AND to_ref = 'HEAD'",
+        )
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(changed, 0);
+        db.close().await;
+    }
+
+    /// A mailbox that went away upstream comes off every email that was
+    /// in it — payload and join rows together — and its row goes.
+    #[tokio::test]
+    async fn refiling_to_nothing_takes_the_label_off_every_email() {
+        let (_d, db) = tmp_db().await;
+        upsert_mailboxes(
+            &db,
+            &now(),
+            "A",
+            &[
+                json!({"id": "M1", "name": "Inbox"}),
+                json!({"id": "M2", "name": "Work"}),
+            ],
+        )
+        .await
+        .unwrap();
+        upsert_emails(
+            &db,
+            &now(),
+            &[email("E1", &["M1", "M2"]), email("E2", &["M2"])],
+        )
+        .await
+        .unwrap();
+
+        let moved = refile_mailboxes(&db, &now(), &[("M2".into(), None)])
+            .await
+            .unwrap();
+
+        assert_eq!(moved, 2);
+        assert_eq!(payload_mailboxes(&db, "E1").await, vec!["M1"]);
+        assert_eq!(joined_mailboxes(&db, "E1").await, vec!["M1"]);
+        assert!(payload_mailboxes(&db, "E2").await.is_empty());
+        assert!(joined_mailboxes(&db, "E2").await.is_empty());
+        let names = db.mailbox_names("A").await.unwrap();
+        assert_eq!(names.keys().collect::<Vec<_>>(), vec!["M1"]);
+        db.close().await;
+    }
+
+    /// A row re-keyed onto a new id carries its emails with it.
+    #[tokio::test]
+    async fn refiling_onto_a_new_id_moves_every_email() {
+        let (_d, db) = tmp_db().await;
+        upsert_emails(&db, &now(), &[email("E1", &["old", "M1"])])
+            .await
+            .unwrap();
+
+        refile_mailboxes(&db, &now(), &[("old".into(), Some("new".into()))])
+            .await
+            .unwrap();
+
+        assert_eq!(payload_mailboxes(&db, "E1").await, vec!["M1", "new"]);
+        assert_eq!(joined_mailboxes(&db, "E1").await, vec!["M1", "new"]);
+        db.close().await;
+    }
+
+    #[test]
+    fn a_full_listing_leaves_behind_the_rows_it_did_not_name() {
+        let held = ["M1".to_string(), "M2".to_string(), "M3".to_string()];
+        let listed: HashSet<String> = ["M1".to_string(), "M3".to_string()].into();
+        assert_eq!(
+            unlisted_mailboxes(held.iter(), &listed),
+            vec![("M2".to_string(), None)]
+        );
+    }
 }
