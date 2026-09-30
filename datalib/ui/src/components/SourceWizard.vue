@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// The "+ Data Source" / "Edit" dialog: pick a type, fill one form,
+// The "Add source" / "Edit" dialog: pick a type, fill one form,
 // review the TOML that will be written. One form writes one source —
 // the `[[groups]]` entry, its `ingest` step and its `render_markdown`
 // step — and editing a source reopens the same form over all three.
@@ -1574,7 +1574,7 @@ function submit() {
   box-sizing: border-box;
   padding: 8px 10px;
   border: 1px solid var(--datalib-border);
-  border-radius: 5px;
+  border-radius: var(--datalib-radius);
   background: var(--datalib-input-bg);
   color: var(--datalib-fg);
   font: inherit;
@@ -1600,7 +1600,7 @@ function submit() {
    two overlapping ones. */
 .wiz-bytes {
   display: inline-flex;
-  border-radius: 5px;
+  border-radius: var(--datalib-radius);
 }
 .wiz-bytes:focus-within {
   outline: 2px solid var(--datalib-accent);
@@ -1610,11 +1610,11 @@ function submit() {
   outline: none;
 }
 .wiz-bytes .wiz-num {
-  border-radius: 5px 0 0 5px;
+  border-radius: var(--datalib-radius) 0 0 var(--datalib-radius);
 }
 .wiz-unit {
   width: auto;
-  border-radius: 0 5px 5px 0;
+  border-radius: 0 var(--datalib-radius) var(--datalib-radius) 0;
   border-left: none;
 }
 /* Shares `.wiz-input`'s box; keeps the platform disclosure arrow so it
@@ -1624,7 +1624,7 @@ function submit() {
 }
 
 .wiz-group h3 {
-  font-size: 11px;
+  font-size: var(--datalib-font-size-small);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--datalib-muted);
@@ -1642,8 +1642,8 @@ function submit() {
   text-align: left;
   padding: 10px;
   border: 1px solid var(--datalib-border);
-  border-radius: 6px;
-  background: var(--datalib-card-bg);
+  border-radius: var(--datalib-radius);
+  background: var(--datalib-bg);
   color: inherit;
   cursor: pointer;
   font: inherit;
@@ -1666,11 +1666,11 @@ function submit() {
   flex: 1;
 }
 .wiz-tile-text b {
-  font-size: 14px;
+  font-size: var(--datalib-title-size);
 }
 .wiz-tile-text small {
   color: var(--datalib-muted);
-  font-size: 11.5px;
+  font-size: var(--datalib-font-size-small);
 }
 .wiz-soon {
   font-size: 10px;
@@ -1697,8 +1697,8 @@ function submit() {
   gap: 10px;
   padding: 10px;
   border: 1px solid var(--datalib-border);
-  border-radius: 6px;
-  background: var(--datalib-card-bg);
+  border-radius: var(--datalib-radius);
+  background: var(--datalib-surface-2);
   margin-bottom: 14px;
 }
 .wiz-chosen div {
@@ -1708,11 +1708,11 @@ function submit() {
 }
 .wiz-chosen small {
   color: var(--datalib-muted);
-  font-size: 11.5px;
+  font-size: var(--datalib-font-size-small);
 }
 
 .wiz-cred {
-  font-size: 12.5px;
+  font-size: var(--datalib-font-size);
   color: var(--datalib-muted);
   border-left: 3px solid var(--datalib-border);
   padding-left: 10px;
@@ -1742,7 +1742,7 @@ function submit() {
   order: -1;
 }
 .wiz-label {
-  font-size: 12.5px;
+  font-size: var(--datalib-font-size);
   font-weight: 600;
 }
 .wiz-nofields {
@@ -1755,15 +1755,15 @@ function submit() {
 }
 .wiz-help {
   color: var(--datalib-muted);
-  font-size: 11.5px;
+  font-size: var(--datalib-font-size-small);
   line-height: 1.45;
 }
 .wiz-error {
-  color: #b8481a;
-  font-size: 11.5px;
+  color: var(--datalib-error-fg);
+  font-size: var(--datalib-font-size-small);
 }
 .wiz-permanent {
-  color: #b8481a;
+  color: var(--datalib-error-fg);
 }
 .wiz-probe-headline {
   margin: 0 0 4px;
@@ -1794,8 +1794,8 @@ function submit() {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   background: var(--datalib-code-bg);
-  border-radius: 5px;
-  font-size: 11px;
+  border-radius: var(--datalib-radius);
+  font-size: var(--datalib-font-size-small);
   line-height: 1.5;
 }
 .wiz-probe-note details > summary {
@@ -1829,8 +1829,8 @@ function submit() {
   margin-left: 6px;
 }
 .wiz-path {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12.5px;
+  font-family: var(--datalib-mono);
+  font-size: var(--datalib-font-size);
 }
 /* The input takes the slack so the button keeps its label on one line. */
 .wiz-pathrow {
@@ -1871,7 +1871,7 @@ function submit() {
 }
 .wiz-foot-note {
   margin-right: auto;
-  font-size: 12px;
+  font-size: var(--datalib-font-size-small);
   color: var(--datalib-muted);
 }
 
@@ -1886,7 +1886,7 @@ function submit() {
 .wiz-section-head,
 .wiz-conn-head {
   margin: 0 0 6px;
-  font-size: 11px;
+  font-size: var(--datalib-font-size-small);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--datalib-muted);
@@ -1902,7 +1902,7 @@ function submit() {
    that talks to something outside. */
 .wiz-conn {
   border: 1px solid var(--datalib-border);
-  border-radius: 6px;
+  border-radius: var(--datalib-radius);
   padding: 12px 14px 4px;
   margin-bottom: 16px;
 }
@@ -1939,40 +1939,15 @@ function submit() {
 }
 .wiz-review summary {
   cursor: pointer;
-  font-size: 12.5px;
+  font-size: var(--datalib-font-size);
   color: var(--datalib-muted);
 }
 .wiz-review pre {
   margin: 8px 0 0;
   padding: 10px;
   background: var(--datalib-code-bg);
-  border-radius: 5px;
+  border-radius: var(--datalib-radius);
   overflow-x: auto;
-  font-size: 12px;
-}
-
-.btn {
-  padding: 7px 14px;
-  border: 1px solid var(--datalib-border);
-  border-radius: 5px;
-  background: var(--datalib-card-bg);
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-}
-.btn:hover:not(:disabled) {
-  background: var(--datalib-hover);
-}
-.btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.btn.primary {
-  background: var(--datalib-accent);
-  border-color: var(--datalib-accent);
-  color: #fff;
-}
-.btn.ghost {
-  background: none;
+  font-size: var(--datalib-font-size-small);
 }
 </style>

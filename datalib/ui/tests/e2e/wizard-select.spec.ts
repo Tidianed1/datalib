@@ -30,8 +30,8 @@ test.afterEach(async ({ page }) => {
 });
 
 test("an enum-backed field is a dropdown of its values", async ({ page }) => {
-  await page.getByRole("button", { name: "+ Data Source" }).click();
-  await page.getByRole("searchbox").fill("signal");
+  await page.getByRole("button", { name: "Add source" }).click();
+  await page.locator(".wiz-filter").fill("signal");
   await wizard(page)
     .locator(".wiz-tile", { hasText: "Decrypt and mirror an Android Signal backup" })
     .click();

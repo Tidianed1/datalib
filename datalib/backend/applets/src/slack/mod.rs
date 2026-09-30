@@ -29,6 +29,7 @@ struct ComponentMeta {
     description: String,
     component_hash: String,
     component_args: Vec<String>,
+    icon: &'static str,
 }
 
 pub fn write_frontend(dir: &Path, params: &serde_json::Value) -> Result<()> {
@@ -64,6 +65,7 @@ pub fn write_frontend(dir: &Path, params: &serde_json::Value) -> Result<()> {
         // prefix to call, and it is per-instance — which is why the
         // namespace had to be discoverable at all.
         component_args: vec![namespace],
+        icon: "slack",
     };
     let meta_path = dir.join(format!("{COMPONENT_NAME}.json"));
     std::fs::write(&meta_path, serde_json::to_string_pretty(&meta)?)
@@ -589,6 +591,7 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(dir.join("channels.json")).unwrap())
                 .unwrap();
         assert_eq!(meta["component_args"], serde_json::json!(["slack_work"]));
+        assert_eq!(meta["icon"], "slack");
         let hash = meta["component_hash"].as_str().unwrap();
         let body = std::fs::read(dir.join(format!("{hash}.js"))).unwrap();
         assert_eq!(sha256_hex(&body), hash);

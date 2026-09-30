@@ -141,8 +141,8 @@ async function openManager(page: Page) {
 }
 
 async function pickTile(page: Page, query: string, blurb: string) {
-  await page.getByRole("button", { name: "+ Data Source" }).click();
-  await page.getByRole("searchbox").fill(query);
+  await page.getByRole("button", { name: "Add source" }).click();
+  await page.locator(".wiz-filter").fill(query);
   await wizard(page).locator(".wiz-tile", { hasText: blurb }).click();
 }
 
@@ -164,8 +164,8 @@ test.afterEach(async ({ page }) => {
 });
 
 test("Gmail and Fastmail are separate tiles over one step type", async ({ page }) => {
-  await page.getByRole("button", { name: "+ Data Source" }).click();
-  await page.getByRole("searchbox").fill("mail");
+  await page.getByRole("button", { name: "Add source" }).click();
+  await page.locator(".wiz-filter").fill("mail");
   // Matched on the blurb, not the label: the catch-all's blurb names
   // Fastmail too ("a JMAP server other than Fastmail"), so filtering on
   // the word alone resolves to two tiles.

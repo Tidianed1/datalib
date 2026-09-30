@@ -186,14 +186,21 @@ Two kinds of file, and that is all:
 | File | Meaning |
 | --- | --- |
 | `<sha256>.js` | An ES module whose default export is the component factory. The server re-hashes it and skips the file if the name does not match its contents. |
-| `<name>.json` | Either `{title, description, component_hash, component_args}` or `{renamed_to}`. |
+| `<name>.json` | Either `{title, description, component_hash, component_args, icon?}` or `{renamed_to}`. |
 
 Each component document does two things: it defines
 `comp.<namespace>.<name>` in the app, resolved by loading the module at
 `component_hash`; and it registers a gallery entry whose card source is
 that qualified name called with `component_args` spelled as JSON
 literals — so `["slack_work"]` yields
-`comp.slack_work.channels("slack_work")`.
+`comp.slack_work.channels("slack_work")`. `icon` is what the layouts
+and the gallery draw beside the card's name: a glyph name from
+`datalib/ui/src/cards/icons.ts`, a mark in `datalib/ui/src/assets/`
+(`"slack"`), or an image of the component's own as a `data:` URL — PNG,
+JPEG, GIF, WebP or SVG (`"data:image/svg+xml;base64,…"`). It is drawn
+through `<img>`, so an SVG's scripts never run. A builtin card names its icon the same way, in
+`datalib/ui/src/cards/catalog.ts`; leaving it out draws the generic
+component glyph.
 
 **There is one mechanism.** Nothing that reads this store knows what an
 applet is. An applet's only privilege is being *called* to write a

@@ -965,10 +965,10 @@ def _check_icons(root: Path) -> int:
             )
 
     app_bgs = _APP_BG.findall(
-        (root / "datalib/ui/src/App.vue").read_text(encoding="utf-8")
+        (root / "datalib/ui/src/theme.css").read_text(encoding="utf-8")
     )
     if len(app_bgs) < 2:
-        bad.append("App.vue no longer sets --datalib-bg for a light and a dark theme")
+        bad.append("theme.css no longer sets --datalib-bg for a light and a dark theme")
     else:
         backgrounds = [
             ("the light theme", app_bgs[0], False),

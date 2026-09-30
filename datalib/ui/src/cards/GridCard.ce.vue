@@ -2029,9 +2029,9 @@ onBeforeUnmount(() => {
      so the percentage resolves after all. The assertion guards the
      surface (it fails the moment that stops being true); the rule stays
      because it is correct independent of what an ancestor happens to
-     do. The same pattern under `.m2-grid` in cards/sourcesCard.css —
-     flex-sized, no positioned ancestor — did collapse, to 2px, and its
-     spec does fail without the fix. */
+     do. The Sources card's grid box (`.sx-grid` in
+     cards/sourcesCard.css) is the same pattern — flex-sized — and
+     without a positioned box it collapsed, to 2px. */
   position: absolute;
   inset: 0;
   transition: filter 120ms ease-out;

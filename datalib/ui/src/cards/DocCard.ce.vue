@@ -683,6 +683,8 @@ watch(
      scrolls away with the content instead. */
   padding: 0 1rem 0.75rem;
   box-sizing: border-box;
+  /* Reading text: never below 14px, whatever the density. */
+  font-size: max(14px, calc(var(--datalib-font-size) + 2px));
 }
 .chat-preview > .empty,
 .chat-preview > .error,
@@ -704,7 +706,7 @@ watch(
   padding: 1rem;
 }
 .error {
-  color: #e35d6a;
+  color: var(--datalib-error-fg);
 }
 .problems {
   /* Above the body and the edges: what render could not do to this
@@ -829,14 +831,14 @@ watch(
   cursor: default;
 }
 .remote-host {
-  font-family: ui-monospace, Menlo, monospace;
+  font-family: var(--datalib-mono);
 }
 .remote-host-count {
   margin-left: 0.3rem;
   color: var(--datalib-muted);
 }
 .remote-load-all {
-  border-color: var(--datalib-accent, #6366f1);
+  border-color: var(--datalib-accent);
 }
 .remote-rules-label {
   font-size: 0.75rem;
@@ -857,10 +859,10 @@ watch(
   cursor: pointer;
 }
 .remote-rule-forget:hover {
-  color: #e35d6a;
+  color: var(--datalib-error-fg);
 }
 .remote-banner-error {
-  color: #e35d6a;
+  color: var(--datalib-error-fg);
 }
 .outgoing-edges {
   /* The doc-level outgoing edges list sits above the rendered body
@@ -895,7 +897,7 @@ watch(
   transition: background-color 100ms ease-in-out;
 }
 .edge-source-link:hover {
-  background: rgba(99, 102, 241, 0.28);
+  background: color-mix(in srgb, var(--datalib-accent) 28%, transparent);
 }
 .edge-dst-title {
   color: var(--datalib-muted, #94a3b8);
@@ -913,7 +915,7 @@ watch(
   background: var(--datalib-input-bg, #fff);
   color: var(--datalib-fg, #000);
   border: 1px solid var(--datalib-border, #ccc);
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
   min-width: 180px;
   padding: 4px 0;
@@ -955,12 +957,12 @@ watch(
   background: #0d1117;
   color: #e6edf3;
   padding: 0.6rem 0.75rem;
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
   overflow-x: auto;
   font-size: 0.82rem;
 }
 .markdown-body code {
-  font-family: ui-monospace, Menlo, monospace;
+  font-family: var(--datalib-mono);
   font-size: 0.85em;
 }
 .markdown-body :not(pre) > code {
@@ -972,7 +974,7 @@ watch(
   margin: 0.4rem 0;
   padding: 0.25rem 0.5rem;
   border: 1px solid var(--datalib-border);
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
   background: var(--datalib-card-bg);
 }
 .markdown-body details > summary {

@@ -360,7 +360,7 @@ onMounted(() => {
 .chat-body > [class^="diff-"] > details.tool-group {
   border: 1px solid var(--datalib-border, #d8d8d8);
   border-left-width: 3px;
-  border-radius: 8px;
+  border-radius: calc(var(--datalib-radius) + 2px);
   background: var(--datalib-card-bg, #fafafa);
   margin: 0.4rem 0;
 }
@@ -400,7 +400,7 @@ onMounted(() => {
   border-radius: 2px;
 }
 .chat-body .msg--claude {
-  border-left-color: var(--datalib-accent, #6366f1);
+  border-left-color: var(--datalib-accent);
 }
 .chat-body .msg--chatgpt {
   border-left-color: #16a34a;
@@ -530,7 +530,7 @@ onMounted(() => {
   color: var(--datalib-muted, #94a3b8);
   background: transparent;
   border: 1px solid var(--datalib-border, #d8d8d8);
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
   cursor: pointer;
 }
 .chat-body button.msg-jump:hover {
@@ -559,11 +559,11 @@ onMounted(() => {
 }
 .chat-body .msg.selected {
   background: var(--datalib-hover, #f0f0f0);
-  border-color: var(--datalib-accent, #6366f1);
+  border-color: var(--datalib-accent);
   /* `outline` (not a thicker border) so moving the selection doesn't
      reflow; the negative offset lays it over the card's own edge so
      the two read as one highlighted border rather than two rings. */
-  outline: 2px solid var(--datalib-accent, #6366f1);
+  outline: 2px solid var(--datalib-accent);
   outline-offset: -1px;
 }
 /* Inline span baked by ingest for sub-section edge anchors (today
@@ -593,12 +593,12 @@ onMounted(() => {
 }
 .chat-body span[data-section-uuid].edge-source:hover,
 .chat-body [data-section-uuid].hover-dst {
-  background: rgba(99, 102, 241, 0.28);
+  background: color-mix(in srgb, var(--datalib-accent) 28%, transparent);
   border-radius: 3px;
 }
 .chat-body span[data-section-uuid].selected {
   background: var(--datalib-card-bg, #1f2937);
-  outline: 2px solid var(--datalib-accent, #6366f1);
+  outline: 2px solid var(--datalib-accent);
   border-radius: 3px;
 }
 /* A remote image or media element held back by the sanitizer

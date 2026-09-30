@@ -62,6 +62,8 @@ const props = withDefaults(
     columnOverrides?: Record<string, Partial<Column<T>>>;
     /// How many leading columns stay put while the rest scroll sideways.
     pinnedColumns?: number;
+    /// Pixels per row. Read once, when the grid is built.
+    rowHeight?: number;
   }>(),
   {
     rowKey: "key",
@@ -69,6 +71,7 @@ const props = withDefaults(
     selectable: false,
     virtualizeRows: true,
     pinnedColumns: 0,
+    rowHeight: 34,
   },
 );
 
@@ -259,7 +262,7 @@ function options(): GridOption {
     darkMode: isDarkTheme(),
     ...KEEP_COLUMN_WIDTHS,
     ...followFrame(boxEl.value!, 120),
-    rowHeight: 34,
+    rowHeight: props.rowHeight,
     enableTextSelectionOnCells: true,
     enableCellNavigation: true,
     enableSelection: props.selectable,

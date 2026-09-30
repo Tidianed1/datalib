@@ -133,6 +133,21 @@ Omitting `title`, `description` or `component_args` on a later PUT
 keeps the stored value; sending `""` clears a title or description
 (clearing the title takes the component out of the gallery).
 
+Add an `icon` to the same body and the app draws it beside the card's
+name, in the gallery and in every layout. It is one of:
+
+- a glyph name: `home`, `sources`, `search`, `table`, `map`, `log`,
+  `code`, `document`, `history`, `dag`, `dashboard`, `add`, `problem`,
+  `chat`, `book`, `component`;
+- a source's mark: `slack`, `gmail`, `claude`, `chatgpt`, … (any source
+  the wizard offers);
+- an image of your own, as a `data:` URL — PNG, JPEG, GIF, WebP or SVG
+  (`"data:image/svg+xml;base64,…"`), drawn at 14–18px.
+
+Without one the card gets the generic component glyph. The same
+keep/clear rules apply: omit it to keep the stored icon, send `""` to
+clear it.
+
 ## Giving your component a real name
 
 The wayfinder hands you a placeholder name like `card_a1b2c3`. Once

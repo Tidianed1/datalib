@@ -67,8 +67,8 @@ describe("reconcile", () => {
 
 describe("pathFor", () => {
   it("writes the pristine default stack as /", () => {
-    expect(pathFor([specOf("gridView()")])).toBe("/");
-    expect(pathFor([{ code: "gridView()", size: null, state: "q=x" }])).not.toBe("/");
+    expect(pathFor([specOf("homeView()")])).toBe("/");
+    expect(pathFor([{ code: "homeView()", size: null, state: "x" }])).not.toBe("/");
   });
 });
 

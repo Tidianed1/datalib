@@ -3,7 +3,7 @@
 `dactalView()` is a card view that queries your `grid_rows` with
 [DACTAL](https://dactal.org)'s query language and renders the results in
 DACTAL's tabular UI. It sits in the card registry alongside
-`gridView`/`documentView` and does **not** replace the grid homepage — open it
+`gridView`/`documentView` and does **not** replace the grid — open it
 in any card, e.g. in an empty card's header type:
 
 ```

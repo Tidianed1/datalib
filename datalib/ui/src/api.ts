@@ -1425,6 +1425,8 @@ export type Meta =
       description: string;
       component_hash: string;
       component_args: unknown[];
+      // A glyph name (cards/icons.ts) or a mark in src/assets/.
+      icon?: string;
     }
   | { renamed_to: string };
 

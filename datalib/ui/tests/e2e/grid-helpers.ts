@@ -13,8 +13,12 @@ import { expect, type APIRequestContext, type Locator, type Page } from "@playwr
 /// The search grid's rows, wherever it is on the page.
 export const SEARCH_ROWS = ".grid-box .slick-row";
 
+/// The search grid on its default query, documents only. `/` opens on
+/// the Home card now, so a spec about the grid goes here.
+export const GRID = "/gridView()";
+
 /// The search grid with its query cleared: every row, the messages
-/// inside a document included. `/` opens on documents only.
+/// inside a document included. `GRID` opens on documents only.
 export const EVERY_ROW = "/gridView()::q%3D";
 
 /// The Manage header's sync button, whichever way it faces: Sync

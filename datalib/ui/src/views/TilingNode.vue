@@ -13,6 +13,7 @@
 // and recurses.
 import { inject } from "vue";
 import CardControls from "@/components/CardControls.vue";
+import CardIcon from "@/components/CardIcon.vue";
 import { growSourceBox, vAutoGrow } from "@/components/autoGrow";
 import { devMode } from "@/devMode";
 import { TILING_API } from "./tilingApi";
@@ -54,7 +55,7 @@ const tabLabel = (child: TileNode) =>
       title="drag to move this card"
       @pointerdown="(e) => api.startDrag(node.id, e)"
     />
-    <div class="tiling-chrome card-chrome" :class="{ 'card-chrome--title': !devMode }">
+    <div class="tiling-chrome card-chrome">
       <textarea
         v-if="devMode"
         v-auto-grow
@@ -66,7 +67,10 @@ const tabLabel = (child: TileNode) =>
         @input="growSourceBox($event.target as HTMLTextAreaElement)"
         @keydown.enter.exact.prevent="api.commitSource(node, $event)"
       />
-      <div v-else class="tiling-title card-title">{{ api.titleFor(node) }}</div>
+      <div v-else class="tiling-title card-title">
+        <CardIcon class="card-title-icon" :source="node.source" />
+        <span class="card-title-text">{{ api.titleFor(node) }}</span>
+      </div>
       <CardControls :source="node.source" :ctx="api.ctxFor(node)" />
     </div>
     <!-- Empty slot: the host teleports this leaf's persistent card here
@@ -200,7 +204,7 @@ const tabLabel = (child: TileNode) =>
   flex-direction: column;
   box-sizing: border-box;
   background: var(--datalib-bg);
-  border: 1px solid #888;
+  border: 1px solid var(--datalib-border);
   border-radius: 4px;
   overflow: hidden;
 }
@@ -279,7 +283,7 @@ const tabLabel = (child: TileNode) =>
   align-items: center;
   justify-content: center;
   cursor: grab;
-  background: rgba(0, 0, 0, 0.04);
+  background: var(--datalib-surface-2);
 }
 .tiling-grip::before {
   content: "";
@@ -289,7 +293,7 @@ const tabLabel = (child: TileNode) =>
   background: var(--tiling-edge);
 }
 .tiling-grip:hover {
-  background: rgba(0, 0, 0, 0.1);
+  background: var(--datalib-hover);
 }
 .tiling-grip:active {
   cursor: grabbing;
@@ -362,7 +366,7 @@ const tabLabel = (child: TileNode) =>
   align-items: stretch;
   gap: 1px;
   overflow-x: auto;
-  background: rgba(0, 0, 0, 0.08);
+  background: var(--datalib-surface-2);
   border-radius: 3px 3px 0 0;
 }
 .tiling-tab {
@@ -372,11 +376,8 @@ const tabLabel = (child: TileNode) =>
   max-width: 16rem;
   padding: 0.25rem 0.5rem;
   cursor: pointer;
-  font:
-    12px/1.4 ui-monospace,
-    Menlo,
-    monospace;
-  border-right: 1px solid color-mix(in srgb, #888 50%, transparent);
+  font: 12px/1.4 var(--datalib-mono);
+  border-right: 1px solid var(--datalib-border-soft);
   opacity: 0.65;
   white-space: nowrap;
 }
@@ -394,10 +395,7 @@ const tabLabel = (child: TileNode) =>
 /* Non-dev tabs carry titles, not source — drop the tab bar's
    monospace for them. */
 .tiling-tab-label--title {
-  font-family:
-    system-ui,
-    -apple-system,
-    sans-serif;
+  font-family: var(--datalib-font);
 }
 .tiling-tab-close {
   flex: 0 0 auto;
@@ -424,7 +422,7 @@ const tabLabel = (child: TileNode) =>
 .tiling-divider::before {
   content: "";
   position: absolute;
-  background: #888;
+  background: var(--datalib-border);
 }
 .tiling-body--h > .tiling-divider {
   width: 8px;

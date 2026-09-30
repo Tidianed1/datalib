@@ -473,6 +473,10 @@ pub struct PutLibRequest {
     /// and the reason `documentPickerView` had to exist as a stand-in.
     #[serde(default)]
     pub component_args: Option<Vec<serde_json::Value>>,
+    /// The icon the layouts draw beside the card's name (see
+    /// `frontend::Meta`), same keep/clear semantics as `title`.
+    #[serde(default)]
+    pub icon: Option<String>,
 }
 
 /// What a write returns: the name, the content hash, and the metadata
@@ -567,20 +571,22 @@ async fn put_lib(
         Some(v) if v.trim().is_empty() => None,
         Some(v) => Some(v),
     };
-    let (prior_title, prior_desc, prior_args) = match prior {
+    let (prior_title, prior_desc, prior_args, prior_icon) = match prior {
         Some(frontend::Meta::Component {
             title,
             description,
             component_args,
+            icon,
             ..
-        }) => (Some(title), Some(description), Some(component_args)),
-        _ => (None, None, None),
+        }) => (Some(title), Some(description), Some(component_args), icon),
+        _ => (None, None, None, None),
     };
     let meta = frontend::Meta::Component {
         title: merge(req.title, prior_title).unwrap_or_default(),
         description: merge(req.description, prior_desc).unwrap_or_default(),
         component_hash: hash.clone(),
         component_args: req.component_args.or(prior_args).unwrap_or_default(),
+        icon: merge(req.icon, prior_icon),
     };
     // Writing the metadata also retires any tombstone at this name: the
     // name holds a real component again.

@@ -18,6 +18,9 @@ import type { CardCtx } from "@/cards/types";
 const props = defineProps<{
   source: string;
   ctx: CardCtx;
+  // Drawn in a tab's sidebar row, which has its own pop-out and close:
+  // only the hand-off and the help, then.
+  sidebar?: boolean;
 }>();
 
 // ---- agent hand-off (🤖) ----
@@ -94,7 +97,7 @@ watch(helpOpen, (open) => {
     </div>
   </Teleport>
   <a
-    v-if="source.trim() !== ''"
+    v-if="!sidebar && source.trim() !== ''"
     class="card-control card-control--alone"
     :href="aloneHref"
     target="_blank"
@@ -102,7 +105,12 @@ watch(helpOpen, (open) => {
     title="open this card alone, in a new tab or window"
     >↗</a
   >
-  <button class="card-control card-control--close" title="close card" @click="ctx.host.close()">
+  <button
+    v-if="!sidebar"
+    class="card-control card-control--close"
+    title="close card"
+    @click="ctx.host.close()"
+  >
     ✕
   </button>
 </template>
@@ -115,16 +123,15 @@ watch(helpOpen, (open) => {
   flex: 0 0 auto;
   border: none;
   background: transparent;
-  color: inherit;
-  opacity: 0.6;
+  color: var(--datalib-muted);
   cursor: pointer;
-  font-size: 0.8rem;
+  font-size: var(--datalib-font-size-small);
   line-height: 1.5;
   text-decoration: none;
   padding: 0.2rem 0;
 }
 .card-control:hover {
-  opacity: 1;
+  color: var(--datalib-fg);
 }
 </style>
 
@@ -135,7 +142,7 @@ watch(helpOpen, (open) => {
   position: fixed;
   inset: 0;
   z-index: 1000;
-  background: color-mix(in srgb, var(--datalib-bg) 60%, transparent);
+  background: rgba(0, 0, 0, 0.35);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -144,42 +151,47 @@ watch(helpOpen, (open) => {
   width: min(720px, 90vw);
   max-height: 85vh;
   overflow: auto;
-  background: var(--datalib-card-bg);
+  background: var(--datalib-bg);
   color: var(--datalib-fg);
   border: 1px solid var(--datalib-border);
-  border-radius: 8px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  border-radius: calc(var(--datalib-radius) + 4px);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.22);
+  font-family: var(--datalib-font);
 }
 .card-help-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 12px 16px;
-  border-bottom: 1px solid var(--datalib-border);
+  border-bottom: 1px solid var(--datalib-border-soft);
 }
 .card-help-head h3 {
   margin: 0;
-  font-size: 15px;
+  font-size: calc(var(--datalib-title-size) + 2px);
 }
 .card-help-close {
   padding: 2px 9px;
   border: 1px solid var(--datalib-border);
-  border-radius: 4px;
-  background: var(--datalib-card-bg);
+  border-radius: var(--datalib-radius);
+  background: var(--datalib-bg);
   color: inherit;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--datalib-font-size-small);
   cursor: pointer;
+}
+.card-help-close:hover {
+  background: var(--datalib-hover);
 }
 .card-help-body {
   padding: 4px 16px 16px;
-  font-size: 13px;
+  font-size: var(--datalib-font-size);
   line-height: 1.5;
 }
 .card-help-body p {
   margin: 10px 0;
 }
 .card-help-body code {
-  font-size: 12px;
+  font-family: var(--datalib-mono);
+  font-size: var(--datalib-font-size-small);
 }
 </style>

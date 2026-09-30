@@ -8,10 +8,10 @@
 // growing worked even then.
 
 import { test, expect, type Page } from "@playwright/test";
-import { gridSettled, SEARCH_ROWS, searchGrid, type GridApi } from "./grid-helpers";
+import { GRID, gridSettled, SEARCH_ROWS, searchGrid, type GridApi } from "./grid-helpers";
 
 async function openGrid(page: Page) {
-  await page.goto("/");
+  await page.goto(GRID);
   await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 15_000 });
 }
 

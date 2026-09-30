@@ -4,7 +4,7 @@
 // tabs, so the defaults are checked there too.
 
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
-import { gridSettled, SEARCH_ROWS, type GridApi } from "./grid-helpers";
+import { GRID, gridSettled, SEARCH_ROWS, type GridApi } from "./grid-helpers";
 
 async function total(request: APIRequestContext, q: string): Promise<number> {
   const r = await request.get(`/applet/unified_index/search?q=${encodeURIComponent(q)}&limit=1`);
@@ -40,7 +40,7 @@ async function expectDefaults(page: Page, request: APIRequestContext) {
 /// Every message and tool call used to be a row of its own, with the
 /// text past the middle of the screen.
 test("the grid opens one row per document, Contents second", async ({ page, request }) => {
-  await page.goto("/");
+  await page.goto(GRID);
   await expectDefaults(page, request);
   // Named after what it is, not after the term it opens with.
   await expect(page.locator(".miller-col-title").first()).toHaveText("Search");
@@ -50,7 +50,7 @@ test("the grid opens one row per document, Contents second", async ({ page, requ
 /// row — and stays deleted, rather than coming back on a reload.
 test("a cleared default stays cleared", async ({ page, request }) => {
   const every = await total(request, "");
-  await page.goto("/");
+  await page.goto(GRID);
   await expect(page.getByTestId("search-input")).toHaveValue("is:document");
   await page.getByTestId("search-clear").click();
   await expect(page.locator(".grid-column .status")).toContainText(`(of ${every})`);
@@ -64,7 +64,7 @@ test("a cleared default stays cleared", async ({ page, request }) => {
 /// The hint used to suggest `source:Slack` whatever the library held.
 /// Its example source has to be one a search finds rows in.
 test("the empty search bar suggests a source this library has", async ({ page, request }) => {
-  await page.goto("/");
+  await page.goto(GRID);
   await page.getByTestId("search-clear").click();
   const input = page.getByTestId("search-input");
   await expect(input).toHaveAttribute("placeholder", /source_id:/);
@@ -84,7 +84,7 @@ test.describe("in the tabs layout, the app's own default", () => {
   });
 
   test("the grid opens one row per document, Contents second", async ({ page, request }) => {
-    await page.goto("/");
+    await page.goto(GRID);
     await expect(page.locator(".tabs-row .tabs-label").first()).toHaveText("Search");
     await expectDefaults(page, request);
   });

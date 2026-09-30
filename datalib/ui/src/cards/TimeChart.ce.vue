@@ -181,7 +181,7 @@ const time = formatClock;
   margin: 0;
   padding: 8px 10px 4px;
   border: 1px solid var(--datalib-border);
-  border-radius: 6px;
+  border-radius: var(--datalib-radius);
   background: var(--datalib-bg);
   min-width: 0;
 }
@@ -189,7 +189,7 @@ const time = formatClock;
   display: flex;
   justify-content: space-between;
   gap: 8px;
-  font-size: 12px;
+  font-size: var(--datalib-font-size-small);
 }
 .tc-title {
   color: var(--datalib-muted);
@@ -206,7 +206,7 @@ const time = formatClock;
   margin: 4px 0 0;
   padding: 0;
   list-style: none;
-  font-size: 11px;
+  font-size: var(--datalib-font-size-small);
   color: var(--datalib-fg);
 }
 .tc-legend li {

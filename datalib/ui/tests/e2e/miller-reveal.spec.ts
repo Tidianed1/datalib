@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { firstRowUuid, selectRowByUuid } from "./grid-helpers";
+import { GRID, firstRowUuid, selectRowByUuid } from "./grid-helpers";
 
 // A column a card opens (a grid row's document) is scrolled into view.
 // The miller row scrolls horizontally, and a stack wider than the
@@ -21,7 +21,7 @@ async function docColumnOverhang(page: import("@playwright/test").Page) {
 }
 
 test("opening a document scrolls the new column into view", async ({ page }) => {
-  await page.goto("/");
+  await page.goto(GRID);
   const rowId = await firstRowUuid(page);
   await selectRowByUuid(page, rowId);
   await expect(page.locator(".chat-preview")).toBeVisible();

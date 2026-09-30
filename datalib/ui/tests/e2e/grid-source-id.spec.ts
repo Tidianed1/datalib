@@ -10,7 +10,13 @@
 // crosses the backend, the config file and the grid, and it is the
 // reason renaming a source never needs a re-index.
 import { test, expect, type Page } from "@playwright/test";
-import { actOnRowByUuid, searchAndSettle, MANAGE_WITH_CONFIG, savedConfig } from "./grid-helpers";
+import {
+  GRID,
+  actOnRowByUuid,
+  searchAndSettle,
+  MANAGE_WITH_CONFIG,
+  savedConfig,
+} from "./grid-helpers";
 
 const SOURCE_CELLS = '.grid-box .slick-row [col-id="source_ref"]';
 
@@ -21,7 +27,7 @@ async function distinctSourceCells(page: Page): Promise<string[]> {
 }
 
 async function openGrid(page: Page) {
-  await page.goto("/");
+  await page.goto(GRID);
   await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
 }
 
