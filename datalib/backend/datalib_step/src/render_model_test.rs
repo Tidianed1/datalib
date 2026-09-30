@@ -16,7 +16,6 @@ use std::sync::Mutex;
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use datalib_etl::doltlite_raw::{self, DiffScanSpec};
-use datalib_etl::pin::Reads;
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::{build_grid_index, init_schema, RenderedMarkdown};
 use datalib_etl_render::indexed_markdown::{blocking, IndexedMarkdownStore};
@@ -239,7 +238,7 @@ impl RenderProcessor for SynthRender {
                 ",
             },
         ))?;
-        let model = blocking(load_model(&pool, Reads::At(&pin)))?;
+        let model = blocking(load_model(&pool))?;
         blocking(pool.close());
         let unparsed = self.unparsed.lock().unwrap().clone();
         ctx.report_unparsed(
@@ -297,14 +296,9 @@ impl RenderProcessor for SynthRender {
     }
 }
 
-async fn load_model(pool: &SqlitePool, reads: Reads<'_>) -> Result<Model> {
+async fn load_model(pool: &SqlitePool) -> Result<Model> {
     let mut model = Model::default();
-    let sql = format!(
-        "SELECT id, title, author_id FROM {}",
-        reads.table("parents")
-    );
-    // Audited: the table name is a literal through `Reads::table`.
-    for r in sqlx::query(sqlx::AssertSqlSafe(sql))
+    for r in sqlx::query("SELECT id, title, author_id FROM parents")
         .fetch_all(pool)
         .await?
     {
@@ -316,11 +310,7 @@ async fn load_model(pool: &SqlitePool, reads: Reads<'_>) -> Result<Model> {
             },
         );
     }
-    let sql = format!(
-        "SELECT id, parent_id, body, seq FROM {}",
-        reads.table("children")
-    );
-    for r in sqlx::query(sqlx::AssertSqlSafe(sql))
+    for r in sqlx::query("SELECT id, parent_id, body, seq FROM children")
         .fetch_all(pool)
         .await?
     {
@@ -333,8 +323,7 @@ async fn load_model(pool: &SqlitePool, reads: Reads<'_>) -> Result<Model> {
             },
         );
     }
-    let sql = format!("SELECT id, name FROM {}", reads.table("authors"));
-    for r in sqlx::query(sqlx::AssertSqlSafe(sql))
+    for r in sqlx::query("SELECT id, name FROM authors")
         .fetch_all(pool)
         .await?
     {
@@ -597,17 +586,20 @@ fn docs_of(rendered: &[RenderedMarkdown]) -> BTreeMap<String, Doc> {
         .collect()
 }
 
+/// Documents, the `.md` files on disk, and each document's render version.
+type StoreView = (BTreeMap<String, Doc>, BTreeSet<String>, Vec<u32>);
+
 /// The render store at one commit, as documents, plus the `.md` files
 /// on disk, which must be exactly the documents' — a deleted document
 /// left on disk stays searchable (`remove_document`'s reason to exist).
-fn render_store_at(
-    data_root: &Path,
-    commit: Option<&str>,
-) -> (BTreeMap<String, Doc>, BTreeSet<String>, Vec<u32>) {
+fn render_store_at(data_root: &Path, commit: Option<&str>) -> StoreView {
+    try_render_store_at(data_root, commit).expect("a readable commit")
+}
+
+/// `None` when the commit holds no table, which a reader skips.
+fn try_render_store_at(data_root: &Path, commit: Option<&str>) -> Option<StoreView> {
     let root = datalib_etl::layout::render_markdown_root(data_root, SOURCE);
-    let store = IndexedMarkdownStore::open_for_reading(&root, commit)
-        .expect("open for reading")
-        .expect("a commit");
+    let store = IndexedMarkdownStore::open_for_reading(&root, commit).expect("open for reading")?;
     let pin = store.pin().unwrap().clone();
     let rendered = store.documents(data_root, &pin).expect("documents");
     let versions = rendered.iter().map(|d| d.render_version).collect();
@@ -622,7 +614,7 @@ fn render_store_at(
                 .collect()
         })
         .unwrap_or_default();
-    (docs_of(&rendered), files, versions)
+    Some((docs_of(&rendered), files, versions))
 }
 
 async fn index_docs(pool: &SqlitePool) -> BTreeMap<String, Doc> {
@@ -833,16 +825,23 @@ fn assert_store_is(world: &World, want: &BTreeMap<String, Doc>, ctx: &str) {
 
 /// Every commit the run made is one a consumer may read: each document
 /// in it is either the run's answer or the previous run's, and nothing
-/// unchanged between the two ever went missing.
+/// unchanged between the two ever went missing. The store's birth commit
+/// holds no table, so a reader skips it rather than reading it as empty.
 fn assert_every_commit_is_truthful(
     world: &World,
-    commits: &[String],
+    commits: &[(String, String)],
     before: &BTreeMap<String, Doc>,
     after: &BTreeMap<String, Doc>,
     ctx: &str,
 ) {
-    for c in commits {
-        let (got, _, _) = render_store_at(&world.data_root, Some(c));
+    for (c, msg) in commits {
+        let Some((got, _, _)) = try_render_store_at(&world.data_root, Some(c)) else {
+            assert_eq!(
+                msg, "Initialize data repository",
+                "{ctx}: commit {c} ({msg}) holds no table"
+            );
+            continue;
+        };
         for (uuid, doc) in &got {
             let ok = before.get(uuid) == Some(doc) || after.get(uuid) == Some(doc);
             assert!(
@@ -958,7 +957,6 @@ async fn incremental_render_equals_cold_render_under_random_histories() {
                     "{ctx}: commit {c} is a rescue — a batch was SQL-committed and never sealed"
                 );
             }
-            let new_commits: Vec<String> = new_commits.into_iter().map(|(c, _)| c).collect();
             assert_every_commit_is_truthful(&world, &new_commits, &before, &after, &ctx);
             let (_, _, versions) = render_store_at(&world.data_root, None);
             let v = synth.version.load(Ordering::SeqCst);

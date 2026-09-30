@@ -110,12 +110,8 @@ impl RawDb {
         self.close_all().await;
     }
 
-    pub async fn load_payloads(
-        &self,
-        reads: datalib_etl::pin::Reads<'_>,
-        table: &str,
-    ) -> Result<Vec<Value>> {
-        dr::load_payloads(&self.pool, reads, table).await
+    pub async fn load_payloads(&self, table: &str) -> Result<Vec<Value>> {
+        dr::load_payloads(&self.pool, table).await
     }
 }
 

@@ -55,17 +55,11 @@ pub fn render_connections(
             let pin = db.pin().expect("a reader is pinned at open").clone();
             // A user who excluded connections has no table; treat a load
             // error as "absent" rather than failing the whole render.
-            let rows = datalib_etl::doltlite_raw::load_payloads_with_id(
-                db.pool(),
-                datalib_etl::pin::Reads::At(&pin),
-                "connections",
-            )
-            .await
-            .unwrap_or_default();
-            // Photos, if any were fetched, keyed by the connection's URL.
-            let photos = load_photo_blobs(&db, datalib_etl::pin::Reads::At(&pin))
+            let rows = datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), "connections")
                 .await
                 .unwrap_or_default();
+            // Photos, if any were fetched, keyed by the connection's URL.
+            let photos = load_photo_blobs(&db).await.unwrap_or_default();
             let changed =
                 changed_rows(db.pool(), range, &pin, &["connections", "contact_photos"]).await?;
             // Closed, not dropped: the next open of this store is a

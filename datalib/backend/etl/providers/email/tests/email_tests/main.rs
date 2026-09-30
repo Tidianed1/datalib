@@ -6,8 +6,10 @@
 //! at its own fixture tree; one process means one such variable.
 
 mod gmail_failed_fetch_holds_cursor;
+mod gmail_label_lifecycle;
 mod gmail_label_union;
 mod gmail_widened_labels_backfill;
+mod jmap_full_resync_prunes;
 mod jmap_mbox;
 mod jmap_progress_countdown;
 mod jmap_render;

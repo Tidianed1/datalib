@@ -83,13 +83,9 @@ pub fn render(
                 // load error as "absent" rather than failing the render.
                 loaded.push((
                     table,
-                    datalib_etl::doltlite_raw::load_payloads_with_id(
-                        db.pool(),
-                        datalib_etl::pin::Reads::At(&pin),
-                        table,
-                    )
-                    .await
-                    .unwrap_or_default(),
+                    datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), table)
+                        .await
+                        .unwrap_or_default(),
                 ));
             }
             let changed = changed_rows(db.pool(), range, &pin, &message_tables()).await?;

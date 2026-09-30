@@ -40,4 +40,5 @@ it, and may start on a producer still running when that producer
 declares `streams_output`, reading each seal as it lands
 ([`datalib/backend/dag/README.md`](../../datalib/backend/dag/README.md)
 § "What keeps steps apart: locks"; the reader side is
-`datalib/backend/etl/src/pin.rs`).
+`doltlite_raw::open_reader`, which opens the commit read-only and
+detached — [`docs/dev/doltlite.md`](../../docs/dev/doltlite.md#three-ways-to-read-one-commit)).

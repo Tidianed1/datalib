@@ -229,7 +229,7 @@ fn read_rows(
         let rows = sqlx::query(
             "SELECT channel, markdown_uuid, message_index, \
                         IFNULL(created_at, ''), IFNULL(author, ''), preview \
-                 FROM pinned_grid_rows \
+                 FROM grid_rows \
                  WHERE channel IS NOT NULL AND markdown_uuid IS NOT NULL",
         )
         .fetch_all(pool)

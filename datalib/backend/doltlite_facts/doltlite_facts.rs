@@ -515,6 +515,32 @@ mod revision_by_path {
         }
     }
 
+    /// Every reader opens this way, and reader queries lean on `IN (…)`,
+    /// `IN (SELECT value FROM json_each(?))` and `DISTINCT`. Through 0.50.13
+    /// a detached open refused all three as writes (dolthub/doltlite#3392).
+    #[tokio::test]
+    async fn a_detached_open_runs_queries_that_need_an_ephemeral_table() {
+        let (s, commit) = store_with_rows().await;
+        let mut d = connect(&s.at(&commit), true, Duration::from_secs(5)).await;
+        assert_eq!(
+            int(&mut d, "SELECT COUNT(*) FROM t WHERE id IN ('a', 'b')").await,
+            2
+        );
+        assert_eq!(
+            int(
+                &mut d,
+                "SELECT COUNT(*) FROM t WHERE id IN (SELECT value FROM json_each('[\"a\"]'))"
+            )
+            .await,
+            1
+        );
+        assert_eq!(
+            texts(&mut d, "SELECT DISTINCT CAST(v AS TEXT) FROM t").await,
+            vec!["1", "2"]
+        );
+        assert_eq!(int(&mut d, "SELECT COUNT(DISTINCT v) FROM t").await, 2);
+    }
+
     #[tokio::test]
     async fn a_branch_opens_read_only_by_path() {
         let (s, _) = store_with_rows().await;

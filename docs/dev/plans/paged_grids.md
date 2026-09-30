@@ -322,13 +322,14 @@ behind, and keeping the indexes only on a read branch was slower anyway
 
 The applet answers each request with the commit its transaction read,
 as `at`. When that changes, the UI treats it like `index_changed` and
-re-reads the key range it holds. The `pinned_<table>` views and their
-catalog races do not apply: the snapshot includes the catalog.
+re-reads the key range it holds. The snapshot includes the catalog, so
+a table committed after it is simply not there yet.
 
-This goes against a rule in `AGENTS.md` ("a reader … pins a commit"
-through `dolt_at_`), so step 2 changes the rule's text: a reader pins
-a commit with `dolt_at_` *or* a held read transaction, and the second is
-for a reader that needs indexes. Passes that already use `dolt_at_` keep it.
+**Superseded on doltlite 0.50.14:** every other reader now opens its
+commit read-only and detached, which also uses indexes
+([`doltlite.md`](../doltlite.md#three-ways-to-read-one-commit)); the
+applet keeps its held transaction because it moves to the newest
+`main` without reopening.
 
 **The search endpoint** takes `offset` and `sort` (`created_at:desc`;
 a column the grid shows, or `score`), with a default `limit` of 200.

@@ -347,6 +347,17 @@ addressbooks_bookkeeping
     last_error
     volatile_payload
     tz_offset
+contact_categories
+    id
+    contact_id
+    addressbook_id
+    category
+contact_group_members
+    id
+    group_id
+    addressbook_id
+    member
+    member_id
 contact_photos
     id
     owner_id
@@ -458,8 +469,6 @@ mailboxes
     parent_id
     role
     sort_order
-    total_emails
-    unread_emails
 mailboxes_bookkeeping
     id
     fetched_at_utc

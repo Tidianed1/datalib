@@ -263,14 +263,11 @@ impl RawDb {
     // ── render reads ────────────────────────────────────────────────
 
     pub async fn load_account(&self) -> Result<Option<LoadedAccount>> {
-        // Audited: the interpolation is a table name this handle chose.
-        let row = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT id, method, server_url, login FROM {} ORDER BY id LIMIT 1",
-            self.reads().table("accounts")
-        )))
-        .fetch_optional(self.pool())
-        .await
-        .context("select account")?;
+        let row =
+            sqlx::query("SELECT id, method, server_url, login FROM accounts ORDER BY id LIMIT 1")
+                .fetch_optional(self.pool())
+                .await
+                .context("select account")?;
         Ok(row.map(|r| LoadedAccount {
             id: r.try_get("id").unwrap_or_default(),
             method: r.try_get("method").unwrap_or_default(),
@@ -280,14 +277,10 @@ impl RawDb {
     }
 
     pub async fn load_calendars(&self) -> Result<Vec<LoadedCalendar>> {
-        // Audited: the interpolation is a table name this handle chose.
-        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT id, display_name, time_zone FROM {} ORDER BY id",
-            self.reads().table("calendars")
-        )))
-        .fetch_all(self.pool())
-        .await
-        .context("select calendars")?;
+        let rows = sqlx::query("SELECT id, display_name, time_zone FROM calendars ORDER BY id")
+            .fetch_all(self.pool())
+            .await
+            .context("select calendars")?;
         Ok(rows
             .into_iter()
             .map(|r| LoadedCalendar {
@@ -302,12 +295,10 @@ impl RawDb {
     }
 
     pub async fn load_ics_objects(&self) -> Result<Vec<LoadedIcsObject>> {
-        // Audited: the interpolation is a table name this handle chose.
-        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+        let rows = sqlx::query(
             "SELECT id, calendar_id, uid, json_extract(payload, '$.ics') AS ics
-             FROM {} ORDER BY id",
-            self.reads().table("ics_objects")
-        )))
+             FROM ics_objects ORDER BY id",
+        )
         .fetch_all(self.pool())
         .await
         .context("select ics_objects")?;
@@ -325,11 +316,9 @@ impl RawDb {
     }
 
     pub async fn load_google_events(&self) -> Result<Vec<LoadedGoogleEvent>> {
-        // Audited: the interpolation is a table name this handle chose.
-        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT id, calendar_id, json(payload) AS payload FROM {} ORDER BY id",
-            self.reads().table("google_events")
-        )))
+        let rows = sqlx::query(
+            "SELECT id, calendar_id, json(payload) AS payload FROM google_events ORDER BY id",
+        )
         .fetch_all(self.pool())
         .await
         .context("select google_events")?;

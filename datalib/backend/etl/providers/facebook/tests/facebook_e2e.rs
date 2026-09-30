@@ -26,9 +26,7 @@ fn fixture() -> PathBuf {
 }
 
 async fn rows(db: &RawDb, table: &str) -> Vec<serde_json::Value> {
-    db.load_payloads(datalib_etl::pin::Reads::Own, table)
-        .await
-        .unwrap_or_default()
+    db.load_payloads(table).await.unwrap_or_default()
 }
 
 #[test]

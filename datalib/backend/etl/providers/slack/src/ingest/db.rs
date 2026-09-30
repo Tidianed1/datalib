@@ -209,7 +209,7 @@ impl RawDb {
     }
 
     pub async fn load_users(&self) -> Result<Vec<Value>> {
-        dr::load_payloads(self.pool(), datalib_etl::pin::Reads::Own, "users").await
+        dr::load_payloads(self.pool(), "users").await
     }
 
     // ── channels ────────────────────────────────────────────────────
@@ -280,7 +280,7 @@ impl RawDb {
     }
 
     pub async fn load_channels(&self) -> Result<Vec<Value>> {
-        dr::load_payloads(self.pool(), datalib_etl::pin::Reads::Own, "channels").await
+        dr::load_payloads(self.pool(), "channels").await
     }
 
     pub async fn channels_for_fetch(
@@ -730,7 +730,7 @@ impl RawDb {
     }
 
     pub async fn load_bookmarks(&self) -> Result<Vec<Value>> {
-        dr::load_payloads(self.pool(), datalib_etl::pin::Reads::Own, "bookmarks").await
+        dr::load_payloads(self.pool(), "bookmarks").await
     }
 
     /// Store a complete `saved.list` walk and drop the stored items it no
@@ -785,7 +785,7 @@ impl RawDb {
     }
 
     pub async fn load_saved_items(&self) -> Result<Vec<Value>> {
-        dr::load_payloads(self.pool(), datalib_etl::pin::Reads::Own, "saved_items").await
+        dr::load_payloads(self.pool(), "saved_items").await
     }
 
     // ── attachments (per-provider CAS edge) ─────────────────────────
