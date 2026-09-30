@@ -216,7 +216,7 @@ expression: snapshot
       "md_path": "tng_email/render_markdown/00000000-0000-81c2-ac6e-558cd94c8895/all.md",
       "modified_at": "2026-01-06T08:00:00+00:00",
       "provider": "email",
-      "renderer_version": "rust-v1.9",
+      "renderer_version": "rust-v1.10",
       "source_id": "tng_email",
       "title": "Your shore leave awaits!"
     },
@@ -468,7 +468,7 @@ expression: snapshot
       "md_path": "tng_email/render_markdown/00000000-0000-848a-8bbe-bf3f6bed391e/all.md",
       "modified_at": "2026-01-07T09:00:00+00:00",
       "provider": "email",
-      "renderer_version": "rust-v1.9",
+      "renderer_version": "rust-v1.10",
       "source_id": "tng_email",
       "title": "Bridge status display"
     },
@@ -636,7 +636,7 @@ expression: snapshot
       "md_path": "tng_email/render_markdown/00000000-0000-8708-9f53-15db76337ff7/all.md",
       "modified_at": "2026-01-05T11:15:00+00:00",
       "provider": "email",
-      "renderer_version": "rust-v1.9",
+      "renderer_version": "rust-v1.10",
       "source_id": "tng_email",
       "title": "Mission Briefing — Sector 001"
     },
@@ -816,7 +816,7 @@ expression: snapshot
       "md_path": "tng_email/render_markdown/00000000-0000-88b7-a1e0-06d73bd4289d/all.md",
       "modified_at": "2026-01-07T14:00:00+00:00",
       "provider": "email",
-      "renderer_version": "rust-v1.9",
+      "renderer_version": "rust-v1.10",
       "source_id": "tng_email",
       "title": "Captain's Log — Stardate 80124.1"
     },
