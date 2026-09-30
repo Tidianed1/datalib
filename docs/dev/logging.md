@@ -209,6 +209,42 @@ sqlite3 <root>/system/runs/runs.sqlite \
     ORDER BY l.seq DESC LIMIT 50"
 ```
 
+### From outside the app
+
+`GET /metrics` serves the numbers in Prometheus's text exposition
+format, the one every metrics tool reads: Prometheus itself, Grafana's
+agent, an OpenTelemetry collector's Prometheus receiver. It is behind
+the API token like every route, so a scrape sends it as a bearer
+token:
+
+```yaml
+scrape_configs:
+  - job_name: datalib
+    static_configs: [{ targets: ["127.0.0.1:8731"] }]
+    authorization: { credentials_file: <root>/system/api-token }
+```
+
+What it serves (`http/src/prometheus.rs`):
+
+- **`datalib_step_<name>`**: every series a step the config declares
+  has reported, its newest value from the last run it reported in,
+  labelled `step`, `group` and the series' own labels. The type comes
+  from the name: one ending in `_total` is a counter, anything else a
+  gauge (`step_protocol.md` §"stdout: the event protocol" has the naming
+  rules). A step's counters start again from zero each run, which a
+  scraper reads as a counter reset.
+- **`datalib_step_state{state=…}`**: 1 for the state the sync loop last
+  put the step in, 0 for the others — `running`, `failed`, `off`, …
+- **`datalib_step_last_success_timestamp_seconds`**: for an alert on a
+  source that has not synced in a day.
+- **`datalib_tree_bytes{tree=…}`** and **`datalib_root_bytes`**: what
+  the usage sampler last measured.
+
+Its history starts when something begins scraping; the app's own views
+read the run store, which has every run it keeps. Labels are step and
+group ids and what a step labels its series with (a table name, a
+producer), never a record's contents. Log lines do not go out this way.
+
 ## Rules
 
 - **A response that is the log must not write the log.** The card

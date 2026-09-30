@@ -66,7 +66,7 @@ describe("a step's charts", () => {
     const charts = stepCharts(
       step({
         series: [
-          { name: "api_requests", labels: "", points: [{ at: at(1), value: 3 }] },
+          { name: "api_requests_total", labels: "", points: [{ at: at(1), value: 3 }] },
           { name: "queued", labels: "", points: [{ at: at(1), value: 4 }] },
           { name: "queued", labels: "from=a/ingest", points: [{ at: at(2), value: 6 }] },
           { name: "problems", labels: "severity=error", points: [{ at: at(2), value: 1 }] },
@@ -75,13 +75,18 @@ describe("a step's charts", () => {
         disk: [{ at: at(0), value: 1000 }],
       }),
     );
-    expect(charts.map((c) => c.key)).toEqual(["queued", "api_requests", "log_problems", "disk"]);
+    expect(charts.map((c) => c.key)).toEqual([
+      "queued",
+      "api_requests_total",
+      "log_problems",
+      "disk",
+    ]);
     expect(charts[0].lines[0].points.at(-1)?.v).toBe(10);
   });
 
   it("folds labels past the cap into one summed line, keeping each colour on its series", () => {
     const series = Array.from({ length: MAX_LINES + 2 }, (_, i) => ({
-      name: "rows_upserted",
+      name: "rows_upserted_total",
       labels: `table=t${i}`,
       points: [{ at: at(i), value: 1 }],
     }));

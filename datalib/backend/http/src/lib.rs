@@ -41,6 +41,7 @@ pub mod lock;
 pub mod logging;
 pub mod loop_guard;
 pub mod manage;
+pub mod prometheus;
 pub mod remote_media;
 pub mod request_log;
 pub mod supervisor;
@@ -176,6 +177,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/probe", post(connect::probe))
         .route("/api/dag", get(get_dag))
         .route("/api/manage/rows", get(manage::get_manage_rows))
+        // Prometheus's own path, so a scrape config needs nothing but the
+        // address and the token.
+        .route("/metrics", get(prometheus::get_metrics))
         .route(
             "/api/manage/groups/{id}/dashboard",
             get(manage::get_dashboard),
@@ -1061,7 +1065,7 @@ pub struct DagStepProgress {
     /// The step's own words: "conversations.list", "3 of 9 channels".
     pub msg: Option<String>,
     /// Current value per metric series, keyed `name` or `name{labels}`
-    /// (`rows_upserted{table=slack_messages}`). `done` and `queued` are
+    /// (`rows_upserted_total{table=slack_messages}`). `done_total` and `queued` are
     /// the two the runner derives for a step that reports the simple
     /// `progress_length` / `progress_inc` form.
     pub metrics: std::collections::BTreeMap<String, i64>,
@@ -2039,7 +2043,7 @@ mod tests {
             ],
             metrics: vec![MetricRow {
                 step: "a/ingest".into(),
-                name: "rows_upserted".into(),
+                name: "rows_upserted_total".into(),
                 labels: "table=t".into(),
                 value: 700,
                 updated_at_utc: "2026-09-14T10:01:00.000000+00:00".into(),
@@ -2054,20 +2058,20 @@ mod tests {
             recent_samples: vec![
                 sample(
                     "a/ingest",
-                    "rows_upserted",
+                    "rows_upserted_total",
                     "2026-09-14T10:00:50.000000+00:00",
                     500,
                 ),
                 sample(
                     "a/ingest",
-                    "rows_upserted",
+                    "rows_upserted_total",
                     "2026-09-14T10:01:00.000000+00:00",
                     700,
                 ),
                 // A lone sample is a point, not a slope.
                 sample(
                     "a/ingest",
-                    "api_requests",
+                    "api_requests_total",
                     "2026-09-14T10:01:00.000000+00:00",
                     9,
                 ),
@@ -2076,9 +2080,14 @@ mod tests {
         };
         let by = progress_by_step(&snap, "2026-09-14T10:03:00.000000+00:00");
         let a = &by["a/ingest"];
-        assert_eq!(a.metrics["rows_upserted{table=t}"], 700);
-        assert_eq!(a.rates.get("rows_upserted"), Some(&20.0), "{:?}", a.rates);
-        assert!(!a.rates.contains_key("api_requests"));
+        assert_eq!(a.metrics["rows_upserted_total{table=t}"], 700);
+        assert_eq!(
+            a.rates.get("rows_upserted_total"),
+            Some(&20.0),
+            "{:?}",
+            a.rates
+        );
+        assert!(!a.rates.contains_key("api_requests_total"));
         assert_eq!(
             a.progress_age_secs,
             Some(120),

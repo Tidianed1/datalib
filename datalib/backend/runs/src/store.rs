@@ -417,7 +417,7 @@ pub struct Snapshot {
     /// Oldest first within a series.
     pub recent_samples: Vec<MetricSampleRow>,
     /// Every sample of a queue's series — `queued`, and the running
-    /// totals of what came off it, `done` and `dequeued` — from the last
+    /// totals of what came off it, `done_total` and `dequeued_total` — from the last
     /// [`QUEUE_WINDOW`], plus the newest one before it, per series: where
     /// each stood when the window opened and how it moved since. Oldest
     /// first within a series.
@@ -539,6 +539,16 @@ pub async fn runs(data_root: &Path, step: Option<&str>, limit: i64) -> Vec<RunRo
 /// step that has never reported the series is absent — the reader
 /// draws "not counted", never a false zero.
 pub async fn latest_metric(data_root: &Path, name: &str) -> Vec<MetricRow> {
+    newest_per_series(data_root, Some(name)).await
+}
+
+/// The newest sample of every series every step has reported, across
+/// every run the store keeps: what `GET /metrics` serves.
+pub async fn latest_metrics(data_root: &Path) -> Vec<MetricRow> {
+    newest_per_series(data_root, None).await
+}
+
+async fn newest_per_series(data_root: &Path, name: Option<&str>) -> Vec<MetricRow> {
     let path = runs_path(data_root);
     if !path.exists() {
         return Vec::new();
@@ -546,16 +556,16 @@ pub async fn latest_metric(data_root: &Path, name: &str) -> Vec<MetricRow> {
     let Ok(pool) = open_existing(&path).await else {
         return Vec::new();
     };
-    // Every sample of the series, newest run first within a (step,
-    // labels) pair; the first of each pair is the answer. Two runs
+    // Every sample, newest run first within a (step, name, labels)
+    // series; the first of each is the answer. Two runs
     // started in the same instant — a test, or two ticks of a wall
     // clock at second resolution — fall back to the order the store
     // recorded them in.
     let rows = sqlx::query(
         "SELECT m.run_id, m.step, m.name, m.labels, m.value, m.updated_at_utc, m.tz_offset \
          FROM metrics m JOIN runs r ON r.run_id = m.run_id \
-         WHERE m.name = ? \
-         ORDER BY m.step, m.labels, r.started_at_utc DESC, r.rowid DESC",
+         WHERE ?1 IS NULL OR m.name = ?1 \
+         ORDER BY m.step, m.name, m.labels, r.started_at_utc DESC, r.rowid DESC",
     )
     .bind(name)
     .fetch_all(&pool)
@@ -565,17 +575,18 @@ pub async fn latest_metric(data_root: &Path, name: &str) -> Vec<MetricRow> {
     let mut out: Vec<MetricRow> = Vec::new();
     for r in &rows {
         let step: String = r.get("step");
+        let name: String = r.get("name");
         let labels: String = r.get("labels");
         if out
             .last()
-            .is_some_and(|m| m.step == step && m.labels == labels)
+            .is_some_and(|m| m.step == step && m.name == name && m.labels == labels)
         {
             continue;
         }
         out.push(MetricRow {
             run_id: r.get("run_id"),
             step,
-            name: r.get("name"),
+            name,
             labels,
             value: r.get("value"),
             updated_at_utc: r.get("updated_at_utc"),
@@ -732,12 +743,12 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
     let queue_history = sqlx::query(
         "SELECT step, name, labels, ts_utc, tz_offset, value FROM ( \
            SELECT *, ROW_NUMBER() OVER (PARTITION BY step, name, labels ORDER BY ts_utc DESC) AS rn \
-           FROM metric_samples WHERE run_id = ?1 AND name IN ('queued', 'done', 'dequeued') \
+           FROM metric_samples WHERE run_id = ?1 AND name IN ('queued', 'done_total', 'dequeued_total') \
              AND ts_utc <= ?2) \
          WHERE rn = 1 \
          UNION ALL \
          SELECT step, name, labels, ts_utc, tz_offset, value FROM metric_samples \
-           WHERE run_id = ?1 AND name IN ('queued', 'done', 'dequeued') AND ts_utc > ?2 \
+           WHERE run_id = ?1 AND name IN ('queued', 'done_total', 'dequeued_total') AND ts_utc > ?2 \
          ORDER BY step, name, labels, ts_utc",
     )
     .bind(&run_id)

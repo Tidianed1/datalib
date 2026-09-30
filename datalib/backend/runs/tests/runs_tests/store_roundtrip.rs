@@ -55,7 +55,7 @@ async fn what_is_published_is_readable() {
         let w = start(td.path(), "run-1");
         w.step(at("slack/raw", "running", "conversations.list"));
         w.step(at("slack/rendered_md", "pending", "waiting"));
-        w.metric(metric("slack/raw", "rows_upserted", 3));
+        w.metric(metric("slack/raw", "rows_upserted_total", 3));
         w.log(line("slack/raw", "info", "hello"));
     }
 
@@ -93,7 +93,7 @@ async fn ticks_coalesce_but_log_lines_do_not() {
         let w = start(td.path(), "run-1");
         for i in 0..500 {
             w.step(at("slack/raw", "running", &format!("tick {i}")));
-            w.metric(metric("slack/raw", "done", i));
+            w.metric(metric("slack/raw", "done_total", i));
             w.log(line("slack/raw", "info", &format!("line {i}")));
         }
     }
@@ -433,7 +433,7 @@ async fn retention_keeps_the_newest_runs_and_sweeps_their_rows() {
         let w = RunWriter::start(td.path(), &id, &id, None, keep_two).unwrap();
         w.step(at("a", "succeeded", "ok"));
         w.log(line("a", "info", &id));
-        w.metric(metric("a", "done", day));
+        w.metric(metric("a", "done_total", day));
     }
     assert!(
         log_after(td.path(), "2026-01-01T00:00:00+00:00", None, 0, 10)
@@ -672,7 +672,7 @@ async fn a_reader_sees_progress_while_the_writer_is_running() {
 
     let mut seen = std::collections::BTreeSet::new();
     for i in 0..40 {
-        w.metric(metric("slack/raw", "done", i));
+        w.metric(metric("slack/raw", "done_total", i));
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         for m in snapshot(td.path()).await.metrics {
             seen.insert(m.value);

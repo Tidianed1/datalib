@@ -449,7 +449,7 @@ pub(crate) struct QueueLedger {
     /// design), and the repeat must not count its rows twice.
     last_seen: Vec<BTreeMap<usize, String>>,
     /// Per consumer, per producer: the rows taken off the queue so far —
-    /// the `dequeued{from=<producer>}` running total.
+    /// the `dequeued_total{from=<producer>}` running total.
     taken: Vec<BTreeMap<usize, u64>>,
 }
 

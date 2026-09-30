@@ -73,8 +73,8 @@ pub struct QueueDrain {
     pub secs: f64,
     /// What the queues held when that stretch began.
     pub queued_then: i64,
-    /// Read off running totals of what came off — `dequeued` beside the
-    /// runner's queues, `done` beside the step's own — rather than summed
+    /// Read off running totals of what came off — `dequeued_total` beside
+    /// the runner's queues, `done_total` beside the step's own — rather than summed
     /// from the drops the queue's samples recorded.
     pub counted: bool,
     /// Nothing came off in the recent window, so the stretch reaches back
@@ -119,7 +119,7 @@ pub fn queue_drain(
     let queued_then = queues.iter().map(|k| value_at(k, start)).sum();
     let secs = secs_between(start, now)?.max(0.0);
 
-    // `done` counts the step's own bar, so it is the pace only of the
+    // `done_total` counts the step's own bar, so it is the pace only of the
     // step's own queue, and says nothing about one the runner keeps.
     let has_own_queue = current.contains_key(QUEUED);
     let counters: Vec<&String> = current
@@ -448,10 +448,10 @@ mod tests {
         let from = "from=a/ingest";
         vec![
             sample("queued", from, "02:30", 10),
-            sample("dequeued", from, "02:30", 0),
+            sample("dequeued_total", from, "02:30", 0),
             sample("queued", from, "03:20", 40),
             sample("queued", from, "03:40", 0),
-            sample("dequeued", from, "03:40", 40),
+            sample("dequeued_total", from, "03:40", 40),
             sample("queued", from, "04:30", 60),
         ]
     }
@@ -466,7 +466,7 @@ mod tests {
         let refs: Vec<&MetricSampleRow> = samples.iter().collect();
         let now = current(&[
             ("queued{from=a/ingest}", 60),
-            ("dequeued{from=a/ingest}", 40),
+            ("dequeued_total{from=a/ingest}", 40),
         ]);
         let d = queue_drain(&refs, &now, Some(STARTED), NOW).unwrap();
         // The window opens at 03:00, when 10 were queued; the queue has
@@ -502,29 +502,29 @@ mod tests {
     #[test]
     fn a_window_with_nothing_taken_off_reaches_back_to_the_start() {
         let samples = [
-            sample("dequeued", "from=a", "00:30", 0),
-            sample("dequeued", "from=a", "01:00", 100),
+            sample("dequeued_total", "from=a", "00:30", 0),
+            sample("dequeued_total", "from=a", "01:00", 100),
             sample("queued", "from=a", "01:00", 0),
             sample("queued", "from=a", "02:00", 50),
         ];
         let refs: Vec<&MetricSampleRow> = samples.iter().collect();
-        let now = current(&[("queued{from=a}", 50), ("dequeued{from=a}", 100)]);
+        let now = current(&[("queued{from=a}", 50), ("dequeued_total{from=a}", 100)]);
         let d = queue_drain(&refs, &now, Some(STARTED), NOW).unwrap();
         assert_eq!((d.taken, d.secs, d.since_start), (100, 300.0, true));
     }
 
-    /// `done` counts the step's own bar, so it paces the step's own
+    /// `done_total` counts the step's own bar, so it paces the step's own
     /// queue — and is not taken for the pace of a queue the runner keeps.
     #[test]
     fn done_paces_only_the_steps_own_queue() {
         let samples = [
-            sample("done", "", "02:00", 10),
+            sample("done_total", "", "02:00", 10),
             sample("queued", "from=a", "02:00", 5),
         ];
         let refs: Vec<&MetricSampleRow> = samples.iter().collect();
         let own = queue_drain(
             &refs,
-            &current(&[("queued", 5), ("done", 70)]),
+            &current(&[("queued", 5), ("done_total", 70)]),
             Some(STARTED),
             NOW,
         )
@@ -532,7 +532,7 @@ mod tests {
         assert_eq!((own.taken, own.counted), (60, true));
         let theirs = queue_drain(
             &refs,
-            &current(&[("queued{from=a}", 5), ("done", 70)]),
+            &current(&[("queued{from=a}", 5), ("done_total", 70)]),
             Some(STARTED),
             NOW,
         )

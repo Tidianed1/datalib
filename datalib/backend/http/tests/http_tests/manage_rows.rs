@@ -442,7 +442,7 @@ async fn a_groups_dashboard_charts_the_run_its_steps_took_part_in() {
         w.metric(datalib_runs::MetricRow {
             run_id: "r1".into(),
             step: "slack/ingest".into(),
-            name: "api_requests".into(),
+            name: "api_requests_total".into(),
             labels: String::new(),
             value: 7,
             updated_at_utc: "2026-08-31T09:00:05.000000+00:00".into(),
@@ -469,7 +469,7 @@ async fn a_groups_dashboard_charts_the_run_its_steps_took_part_in() {
     let ingest = &steps[0];
     assert_eq!(ingest["in_run"], true);
     assert_eq!(ingest["state"], "succeeded");
-    assert_eq!(ingest["series"][0]["name"], "api_requests");
+    assert_eq!(ingest["series"][0]["name"], "api_requests_total");
     assert_eq!(ingest["series"][0]["points"][0]["value"], 7);
     let last = |k: &str| ingest[k].as_array().unwrap().last().unwrap()["value"].clone();
     assert_eq!(last("warnings"), 2);
@@ -479,6 +479,74 @@ async fn a_groups_dashboard_charts_the_run_its_steps_took_part_in() {
     // A group none of whose steps ever ran has no run to show.
     let idx = rows_of_at(tmp.path(), "/api/manage/groups/unified_index/dashboard").await;
     assert_eq!(idx["run"], serde_json::Value::Null);
+}
+
+/// `GET /metrics` serves the run store's series in Prometheus's text
+/// format, typed by name, labelled by step and group, and only for
+/// steps the config still declares — and like every route, only with
+/// the token.
+#[tokio::test]
+async fn metrics_are_served_in_prometheus_text_format() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_root(tmp.path(), CONFIG, None).await;
+    {
+        let w = datalib_runs::RunWriter::start(
+            tmp.path(),
+            "r1",
+            "2026-08-31T09:00:00.000000+00:00",
+            None,
+            datalib_runs::Retention::default(),
+        )
+        .unwrap();
+        for (step, name, labels, value) in [
+            ("slack/ingest", "api_requests_total", "", 7),
+            ("slack/ingest", "rows_upserted_total", "table=messages", 12),
+            ("slack/render_markdown", "items", "", 26),
+            ("removed/step", "items", "", 1),
+        ] {
+            w.metric(datalib_runs::MetricRow {
+                run_id: "r1".into(),
+                step: step.into(),
+                name: name.into(),
+                labels: labels.into(),
+                value,
+                updated_at_utc: "2026-08-31T09:00:05.000000+00:00".into(),
+                tz_offset: None,
+            });
+        }
+    }
+
+    let app = router(state(tmp.path()).await);
+    let get = |auth: bool| {
+        let mut req = Request::builder().uri("/metrics");
+        if auth {
+            req = req.header("authorization", format!("Bearer {TEST_TOKEN}"));
+        }
+        req.body(Body::empty()).unwrap()
+    };
+    let refused = app.clone().oneshot(get(false)).await.unwrap();
+    assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
+
+    let resp = app.oneshot(get(true)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(resp.headers()["content-type"]
+        .to_str()
+        .unwrap()
+        .starts_with("text/plain; version=0.0.4"));
+    let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    for line in [
+        "# TYPE datalib_step_api_requests_total counter",
+        "datalib_step_api_requests_total{step=\"slack/ingest\",group=\"slack\"} 7",
+        "datalib_step_rows_upserted_total{step=\"slack/ingest\",group=\"slack\",table=\"messages\"} 12",
+        "# TYPE datalib_step_items gauge",
+        "datalib_step_items{step=\"slack/render_markdown\",group=\"slack\"} 26",
+    ] {
+        assert!(text.lines().any(|l| l == line), "no line {line:?} in:\n{text}");
+    }
+    assert!(!text.contains("removed/step"), "{text}");
 }
 
 async fn rows_of_at(root: &Path, uri: &str) -> serde_json::Value {

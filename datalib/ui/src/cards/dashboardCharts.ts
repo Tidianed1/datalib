@@ -62,9 +62,10 @@ export function sumSeries(series: Point[][]): Point[] {
   }));
 }
 
-/// `rows_upserted` → "rows upserted".
+/// `rows_upserted_total` → "rows upserted": the suffix says the series
+/// is a running total, which every chart but the queue's is.
 export function humanName(name: string): string {
-  return name.replace(/_/g, " ");
+  return name.replace(/_total$/, "").replace(/_/g, " ");
 }
 
 /// `table=messages,kind=dm` → "messages, dm": the values say which is

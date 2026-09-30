@@ -107,7 +107,7 @@ pub enum Event {
     },
     /// Total expected work units, if known (`None` → indeterminate).
     /// Sugar for a step that counts one thing: the runner turns this and
-    /// [`Event::ProgressInc`] into the `done` and `queued` metrics.
+    /// [`Event::ProgressInc`] into the `done_total` and `queued` metrics.
     ProgressLength {
         step: StepId,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -369,7 +369,7 @@ mod tests {
     fn metric_event_json_shape_matches_doc() {
         let e = Event::Metric {
             step: "slack/ingest".into(),
-            name: "rows_upserted".into(),
+            name: "rows_upserted_total".into(),
             labels: BTreeMap::from([("table".to_string(), "slack_messages".to_string())]),
             value: 1234,
         };
@@ -379,7 +379,7 @@ mod tests {
         assert_eq!(j["value"], 1234);
 
         let bare: Event = serde_json::from_str(
-            r#"{"event":"metric","step":"s","name":"api_requests","value":7}"#,
+            r#"{"event":"metric","step":"s","name":"api_requests_total","value":7}"#,
         )
         .unwrap();
         match bare {

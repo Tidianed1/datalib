@@ -1160,7 +1160,7 @@ mod tests {
     /// A seal a child announces on stdout reaches the event stream once.
     /// It used to arrive twice -- forwarded from the wire, and again from
     /// the scheduler when the signal reached it -- so every subprocess
-    /// step's `checkpoints` metric read double, and the Manage screen
+    /// step's `checkpoints_total` metric read double, and the Manage screen
     /// counted four seals for a download that made two.
     #[tokio::test]
     async fn a_subprocess_checkpoint_reaches_the_event_stream_once() {

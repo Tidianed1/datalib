@@ -332,7 +332,12 @@ impl EventSink for RunStoreSink {
                     acc.checkpoints += 1;
                     acc.checkpoints
                 };
-                self.metric(step, "checkpoints", &BTreeMap::new(), n as i64);
+                self.metric(
+                    step,
+                    datalib_metrics::CHECKPOINTS,
+                    &BTreeMap::new(),
+                    n as i64,
+                );
                 let (ts_utc, tz_offset) = now();
                 let since_last = match rows {
                     Some(rows) => format!("{rows} rows since the last, "),
@@ -701,7 +706,7 @@ mod tests {
         assert_eq!(snap.steps.len(), 1);
         assert_eq!(snap.steps[0].state, LiveState::Running.as_str());
         assert_eq!(
-            metric_value(&snap, "slack/raw", "done"),
+            metric_value(&snap, "slack/raw", datalib_metrics::DONE),
             Some(6),
             "1 + 3 + 2, not the last delta"
         );
@@ -751,7 +756,10 @@ mod tests {
                 BTreeMap::from([(String::new(), 0), ("from=slack/list".to_string(), 0)]),
                 "{status:?}"
             );
-            assert_eq!(metric_value(&snap, "slack/raw", "done"), Some(3));
+            assert_eq!(
+                metric_value(&snap, "slack/raw", datalib_metrics::DONE),
+                Some(3)
+            );
         }
     }
 
@@ -781,7 +789,7 @@ mod tests {
         .await;
 
         assert_eq!(
-            metric_value(&snap, "slack/raw", "done"),
+            metric_value(&snap, "slack/raw", datalib_metrics::DONE),
             Some(1),
             "attempt 2 starts over, not at 8"
         );
@@ -794,7 +802,7 @@ mod tests {
     async fn metrics_are_absolute_and_labelled() {
         let table = |t: &str, v: i64| Event::Metric {
             step: "slack/raw".into(),
-            name: "rows_upserted".into(),
+            name: "rows_upserted_total".into(),
             labels: BTreeMap::from([("table".to_string(), t.to_string())]),
             value: v,
         };
@@ -946,7 +954,10 @@ mod tests {
         .await;
 
         assert_eq!(snap.steps[0].msg.as_deref(), Some("conversations.list"));
-        assert_eq!(metric_value(&snap, "slack/raw", "checkpoints"), Some(1));
+        assert_eq!(
+            metric_value(&snap, "slack/raw", datalib_metrics::CHECKPOINTS),
+            Some(1)
+        );
         let log = log_after(td.path(), "run-1", Some("slack/raw"), 0, 100).await;
         assert_eq!(log.len(), 3, "{log:?}");
         assert_eq!(log[0].level, "warn");

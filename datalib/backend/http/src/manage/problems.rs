@@ -97,7 +97,7 @@ mod tests {
             sample("slack/render_markdown", "severity=loud", 99, "r9"),
             sample("mail/render_markdown", "severity=warning", 0, "r8"),
             MetricRow {
-                name: "rows_upserted".into(),
+                name: "rows_upserted_total".into(),
                 ..sample("mail/ingest", "", 500, "r8")
             },
         ];

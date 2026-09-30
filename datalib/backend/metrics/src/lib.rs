@@ -1,5 +1,11 @@
 //! The metric names a step reports and the server reads back by name.
 //!
+//! Names follow Prometheus's conventions, because `GET /metrics` serves
+//! them as they are: a running total ends in `_total` (a counter), and
+//! anything that can go down does not (a gauge); a unit is the suffix
+//! before it (`_bytes`, `_seconds`). The export reads a series' type off
+//! its name, so the suffix is the contract.
+//!
 //! A metric whose only reader is a person looking at the sync dashboard
 //! needs no name here — it charts whatever series it is handed.
 //! A name belongs here once a *column* is keyed on it, because then
@@ -30,7 +36,11 @@ pub const QUEUED: &str = "queued";
 /// What a step's own progress bar has counted done: a running total.
 /// With the step's own [`QUEUED`], it is how fast that queue is worked
 /// off.
-pub const DONE: &str = "done";
+pub const DONE: &str = "done_total";
+
+/// Checkpoints a step has sealed this run: a running total the runner
+/// keeps from the step's `checkpoint` events.
+pub const CHECKPOINTS: &str = "checkpoints_total";
 
 /// The rows the runner has taken off a `queued{from=<producer>}` queue
 /// as the step read them: a running total, one per producer, with the
@@ -38,4 +48,4 @@ pub const DONE: &str = "done";
 /// which a sampled gauge can miss the bottom of; a total that only
 /// grows loses nothing to sampling, and is what the ETA column reads
 /// the pace off.
-pub const DEQUEUED: &str = "dequeued";
+pub const DEQUEUED: &str = "dequeued_total";

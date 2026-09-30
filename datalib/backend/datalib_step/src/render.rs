@@ -85,7 +85,7 @@ pub async fn run(
         removed = report.removed,
         "docs (re)rendered"
     );
-    progress.metric("documents_removed", &[], report.removed as i64);
+    progress.metric("documents_removed_total", &[], report.removed as i64);
     // The last word on what the source holds, after the sweep: a run
     // that deleted more than it wrote leaves the checkpoints' last
     // number too high, and this is the one that stands between runs.
@@ -292,7 +292,7 @@ pub fn render_source(
             .with_context(|| format!("store document {}", md.markdown_uuid))?;
         emitted.insert(md.markdown_uuid);
         docs += 1;
-        progress.metric("documents_rendered", &[], docs as i64);
+        progress.metric("documents_rendered_total", &[], docs as i64);
         // What a consumer reading a checkpoint may see is a document
         // this run is about to sweep. That is stale, not torn: the
         // sweep's deletions reach the consumer through the same diff
