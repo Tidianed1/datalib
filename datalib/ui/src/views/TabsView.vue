@@ -485,6 +485,9 @@ function resetSidebarWidth() {
           <span v-else class="tabs-label" @dblclick.stop="startRename(row.tab.id)">{{
             nameOf(row.tab)
           }}</span>
+          <span v-if="!devMode && row.tab.id === selectedId" class="tabs-card-controls" @click.stop>
+            <CardControls :source="row.tab.source" :ctx="ctxFor(row.tab)" sidebar />
+          </span>
           <button
             v-if="row.tab.parentId !== null"
             class="tabs-action"
@@ -540,7 +543,10 @@ function resetSidebarWidth() {
       </ul>
     </nav>
     <section v-if="selected" class="tabs-main">
-      <div class="tabs-chrome">
+      <!-- The sidebar already names the card, its opener, and pops out
+           or closes it, so the card runs to the top — except in dev
+           mode, whose source box is the point of the bar. -->
+      <div v-if="devMode" class="tabs-chrome">
         <button
           v-if="parentOfSelected"
           class="tabs-from"
@@ -550,7 +556,6 @@ function resetSidebarWidth() {
           ↰ {{ nameOf(parentOfSelected) }}
         </button>
         <textarea
-          v-if="devMode"
           :key="selected.id"
           v-auto-grow
           class="tabs-source"
@@ -560,10 +565,6 @@ function resetSidebarWidth() {
           @input="growSourceBox($event.target as HTMLTextAreaElement)"
           @keydown.enter.exact.prevent="commitSource(selected, $event)"
         />
-        <div v-else class="tabs-title">
-          <CardIcon class="tabs-title-icon" :source="selected.source" />
-          <span class="tabs-title-text">{{ nameOf(selected) }}</span>
-        </div>
         <CardControls :key="selected.id" :source="selected.source" :ctx="ctxFor(selected)" />
       </div>
       <template v-for="tab in tabs" :key="tab.id">
@@ -803,25 +804,11 @@ function resetSidebarWidth() {
 .tabs-source:focus {
   outline: none;
 }
-.tabs-title {
-  flex: 1 1 auto;
-  min-width: 0;
+.tabs-card-controls {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: var(--datalib-title-size);
-  font-weight: 600;
-  line-height: 18px;
-  padding: 0.2rem 0.2rem;
-}
-.tabs-title-icon {
-  color: var(--datalib-accent);
-}
-.tabs-title-text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  gap: 4px;
 }
 .tabs-card {
   flex: 1 1 auto;

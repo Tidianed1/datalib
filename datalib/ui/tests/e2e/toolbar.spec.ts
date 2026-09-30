@@ -23,6 +23,9 @@ test.describe("toolbar", () => {
 
   test("the search box opens a search card on what was typed", async ({ page }) => {
     await page.goto("/");
+    // The card surface is up once Home is: a search asked before that
+    // replaces the stack instead of opening beside it.
+    await expect(page.locator(".miller-col-title")).toHaveText("Home");
     await searchBox(page).fill("warp");
     await searchBox(page).press("Enter");
     await expect(page.locator(".miller-col")).toHaveCount(2);

@@ -425,6 +425,23 @@ fn remember(app: &AppHandle, root: &Path) {
 /// opened this way can reveal files and pick paths like the main one.
 static OPENED_WINDOWS: AtomicUsize = AtomicUsize::new(0);
 
+/// On macOS the page draws its own toolbar where the title bar was:
+/// the window's content runs under the bar, the title text is hidden,
+/// and the three window buttons sit centred in the toolbar's 40px row.
+/// The y is set by eye: the buttons' middle lands about 1pt above it.
+/// The UI leaves them room and marks the toolbar as a drag region
+/// (`App.vue`, capabilities/window-drag.json).
+fn under_title_bar<'a>(
+    builder: WebviewWindowBuilder<'a, Wry, AppHandle>,
+) -> WebviewWindowBuilder<'a, Wry, AppHandle> {
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true)
+        .traffic_light_position(tauri::LogicalPosition::new(16.0, 21.0));
+    builder
+}
+
 /// The two rules every window of the app follows.
 ///
 /// **A window shows the app, never someone else's website.** Rendered
@@ -439,22 +456,6 @@ static OPENED_WINDOWS: AtomicUsize = AtomicUsize::new(0);
 /// and the grid's double-click were dead in the app. Same origin gets a
 /// second window of the app, under the same rules; anything else goes
 /// to the OS browser, as above.
-/// On macOS the page draws its own toolbar where the title bar was:
-/// the window's content runs under the bar, the title text is hidden,
-/// and the three window buttons sit inside the toolbar's first row. The
-/// UI leaves them room and marks the toolbar as a drag region
-/// (`App.vue`, capabilities/window-drag.json).
-fn under_title_bar<'a>(
-    builder: WebviewWindowBuilder<'a, Wry, AppHandle>,
-) -> WebviewWindowBuilder<'a, Wry, AppHandle> {
-    #[cfg(target_os = "macos")]
-    let builder = builder
-        .title_bar_style(tauri::TitleBarStyle::Overlay)
-        .hidden_title(true)
-        .traffic_light_position(tauri::LogicalPosition::new(16.0, 13.0));
-    builder
-}
-
 fn app_window<'a>(
     builder: WebviewWindowBuilder<'a, Wry, AppHandle>,
     app: &AppHandle,

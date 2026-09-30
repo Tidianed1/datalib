@@ -111,7 +111,7 @@ onUnmounted(() => stop?.());
             </svg>
           </button>
         </template>
-        <div class="datalib-brand" data-tauri-drag-region>Datalib</div>
+        <div class="datalib-brand" data-tauri-drag-region>Data Liberation ✊</div>
       </div>
       <div class="datalib-toolbar-center"><CommandBox /></div>
       <!-- Lightweight sync indicator in the toolbar's flexible space —
@@ -182,7 +182,7 @@ onUnmounted(() => stop?.());
    placed once, when the window opens, at this bar's middle. */
 .datalib-toolbar--titlebar {
   height: 40px;
-  padding-left: 80px;
+  padding-left: 92px;
   -webkit-user-select: none;
   user-select: none;
 }

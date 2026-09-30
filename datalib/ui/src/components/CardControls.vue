@@ -18,6 +18,9 @@ import type { CardCtx } from "@/cards/types";
 const props = defineProps<{
   source: string;
   ctx: CardCtx;
+  // Drawn in a tab's sidebar row, which has its own pop-out and close:
+  // only the hand-off and the help, then.
+  sidebar?: boolean;
 }>();
 
 // ---- agent hand-off (🤖) ----
@@ -94,7 +97,7 @@ watch(helpOpen, (open) => {
     </div>
   </Teleport>
   <a
-    v-if="source.trim() !== ''"
+    v-if="!sidebar && source.trim() !== ''"
     class="card-control card-control--alone"
     :href="aloneHref"
     target="_blank"
@@ -102,7 +105,12 @@ watch(helpOpen, (open) => {
     title="open this card alone, in a new tab or window"
     >↗</a
   >
-  <button class="card-control card-control--close" title="close card" @click="ctx.host.close()">
+  <button
+    v-if="!sidebar"
+    class="card-control card-control--close"
+    title="close card"
+    @click="ctx.host.close()"
+  >
     ✕
   </button>
 </template>
