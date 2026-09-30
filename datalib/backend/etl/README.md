@@ -425,9 +425,17 @@ sync_scope_state`) when the change alters what the cursor means. The
 test for a rung is always the same shape: build the store at
 `version - 1` by hand, open with the ladder, assert the rows —
 `app_store.rs`'s `a_store_from_before_the_utc_columns_is_migrated_on_open`
-is the template. No provider has a ladder yet; the tree's only rungs
-are the app stores' (`core/src/app_store_migrate.rs`), which
-`AppStore::open` applies itself rather than through `open_migrating`.
+is the template. A provider's `RawDb` takes its ladder as the third
+argument of `raw_db!` (email's `schema_raw::LADDER`); contacts, which
+opens by hand, passes it to `open_migrating`. The app stores' rungs
+(`core/src/app_store_migrate.rs`) are applied by `AppStore::open`
+itself rather than through `open_migrating`.
+
+A rung that adds a table the download fills from upstream creates the
+table itself and fills it from what the store already holds (contacts'
+`contact_group_members`). Left to the DDL, the new table would clear
+the store-wide cursors, but not a per-row one like an address book's
+sync-token, and the table would stay empty until upstream changed.
 
 The two-pass order is load-bearing. An index over a column introduced by
 a later schema change cannot be created against an older store, so a

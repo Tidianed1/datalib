@@ -86,18 +86,22 @@ pub(crate) async fn refile_mailboxes(
 ) -> Result<usize> {
     let mut moved = 0;
     for (from, to) in moves {
-        let rows: Vec<EmailRow> = db
-            .emails_filed_under(from)
-            .await?
-            .into_iter()
-            .filter_map(|(account, payload)| {
-                EmailRow::from_jmap_envelope(&account, &refiled(payload, from, to.as_deref()))
-            })
-            .collect();
-        for batch in rows.chunks(REFILE_BATCH) {
-            upsert_emails(db, now, batch).await?;
+        let mut after = String::new();
+        loop {
+            let batch = db.emails_filed_under(from, &after, REFILE_BATCH).await?;
+            let Some((last, _, _)) = batch.last() else {
+                break;
+            };
+            after = last.clone();
+            let rows: Vec<EmailRow> = batch
+                .into_iter()
+                .filter_map(|(_, account, payload)| {
+                    EmailRow::from_jmap_envelope(&account, &refiled(payload, from, to.as_deref()))
+                })
+                .collect();
+            upsert_emails(db, now, &rows).await?;
+            moved += rows.len();
         }
-        moved += rows.len();
     }
     let gone: Vec<String> = moves.iter().map(|(from, _)| from.clone()).collect();
     db.delete_mailboxes(&gone).await?;

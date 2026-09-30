@@ -185,23 +185,32 @@ impl RawDb {
             .collect())
     }
 
-    /// Every email filed under `mailbox_id`: its account and its payload.
-    pub async fn emails_filed_under(&self, mailbox_id: &str) -> Result<Vec<(String, Value)>> {
-        let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT e.account_id, json(e.payload) FROM email_mailboxes m
+    /// Up to `limit` emails filed under `mailbox_id` with an id after
+    /// `after`, in id order: each one's id, account and payload.
+    pub async fn emails_filed_under(
+        &self,
+        mailbox_id: &str,
+        after: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, String, Value)>> {
+        let rows: Vec<(String, String, String)> = sqlx::query_as(
+            "SELECT e.id, e.account_id, json(e.payload) FROM email_mailboxes m
              JOIN emails e ON e.id = m.email_id
-             WHERE m.mailbox_id = ?
-             ORDER BY e.id",
+             WHERE m.mailbox_id = ? AND e.id > ?
+             ORDER BY e.id
+             LIMIT ?",
         )
         .bind(mailbox_id)
+        .bind(after)
+        .bind(limit as i64)
         .fetch_all(self.pool())
         .await
         .with_context(|| format!("select the emails filed under {mailbox_id}"))?;
         rows.into_iter()
-            .map(|(account, payload)| {
+            .map(|(id, account, payload)| {
                 let v = serde_json::from_str(&payload)
-                    .with_context(|| format!("parse an email payload under {mailbox_id}"))?;
-                Ok((account, v))
+                    .with_context(|| format!("parse the payload of email {id}"))?;
+                Ok((id, account, v))
             })
             .collect()
     }
