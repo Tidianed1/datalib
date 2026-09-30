@@ -1,4 +1,4 @@
-import { actOnRowByUuid, EVERY_ROW, SEARCH_ROWS, type GridApi } from "./grid-helpers";
+import { GRID, actOnRowByUuid, EVERY_ROW, SEARCH_ROWS, type GridApi } from "./grid-helpers";
 import { test, expect, type Page } from "@playwright/test";
 
 // The grid's `Indexed` / `Embedded` columns, end to end against the
@@ -47,7 +47,7 @@ test("the applet reports the fixture's documents indexed and embedded", async ({
 });
 
 test("the columns are off by default and render check marks once shown", async ({ page }) => {
-  await page.goto("/");
+  await page.goto(GRID);
   await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
 
   // Off by default. This is the assertion that fails if someone drops
@@ -104,7 +104,7 @@ test("the columns are off by default and render check marks once shown", async (
 // scrolled to them; a version that asked once on load would leave them
 // as the unknown em dash for good.
 test("rows scrolled to later get their check marks too", async ({ page }) => {
-  await page.goto("/");
+  await page.goto(GRID);
   await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
   await page.evaluate(() =>
     (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.showColumns([
@@ -199,7 +199,7 @@ test.describe("the search coverage line", () => {
       documents = state.summary.documents;
       state.summary.embedded = 0;
     });
-    await page.goto("/");
+    await page.goto(GRID);
     await expect(page.locator(".qmd-summary")).toHaveText(
       /^\s*· [\d,]+ documents searchable · 0 with semantic search$/,
     );
@@ -210,7 +210,7 @@ test.describe("the search coverage line", () => {
   });
 
   test("with both, counts every document in each", async ({ page }) => {
-    await page.goto("/");
+    await page.goto(GRID);
     await expect(page.locator(".qmd-summary")).toHaveText(
       /^\s*· ([\d,]+) documents searchable · \1 with semantic search$/,
     );

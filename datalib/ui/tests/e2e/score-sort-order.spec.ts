@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { searchAndSettle } from "./grid-helpers";
+import { GRID, searchAndSettle } from "./grid-helpers";
 
 // Two contracts a single qmd-routed query has to satisfy. They share
 // the same setup (open page → type free-text → qmd routes → score
@@ -27,7 +27,7 @@ test.describe("qmd-routed search: score-desc sort + scroll-to-top", () => {
     // 1. Open the search page empty. Time-asc default scrolls to the
     //    bottom, so we have a non-zero scrollTop — the precondition
     //    for the scroll-to-top assertion below.
-    await page.goto("/");
+    await page.goto(GRID);
     await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
     // The main pane's viewport: the grid keeps one per frozen quadrant.
     const viewport = page.locator(".grid-box .slick-viewport-top.slick-viewport-left");

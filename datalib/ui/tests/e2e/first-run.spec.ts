@@ -37,7 +37,7 @@ test("an empty folder gets an explained bootstrap, not a 502", async ({ page, re
 
   // The toolbar is hidden while the root is uninitialized — nothing on
   // it can do anything, and the grid behind it is the 502.
-  await expect(page.getByRole("button", { name: "Data sources" })).toHaveCount(0);
+  await expect(page.getByRole("searchbox", { name: "Search your data" })).toHaveCount(0);
 
   await page.getByRole("button", { name: "Initialize empty data library" }).click();
 
@@ -60,7 +60,7 @@ test("an empty folder gets an explained bootstrap, not a 502", async ({ page, re
   expect(after.text).toContain('id = "unified_index"');
 
   // The gate is gone, so the toolbar is back…
-  await expect(page.getByRole("button", { name: "Data sources" })).toBeVisible();
+  await expect(page.getByRole("searchbox", { name: "Search your data" })).toBeVisible();
 
   // …and it does not come back on reload now that the root is
   // initialized.

@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { firstRowUuid, selectRowByUuid, type GridApi } from "./grid-helpers";
+import { GRID, firstRowUuid, selectRowByUuid, type GridApi } from "./grid-helpers";
 
 // The miller stack rides the browser's history. Opening a column is a
 // navigation: Back closes it and Forward reopens it, and the columns
@@ -32,7 +32,7 @@ async function isSelected(page: import("@playwright/test").Page, uuid: string) {
 }
 
 test("Back closes the column a click opened; Forward reopens it", async ({ page }) => {
-  await page.goto("/");
+  await page.goto(GRID);
   const rowId = await firstRowUuid(page);
   await markGridColumn(page);
 
@@ -57,7 +57,7 @@ test("Back closes the column a click opened; Forward reopens it", async ({ page 
 });
 
 test("closing a column is a navigation Back undoes", async ({ page }) => {
-  await page.goto("/");
+  await page.goto(GRID);
   const rowId = await firstRowUuid(page);
   await selectRowByUuid(page, rowId);
   await expect(page.locator(chatPreview)).toBeVisible();
@@ -73,7 +73,7 @@ test("closing a column is a navigation Back undoes", async ({ page }) => {
 });
 
 test("the page title names the stack, newest column first", async ({ page }) => {
-  await page.goto("/");
+  await page.goto(GRID);
   await expect(page).toHaveTitle("Search · Datalib");
   const rowId = await firstRowUuid(page);
   await selectRowByUuid(page, rowId);

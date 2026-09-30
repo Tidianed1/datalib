@@ -1,36 +1,42 @@
 import { test, expect } from "@playwright/test";
 import { stubClipboard } from "./grid-helpers";
 
-// The toolbar across the top is the way home: "Data sources" reveals
-// the sources card — opening one only when none is showing — and
-// "New card" is the "+" strip's gesture from the top. The status bar's
-// "Logs" reveals the log the same way. All act on the URL-synced
-// miller stack, so the path says what they did.
+// The chrome around the cards: the toolbar's search box opens a search
+// card on what was typed, and ⌘K (Ctrl+K) reaches it from anywhere;
+// the status bar's "Logs" reveals the log once. All act on the
+// URL-synced miller stack, so the path says what they did. A new
+// window opens on Home.
 
 async function stackPath(page: import("@playwright/test").Page): Promise<string> {
   return decodeURIComponent(await page.evaluate(() => location.pathname));
 }
 
+const searchBox = (page: import("@playwright/test").Page) =>
+  page.getByRole("searchbox", { name: "Search your data" });
+
 test.describe("toolbar", () => {
-  test("Data sources opens the sources card once, then only reveals it", async ({ page }) => {
+  test("a new window opens on Home", async ({ page }) => {
     await page.goto("/");
     await expect(page.locator(".miller-col")).toHaveCount(1);
-
-    await page.getByRole("button", { name: "Data sources" }).click();
-    await expect(page.locator(".miller-col")).toHaveCount(2);
-    await expect(page.locator(".m2-head")).toBeVisible({ timeout: 10_000 });
-    expect(await stackPath(page)).toContain("sourcesView()");
-
-    // A second press finds the card already there.
-    await page.getByRole("button", { name: "Data sources" }).click();
-    await expect(page.locator(".miller-col")).toHaveCount(2);
+    await expect(page.locator(".miller-col-title")).toHaveText("Home");
   });
 
-  test("New card appends a gallery column", async ({ page }) => {
+  test("the search box opens a search card on what was typed", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "New card" }).click();
-    await expect(page.locator(".gv-row").first()).toBeVisible({ timeout: 10_000 });
-    expect(await stackPath(page)).toContain("galleryView()");
+    await searchBox(page).fill("warp");
+    await searchBox(page).press("Enter");
+    await expect(page.locator(".miller-col")).toHaveCount(2);
+    await expect(page.locator(".miller-col-title").last()).toHaveText("Search: warp");
+    expect(await stackPath(page)).toContain('searchView({"q":"warp"})');
+    // The box empties, ready for the next search.
+    await expect(searchBox(page)).toHaveValue("");
+  });
+
+  test("Ctrl+K puts the caret in the search box", async ({ page }) => {
+    await page.goto("/");
+    await expect(searchBox(page)).not.toBeFocused();
+    await page.keyboard.press("Control+k");
+    await expect(searchBox(page)).toBeFocused();
   });
 
   test("the status bar's Logs opens the log over every run, once", async ({ page }) => {
@@ -43,6 +49,16 @@ test.describe("toolbar", () => {
 
     await page.getByRole("button", { name: "Logs" }).click();
     await expect(page.locator(".miller-col")).toHaveCount(2);
+  });
+
+  test("the status bar's density switch resizes the chrome, and is kept", async ({ page }) => {
+    await page.goto("/");
+    const html = page.locator("html");
+    await expect(html).toHaveAttribute("data-density", "compact");
+    await page.getByRole("button", { name: "Comfortable" }).click();
+    await expect(html).toHaveAttribute("data-density", "comfortable");
+    await page.reload();
+    await expect(html).toHaveAttribute("data-density", "comfortable");
   });
 
   test("the status bar copies the data root's path in a browser", async ({ page }) => {

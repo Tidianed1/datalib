@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { GRID } from "./grid-helpers";
 
 // Non-dev card creation goes through the new-card gallery: the "+"
 // strip after the last miller column creates a `galleryView()` card —
@@ -10,14 +11,14 @@ import { test, expect } from "@playwright/test";
 
 test.describe("new-card gallery (non-dev mode)", () => {
   test("+ strip → gallery → Document → picker → document card", async ({ page }) => {
-    await page.goto("/");
+    await page.goto(GRID);
     // Non-dev: no source boxes, but the "+" creation strip is there.
     await expect(page.locator(".miller-col-source")).toHaveCount(0);
     await page.locator(".miller-add").click();
 
-    // The gallery column appears, builtins listed with sourcesView first.
+    // The gallery column appears, builtins listed with Home first.
     const galleryRows = page.locator(".gv-row");
-    await expect(galleryRows.first()).toContainText("Manage data sources");
+    await expect(galleryRows.first()).toContainText("Home");
     expect(decodeURIComponent(await page.evaluate(() => location.pathname))).toContain(
       "galleryView()",
     );
@@ -48,7 +49,7 @@ test.describe("new-card gallery (non-dev mode)", () => {
   });
 
   test("gallery's Logs entry becomes a log card over every run", async ({ page }) => {
-    await page.goto("/");
+    await page.goto(GRID);
     await page.locator(".miller-add").click();
     await page.locator(".gv-row", { hasText: "Logs" }).first().click();
     const col = page.locator(".miller-col").filter({ has: page.locator(".rl-panel") });
@@ -58,7 +59,7 @@ test.describe("new-card gallery (non-dev mode)", () => {
   });
 
   test("gallery's Unified Search entry becomes a second grid", async ({ page }) => {
-    await page.goto("/");
+    await page.goto(GRID);
     await page.locator(".miller-add").click();
     await page.locator(".gv-row", { hasText: "Unified Search" }).first().click();
     // Two grid columns now: the default one and the freshly picked one.

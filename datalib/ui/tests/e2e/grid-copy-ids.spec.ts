@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import {
+  GRID,
   actOnRowByUuid,
   contextMenuRowByUuid,
   firstRowUuid,
@@ -45,7 +46,7 @@ test("a row with an upstream id offers both copies, and they differ", async ({ p
       "(slack messages carry `{team}#{channel}#{ts}` against a datalib uuid)",
   ).toBeTruthy();
 
-  await page.goto("/");
+  await page.goto(GRID);
   await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
 
   const readClipboard = await stubClipboard(page);
@@ -68,7 +69,7 @@ test("a row with an upstream id offers both copies, and they differ", async ({ p
 /// The copy key on two selected rows: a TSV with the shown headers first,
 /// and a stamp as the stamp rather than as the cell draws it.
 test("the copy key puts the selected rows on the clipboard as TSV", async ({ page }) => {
-  await page.goto("/");
+  await page.goto(GRID);
   await firstRowUuid(page);
   const stamped = await page.evaluate(() =>
     (window as unknown as { __fwGridApi: GridApi }).__fwGridApi
@@ -100,7 +101,7 @@ test("the copy key puts the selected rows on the clipboard as TSV", async ({ pag
 /// A Touched cell draws the stamp in the viewer's zone; its copy is the
 /// stamp as the row holds it.
 test("a cell's right-click copies the cell's value", async ({ page }) => {
-  await page.goto("/");
+  await page.goto(GRID);
   await firstRowUuid(page);
   const row = await page.evaluate(() =>
     (window as unknown as { __fwGridApi: GridApi }).__fwGridApi

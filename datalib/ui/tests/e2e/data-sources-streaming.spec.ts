@@ -32,6 +32,7 @@
 import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { rmSync, writeFileSync } from "node:fs";
 import {
+  GRID,
   savedConfig,
   expandGroup,
   pipelineRow,
@@ -234,7 +235,7 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
     // rows before it has any. Not touched again after this: the point
     // is that it updates itself.
     const grid = await context.newPage();
-    await grid.goto("/");
+    await grid.goto(GRID);
     await searchAndSettle(grid, `source_id:${SOURCES[0]}`);
     await expect(grid.getByText("no matches.")).toBeVisible();
 
@@ -428,7 +429,7 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
     const was = await stampsBefore(page, steps);
 
     const grid = await context.newPage();
-    await grid.goto("/");
+    await grid.goto(GRID);
     await searchAndSettle(grid, `source_id:${id}`);
     const activeUuid = () =>
       grid.evaluate(() => (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.activeUuid());

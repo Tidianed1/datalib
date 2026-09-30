@@ -6,6 +6,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { copyFileSync } from "node:fs";
 import {
+  GRID,
   nameCell,
   expandGroup,
   expectGridPainted,
@@ -76,7 +77,7 @@ async function gridRows(
 
 /// Open Explore and wait for it to have painted rows from the applet.
 async function openExplore(page: Page) {
-  await page.goto(`${BASE}/`);
+  await page.goto(`${BASE}${GRID}`);
   await expect(page.locator(SEARCH_ROWS).first()).toBeVisible({
     timeout: 20_000,
   });

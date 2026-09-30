@@ -2,6 +2,7 @@
 // the person renames it, and a card's requests say which card made them.
 
 import { test, expect, type Page } from "@playwright/test";
+import { GRID } from "./grid-helpers";
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("datalib-layout", "tabs"));
@@ -24,14 +25,14 @@ async function renameFromMenu(page: Page) {
 
 test("a card's requests name the card and its type", async ({ page }) => {
   const search = page.waitForRequest((r) => r.url().includes("/applet/unified_index/search"));
-  await page.goto("/");
+  await page.goto(GRID);
   const headers = (await search).headers();
   expect(headers["x-datalib-card"]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab]/);
   expect(headers["x-datalib-card-type"]).toBe("gridView");
 });
 
 test("a renamed tab keeps its name through a search and a reload", async ({ page }) => {
-  await page.goto("/");
+  await page.goto(GRID);
   await expect(firstLabel(page)).toHaveText(/^Search/);
 
   // Unrenamed, the grid names its tab after the query.
@@ -53,7 +54,7 @@ test("a renamed tab keeps its name through a search and a reload", async ({ page
 });
 
 test("Escape and a blank name leave the tab as it was", async ({ page }) => {
-  await page.goto("/");
+  await page.goto(GRID);
   await expect(firstLabel(page)).toHaveText(/^Search/);
   const before = await firstLabel(page).innerText();
 
