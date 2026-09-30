@@ -175,7 +175,13 @@ test was in Datalib.app's position:
 
 Two consequences for a descriptor whose path is a macOS package: it
 must say `picks: "file"`, and the grant it earns does carry down the
-spawn chain above. What is **not** measured is whether the grant
+spawn chain above.
+
+**A picked file grants that file, not its neighbours.** Seen in the app
+with `apple_messages`: choosing `~/Library/Messages/chat.db` let the
+step copy `chat.db` and then refused `chat.db-wal` beside it with
+`Operation not permitted`. A SQLite database in WAL mode is three files,
+so a source reading one picks the folder that holds them. What is **not** measured is whether the grant
 survives quitting and relaunching the app; the TCC database that would
 say so is itself protected. Until it is, the wizard's help text for
 such a source names Full Disk Access as the durable fallback, and the

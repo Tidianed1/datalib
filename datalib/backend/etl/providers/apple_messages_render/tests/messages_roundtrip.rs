@@ -25,6 +25,7 @@ const BRIDGE: &str = "iMessage;+;chat240603120915";
 
 struct Fixture {
     _dir: tempfile::TempDir,
+    messages: PathBuf,
     db: PathBuf,
     raw: PathBuf,
     out: PathBuf,
@@ -33,7 +34,11 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
-        let db = dir.path().join("chat.db");
+        // Laid out as `~/Library/Messages` is, since the folder is what
+        // the wizard writes into the config.
+        let messages = dir.path().join("Messages");
+        std::fs::create_dir_all(&messages).expect("mkdir Messages");
+        let db = messages.join("chat.db");
         std::fs::copy(fixture_db(), &db).expect("stage chat.db");
         // A Bazel runfile is read-only and `fs::copy` keeps the mode;
         // the tests play Messages writing to the database.
@@ -46,6 +51,7 @@ impl Fixture {
         Self {
             out: dir.path().join("render_markdown"),
             _dir: dir,
+            messages,
             db,
             raw,
         }
@@ -53,8 +59,8 @@ impl Fixture {
 
     async fn ingest(&self) -> Result<Option<String>> {
         let config = AppleMessagesConfig {
-            database: Some(LocalPath {
-                path: self.db.clone(),
+            messages: Some(LocalPath {
+                path: self.messages.clone(),
             }),
             ..Default::default()
         };

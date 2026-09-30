@@ -1599,23 +1599,23 @@ export const CATALOG: CatalogEntry[] = [
     fields: [
       {
         kind: "path",
-        // Choosing the file here is what grants the app access to it on
+        // Choosing the folder here is what grants the app access to it on
         // macOS (docs/dev/wizard_file_pickers.md) — the same wall Photos
-        // sits behind.
-        picks: "file",
-        pickTitle: "Choose your Messages database",
-        extensions: ["db"],
+        // sits behind. Not the file: picking chat.db grants that one file,
+        // and the snapshot also reads chat.db-wal beside it.
+        picks: "dir",
+        pickTitle: "Choose your Messages folder",
         required: true,
-        target: "database.path",
-        label: "Messages database",
+        target: "messages.path",
+        label: "Messages folder",
         help:
-          "The chat.db the Messages app keeps at ~/Library/Messages; press Cmd-Shift-G in the " +
-          "picker and paste that path to reach it. Choose it with the picker rather than " +
-          "typing the path: macOS protects the folder, and picking the file is what lets Datalib " +
-          'read it. If a sync still fails with "Operation not permitted", grant Datalib ' +
-          "Full Disk Access in System Settings. Attachments (photos, videos, files) are " +
-          "listed by name and path only — their bytes are not copied, since picking " +
-          "chat.db grants access to that one file.",
+          "The folder the Messages app keeps its database in, ~/Library/Messages; press " +
+          "Cmd-Shift-G in the picker and paste that path to reach it. Choose it with the " +
+          "picker rather than typing the path: macOS protects the folder, and picking it is " +
+          'what lets Datalib read it. If a sync still fails with "Operation not permitted", ' +
+          "grant Datalib Full Disk Access in System Settings. A copied chat.db file works too, " +
+          "typed in here. Attachments (photos, videos, files) are listed by name and path " +
+          "only — their bytes are not copied.",
       },
       {
         kind: "bool",
