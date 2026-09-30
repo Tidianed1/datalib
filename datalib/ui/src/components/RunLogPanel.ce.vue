@@ -1201,40 +1201,46 @@ onUnmounted(() => {
   min-width: 180px;
   padding: 4px 8px;
   border: 1px solid var(--datalib-border);
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
   background: var(--datalib-bg);
   color: inherit;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--datalib-font-size);
+}
+.rl-search:focus,
+.rl-run:focus {
+  outline: none;
+  border-color: var(--datalib-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--datalib-accent) 18%, transparent);
 }
 .rl-run {
   max-width: 28vw;
   text-overflow: ellipsis;
   padding: 4px 8px;
   border: 1px solid var(--datalib-border);
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
   background: var(--datalib-bg);
   color: inherit;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--datalib-font-size);
 }
 .rl-level {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--datalib-font-size-small);
   color: var(--datalib-muted);
   white-space: nowrap;
 }
 .rl-count {
-  font-size: 12px;
+  font-size: var(--datalib-font-size-small);
   color: var(--datalib-muted);
   white-space: nowrap;
 }
 .rl-note {
   margin: 0;
   padding: 16px;
-  font-size: 13px;
+  font-size: var(--datalib-font-size);
   color: var(--datalib-muted);
 }
 .rl-note.bad {
@@ -1287,7 +1293,7 @@ onUnmounted(() => {
   text-decoration: underline dotted;
 }
 .rl-grid .slick-cell {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
+  font-family: var(--datalib-mono);
+  font-size: var(--datalib-font-size-small);
 }
 </style>

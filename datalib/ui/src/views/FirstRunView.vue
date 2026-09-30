@@ -85,13 +85,14 @@ li {
 }
 .cmd {
   background: var(--datalib-code-bg);
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
+  font-family: var(--datalib-mono);
   padding: 0.6rem 0.75rem;
   overflow-x: auto;
   margin: 0;
 }
 .label {
   color: var(--datalib-muted);
-  font-size: 0.9rem;
+  font-size: var(--datalib-font-size-small);
 }
 </style>

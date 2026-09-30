@@ -283,7 +283,7 @@ const tabLabel = (child: TileNode) =>
   align-items: center;
   justify-content: center;
   cursor: grab;
-  background: rgba(0, 0, 0, 0.04);
+  background: var(--datalib-surface-2);
 }
 .tiling-grip::before {
   content: "";
@@ -293,7 +293,7 @@ const tabLabel = (child: TileNode) =>
   background: var(--tiling-edge);
 }
 .tiling-grip:hover {
-  background: rgba(0, 0, 0, 0.1);
+  background: var(--datalib-hover);
 }
 .tiling-grip:active {
   cursor: grabbing;
@@ -366,7 +366,7 @@ const tabLabel = (child: TileNode) =>
   align-items: stretch;
   gap: 1px;
   overflow-x: auto;
-  background: rgba(0, 0, 0, 0.08);
+  background: var(--datalib-surface-2);
   border-radius: 3px 3px 0 0;
 }
 .tiling-tab {
@@ -376,11 +376,8 @@ const tabLabel = (child: TileNode) =>
   max-width: 16rem;
   padding: 0.25rem 0.5rem;
   cursor: pointer;
-  font:
-    12px/1.4 ui-monospace,
-    Menlo,
-    monospace;
-  border-right: 1px solid color-mix(in srgb, #888 50%, transparent);
+  font: 12px/1.4 var(--datalib-mono);
+  border-right: 1px solid var(--datalib-border-soft);
   opacity: 0.65;
   white-space: nowrap;
 }
@@ -398,10 +395,7 @@ const tabLabel = (child: TileNode) =>
 /* Non-dev tabs carry titles, not source — drop the tab bar's
    monospace for them. */
 .tiling-tab-label--title {
-  font-family:
-    system-ui,
-    -apple-system,
-    sans-serif;
+  font-family: var(--datalib-font);
 }
 .tiling-tab-close {
   flex: 0 0 auto;
@@ -428,7 +422,7 @@ const tabLabel = (child: TileNode) =>
 .tiling-divider::before {
   content: "";
   position: absolute;
-  background: #888;
+  background: var(--datalib-border);
 }
 .tiling-body--h > .tiling-divider {
   width: 8px;

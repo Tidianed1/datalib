@@ -69,7 +69,15 @@ Shadow DOM is the isolation boundary: document-head styles do not
 reach inside, so a card must inject any CSS it needs into `root`
 itself. CSS custom properties (the app's `--datalib-*` theme variables) do
 inherit across the boundary and are the supported way to pick up
-theming.
+theming. They live in `datalib/ui/src/theme.css`: the colours for
+light and dark, the system font, and every size — row height, control
+height, padding, font sizes — keyed off `<html data-density>`, which
+the status bar's **Compact / Comfortable** switch sets
+(`datalib/ui/src/density.ts`). A card that sizes itself with
+`var(--datalib-font-size)`, `var(--datalib-row-h)` and the rest
+follows that switch without knowing it exists. `--datalib-bg` is a
+card's own background; `--datalib-ground` is the grey the cards sit
+on.
 
 The prebuilt cards are Vue components, adapted to this contract by
 `vueCard` (`datalib/ui/src/cards/vueCard.ts`): it injects the
@@ -83,7 +91,19 @@ a card must also be `.ce.vue` and listed in the adapter's
 `styleSources` so their CSS lands in the root too (see
 `datalib/ui/src/cards/libs/documentView.ts` for the pattern).
 
-## Titles and dev mode
+## Titles, icons and dev mode
+
+Every card kind describes itself with the same three fields: a
+**title** and **description** for the gallery, and an **icon** the
+layouts draw beside the card's name — on a tab, in a card's header, in
+the gallery. A builtin declares them in `datalib/ui/src/cards/catalog.ts`
+(`BUILTIN_META`, keyed by `ViewLibs`, so a new builtin without an entry
+does not type-check); a custom component declares them in its
+`<name>.json` (see [`applets.md`](applets.md)). `cardMeta(source)`
+answers for either, and `components/CardIcon.vue` draws what it names,
+so nothing that draws a card knows which kind it is. An icon is a
+glyph name from `cards/icons.ts`, a source's mark in `src/assets/`, or
+a `data:image/…` URL; anything else draws the generic component glyph.
 
 The chrome bar around each card has two faces, switched by the **dev**
 toggle in the status bar (`datalib/ui/src/devMode.ts`, persisted in
@@ -105,13 +125,15 @@ time" opt-out that turns the button into a straight copy.
 
 Card creation is the same gesture in both modes: every layout has an
 "add card" affordance (the miller layout's ＋ after the last column,
-the tabs layout's "＋ new card", the tree layout's "+ card" button, the
+the tabs layout's "New card" under the last tab, the tree layout's
+"+ card" button, the
 tiling layout's ＋ add areas), and it always creates a `galleryView()`
 card — the **new-card gallery**
 (`datalib/ui/src/cards/libs/galleryView.ts`). It lists, each with a
 short description:
 
-1. the builtins, `sourcesView` first;
+1. the builtins `cards/catalog.ts` offers, `homeView` first and
+   `sourcesView` second;
 2. every titled component in the frontend store, each expanding to its
    qualified name called with its stored `component_args` — so one
    component appears once per namespace with its own arguments
@@ -329,7 +351,9 @@ reads or writes the URL; one switched back to puts its own stack back.
 ## The tabs layout
 
 The layout the app opens on, until the person picks another in the
-status bar (the choice is kept in this browser). One card at a time, full size, beside a sidebar listing every open
+status bar (the choice is kept in this browser). Every layout opens a
+new window on `homeView()` (`DEFAULT_SPECS` in `views/millerStack.ts`),
+which the URL writes as `/`. One card at a time, full size, beside a sidebar listing every open
 card as a tree: each tab sits under the tab that opened it, as in
 Firefox's Tree Style Tab. `views/tabTree.ts` holds the decisions as
 pure functions. Each window has a tree of its own
@@ -360,6 +384,23 @@ card is named by its card again.
 
 The factories in `ViewLibs` are the public surface card source
 programs against:
+
+- `homeView()` — the card a new window opens on
+  (`cards/HomeCard.ce.vue`): what needs a person (a source whose last
+  sync failed or stopped, a store holding errors or warnings), the
+  library's item count and size on disk, each source's state, and the
+  newest documents by their own timestamps. It reads only
+  `GET /api/manage/rows` and the search; its decisions are
+  `cards/home.ts`.
+- `searchView(opts?: { q? })` — the friendly search
+  (`cards/SearchCard.ce.vue`): a box that takes words and filters, a
+  "Meaning only" switch that moves the free text into a `qmd_vsearch:`
+  predicate, chips for the sources the results come from with their
+  counts (`/search/groups?by=source_ref`), the results as a list with
+  the typed words marked, and the picked result drawn in place by
+  `documentView` in a shadow root of its own. "View as table" opens
+  `gridView` on the same query. The toolbar's search box (⌘K) opens
+  one. Its query logic is `cards/search.ts`.
 
 - `gridView(opts?: { q?, columns?, name?, url?, placeholder? })` —
   search bar + a SlickGrid over `/applet/unified_index/search`, or over
@@ -400,7 +441,7 @@ programs against:
   isolates on hover; hovering a point previews it, clicking opens
   `documentView` beside the card. Persists `q`/`by`/`sel`. The pure
   half — colours, view, hit-testing — is `cards/embeddingMap.ts`.
-- `galleryView()` — the new-card gallery (see "Titles and dev mode"
+- `galleryView()` — the new-card gallery (see "Titles, icons and dev mode"
   above); replaces itself with whatever the user picks.
 - `agentSeedView(name)` — the in-card hand-off instructions a freshly
   minted, agent-bound component is seeded with (the gallery's agent
@@ -421,7 +462,14 @@ programs against:
   `cards/rowActions.ts`, shared with the dashboard; the card keeps only
   what needs the config's text — edit, rename, remove, compare. The
   `/data_sources` route is this card alone at 1.6× width (`MANAGE_STACK`
-  in `router/index.ts`).
+  in `router/index.ts`). The card's logic is `cards/sourcesCardModel.ts`
+  (`useSourcesCard`), shared with `sourcesNextView`.
+- `sourcesNextView()` — the redesigned Sources card
+  (`cards/SourcesNextCard.ce.vue`), beside `sourcesView` until it
+  replaces it: the same logic and the same `TableGrid`, with a header
+  that says how the last sync went, the config's notices as strips,
+  a status column that reads word first, and rows sized by the density
+  switch. Home's "Open Sources" opens it.
 - `syncDashboardView({ group, step })` — one group's sync
   (`cards/SyncDashboardCard.ce.vue`): the group's Manage row at the top
   and each step's row under it, laid out vertically, each with a

@@ -638,8 +638,8 @@ function onChromeDown(node: TreeNode, ev: PointerEvent) {
   box-sizing: border-box;
   background: var(--datalib-bg);
   border: 1px solid var(--datalib-border);
-  border-radius: 6px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  border-radius: calc(var(--datalib-radius) + 2px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
   overflow: hidden;
   /* Animate to freshly laid-out positions so siblings shuffling to
      make room reads as motion, not teleport. */
@@ -705,9 +705,9 @@ function onChromeDown(node: TreeNode, ev: PointerEvent) {
   gap: 0.2rem;
   padding: 0.2rem;
   border: 1px solid var(--datalib-border);
-  border-radius: 6px;
+  border-radius: var(--datalib-radius);
   background: var(--datalib-bg);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
 }
 .tree-controls button {
   border: none;

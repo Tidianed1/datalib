@@ -460,12 +460,12 @@ onUnmounted(() => {
   flex-direction: column;
   gap: 10px;
   color: var(--datalib-fg);
-  font-size: 13px;
+  font-size: var(--datalib-font-size);
 }
 .sd-section {
   border: 1px solid var(--datalib-border);
-  border-radius: 8px;
-  background: var(--datalib-card-bg);
+  border-radius: calc(var(--datalib-radius) + 2px);
+  background: var(--datalib-bg);
   padding: 10px 12px;
   display: flex;
   flex-direction: column;
@@ -482,7 +482,7 @@ onUnmounted(() => {
 }
 .sd-name {
   font-weight: 600;
-  font-size: 14px;
+  font-size: var(--datalib-title-size);
 }
 .sd-status {
   display: inline-flex;
@@ -496,7 +496,7 @@ onUnmounted(() => {
 }
 .sd-inline-key {
   color: var(--datalib-muted);
-  font-size: 11px;
+  font-size: var(--datalib-font-size-small);
   margin-left: 6px;
 }
 .sd-stats {
@@ -511,20 +511,20 @@ onUnmounted(() => {
 }
 .sd-stats dt {
   color: var(--datalib-muted);
-  font-size: 11px;
+  font-size: var(--datalib-font-size-small);
 }
 .sd-stats dd {
   margin: 0;
-  font-size: 15px;
+  font-size: var(--datalib-title-size);
   font-variant-numeric: tabular-nums;
 }
 .sd-run {
   font: inherit;
-  font-size: 12px;
+  font-size: var(--datalib-font-size-small);
   color: var(--datalib-fg);
   background: var(--datalib-input-bg);
   border: 1px solid var(--datalib-border);
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
   max-width: 260px;
 }
 .sd-tools {
@@ -538,10 +538,10 @@ onUnmounted(() => {
 }
 .sd-btn {
   font: inherit;
-  font-size: 12px;
+  font-size: var(--datalib-font-size-small);
   padding: 2px 8px;
   border: 1px solid var(--datalib-border);
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
   background: var(--datalib-bg);
   color: var(--datalib-fg);
   cursor: pointer;
@@ -565,19 +565,19 @@ onUnmounted(() => {
 .sd-note {
   margin: 0;
   color: var(--datalib-muted);
-  font-size: 12px;
+  font-size: var(--datalib-font-size-small);
 }
 .sd-empty {
   margin: 0;
   color: var(--datalib-muted);
   font-style: italic;
-  font-size: 12px;
+  font-size: var(--datalib-font-size-small);
 }
 .sd-msg {
   margin: 0;
   padding: 6px 10px;
-  border-radius: 6px;
-  font-size: 12px;
+  border-radius: var(--datalib-radius);
+  font-size: var(--datalib-font-size-small);
 }
 .bad {
   color: var(--datalib-log-error);

@@ -212,7 +212,7 @@ function severityLabel(d: Diagnostic): string {
   margin: 0.8rem 0;
   padding: 0;
   border: 1px solid var(--datalib-border);
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
   overflow: hidden;
 }
 .diag {
@@ -220,8 +220,8 @@ function severityLabel(d: Diagnostic): string {
   grid-template-columns: 5.5rem 5.5rem 1fr;
   gap: 0.5rem;
   padding: 0.45rem 0.6rem;
-  border-bottom: 1px solid var(--datalib-border);
-  font-size: 0.9rem;
+  border-bottom: 1px solid var(--datalib-border-soft);
+  font-size: var(--datalib-font-size);
   line-height: 1.45;
 }
 .diag:last-child {
@@ -229,7 +229,7 @@ function severityLabel(d: Diagnostic): string {
 }
 .loc {
   font: inherit;
-  font-family: ui-monospace, monospace;
+  font-family: var(--datalib-mono);
   background: none;
   border: none;
   padding: 0;
@@ -247,16 +247,16 @@ function severityLabel(d: Diagnostic): string {
 }
 .sev-fatal .sev,
 .sev-rejected .sev {
-  color: var(--datalib-log-error);
+  color: var(--datalib-error-fg);
 }
 .sev-blocked .sev {
-  color: var(--datalib-log-warn);
+  color: var(--datalib-warn-fg);
 }
 .sev-warning .sev {
   color: var(--datalib-muted);
 }
 .entry {
-  font-family: ui-monospace, monospace;
+  font-family: var(--datalib-mono);
   color: var(--datalib-muted);
 }
 .help {
@@ -264,27 +264,27 @@ function severityLabel(d: Diagnostic): string {
   color: var(--datalib-muted);
 }
 .ok {
-  color: var(--datalib-log-ok);
+  color: var(--datalib-ok);
 }
 .label {
   display: block;
   margin-top: 0.9rem;
   color: var(--datalib-muted);
-  font-size: 0.9rem;
+  font-size: var(--datalib-font-size-small);
 }
 .editor {
   width: 100%;
   box-sizing: border-box;
   min-height: 18rem;
   margin-top: 0.35rem;
-  font-family: ui-monospace, monospace;
-  font-size: 0.85rem;
+  font-family: var(--datalib-mono);
+  font-size: var(--datalib-font-size-small);
   line-height: 1.5;
   tab-size: 2;
   background: var(--datalib-input-bg);
   color: var(--datalib-fg);
   border: 1px solid var(--datalib-border);
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
   padding: 0.6rem;
   resize: vertical;
 }
