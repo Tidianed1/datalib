@@ -1,42 +1,32 @@
-//! A folder of Lightroom backups, mirrored oldest first, one commit per
-//! backup dated when it was taken, then the live catalog on top when the
-//! source has one. `INGEST.md` §"A folder of backups" has the rules this
-//! implements.
+//! A folder of Lightroom backups: which entries are backups, which the
+//! store already holds, and which may still go on top of its history.
+//! Pure over an `fsscan` of the folder and the ledger; `sync` acts on it.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use chrono::{NaiveDateTime, TimeZone};
 use sqlx::sqlite::SqlitePool;
 
-use datalib_etl::doltlite_raw as dr;
-use datalib_etl::download_problems::RecordProblem;
-use datalib_etl::progress::Progress;
-use datalib_etl::scope_config;
-use datalib_etl::stop::StopFlag;
-use datalib_etl_sqlite_mirror::{MirrorOptions, MirrorStats};
+use datalib_etl::fsscan::{self, ScannedFile};
 
-use super::unpack::{self, is_catalog, is_zip};
+use super::unpack::{is_catalog, is_zip};
 
 /// The store's record of the catalog states it holds: one row per
 /// backup, written in the commit that mirrored it, and one for the live
 /// catalog, moved whenever mirroring it changed the store.
 pub const LEDGER: &str = "lightroom_snapshots";
 
-const LEDGER_DDL: &str = "CREATE TABLE IF NOT EXISTS lightroom_snapshots (
+pub const LEDGER_DDL: &str = "CREATE TABLE IF NOT EXISTS lightroom_snapshots (
     snapshot TEXT PRIMARY KEY,
     taken_at TEXT NOT NULL,
-    file TEXT NOT NULL
+    file TEXT NOT NULL,
+    blake3 TEXT NOT NULL
 )";
 
 /// The live catalog's row in [`LEDGER`]. A backup's name starts with a
 /// date, so it can never be this.
 pub const LIVE: &str = "live catalog";
-
-/// `scope_config`'s key for the filters the newest commit was mirrored
-/// under.
-const SCOPE: &str = "backups";
 
 /// How Lightroom names a backup's folder: `2026-09-27 1650`, sometimes
 /// with a note a person added after it.
@@ -44,14 +34,14 @@ const NAME_DATE_FORMAT: &str = "%Y-%m-%d %H%M";
 const NAME_DATE_LEN: usize = "2026-09-27 1650".len();
 
 /// `taken_at` as the ledger stores it.
-const LEDGER_DATE_FORMAT: &str = "%Y-%m-%dT%H:%M:%S";
+pub const LEDGER_DATE_FORMAT: &str = "%Y-%m-%dT%H:%M:%S";
 
-/// One entry directly under the backups folder: a folder and the files
-/// in it, or a catalog file sitting there on its own.
+/// One entry directly under the backups folder, with the catalog files
+/// found in it: a folder, or a catalog file sitting there on its own.
 #[derive(Debug, Clone)]
 pub struct Entry {
     pub name: String,
-    pub files: Vec<PathBuf>,
+    pub files: Vec<ScannedFile>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,7 +50,15 @@ pub struct Backup {
     pub name: String,
     pub taken_at: NaiveDateTime,
     /// What to mirror: the `.zip` Lightroom wrote, else a bare `.lrcat`.
-    pub file: PathBuf,
+    pub file: ScannedFile,
+}
+
+/// A ledger row, as the plan needs it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Held {
+    pub snapshot: String,
+    pub taken_at: NaiveDateTime,
+    pub blake3: String,
 }
 
 /// What a run will do, decided from the folder and the ledger alone.
@@ -74,7 +72,27 @@ pub struct Plan {
     pub refused: Vec<(String, String)>,
 }
 
-pub fn plan(entries: Vec<Entry>, ledger: &BTreeMap<String, NaiveDateTime>) -> Plan {
+/// Group a scan of the folder by its top-level entry. Hidden entries
+/// (`.DS_Store`, `.Trashes`) are nobody's backup.
+pub fn entries(files: &[ScannedFile]) -> Vec<Entry> {
+    let mut by_name: BTreeMap<&str, Vec<ScannedFile>> = BTreeMap::new();
+    for f in files {
+        let top = f.rel.split('/').next().unwrap_or(&f.rel);
+        if top.starts_with('.') {
+            continue;
+        }
+        by_name.entry(top).or_default().push(f.clone());
+    }
+    by_name
+        .into_iter()
+        .map(|(name, files)| Entry {
+            name: name.to_string(),
+            files,
+        })
+        .collect()
+}
+
+pub fn plan(entries: Vec<Entry>, ledger: &[Held]) -> Plan {
     let mut out = Plan::default();
     for entry in entries {
         match read_entry(&entry) {
@@ -88,21 +106,38 @@ pub fn plan(entries: Vec<Entry>, ledger: &BTreeMap<String, NaiveDateTime>) -> Pl
 
     let newest_held = newest(ledger);
     for b in &out.found {
-        if ledger.contains_key(&b.name) {
+        let hash = fsscan::hex(&b.file.blake3);
+        let backups = ledger.iter().filter(|h| h.snapshot != LIVE);
+        // Known by content, not by name: a folder renamed by hand is the
+        // backup the store already has.
+        if backups.clone().any(|h| h.blake3 == hash) {
+            continue;
+        }
+        if let Some(h) = backups.clone().find(|h| h.snapshot == b.name) {
+            out.refused.push((
+                b.name.clone(),
+                format!(
+                    "{} changed after it was committed on {}; history keeps the version \
+                     committed then",
+                    b.file.rel,
+                    h.taken_at.format(LEDGER_DATE_FORMAT),
+                ),
+            ));
             continue;
         }
         match newest_held {
             // History is one line: a backup taken before the newest state
             // already committed, a backup's or the live catalog's, has
             // nowhere to go.
-            Some((name, at)) if b.taken_at < at => out.refused.push((
+            Some(newest) if b.taken_at < newest.taken_at => out.refused.push((
                 b.name.clone(),
                 format!(
-                    "taken {}, before the newest state already in the store ({name}, {}); \
+                    "taken {}, before the newest state already in the store ({}, {}); \
                      backups are added in the order they were taken, so this one \
                      was left out",
                     b.taken_at.format(LEDGER_DATE_FORMAT),
-                    at.format(LEDGER_DATE_FORMAT),
+                    newest.snapshot,
+                    newest.taken_at.format(LEDGER_DATE_FORMAT),
                 ),
             )),
             _ => out.ingest.push(b.clone()),
@@ -111,17 +146,19 @@ pub fn plan(entries: Vec<Entry>, ledger: &BTreeMap<String, NaiveDateTime>) -> Pl
     out
 }
 
-fn newest(ledger: &BTreeMap<String, NaiveDateTime>) -> Option<(&str, NaiveDateTime)> {
-    ledger
-        .iter()
-        .max_by_key(|(_, t)| **t)
-        .map(|(n, t)| (n.as_str(), *t))
+pub fn newest(ledger: &[Held]) -> Option<&Held> {
+    ledger.iter().max_by_key(|h| h.taken_at)
 }
 
 /// `Ok(None)` for an entry with no catalog in it, which is not a backup.
 fn read_entry(entry: &Entry) -> Result<Option<Backup>, String> {
-    let zips: Vec<&PathBuf> = entry.files.iter().filter(|f| is_zip(f)).collect();
-    let catalogs: Vec<&PathBuf> = entry.files.iter().filter(|f| is_catalog(f)).collect();
+    let path = |f: &&ScannedFile| f.path.clone();
+    let zips: Vec<&ScannedFile> = entry.files.iter().filter(|f| is_zip(&path(f))).collect();
+    let catalogs: Vec<&ScannedFile> = entry
+        .files
+        .iter()
+        .filter(|f| is_catalog(&path(f)))
+        .collect();
     // A folder that has both is one Lightroom wrote and someone unpacked
     // since. The zip is what Lightroom wrote; the unpacked copy may have
     // been opened, and so changed, after.
@@ -155,7 +192,7 @@ fn taken_at(name: &str) -> Option<NaiveDateTime> {
 
 /// The commit date for a backup: its folder's time, read in this
 /// machine's time zone, which is the one Lightroom named it in.
-fn commit_date(taken_at: NaiveDateTime) -> Option<String> {
+pub fn commit_date(taken_at: NaiveDateTime) -> Option<String> {
     let date = chrono::Local
         .from_local_datetime(&taken_at)
         .earliest()
@@ -169,274 +206,86 @@ fn commit_date(taken_at: NaiveDateTime) -> Option<String> {
     date
 }
 
-pub fn list_entries(dir: &Path) -> Result<Vec<Entry>> {
-    let mut out = Vec::new();
-    let listing = std::fs::read_dir(dir)
-        .with_context(|| format!("read the backups folder {}", dir.display()))?;
-    for item in listing {
-        let item = item.with_context(|| format!("read {}", dir.display()))?;
-        let name = item.file_name().to_string_lossy().into_owned();
-        if name.starts_with('.') {
-            continue;
-        }
-        let path = item.path();
-        let files = if path.is_dir() {
-            std::fs::read_dir(&path)
-                .with_context(|| format!("read {}", path.display()))?
-                .map(|f| f.map(|f| f.path()))
-                .collect::<std::io::Result<Vec<_>>>()
-                .with_context(|| format!("read {}", path.display()))?
-        } else {
-            vec![path]
-        };
-        out.push(Entry { name, files });
-    }
-    Ok(out)
-}
-
-#[derive(Debug, Default)]
-pub struct BackupsRun {
-    pub found: usize,
-    pub mirrored: Vec<String>,
-    pub problems: Vec<RecordProblem>,
-    /// The live catalog, when the source has one and the run reached it.
-    pub live: Option<MirrorStats>,
-    /// The last backup mirrored.
-    pub last: Option<MirrorStats>,
-}
-
-impl BackupsRun {
-    pub fn summary(&self) -> String {
-        let mut s = format!(
-            "backups_found={} backups_mirrored={} backups_refused={}",
-            self.found,
-            self.mirrored.len(),
-            self.problems.len()
-        );
-        if let Some(last) = self.live.as_ref().or(self.last.as_ref()) {
-            s.push(' ');
-            s.push_str(&last.summary());
-        }
-        s
-    }
-}
-
-/// What one run reads.
-pub struct Inputs<'a> {
-    pub backups: &'a Path,
-    /// Mirrored last, on top of the backups.
-    pub catalog: Option<&'a Path>,
-    /// The run's now, in local time: the live catalog's `taken_at`.
-    pub now: NaiveDateTime,
-}
-
-/// Commits each backup and the live catalog as it mirrors them, and
-/// leaves only the problems for the caller's closing commit.
-pub async fn ingest(
-    pool: &SqlitePool,
-    inputs: Inputs<'_>,
-    options: &MirrorOptions,
-    progress: &Progress,
-    stop: &StopFlag,
-    label: &str,
-) -> Result<BackupsRun> {
-    let dir = inputs.backups;
-    sqlx::query(LEDGER_DDL)
-        .execute(pool)
-        .await
-        .context("create the backups ledger")?;
-    let ledger = read_ledger(pool).await?;
-    let plan = plan(list_entries(dir)?, &ledger);
-    if plan.found.is_empty() {
-        bail!(
-            "found no Lightroom backups in {}: expected folders named like `2026-09-27 1650`, \
-             each holding a .zip or a .lrcat",
-            dir.display()
-        );
-    }
-
-    let mut options = MirrorOptions {
-        sidecar_tables: [options.sidecar_tables.as_slice(), &[LEDGER.to_string()]].concat(),
-        ..options.clone()
-    };
-    let scope = scope_of(&options);
-    let recorded = scope_config::load(pool, SCOPE).await?;
-    let filters_changed = recorded.as_ref().is_some_and(|r| r != &scope);
-
-    let mut run = BackupsRun {
-        found: plan.found.len(),
-        problems: plan
-            .refused
-            .iter()
-            .map(|(name, why)| RecordProblem::new(LEDGER, name, why))
-            .collect(),
-        ..Default::default()
-    };
-
-    // The filters shape every commit from here on, but the store's newest
-    // commit was made under the old ones. With no new backup and no live
-    // catalog to carry them, mirror the newest backup again so HEAD shows
-    // the catalog as the filters now say.
-    let mut todo: Vec<(Backup, bool)> = plan.ingest.iter().map(|b| (b.clone(), false)).collect();
-    let mut remirror_missing = false;
-    if filters_changed && todo.is_empty() && inputs.catalog.is_none() {
-        let newest = newest(&ledger).map(|(n, _)| n);
-        match plan.found.iter().find(|b| Some(b.name.as_str()) == newest) {
-            Some(b) => todo.push((b.clone(), true)),
-            None => {
-                remirror_missing = true;
-                run.problems.push(RecordProblem::new(
-                    LEDGER,
-                    newest.unwrap_or(""),
-                    "the table and column filters changed, and this, the newest state in \
-                     the store, is not a backup on disk that can be mirrored again under \
-                     them; the store keeps the old filters until the next backup",
-                ));
-            }
-        }
-    }
-
-    let mut stopped = false;
-    for (backup, again) in todo {
-        if stop.requested() {
-            stopped = true;
-            break;
-        }
-        let stats = unpack::mirror_file(pool, &backup.file, &options, progress)
+pub async fn read_ledger(pool: &SqlitePool) -> Result<Vec<Held>> {
+    let rows: Vec<(String, String, String)> =
+        sqlx::query_as("SELECT snapshot, taken_at, blake3 FROM lightroom_snapshots")
+            .fetch_all(pool)
             .await
-            .with_context(|| format!("mirror backup {}", backup.name))?;
-        options.gc = false;
-        let file = backup
-            .file
-            .strip_prefix(dir)
-            .unwrap_or(&backup.file)
-            .display()
-            .to_string();
-        record(pool, &backup.name, backup.taken_at, &file).await?;
-
-        let (what, date) = if again {
-            // Dated now: the filters changed now, not when the backup
-            // was taken.
-            ("backup mirrored again under new filters", None)
-        } else {
-            ("backup", commit_date(backup.taken_at))
-        };
-        let msg = format!(
-            "download {label}: {what} {}: {}",
-            backup.name,
-            stats.summary()
-        );
-        // Not announced as a checkpoint: nothing reads this store while
-        // the step runs, so the runner has no use for the version.
-        dr::commit_run_dated(pool, &msg, date.as_deref()).await?;
-        run.mirrored.push(backup.name.clone());
-        run.last = Some(stats);
-    }
-
-    if stopped {
-        return Ok(run);
-    }
-    // Record the filters once HEAD is mirrored under them, which the live
-    // catalog below does whatever changed. An absent record is taken as a
-    // match: it is a store from before the record, or a first run.
-    if !remirror_missing && recorded.as_ref() != Some(&scope) {
-        scope_config::store(pool, SCOPE, &scope).await?;
-    }
-
-    if let Some(catalog) = inputs.catalog {
-        let stats = unpack::mirror_file(pool, catalog, &options, progress)
-            .await
-            .with_context(|| format!("mirror the catalog {}", catalog.display()))?;
-        // Only a mirror that changed something moves the live row: a
-        // no-op run must stay a no-op, and the row's time is what a
-        // backup that turns up later is held against.
-        if mirror_changed(pool).await? {
-            record(pool, LIVE, inputs.now, &catalog.display().to_string()).await?;
-        }
-        let name = catalog
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let msg = format!("download {label}: catalog {name}: {}", stats.summary());
-        dr::commit_run(pool, &msg).await?;
-        run.live = Some(stats);
-    }
-    Ok(run)
+            .context("read the snapshots ledger")?;
+    rows.into_iter()
+        .map(|(snapshot, t, blake3)| {
+            let taken_at = NaiveDateTime::parse_from_str(&t, LEDGER_DATE_FORMAT)
+                .with_context(|| format!("ledger row {snapshot:?} has taken_at {t:?}"))?;
+            Ok(Held {
+                snapshot,
+                taken_at,
+                blake3,
+            })
+        })
+        .collect()
 }
 
-async fn record(
+pub async fn record(
     pool: &SqlitePool,
     snapshot: &str,
     taken_at: NaiveDateTime,
     file: &str,
+    blake3: &str,
 ) -> Result<()> {
     sqlx::query(
-        "INSERT OR REPLACE INTO lightroom_snapshots (snapshot, taken_at, file) VALUES (?, ?, ?)",
+        "INSERT OR REPLACE INTO lightroom_snapshots (snapshot, taken_at, file, blake3) \
+         VALUES (?, ?, ?, ?)",
     )
     .bind(snapshot)
     .bind(taken_at.format(LEDGER_DATE_FORMAT).to_string())
     .bind(file)
+    .bind(blake3)
     .execute(pool)
     .await
     .with_context(|| format!("record {snapshot} in {LEDGER}"))?;
     Ok(())
 }
 
-/// Did the mirror leave anything uncommitted outside the store's own
-/// bookkeeping?
-async fn mirror_changed(pool: &SqlitePool) -> Result<bool> {
-    let tables: Vec<String> = sqlx::query_scalar("SELECT table_name FROM dolt_status")
-        .fetch_all(pool)
-        .await
-        .context("read dolt_status")?;
-    Ok(tables
-        .iter()
-        .any(|t| t != LEDGER && !dr::SHARED_TABLES.contains(&t.as_str())))
-}
-
-async fn read_ledger(pool: &SqlitePool) -> Result<BTreeMap<String, NaiveDateTime>> {
-    let rows: Vec<(String, String)> =
-        sqlx::query_as("SELECT snapshot, taken_at FROM lightroom_snapshots")
-            .fetch_all(pool)
-            .await
-            .context("read the backups ledger")?;
-    rows.into_iter()
-        .map(|(name, t)| {
-            let t = NaiveDateTime::parse_from_str(&t, LEDGER_DATE_FORMAT)
-                .with_context(|| format!("ledger row {name:?} has taken_at {t:?}"))?;
-            Ok((name, t))
-        })
-        .collect()
-}
-
-/// The options that decide what a mirrored catalog looks like. Not
-/// `snapshot` or `gc`: those change how a run reads and stores, not what
-/// lands.
-fn scope_of(o: &MirrorOptions) -> serde_json::Value {
-    serde_json::json!({
-        "include_tables": o.include_tables,
-        "exclude_tables": o.exclude_tables,
-        "exclude_columns": o.exclude_columns,
-        "stable_key_columns": o.stable_key_columns,
-        "primary_keys": o.primary_keys,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn at(s: &str) -> NaiveDateTime {
         NaiveDateTime::parse_from_str(s, LEDGER_DATE_FORMAT).unwrap()
     }
 
-    fn folder(name: &str, files: &[&str]) -> Entry {
-        Entry {
-            name: name.into(),
-            files: files
-                .iter()
-                .map(|f| PathBuf::from(format!("/B/{name}/{f}")))
-                .collect(),
+    /// A stand-in digest: equal for equal `content`, distinct for the
+    /// short strings these tests use.
+    fn digest(content: &str) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        for (i, b) in content.bytes().enumerate() {
+            out[i % 32] = out[i % 32].wrapping_mul(31).wrapping_add(b);
+        }
+        out[31] = content.len() as u8;
+        out
+    }
+
+    /// A scanned file whose content is named by `content`, so two files
+    /// with the same `content` hash the same.
+    fn file(rel: &str, content: &str) -> ScannedFile {
+        ScannedFile {
+            path: PathBuf::from(format!("/B/{rel}")),
+            rel: rel.into(),
+            size: 1,
+            blake3: digest(content),
+        }
+    }
+
+    fn hash(content: &str) -> String {
+        fsscan::hex(&digest(content))
+    }
+
+    fn held(snapshot: &str, t: &str, content: &str) -> Held {
+        Held {
+            snapshot: snapshot.into(),
+            taken_at: at(t),
+            blake3: hash(content),
         }
     }
 
@@ -444,32 +293,36 @@ mod tests {
         bs.iter().map(|b| b.name.as_str()).collect()
     }
 
+    fn refused(p: &Plan) -> Vec<&str> {
+        p.refused.iter().map(|(n, _)| n.as_str()).collect()
+    }
+
     /// The layout of a real backups folder, which a person has partly
-    /// unpacked and annotated by hand.
-    fn lightroom_folder() -> Vec<Entry> {
+    /// unpacked and annotated by hand, as `fsscan` reports it: catalog
+    /// files only, `-wal`/`-shm` and `.DS_Store` filtered out.
+    fn lightroom_folder() -> Vec<ScannedFile> {
         vec![
-            folder("2026-09-02 0911", &["Lightroom Catalog-v13-3.zip"]),
-            folder(
-                "2018-03-07 2110",
-                &[
-                    ".DS_Store",
-                    "Lightroom Catalog-2-3.lrcat",
-                    "Lightroom Catalog-2-3.lrcat-shm",
-                    "Lightroom Catalog-2-3.lrcat-wal",
-                    "Lightroom Catalog-2-3.lrcat.zip",
-                ],
+            file("2026-09-02 0911/Lightroom Catalog-v13-3.zip", "v13"),
+            file(
+                "2018-03-07 2110/Lightroom Catalog-2-3.lrcat",
+                "2018 unpacked",
             ),
-            folder(
-                "2019-12-14 0731 - Before restoring captions",
-                &["Lightroom Catalog-2-3.lrcat.zip"],
+            file("2018-03-07 2110/Lightroom Catalog-2-3.lrcat.zip", "2018"),
+            file(
+                "2019-12-14 0731 - Before restoring captions/Lightroom Catalog-2-3.lrcat.zip",
+                "2019",
             ),
-            folder("2016-10-01 0856", &["Lightroom Catalog.lrcat"]),
+            file("2016-10-01 0856/Lightroom Catalog.lrcat", "2016"),
         ]
+    }
+
+    fn plan_of(files: Vec<ScannedFile>, ledger: &[Held]) -> Plan {
+        plan(entries(&files), ledger)
     }
 
     #[test]
     fn backups_are_mirrored_in_the_order_they_were_taken() {
-        let p = plan(lightroom_folder(), &BTreeMap::new());
+        let p = plan_of(lightroom_folder(), &[]);
         assert_eq!(
             names(&p.ingest),
             [
@@ -485,28 +338,28 @@ mod tests {
 
     #[test]
     fn the_zip_lightroom_wrote_beats_an_unpacked_copy_beside_it() {
-        let p = plan(lightroom_folder(), &BTreeMap::new());
+        let p = plan_of(lightroom_folder(), &[]);
         let b = p
             .ingest
             .iter()
             .find(|b| b.name == "2018-03-07 2110")
             .unwrap();
-        assert!(b.file.ends_with("Lightroom Catalog-2-3.lrcat.zip"));
+        assert!(b.file.rel.ends_with("Lightroom Catalog-2-3.lrcat.zip"));
         let bare = p
             .ingest
             .iter()
             .find(|b| b.name == "2016-10-01 0856")
             .unwrap();
-        assert!(bare.file.ends_with("Lightroom Catalog.lrcat"));
+        assert!(bare.file.rel.ends_with("Lightroom Catalog.lrcat"));
     }
 
     #[test]
     fn backups_the_store_holds_are_skipped() {
-        let ledger = BTreeMap::from([
-            ("2016-10-01 0856".to_string(), at("2016-10-01T08:56:00")),
-            ("2018-03-07 2110".to_string(), at("2018-03-07T21:10:00")),
-        ]);
-        let p = plan(lightroom_folder(), &ledger);
+        let ledger = [
+            held("2016-10-01 0856", "2016-10-01T08:56:00", "2016"),
+            held("2018-03-07 2110", "2018-03-07T21:10:00", "2018"),
+        ];
+        let p = plan_of(lightroom_folder(), &ledger);
         assert_eq!(p.found.len(), 4);
         assert_eq!(
             names(&p.ingest),
@@ -517,13 +370,41 @@ mod tests {
         );
     }
 
+    /// A backup is known by its bytes: renaming its folder by hand, as
+    /// someone adding a note does, does not make it a new backup.
+    #[test]
+    fn a_renamed_backup_folder_is_the_backup_already_held() {
+        let ledger = [held("2019-12-14 0731", "2019-12-14T07:31:00", "2019")];
+        let p = plan_of(lightroom_folder(), &ledger);
+        let renamed = "2019-12-14 0731 - Before restoring captions";
+        assert!(!names(&p.ingest).contains(&renamed));
+        assert!(!refused(&p).contains(&renamed), "{:?}", p.refused);
+        assert_eq!(names(&p.ingest), ["2026-09-02 0911"]);
+    }
+
+    /// History cannot be rewritten, so a backup whose file changed after
+    /// it was committed is reported, not committed again.
+    #[test]
+    fn a_backup_changed_since_it_was_committed_is_refused() {
+        let ledger = [held(
+            "2016-10-01 0856",
+            "2016-10-01T08:56:00",
+            "2016, before",
+        )];
+        let p = plan_of(lightroom_folder(), &ledger);
+        assert!(!names(&p.ingest).contains(&"2016-10-01 0856"));
+        let (name, why) = &p.refused[0];
+        assert_eq!(name, "2016-10-01 0856");
+        assert!(why.contains("changed after it was committed"), "{why}");
+    }
+
     /// History is one line, so a backup that turns up after a newer one
     /// was committed cannot be slotted in; it is reported, not appended
     /// on top as though the catalog had gone back in time.
     #[test]
     fn a_backup_older_than_the_newest_held_is_refused() {
-        let ledger = BTreeMap::from([("2019-01-28 1032".to_string(), at("2019-01-28T10:32:00"))]);
-        let p = plan(lightroom_folder(), &ledger);
+        let ledger = [held("2019-01-28 1032", "2019-01-28T10:32:00", "2019-01")];
+        let p = plan_of(lightroom_folder(), &ledger);
         assert_eq!(
             names(&p.ingest),
             [
@@ -531,19 +412,18 @@ mod tests {
                 "2026-09-02 0911"
             ]
         );
-        let refused: Vec<&str> = p.refused.iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(refused, ["2016-10-01 0856", "2018-03-07 2110"]);
+        assert_eq!(refused(&p), ["2016-10-01 0856", "2018-03-07 2110"]);
     }
 
     /// The live catalog's row is a state like any backup's: a backup
     /// taken before the catalog was last mirrored cannot follow it.
     #[test]
     fn the_live_catalog_holds_back_an_older_backup() {
-        let ledger = BTreeMap::from([
-            ("2016-10-01 0856".to_string(), at("2016-10-01T08:56:00")),
-            (LIVE.to_string(), at("2019-06-01T12:00:00")),
-        ]);
-        let p = plan(lightroom_folder(), &ledger);
+        let ledger = [
+            held("2016-10-01 0856", "2016-10-01T08:56:00", "2016"),
+            held(LIVE, "2019-06-01T12:00:00", "live"),
+        ];
+        let p = plan_of(lightroom_folder(), &ledger);
         assert_eq!(
             names(&p.ingest),
             [
@@ -558,21 +438,18 @@ mod tests {
 
     #[test]
     fn a_folder_that_cannot_be_placed_is_refused_and_one_with_no_catalog_ignored() {
-        let p = plan(
+        let p = plan_of(
             vec![
-                folder("Old catalogs", &["Lightroom Catalog.lrcat.zip"]),
-                folder("2020-01-01 0000", &["a.zip", "b.zip"]),
-                folder("2020-02-02 0000", &["notes.txt"]),
-                Entry {
-                    name: "2021-05-06 0700 Catalog.zip".into(),
-                    files: vec!["/B/2021-05-06 0700 Catalog.zip".into()],
-                },
+                file("Old catalogs/Lightroom Catalog.lrcat.zip", "old"),
+                file("2020-01-01 0000/a.zip", "a"),
+                file("2020-01-01 0000/b.zip", "b"),
+                file("2021-05-06 0700 Catalog.zip", "loose"),
+                file(".Trashes/2022-01-01 0000/x.zip", "trash"),
             ],
-            &BTreeMap::new(),
+            &[],
         );
         assert_eq!(names(&p.ingest), ["2021-05-06 0700 Catalog.zip"]);
-        let refused: Vec<&str> = p.refused.iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(refused, ["Old catalogs", "2020-01-01 0000"]);
+        assert_eq!(refused(&p), ["2020-01-01 0000", "Old catalogs"]);
     }
 
     #[test]

@@ -10,7 +10,9 @@ use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl::raw_layout;
 use datalib_etl_lightroom_config::LightroomConfig;
 
-use crate::ingest::{self, backups, unpack, MirrorOptions};
+use datalib_etl::fingerprint_cache::{self, FingerprintCache};
+
+use crate::ingest::{self, sync, MirrorOptions};
 
 /// The engine's options for this config. `source_path` is the catalog,
 /// else the backups folder, which the engine never reads itself: each
@@ -70,38 +72,30 @@ impl DataProcessor for LightroomIngest {
         let entity_db = raw_layout::entities_db(&self.raw_path);
         let pool = ingest::mirror::open_mirror(&entity_db).await?;
         let session = ctx.open_store(pool.clone(), entity_db).await;
-        let (summary, problems) = match (&self.backups, &self.catalog) {
-            (Some(dir), catalog) => {
-                let now = chrono::DateTime::parse_from_rfc3339(ctx.now)
-                    .with_context(|| format!("the run's now {:?} is not RFC 3339", ctx.now))?
-                    .with_timezone(&chrono::Local)
-                    .naive_local();
-                let inputs = backups::Inputs {
-                    backups: dir,
-                    catalog: catalog.as_deref(),
-                    now,
-                };
-                let run = backups::ingest(
-                    &pool,
-                    inputs,
-                    &self.options,
-                    ctx.progress,
-                    &ctx.control.stop,
-                    ctx.name,
-                )
-                .await?;
-                (run.summary(), run.problems)
-            }
-            (None, Some(catalog)) => {
-                let stats =
-                    unpack::mirror_file(&pool, catalog, &self.options, ctx.progress).await?;
-                (stats.summary(), Vec::new())
-            }
-            (None, None) => unreachable!("validate() refuses a config with neither"),
-        };
+        let now = chrono::DateTime::parse_from_rfc3339(ctx.now)
+            .with_context(|| format!("the run's now {:?} is not RFC 3339", ctx.now))?
+            .with_timezone(&chrono::Local)
+            .naive_local();
+        let cache = FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?;
+        let run = sync::run(
+            &pool,
+            &cache,
+            sync::Inputs {
+                backups: self.backups.as_deref(),
+                catalog: self.catalog.as_deref(),
+                now,
+            },
+            &self.options,
+            ctx.progress,
+            &ctx.control.stop,
+            ctx.name,
+        )
+        .await?;
         // Every run, so a backup that is placed or removed stops being a
         // problem.
-        download_problems::report_records(&pool, &problems).await;
+        download_problems::report_records(&pool, &run.problems).await;
+        download_problems::report_run(&pool, &run.run_problems).await;
+        let summary = run.summary();
         session.finish(ctx, summary).await
     }
 }

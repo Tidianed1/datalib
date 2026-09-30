@@ -46,10 +46,19 @@ unchanged catalog produces **no commit at all** — asserted by
 `sqlite_mirror/tests/mirror_roundtrip.rs::unchanged_source_produces_no_commit`,
 which was watched failing against a deliberately broken build.
 
-It also means the ingester needs no resume cursor and no
-change-tracking of its own. It never has to know how Lightroom marks
-rows dirty. Whatever the catalog says today becomes HEAD; history
+It also means the ingester never has to know how Lightroom marks rows
+dirty. Whatever the catalog says today becomes HEAD; history
 accumulates behind it.
+
+**An unchanged catalog is not read at all.** Before mirroring, each run
+asks `fsscan` whether the catalog's files changed — the `.lrcat` and its
+`-wal`, where a running Lightroom keeps edits it has not yet written
+back. The host's fingerprint cache answers that with a `stat`, so a sync
+with nothing new takes milliseconds instead of a snapshot and a refill
+of every table. The hashes it compares against are the source's own, in
+`ingested_files`. A changed filter, or a backup committed under the
+catalog in the same run (below), mirrors it again whatever its files
+say.
 
 ### The copy runs inside SQLite
 
@@ -329,7 +338,8 @@ backups, as the run's last commit, so the backups are the history and
 the live catalog is HEAD. A sync that finds a new backup commits it and
 then the catalog on top again.
 
-- **Which file is a backup.** Each entry in the folder is one backup:
+- **Which file is a backup.** The folder is scanned with `fsscan`, so a
+  backup already hashed costs a `stat`. Each entry in it is one backup:
   a folder with a catalog in it, or a catalog file on its own. Its
   time comes from the start of its name (`YYYY-MM-DD HHMM`), so a note
   added after it (`2019-12-14 0731 - Before restoring captions`) is
@@ -350,9 +360,15 @@ then the catalog on top again.
   had gone back in time. So is a folder holding two catalogs, and one
   whose name does not start with a date. To take an older backup in,
   start a new store.
+- **A backup is known by its bytes, not its name.** Renaming a backup's
+  folder by hand — adding a note — changes nothing: its hash is already
+  in the store. A backup whose file changed after it was committed is
+  reported rather than committed again, and history keeps the version
+  committed then.
 - **`lightroom_snapshots` lists the states the store holds**: one row per
   backup — `snapshot` (the entry's name), `taken_at` (from the name, local
-  time) and `file` (relative to the folder) — landing in the commit that
+  time), `file` (relative to the folder) and `blake3` (the file's
+  hash) — landing in the commit that
   mirrored it, so `dolt_diff_lightroom_snapshots` names the backup behind
   every commit. With a catalog there is also a `live catalog` row, whose
   `taken_at` is the last sync at which mirroring the catalog changed the
@@ -363,8 +379,9 @@ then the catalog on top again.
   `stable_key_columns` and `primary_keys` shape every backup mirrored
   from then on. With a catalog, its mirror carries the change to HEAD.
   Without one, a sync that finds no new backup mirrors the newest backup
-  again under the new filters, as a commit dated now. The filters are recorded with `scope_config` for the
-  comparison; earlier commits keep the filters they were made with.
+  again under the new filters, as a commit dated now. The filters are
+  recorded with `scope_config` for the comparison; earlier commits keep
+  the filters they were made with.
 - **A folder with no backups fails the run**, as does one that cannot
   be read (a backup drive that is not mounted).
 
@@ -372,8 +389,9 @@ A zip is unpacked into a temporary directory for the length of its
 mirror, so a run needs free space for one catalog at a time; the
 unpacked copy is read without a snapshot, since nothing else has it
 open. `tests/backups_folder.rs` covers the order, the dates, the ledger,
-the refusals, the filter change and the live catalog on top, against
-zipped copies of the TNG catalog.
+the refusals, the filter change, the live catalog on top, the unchanged
+catalog left unread and backups known by their bytes, against zipped
+copies of the TNG catalog.
 
 ## Store size and `gc`
 

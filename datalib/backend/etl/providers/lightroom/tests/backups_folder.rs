@@ -10,9 +10,10 @@ use chrono::NaiveDateTime;
 use sqlx::sqlite::SqlitePool;
 
 use datalib_etl::doltlite_raw as dr;
+use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::progress::Progress;
 use datalib_etl::stop::StopFlag;
-use datalib_etl_lightroom::ingest::backups::{self, BackupsRun};
+use datalib_etl_lightroom::ingest::sync::{self, SyncRun};
 use datalib_etl_lightroom::ingest::{mirror, MirrorOptions};
 
 struct Fixture {
@@ -69,7 +70,7 @@ impl Fixture {
         path
     }
 
-    async fn sync(&self, options: &MirrorOptions) -> Result<BackupsRun> {
+    async fn sync(&self, options: &MirrorOptions) -> Result<SyncRun> {
         self.sync_with(options, None, NOW).await
     }
 
@@ -80,15 +81,31 @@ impl Fixture {
         options: &MirrorOptions,
         catalog: Option<&Path>,
         now: &str,
-    ) -> Result<BackupsRun> {
+    ) -> Result<SyncRun> {
+        self.run(options, Some(&self.backups()), catalog, now).await
+    }
+
+    async fn sync_catalog(&self, options: &MirrorOptions, catalog: &Path) -> Result<SyncRun> {
+        self.run(options, None, Some(catalog), NOW).await
+    }
+
+    async fn run(
+        &self,
+        options: &MirrorOptions,
+        backups: Option<&Path>,
+        catalog: Option<&Path>,
+        now: &str,
+    ) -> Result<SyncRun> {
         let pool = mirror::open_mirror(&self.store()).await?;
-        let inputs = backups::Inputs {
-            backups: &self.backups(),
+        let cache = FingerprintCache::open(&self.dir.path().join("fingerprints.sqlite")).await?;
+        let inputs = sync::Inputs {
+            backups,
             catalog,
             now: at(now),
         };
-        let run = backups::ingest(
+        let run = sync::run(
             &pool,
+            &cache,
             inputs,
             options,
             &Progress::noop(),
@@ -98,6 +115,7 @@ impl Fixture {
         .await;
         if let Ok(run) = &run {
             datalib_etl::download_problems::report_records(&pool, &run.problems).await;
+            datalib_etl::download_problems::report_run(&pool, &run.run_problems).await;
             dr::commit_run(&pool, &format!("download lightroom: {}", run.summary())).await?;
         }
         pool.close().await;
@@ -264,7 +282,7 @@ async fn each_backup_is_a_commit_dated_when_it_was_taken() -> Result<()> {
     assert_eq!(keywords, 1, "HEAD is the newest backup");
 
     let ledger: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT snapshot, taken_at, file FROM lightroom_snapshots ORDER BY taken_at",
+        "SELECT snapshot, taken_at, file FROM lightroom_snapshots WHERE snapshot != 'live catalog' ORDER BY taken_at",
     )
     .fetch_all(&pool)
     .await?;
@@ -309,7 +327,7 @@ async fn a_folder_with_nothing_new_commits_nothing() -> Result<()> {
 
     let run = f.sync(&options()).await?;
     assert!(run.mirrored.is_empty());
-    assert_eq!(run.found, 1);
+    assert_eq!(run.backups_found, 1);
     assert_eq!(head(&f.read().await).await, before);
     Ok(())
 }
@@ -572,5 +590,80 @@ async fn a_changed_filter_reaches_head_through_the_live_catalog() -> Result<()> 
     let pool = f.read().await;
     assert!(!table_exists(&pool, "AgOzSpaceIds").await);
     pool.close().await;
+    Ok(())
+}
+
+/// An unchanged catalog is a stat: no snapshot, no mirror, no commit.
+/// An edit, or a changed filter, mirrors it again.
+#[tokio::test]
+async fn an_unchanged_catalog_is_not_mirrored_again() -> Result<()> {
+    let f = Fixture::new();
+    let live = f.live(&[]).await;
+    let run = f.sync_catalog(&options(), &live).await?;
+    assert!(run.live.is_some(), "the first sync mirrors it");
+    let before = head(&f.read().await).await;
+
+    let run = f.sync_catalog(&options(), &live).await?;
+    assert!(run.live.is_none() && run.catalog_unchanged, "{run:?}");
+    assert_eq!(head(&f.read().await).await, before);
+
+    let live = f.live(&[RERATE]).await;
+    let run = f.sync_catalog(&options(), &live).await?;
+    assert!(run.live.is_some(), "an edit is mirrored");
+    assert_eq!(rating_of_picard(&f.read().await).await, Some(1));
+
+    let narrowed = MirrorOptions {
+        exclude_tables: vec!["AgOz*".into()],
+        ..options()
+    };
+    let run = f.sync_catalog(&narrowed, &live).await?;
+    assert!(run.live.is_some(), "a changed filter is mirrored");
+    assert!(!table_exists(&f.read().await, "AgOzSpaceIds").await);
+    Ok(())
+}
+
+/// A backup is known by its bytes. Renaming its folder changes nothing;
+/// rewriting its file after it was committed is reported, and history
+/// keeps what was committed.
+#[tokio::test]
+async fn backups_are_known_by_their_bytes() -> Result<()> {
+    let f = Fixture::new();
+    f.backup(
+        "2021-03-01 0900",
+        "TngCatalog.lrcat",
+        Some("TngCatalog.zip"),
+        &[],
+    )
+    .await;
+    f.sync(&options()).await?;
+    let before = head(&f.read().await).await;
+
+    std::fs::rename(
+        f.backups().join("2021-03-01 0900"),
+        f.backups().join("2021-03-01 0900 - first backup"),
+    )?;
+    let run = f.sync(&options()).await?;
+    assert!(
+        run.mirrored.is_empty() && run.problems.is_empty(),
+        "{run:?}"
+    );
+    assert_eq!(head(&f.read().await).await, before);
+
+    std::fs::remove_dir_all(f.backups().join("2021-03-01 0900 - first backup"))?;
+    f.backup(
+        "2021-03-01 0900",
+        "TngCatalog.lrcat",
+        Some("TngCatalog.zip"),
+        &[RERATE],
+    )
+    .await;
+    let run = f.sync(&options()).await?;
+    assert!(run.mirrored.is_empty(), "{run:?}");
+    let refused: Vec<&str> = run.problems.iter().map(|p| p.id.as_str()).collect();
+    assert_eq!(refused, ["2021-03-01 0900"]);
+    assert!(run.problems[0]
+        .detail
+        .contains("changed after it was committed"));
+    assert_eq!(rating_of_picard(&f.read().await).await, Some(5));
     Ok(())
 }

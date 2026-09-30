@@ -95,6 +95,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         &fsscan::ScanOptions {
             ignore: opts.ignore.clone(),
             max_bytes: opts.max_bytes,
+            ..Default::default()
         },
         is_pdf,
     )

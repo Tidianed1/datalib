@@ -3,6 +3,7 @@
 //! or a folder of backups.
 
 pub mod backups;
+pub mod sync;
 pub mod unpack;
 
 pub use datalib_etl_sqlite_mirror::{

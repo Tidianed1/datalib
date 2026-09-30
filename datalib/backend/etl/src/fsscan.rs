@@ -78,6 +78,9 @@ pub struct ScanOptions {
     pub ignore: Vec<String>,
     /// Skip files larger than this rather than hashing them.
     pub max_bytes: Option<u64>,
+    /// How deep to walk. `Some(1)` is the root's own files, and no
+    /// folder beneath it is opened.
+    pub max_depth: Option<usize>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -373,17 +376,17 @@ where
 
     // A single file is a legitimate root. Every provider that takes
     // "a file or a directory" from its config used to special-case
-    // this itself; the utility owns it now. Walking the parent and
-    // accepting only that one name keeps the rest of the function —
-    // and the cache keys — identical for both shapes.
-    let (root, only) = if resolved.is_file() {
+    // this itself; the utility owns it now. Walking the parent's own
+    // entries and accepting only that one name keeps the rest of the
+    // function — and the cache keys — identical for both shapes.
+    let (root, only, max_depth) = if resolved.is_file() {
         let name = resolved.file_name().map(|n| n.to_os_string());
         match (resolved.parent().map(Path::to_path_buf), name) {
-            (Some(parent), Some(name)) => (parent, Some(name)),
-            _ => (resolved.clone(), None),
+            (Some(parent), Some(name)) => (parent, Some(name), Some(1)),
+            _ => (resolved.clone(), None, opts.max_depth),
         }
     } else {
-        (resolved.clone(), None)
+        (resolved.clone(), None, opts.max_depth)
     };
 
     let cached = cache.load_under(&root).await?;
@@ -392,7 +395,7 @@ where
         ..ScanStats::default()
     };
 
-    let (walked, mut errors) = fswalk::walk_files(&root, &opts.ignore, |p| {
+    let (walked, mut errors) = fswalk::walk_files(&root, &opts.ignore, max_depth, |p| {
         only.as_ref()
             .is_none_or(|name| p.file_name() == Some(name.as_os_str()))
             && accept(p)
@@ -523,6 +526,40 @@ mod tests {
         assert_eq!(warm.stats.hashed, 0);
         assert_eq!(warm.stats.reused, 2);
         assert_eq!(warm.stats.bytes_reused, 7);
+    }
+
+    /// A file as the root is that file: not a same-named file in a
+    /// folder beside it, and no walk of the folders beside it at all. A
+    /// catalog next to its `Previews.lrdata`, or a download in
+    /// `~/Downloads`, used to cost a walk of everything under the parent.
+    #[tokio::test]
+    async fn a_file_root_is_that_file_and_nothing_under_its_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("tree");
+        write(&root, "Catalog.lrcat", b"the catalog");
+        write(&root, "Catalog Previews.lrdata/Catalog.lrcat", b"not it");
+        let cache = fresh_cache(tmp.path()).await;
+
+        let scan = scan_all(&cache, &root.join("Catalog.lrcat")).await;
+        let rels: Vec<&str> = scan.files.iter().map(|f| f.rel.as_str()).collect();
+        assert_eq!(rels, ["Catalog.lrcat"]);
+    }
+
+    /// `max_depth: Some(1)` is the root's own files and none beneath it.
+    #[tokio::test]
+    async fn max_depth_one_stays_in_the_root_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("tree");
+        write(&root, "top.txt", b"top");
+        write(&root, "sub/deep.txt", b"deep");
+        let cache = fresh_cache(tmp.path()).await;
+        let opts = ScanOptions {
+            max_depth: Some(1),
+            ..ScanOptions::default()
+        };
+        let scan = scan(&cache, &root, &opts, all).await.unwrap();
+        let rels: Vec<&str> = scan.files.iter().map(|f| f.rel.as_str()).collect();
+        assert_eq!(rels, ["top.txt"]);
     }
 
     /// The payoff of a shared cache: a second consumer with a narrower
