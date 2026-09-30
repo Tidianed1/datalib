@@ -193,9 +193,12 @@ pub struct WalkError {
     pub error: String,
 }
 
+/// `max_depth: Some(1)` walks `root`'s own entries and opens no folder
+/// beneath it.
 pub fn walk_files<F>(
     root: &Path,
     extra_ignores: &[String],
+    max_depth: Option<usize>,
     accept: F,
 ) -> Result<(Vec<WalkedFile>, Vec<WalkError>)>
 where
@@ -208,7 +211,8 @@ where
         .git_ignore(true)
         .git_global(false)
         .git_exclude(false)
-        .parents(false);
+        .parents(false)
+        .max_depth(max_depth);
 
     if !extra_ignores.is_empty() {
         let mut ov = ignore::overrides::OverrideBuilder::new(root);
@@ -378,7 +382,7 @@ mod tests {
         std::fs::write(d.path().join("sub/b.pdf"), b"y").unwrap();
         std::fs::write(d.path().join("sub/deep/c.txt"), b"z").unwrap();
 
-        let (files, errs) = walk_files(d.path(), &[], |p| {
+        let (files, errs) = walk_files(d.path(), &[], None, |p| {
             p.extension().and_then(|e| e.to_str()) == Some("pdf")
         })
         .unwrap();
@@ -401,7 +405,7 @@ mod tests {
             // A directory link that would otherwise recurse forever.
             std::os::unix::fs::symlink(d.path(), d.path().join("loop")).unwrap();
         }
-        let (files, _) = walk_files(d.path(), &[], |p| {
+        let (files, _) = walk_files(d.path(), &[], None, |p| {
             p.extension().and_then(|e| e.to_str()) == Some("pdf")
         })
         .unwrap();
@@ -417,7 +421,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         #[cfg(unix)]
         std::os::unix::fs::symlink(d.path().join("nope.pdf"), d.path().join("dead.pdf")).unwrap();
-        let (files, errors) = walk_files(d.path(), &[], |p| {
+        let (files, errors) = walk_files(d.path(), &[], None, |p| {
             p.extension().and_then(|e| e.to_str()) == Some("pdf")
         })
         .unwrap();
@@ -435,7 +439,7 @@ mod tests {
         std::fs::write(d.path().join("keep.pdf"), b"x").unwrap();
         std::fs::write(d.path().join("skipme/no.pdf"), b"y").unwrap();
 
-        let (files, _) = walk_files(d.path(), &["skipme/**".into()], |p| {
+        let (files, _) = walk_files(d.path(), &["skipme/**".into()], None, |p| {
             p.extension().and_then(|e| e.to_str()) == Some("pdf")
         })
         .unwrap();

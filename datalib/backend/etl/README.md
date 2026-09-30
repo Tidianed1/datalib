@@ -672,6 +672,15 @@ nothing. A file missing from the scan deletes nothing either: for an export,
 a product left out of the request looks exactly like that. Takeout's
 folder feeds hold to the same rule one level up (`product_exported`).
 
+**A file as the root is that file.** `scan` of a file walks only that
+file's folder, one level deep, and keeps that one name: its `rel` is the
+bare file name and its cache key is the one a scan of the folder would
+use. A caller that wants a few files side by side — a SQLite file and its
+`-wal` — scans the folder with `max_depth: Some(1)` and names them in
+`accept`; no folder beside them is opened. The cache read is not
+depth-limited: `load_under` still fetches every cached entry under the
+folder, which is a database read, not a walk.
+
 **Why content and not `(size, mtime)`.** A cursor on the stat pair
 re-ingests a file that was only *touched* (`rsync` without `-t`, a restore
 from backup, re-downloading the same export), re-reading and re-parsing the
