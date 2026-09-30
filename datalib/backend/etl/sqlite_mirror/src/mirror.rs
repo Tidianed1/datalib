@@ -110,45 +110,35 @@ pub async fn snapshot(source: &Path) -> Result<Snapshot> {
                  If the database is open in its application the copy may be \
                  inconsistent — close the application for a clean backup."
             );
-            let dest = copy_with_sidecars(source, dir.path())?;
+            let dest = dir.path().join(
+                source
+                    .file_name()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from("snapshot.sqlite")),
+            );
+            std::fs::copy(source, &dest)
+                .with_context(|| format!("copy {} for snapshot", source.display()))?;
+            // The WAL and shared-memory sidecars carry committed pages
+            // that aren't in the main file yet. Copy them alongside so
+            // SQLite's recovery can replay them; absent ones are the
+            // normal (non-WAL, or checkpointed) case.
+            for suffix in ["-wal", "-shm", "-journal"] {
+                let mut side = source.as_os_str().to_os_string();
+                side.push(suffix);
+                let side = PathBuf::from(side);
+                if side.exists() {
+                    let mut to = dest.as_os_str().to_os_string();
+                    to.push(suffix);
+                    std::fs::copy(&side, PathBuf::from(to))
+                        .with_context(|| format!("copy sidecar {}", side.display()))?;
+                }
+            }
             Ok(Snapshot {
                 path: dest,
                 dir: Some(dir),
             })
         }
     }
-}
-
-/// Copy a SQLite database into `dir` with what SQLite needs to read it
-/// as it was, and return the copy's path.
-pub fn copy_with_sidecars(source: &Path, dir: &Path) -> Result<PathBuf> {
-    let dest = dir.join(
-        source
-            .file_name()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("snapshot.sqlite")),
-    );
-    std::fs::copy(source, &dest)
-        .with_context(|| format!("copy {} for snapshot", source.display()))?;
-    // The WAL and the rollback journal carry committed pages that
-    // aren't in the main file yet. Copy them alongside so SQLite's
-    // recovery can replay them; absent ones are the normal
-    // (non-WAL, or checkpointed) case. Not `-shm`: SQLite rebuilds
-    // it from the WAL when it opens the copy, and on macOS a
-    // picked database may come with a grant for its `-wal` but
-    // not its `-shm`.
-    for suffix in ["-wal", "-journal"] {
-        let mut side = source.as_os_str().to_os_string();
-        side.push(suffix);
-        let side = PathBuf::from(side);
-        if side.exists() {
-            let mut to = dest.as_os_str().to_os_string();
-            to.push(suffix);
-            std::fs::copy(&side, PathBuf::from(to))
-                .with_context(|| format!("copy sidecar {}", side.display()))?;
-        }
-    }
-    Ok(dest)
 }
 
 async fn vacuum_into(source: &Path, dest: &Path) -> Result<()> {

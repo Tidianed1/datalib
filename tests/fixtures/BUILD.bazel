@@ -18,7 +18,6 @@ exports_files([
     "make_apple_messages_db.py",
     "make_apple_photos_library.py",
     "make_lightroom_catalog.py",
-    "make_wal_db.py",
 ])
 
 # This package's contribution to `//:python_sources` — glob can't cross a

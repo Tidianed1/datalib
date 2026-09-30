@@ -62,14 +62,13 @@ Mac, or a copy of it (`messages.path`). Mirrors iMessage and SMS chats
 with tapbacks; attachments are listed by name, their bytes are not
 copied.
 
-The file is `~/Library/Messages/chat.db`; a folder holding a `chat.db`
-works too. An iPhone backup's `3d0d7e5fb2ce288813306e4d4636395e047a3d28`
-is the same database and works as well. macOS protects
-`~/Library/Messages` and lets Datalib read only the files you pick
-there: in the app, choose `chat.db` and `chat.db-wal` together in the
-picker (Cmd-click both). The newest messages are in `chat.db-wal` until
-Messages folds them into `chat.db`, so picking `chat.db` alone is not
-enough, and neither is picking the folder. From a terminal, the terminal needs
+Point it at the folder, `~/Library/Messages`, or at a `chat.db` file
+directly. An iPhone backup's `3d0d7e5fb2ce288813306e4d4636395e047a3d28`
+is the same database and works too. macOS protects `~/Library/Messages`:
+in the app, choose the folder with the picker — that is what grants
+Datalib access (Cmd-Shift-G in the dialog reaches it). Choosing
+`chat.db` alone is not enough, because the database's `chat.db-wal`
+sits beside it and has to be read too. From a terminal, the terminal needs
 Full Disk Access (System Settings → Privacy & Security); an ingest that
 reports "Operation not permitted" is missing that, not the file.
 

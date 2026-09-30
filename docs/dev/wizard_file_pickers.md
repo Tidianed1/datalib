@@ -139,9 +139,7 @@ On macOS, choosing a path in the standard open panel grants the app
 access to it, and (measured) that grant reaches the processes that do
 the reading. So the picker is a permissions fix as
 well as a typo fix, and for `apple_messages` and `apple_photos` it is
-the *only* way in short of Full Disk Access. What it grants is narrower
-than it looks, though: see "a pick grants exactly what was picked"
-below.
+the *only* way in short of Full Disk Access.
 
 What is established by reading the tree:
 
@@ -187,30 +185,15 @@ Two consequences for a descriptor whose path is a macOS package: it
 must say `picks: "file"`, and the grant it earns does carry down the
 spawn chain above.
 
-**In `~/Library/Messages`, a pick grants exactly what was picked.**
-Seen in the app with `apple_messages`, without Full Disk Access:
-
-| picked | what the step could then do |
-|---|---|
-| `chat.db` alone | copy `chat.db`; copying `chat.db-wal` beside it: `Operation not permitted` |
-| the folder `~/Library/Messages` | nothing inside it: `stat chat.db` answers `No such file or directory` (a refusal there looks like absence) |
-
-The grant is a per-item mark the panel records (the `com.apple.macl`
-extended attribute; see Howard Oakley's
-[Privacy: how locations are protected](https://eclecticlight.co/2026/04/20/privacy-how-locations-are-protected/)).
-For a folder like Documents it reaches the folder's contents; for
-`~/Library/Messages` it did not. So a SQLite database there is picked
-as files: the database and its `-wal` together, in one multi-select
-dialog (`picks: "sqlite"`). The `-shm` is not needed; the snapshot's
-file copy leaves it behind and SQLite rebuilds it from the WAL.
-
-Not measured: whether the grant survives quitting and relaunching the
-app, and whether it survives the `-wal` being deleted and made anew
-(SQLite does that when the last connection to a database closes, if
-nothing asks it to keep the file) — a mark on a deleted file goes with
-it. Until both are, the help text for such a source says to pick again
-when a sync reports `Operation not permitted`, and the right place to
-notice a lapse is the `inspect` probe: **`readdir` the
+**A picked file grants that file, not its neighbours.** Seen in the app
+with `apple_messages`: choosing `~/Library/Messages/chat.db` let the
+step copy `chat.db` and then refused `chat.db-wal` beside it with
+`Operation not permitted`. A SQLite database in WAL mode is three files,
+so a source reading one picks the folder that holds them. What is **not** measured is whether the grant
+survives quitting and relaunching the app; the TCC database that would
+say so is itself protected. Until it is, the wizard's help text for
+such a source names Full Disk Access as the durable fallback, and the
+right place to notice a lapse is the `inspect` probe: **`readdir` the
 chosen path in the shell process, right after picking**, and say so
 immediately when it fails, rather than during a sync days later.
 

@@ -276,8 +276,8 @@ freelist, so the snapshot is usually a little smaller than the catalog.
 
 If the read-only open fails — the classic case being a WAL catalog whose
 `-shm` file we're not allowed to touch — it falls back to copying the
-catalog and its `-wal` / `-journal` sidecars (not `-shm`, which SQLite
-rebuilds from the WAL when it opens the copy), warns, and carries on. That copy can be torn if Lightroom writes mid-copy. **Close Lightroom
+catalog and its `-wal` / `-shm` / `-journal` sidecars, warns, and carries
+on. That copy can be torn if Lightroom writes mid-copy. **Close Lightroom
 for a guaranteed-clean backup.**
 
 `snapshot = false` reads the file in place.

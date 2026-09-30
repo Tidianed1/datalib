@@ -52,9 +52,9 @@ pub struct AppleMessagesConfig {
     /// Shared per-source envelope (paths + cross-source tunables),
     /// resolved by the orchestrator's `normalize()`.
     pub common: SourceCommon,
-    /// The `chat.db` to mirror — the app's own, a copy, or an iPhone
-    /// backup's `3d0d7e5f…` file, which is the same database — or a
-    /// folder holding a `chat.db`. See [`chat_db_path`].
+    /// The Messages folder (`~/Library/Messages`), or a `chat.db` file
+    /// directly — a copy of it, or an iPhone backup's `3d0d7e5f…` file,
+    /// which is the same database. See [`chat_db_path`].
     pub messages: Option<LocalPath>,
     /// Table-name globs to mirror. Default `["*"]`.
     pub include_tables: Vec<String>,
@@ -115,8 +115,10 @@ impl AppleMessagesConfig {
 }
 
 /// The SQLite file for a configured `messages` path: `chat.db` inside it
-/// when it is a folder, the path itself when it is the database. Pure,
-/// with the stat left to the caller.
+/// when it is a folder, the path itself when it is the database. The app
+/// has the user pick the folder because on macOS picking grants access
+/// to what was picked, and the snapshot has to read `chat.db-wal` and
+/// `chat.db-shm` beside the database too.
 pub fn chat_db_path(messages: &Path, is_dir: bool) -> PathBuf {
     if is_dir {
         messages.join(DATABASE_IN_FOLDER)

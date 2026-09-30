@@ -24,18 +24,6 @@ genrule(
     visibility = ["//datalib:__subpackages__"],
 )
 
-# A WAL database with a row only in its `-wal`, and no `-shm`: what the
-# snapshot's file-copy fallback must still read whole.
-genrule(
-    name = "tng_wal_db",
-    srcs = ["//tests/fixtures:make_wal_db.py"],
-    outs = [
-        "tng_wal/tng.db",
-        "tng_wal/tng.db-wal",
-    ],
-    cmd = "python3 $(execpath //tests/fixtures:make_wal_db.py) $(RULEDIR)/tng_wal",
-)
-
 rust_library(
     name = "datalib_etl_sqlite_mirror",
     srcs = glob(["src/**/*.rs"]),
@@ -72,15 +60,10 @@ rust_test(
     size = "small",
     srcs = ["tests/mirror_roundtrip.rs"],
     crate_name = "mirror_roundtrip",
-    data = [
-        ":tng_catalog",
-        "tng_wal/tng.db",
-        "tng_wal/tng.db-wal",
-    ],
+    data = [":tng_catalog"],
     edition = "2021",
     env = {
         "SQLITE_MIRROR_TNG_CATALOG": "$(rootpath :tng_catalog)",
-        "SQLITE_MIRROR_TNG_WAL_DB": "$(rootpath tng_wal/tng.db)",
     },
     deps = [
         ":datalib_etl_sqlite_mirror",

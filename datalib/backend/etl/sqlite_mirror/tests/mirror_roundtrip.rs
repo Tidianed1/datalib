@@ -1061,39 +1061,3 @@ async fn column_defaults_are_not_mirrored_and_the_rows_still_land() -> Result<()
     pool.close().await;
     Ok(())
 }
-
-/// The snapshot's file-copy fallback reads a WAL database whole from the
-/// database and its `-wal` alone. On macOS the user may have granted us
-/// just those two files, so a copy that needed `-shm` too would fail, and
-/// one that dropped the WAL would lose the newest rows without a word.
-#[tokio::test]
-async fn copy_with_sidecars_replays_the_wal_without_shm() -> Result<()> {
-    let fixture =
-        PathBuf::from(std::env::var("SQLITE_MIRROR_TNG_WAL_DB").expect("SQLITE_MIRROR_TNG_WAL_DB"));
-    let granted = tempfile::tempdir()?;
-    let db = granted.path().join("tng.db");
-    std::fs::copy(&fixture, &db)?;
-    std::fs::copy(
-        fixture.with_file_name("tng.db-wal"),
-        granted.path().join("tng.db-wal"),
-    )?;
-    assert!(!granted.path().join("tng.db-shm").exists());
-
-    let crew = |path: PathBuf| async move {
-        let pool = mirror::open_sqlite(&path, false).await.expect("open copy");
-        let n = scalar_i64(&pool, "SELECT COUNT(*) FROM crew").await;
-        pool.close().await;
-        n
-    };
-
-    let copied = tempfile::tempdir()?;
-    let copy = mirror::copy_with_sidecars(&db, copied.path())?;
-    assert_eq!(crew(copy).await, 2, "the row only the WAL holds is there");
-
-    // The fixture's second row really is WAL-only: without it, one row.
-    let bare = tempfile::tempdir()?;
-    let main_only = bare.path().join("tng.db");
-    std::fs::copy(&db, &main_only)?;
-    assert_eq!(crew(main_only).await, 1);
-    Ok(())
-}
