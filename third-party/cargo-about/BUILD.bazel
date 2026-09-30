@@ -3,8 +3,8 @@
 # this and runs it from bazel-bin; it cannot run as a build action
 # because it needs cargo and the network to fetch crate sources.
 #
-# `manual`: only the platforms the release ships have a binary, so
-# `bazelisk build //...` on any other host must not try to pick one.
+# Only the platforms the release ships have a binary; on any other host
+# the target is incompatible, so `bazelisk build //...` skips it.
 
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
 
@@ -41,6 +41,11 @@ copy_file(
     }),
     out = "cargo-about",
     is_executable = True,
-    tags = ["manual"],
+    target_compatible_with = select({
+        ":darwin_aarch64": [],
+        ":linux_x86_64": [],
+        ":linux_aarch64": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
     visibility = ["//visibility:public"],
 )
