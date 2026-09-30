@@ -1022,9 +1022,7 @@ impl IndexedMarkdownStore {
             if mds.is_empty() {
                 return Ok(Vec::new());
             }
-            // One read per table, never a lookup per document: `dolt_at_`
-            // uses no secondary index, so a lookup by document is a full
-            // scan and a whole-store read goes quadratic.
+            // One read per table rather than a lookup per document.
             let wanted = serde_json::to_string(
                 &mds.iter()
                     .map(|m| m.markdown_uuid.as_str())

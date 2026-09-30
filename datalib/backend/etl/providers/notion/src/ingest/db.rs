@@ -277,14 +277,10 @@ impl RawDb {
 
     /// `(user_id, display name)` for every user we resolved.
     pub async fn load_user_names(&self) -> Result<HashMap<String, String>> {
-        // Audited: as `load_comment_anchors`.
-        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT id, name FROM {} WHERE name IS NOT NULL",
-            "users"
-        )))
-        .fetch_all(self.pool())
-        .await
-        .context("select user names")?;
+        let rows = sqlx::query("SELECT id, name FROM users WHERE name IS NOT NULL")
+            .fetch_all(self.pool())
+            .await
+            .context("select user names")?;
         let mut out = HashMap::new();
         for r in rows {
             if let (Ok(id), Ok(name)) =
@@ -346,12 +342,7 @@ impl RawDb {
 
     /// `(block_id, anchor text)` for every block a comment hangs off.
     pub async fn load_comment_anchors(&self) -> Result<HashMap<String, String>> {
-        // Audited: the only interpolation is a table name this handle
-        // chose -- a literal.
-        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT id, plain_text FROM {} WHERE plain_text IS NOT NULL AND plain_text <> ''",
-            "comment_anchors"
-        )))
+        let rows = sqlx::query("SELECT id, plain_text FROM comment_anchors WHERE plain_text IS NOT NULL AND plain_text <> ''")
         .fetch_all(self.pool())
         .await
         .context("select comment anchors")?;
@@ -407,14 +398,10 @@ impl RawDb {
 
     /// Every stored page body, as `(page_id, markdown)`.
     pub async fn load_page_markdown(&self) -> Result<Vec<(String, String)>> {
-        // Audited: as `load_comment_anchors`.
-        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT id, markdown FROM {} ORDER BY id",
-            "page_markdown"
-        )))
-        .fetch_all(self.pool())
-        .await
-        .context("select page_markdown")?;
+        let rows = sqlx::query("SELECT id, markdown FROM page_markdown ORDER BY id")
+            .fetch_all(self.pool())
+            .await
+            .context("select page_markdown")?;
         let mut out = Vec::with_capacity(rows.len());
         for r in rows {
             let (Ok(id), Ok(md)) = (
@@ -429,11 +416,7 @@ impl RawDb {
     }
 
     pub async fn load_comments(&self) -> Result<Vec<(Value, Option<String>)>> {
-        // Audited: as `load_comment_anchors`.
-        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT json(payload) AS payload, page_id FROM {} WHERE payload IS NOT NULL ORDER BY id",
-            "comments"
-        )))
+        let rows = sqlx::query("SELECT json(payload) AS payload, page_id FROM comments WHERE payload IS NOT NULL ORDER BY id")
         .fetch_all(self.pool())
         .await
         .context("select comments")?;
@@ -454,11 +437,9 @@ impl RawDb {
     /// Every `notion_attachments` row, bytes fetched or not: a page
     /// declares them all, so the fetch landing re-renders it.
     pub async fn load_attachments(&self) -> Result<Vec<AttachmentRow>> {
-        // Audited: as `load_comment_anchors`.
-        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT id, page_id, ref_id, blake3 FROM {} ORDER BY page_id, ref_id",
-            "notion_attachments"
-        )))
+        let rows = sqlx::query(
+            "SELECT id, page_id, ref_id, blake3 FROM notion_attachments ORDER BY page_id, ref_id",
+        )
         .fetch_all(self.pool())
         .await
         .context("select notion_attachments for render")?;

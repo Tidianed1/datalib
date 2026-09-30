@@ -250,12 +250,10 @@ pub struct LoadedProjectDoc {
 }
 
 pub async fn load_conversations_from(pool: &SqlitePool) -> Result<Vec<LoadedConversation>> {
-    // Audited: as `first_user_uuid_from`.
-    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT id, org_uuid, org_name, json(payload) AS payload FROM {} \
+    let rows = sqlx::query(
+        "SELECT id, org_uuid, org_name, json(payload) AS payload FROM conversations \
           WHERE payload IS NOT NULL ORDER BY id",
-        "conversations"
-    )))
+    )
     .fetch_all(pool)
     .await
     .context("load_conversations")?;
@@ -277,25 +275,18 @@ pub async fn load_conversations_from(pool: &SqlitePool) -> Result<Vec<LoadedConv
 }
 
 pub async fn first_user_uuid_from(pool: &SqlitePool) -> Result<Option<String>> {
-    // Audited: the only interpolation is a table name the caller chose --
-    // a literal.
-    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT id FROM {} ORDER BY id LIMIT 1",
-        "users"
-    )))
-    .fetch_optional(pool)
-    .await
-    .context("first_user_uuid")?;
+    let row = sqlx::query("SELECT id FROM users ORDER BY id LIMIT 1")
+        .fetch_optional(pool)
+        .await
+        .context("first_user_uuid")?;
     Ok(row.and_then(|r| r.try_get::<String, _>("id").ok()))
 }
 
 pub async fn load_projects_from(pool: &SqlitePool) -> Result<Vec<LoadedProject>> {
-    // Audited: as `first_user_uuid_from`.
-    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT id, org_uuid, org_name, json(payload) AS payload FROM {} \
+    let rows = sqlx::query(
+        "SELECT id, org_uuid, org_name, json(payload) AS payload FROM projects \
           WHERE payload IS NOT NULL ORDER BY id",
-        "projects"
-    )))
+    )
     .fetch_all(pool)
     .await
     .context("load_projects")?;
@@ -315,12 +306,10 @@ pub async fn load_projects_from(pool: &SqlitePool) -> Result<Vec<LoadedProject>>
 }
 
 pub async fn load_project_docs_from(pool: &SqlitePool) -> Result<Vec<LoadedProjectDoc>> {
-    // Audited: as `first_user_uuid_from`.
-    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT id, project_uuid, json(payload) AS payload FROM {} \
+    let rows = sqlx::query(
+        "SELECT id, project_uuid, json(payload) AS payload FROM project_docs \
           WHERE payload IS NOT NULL AND project_uuid IS NOT NULL ORDER BY project_uuid, id",
-        "project_docs"
-    )))
+    )
     .fetch_all(pool)
     .await
     .context("load_project_docs")?;

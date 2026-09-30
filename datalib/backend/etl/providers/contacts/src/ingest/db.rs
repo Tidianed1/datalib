@@ -375,22 +375,17 @@ impl RawDb {
     /// whether the row landed via CardDAV sync-collection or
     /// [`super::vcf_dir::fetch`].
     pub async fn load_all_for_render_and_index_md(&self) -> Result<Vec<LoadedRawContact>> {
-        // Audited: the only interpolations are table names this handle
-        // chose -- literals. The
-        // aliases keep the qualified column references working, since a
-        // pinned read renames the table out from under them.
-        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+        let rows = sqlx::query(
             "SELECT c.id AS id,
                     c.addressbook_id AS addressbook_id,
                     c.uid AS uid,
                     c.href AS href,
                     json_extract(c.payload, '$.vcard') AS vcard,
                     COALESCE(a.display_name, a.href) AS addressbook_label
-             FROM {} c
-             LEFT JOIN {} a ON a.id = c.addressbook_id
+             FROM contacts c
+             LEFT JOIN addressbooks a ON a.id = c.addressbook_id
              ORDER BY c.addressbook_id, c.id",
-            "contacts", "addressbooks"
-        )))
+        )
         .fetch_all(&self.pool)
         .await
         .context("select contacts for render")?;

@@ -293,7 +293,7 @@ instead (`DoltRepo::pinned`), and moves to the newest `main` with
 
 **The allowlist.** The two-process test measures what a reader may do
 beside a live writer — `dolt_hashof`, `sqlite_master`,
-`CREATE TEMP VIEW`, reads through `dolt_at_` modules,
+reads through `dolt_at_` modules,
 `dolt_diff_*`, `dolt_log()`, `dolt_commit_ancestors`,
 `dolt_diff_summary`, `dolt_diff_stat`, `dolt_status`, a `COUNT(*)` per
 table, `BEGIN`/`COMMIT` around plain reads (the held read transaction),

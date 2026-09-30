@@ -258,9 +258,8 @@ pub fn lock_path_for(db_path: &Path) -> PathBuf {
 /// directly: it works here, and fast-forwards `main` at each seal
 /// ([`commit_run`]). Everything between two seals is invisible to a
 /// reader until that moment — the rows, and the schema reconcile that
-/// creates the tables, which a pinned read could not protect itself
-/// from: `pin.rs` lists tables from its branch's `sqlite_master`, not
-/// the pin's.
+/// creates the tables — because a reader resolves `main`'s tip before it
+/// opens that commit.
 ///
 /// The name is also the signal. `fsindex` keeps one branch per scan root
 /// and publishes none of them, so [`publish_to_main`] fires only for a

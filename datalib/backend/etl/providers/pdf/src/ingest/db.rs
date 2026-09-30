@@ -105,15 +105,10 @@ impl RawDb {
     /// every rendered document reads, since its `source_url` is an
     /// absolute path under that root.
     pub async fn scan_root(&self) -> Result<Option<(String, PathBuf)>> {
-        // Audited: the only interpolation is a table name this handle chose
-        // -- a literal.
-        let row = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT id, abs_root FROM {} ORDER BY id LIMIT 1",
-            "pdf_scan_meta"
-        )))
-        .fetch_optional(self.pool())
-        .await
-        .context("read pdf_scan_meta")?;
+        let row = sqlx::query("SELECT id, abs_root FROM pdf_scan_meta ORDER BY id LIMIT 1")
+            .fetch_optional(self.pool())
+            .await
+            .context("read pdf_scan_meta")?;
         Ok(row.map(|r| {
             (
                 r.get::<String, _>("id"),
@@ -140,11 +135,7 @@ impl RawDb {
     }
 
     pub async fn convertible_documents(&self, root: &Path) -> Result<Vec<RenderTarget>> {
-        // Audited: the only interpolations are table names this handle
-        // chose -- literals. The aliases
-        // keep the qualified column references working, since a pinned read
-        // renames the table out from under them.
-        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+        let rows = sqlx::query(
             "SELECT d.blake3      AS blake3,
                     d.title       AS title,
                     d.author      AS author,
@@ -155,14 +146,13 @@ impl RawDb {
                     MIN(p.id)     AS rel_path,
                     COUNT(p.id)   AS copy_count,
                     GROUP_CONCAT(p.id, char(30)) AS path_ids
-               FROM {} d
-               JOIN {} p ON p.blake3 = d.blake3
+               FROM pdf_documents d
+               JOIN pdf_paths p ON p.blake3 = d.blake3
               WHERE d.has_encoding_issues = 0
                 AND d.page_count > d.ocr_page_count
               GROUP BY d.blake3
               ORDER BY d.blake3",
-            "pdf_documents", "pdf_paths"
-        )))
+        )
         .fetch_all(self.pool())
         .await
         .context("select convertible documents")?;

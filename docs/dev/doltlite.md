@@ -361,15 +361,16 @@ The common-use subset:
 
 ## How doltlite behaves
 
-The facts our rules rest on, checked on doltlite 0.50.13 unless a line
-says otherwise. A fact in one process is a test in
+The facts our rules rest on, checked on the pinned doltlite (0.50.14)
+by the tests below; a number measured on an older release names it. A fact in one process is a test in
 `doltlite_facts_test`, in the module named for its section. Anything
 about a writer and a reader in two processes is measured with
 `doltlite_two_process_test`, whose writer seals through the real
 `commit_run`: the shell's writer is not `commit_run`, and a shell probe
 has been wrong about contention before. "Shell probe" below marks a
-fact seen only in the `doltlite` shell on a scratch store. Upstream's own contract for 0.50.13 is `doc/doltlite/concurrency.md`
-and `doc/doltlite/refs.md` in the doltlite repo at `v0.50.13`.
+fact seen only in the `doltlite` shell on a scratch store. Upstream's
+own contract is `doc/doltlite/concurrency.md` and `doc/doltlite/refs.md`
+in the doltlite repo, at the pinned tag.
 
 ### Branches, HEAD and the working set
 
@@ -492,7 +493,7 @@ and `doc/doltlite/refs.md` in the doltlite repo at `v0.50.13`.
 | indexes | primary-key equality only; no secondary index, no `ORDER BY` | all | all |
 | writes to the file | none | none | none |
 | a table committed later | readable by name | at the next transaction | open the newer commit |
-| what holds it | `pin.rs` tests | `a_held_read_transaction_is_a_snapshot_while_the_writer_seals` | `detached_readers_are_snapshots_while_the_writer_seals` |
+| what holds it | `datalib_pin` tests | `a_held_read_transaction_is_a_snapshot_while_the_writer_seals` | `detached_readers_are_snapshots_while_the_writer_seals` |
 
 Every reader in the tree uses the third (`doltlite_raw::open_reader`),
 except the search applet, which holds a transaction; `dolt_at_` is for
