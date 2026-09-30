@@ -39,7 +39,9 @@ use datalib_schema::providers::Provider;
 ///     `user-…` id.
 /// v9: every id carries its row's `created_at` in its leading bits
 ///     (`datalib_id`'s v8 layout).
-pub const RENDER_VERSION: u32 = 10;
+/// v11: the private-use characters around a cited span are dropped
+///     instead of showing as boxes.
+pub const RENDER_VERSION: u32 = 11;
 
 fn profile() -> RenderProfile {
     RenderProfile {

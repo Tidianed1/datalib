@@ -11,10 +11,24 @@ const START: char = '\u{e200}';
 const END: char = '\u{e201}';
 const SEP: char = '\u{e202}';
 
+/// ChatGPT's private-use block. `U+E203`/`U+E204` bracket a cited span
+/// and `U+E206` trails it; whatever the wrappers above did not consume
+/// would show as a tofu box, so every character left in the block goes.
+fn is_sentinel(c: char) -> bool {
+    ('\u{e200}'..='\u{e2ff}').contains(&c)
+}
+
 pub fn clean_text(s: &str) -> String {
-    if !s.contains(START) {
+    if !s.chars().any(is_sentinel) {
         return s.to_string();
     }
+    expand_wrappers(s)
+        .chars()
+        .filter(|&c| !is_sentinel(c))
+        .collect()
+}
+
+fn expand_wrappers(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
@@ -76,12 +90,20 @@ mod tests {
     #[test]
     fn unterminated_sentinel_keeps_inner_text() {
         let raw = "trailing \u{e200}url\u{e202}stuff";
-        assert_eq!(clean_text(raw), "trailing url\u{e202}stuff");
+        assert_eq!(clean_text(raw), "trailing urlstuff");
     }
 
     #[test]
     fn multiple_sentinels_in_one_string() {
         let raw = "\u{e200}url\u{e202}A\u{e202}https://a\u{e201} and \u{e200}url\u{e202}B\u{e202}https://b\u{e201}.";
         assert_eq!(clean_text(raw), "[A](https://a) and [B](https://b).");
+    }
+
+    /// A cited span leaves `U+E203`/`U+E204`/`U+E206` behind, which
+    /// showed as tofu boxes after every sentence.
+    #[test]
+    fn stray_span_markers_are_removed() {
+        let raw = "\u{e200}i\u{e202}turn0image0\u{e202}turn0image1\u{e201}Hi.\u{e203}\u{e204} Next.\u{e203} \u{e204}\u{e206}";
+        assert_eq!(clean_text(raw), "Hi. Next. ");
     }
 }
