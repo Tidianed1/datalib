@@ -49,6 +49,7 @@ rust_library(
         "src/manage/mod.rs",
         "src/manage/problems.rs",
         "src/manage/status.rs",
+        "src/manage/summary.rs",
         "src/prometheus.rs",
         "src/remote_media.rs",
         "src/request_log.rs",
