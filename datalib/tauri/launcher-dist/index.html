@@ -285,9 +285,6 @@
       .legacy .what {
         flex: 1 1 auto;
       }
-      .legacy .warn {
-        color: var(--warn-fg);
-      }
       .empty {
         height: 120px;
         border: 1.5px dashed var(--border);
@@ -659,11 +656,6 @@
             code(legacy.target),
             "? Close anything else using it first.",
           );
-          const warn = document.createElement("span");
-          warn.className = "warn";
-          warn.textContent =
-            "Free-text search may not find documents after the move until each source's search index is rebuilt.";
-          $("legacy-what").append(document.createElement("br"), warn);
         }
         // The first time, the one thing to do is make a library.
         if (none) setPopover(true);

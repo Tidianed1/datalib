@@ -45,6 +45,44 @@ pub fn forgettable(root: &Path, libraries_dir: &Path) -> bool {
     root.parent() != Some(libraries_dir) || !is_data_root(root)
 }
 
+/// A config's top-level `data_root` defaults to the config's own folder,
+/// which moves with it; one written out as the old folder would keep
+/// pointing there. Drop that line, and only that line: any other value
+/// was chosen on purpose.
+fn drop_own_data_root(config: &Path, old_root: &Path) -> std::io::Result<()> {
+    let Ok(text) = std::fs::read_to_string(config) else {
+        return Ok(());
+    };
+    let old = old_root.to_string_lossy();
+    let names_old = |line: &str| {
+        let Some(value) = line.trim().strip_prefix("data_root") else {
+            return false;
+        };
+        let value = value.trim_start().strip_prefix('=').map(str::trim);
+        value
+            .and_then(|v| v.strip_prefix('"')?.strip_suffix('"'))
+            .is_some_and(|v| v.trim_end_matches('/') == old.trim_end_matches('/'))
+    };
+    // Top-level keys come before the first `[` table header.
+    let mut top = true;
+    let mut changed = false;
+    let mut kept = Vec::new();
+    for line in text.split_inclusive('\n') {
+        if line.trim_start().starts_with('[') {
+            top = false;
+        }
+        if top && names_old(line) {
+            changed = true;
+            continue;
+        }
+        kept.push(line);
+    }
+    if changed {
+        std::fs::write(config, kept.concat())?;
+    }
+    Ok(())
+}
+
 // TODO(after 2026-11-01): remove the move of a library at the Datalib
 // folder itself into `Datalib/Default` (`legacy_root`, `move_legacy`,
 // `Target::InsideLegacy`, the launcher's `launcher_move_legacy` and the
@@ -89,6 +127,7 @@ pub fn move_legacy(recents_file: &Path, libraries_dir: &Path) -> std::io::Result
         std::fs::rename(&from, staging.join(name))?;
     }
     std::fs::rename(&staging, &target)?;
+    drop_own_data_root(&target.join("config.toml"), libraries_dir)?;
     forget_recent(recents_file, libraries_dir)?;
     record_recent(recents_file, &target)?;
     Ok(target)
@@ -477,6 +516,35 @@ mod tests {
         assert!(!dir.join("config.toml").exists());
         assert_eq!(legacy_root(&dir), None);
         assert_eq!(paths(&libraries(&f, &dir)), vec![default]);
+    }
+
+    /// A config that spelled out its own folder as `data_root` would
+    /// keep pointing at the old place after the move; that line goes.
+    #[test]
+    fn moving_drops_a_data_root_naming_the_old_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("recent-roots.json");
+        let dir = libraries_dir(&tmp.path().join("Documents"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("config.toml"),
+            format!(
+                "data_root = \"{}\"\n\n[[groups]]\nid = \"x\"\ndata_root = \"{}\"\n",
+                dir.display(),
+                dir.display()
+            ),
+        )
+        .unwrap();
+        let moved = move_legacy(&f, &dir).unwrap();
+        let text = std::fs::read_to_string(moved.join("config.toml")).unwrap();
+        assert_eq!(
+            text,
+            format!(
+                "\n[[groups]]\nid = \"x\"\ndata_root = \"{}\"\n",
+                dir.display()
+            ),
+            "only the top-level line naming the old folder goes"
+        );
     }
 
     /// A `Default` already there (made by hand, say) is never merged
