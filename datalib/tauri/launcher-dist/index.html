@@ -201,16 +201,11 @@
       /* Out of the way until the row is pointed at or tabbed into; always
          there on a row whose folder is gone, where it is the one thing
          to do. */
-      .forget {
-        flex: 0 0 auto;
-        margin-right: 6px;
-        visibility: hidden;
-      }
+      .forget,
       .folder {
         flex: 0 0 auto;
         width: 30px;
         height: 30px;
-        margin-right: 12px;
         border: none;
         border-radius: 6px;
         background: none;
@@ -219,9 +214,17 @@
         align-items: center;
         justify-content: center;
       }
+      .forget {
+        margin-right: 2px;
+        visibility: hidden;
+      }
+      .forget:hover,
       .folder:hover:not(:disabled) {
         background: var(--border-soft);
         color: var(--fg);
+      }
+      .folder {
+        margin-right: 12px;
       }
       .folder:disabled {
         visibility: hidden;
@@ -404,6 +407,8 @@
       const BOOK =
         '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z"/><path d="M5 17a3 3 0 0 1 3-3h11"/></svg>';
 
+      const CROSS =
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
       const FOLDER =
         '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
 
@@ -498,9 +503,9 @@
         row.append(open);
         if (lib.forgettable) {
           const forget = document.createElement("button");
-          forget.className = "btn small forget";
-          forget.textContent = "Forget";
-          forget.title = "Take it off this list. Its folder is left as it is.";
+          forget.className = "forget";
+          forget.innerHTML = CROSS;
+          forget.title = "Forget (the folder stays)";
           forget.setAttribute("aria-label", `Forget ${lib.name}`);
           forget.addEventListener("click", async () => {
             try {
