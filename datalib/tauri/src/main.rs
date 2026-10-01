@@ -200,22 +200,21 @@ fn library_switch(app: AppHandle, path: String) -> Result<(), String> {
     if !launcher::is_data_root(&root) {
         return Err(format!("{} is no longer a data library.", root.display()));
     }
-    leave_library(&app, false).map_err(|e| e.to_string())?;
+    leave_library(&app).map_err(|e| e.to_string())?;
     tauri::async_runtime::spawn(boot(app, root, false));
     Ok(())
 }
 
-/// Close this library and go back to the libraries screen, with the
-/// new-library form open when `new_library`.
+/// Close this library and go back to the libraries screen.
 #[tauri::command]
-fn libraries_show(app: AppHandle, new_library: bool) -> Result<(), String> {
-    leave_library(&app, new_library).map_err(|e| e.to_string())
+fn libraries_show(app: AppHandle) -> Result<(), String> {
+    leave_library(&app).map_err(|e| e.to_string())
 }
 
 /// Close the open library: the main window goes back to the libraries
 /// screen, the library's other windows close, and its server stops.
-fn leave_library(app: &AppHandle, new_library: bool) -> tauri::Result<()> {
-    show_launcher(app, new_library)?;
+fn leave_library(app: &AppHandle) -> tauri::Result<()> {
+    show_launcher(app)?;
     for (label, window) in app.webview_windows() {
         if label != MAIN_WINDOW {
             let _ = window.destroy();
@@ -389,7 +388,7 @@ fn main() {
                 Some(root) => {
                     tauri::async_runtime::spawn(boot(handle, root, false));
                 }
-                None => show_launcher(&handle, false)?,
+                None => show_launcher(&handle)?,
             }
             Ok(())
         })
@@ -465,32 +464,26 @@ fn explicit_data_root() -> Option<PathBuf> {
 }
 
 /// Show the libraries screen in the main window, opening the window if
-/// there is none yet. `new_library` opens it with the new-library form
-/// showing.
-fn show_launcher(app: &AppHandle, new_library: bool) -> tauri::Result<()> {
+/// there is none yet.
+fn show_launcher(app: &AppHandle) -> tauri::Result<()> {
     *app.state::<AppOrigin>().0.lock().expect("app origin lock") = None;
-    let page = if new_library {
-        "index.html#new"
-    } else {
-        "index.html"
-    };
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
-        return window.navigate(launcher_page_url(page));
+        return window.navigate(launcher_page_url());
     }
-    main_window(app, WebviewUrl::App(page.into())).build()?;
+    main_window(app, WebviewUrl::App("index.html".into())).build()?;
     Ok(())
 }
 
 /// Where the shell serves its bundled page, as a URL to navigate to:
 /// a custom scheme on macOS and Linux, a `http://tauri.localhost` host
 /// on Windows.
-fn launcher_page_url(page: &str) -> Url {
+fn launcher_page_url() -> Url {
     let base = if cfg!(windows) {
         "http://tauri.localhost/"
     } else {
         "tauri://localhost/"
     };
-    format!("{base}{page}")
+    format!("{base}index.html")
         .parse()
         .expect("the bundled page's URL parses")
 }
@@ -683,9 +676,7 @@ fn leaves_the_app(next: &Url, app: &AppHandle) -> bool {
         .lock()
         .expect("app origin lock")
         .clone();
-    let launcher_origin = launcher_page_url("index.html")
-        .origin()
-        .ascii_serialization();
+    let launcher_origin = launcher_page_url().origin().ascii_serialization();
     match next.scheme() {
         "http" | "https" => Some(&origin) != app_origin.as_ref() && origin != launcher_origin,
         "mailto" | "tel" => true,

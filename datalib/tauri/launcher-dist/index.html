@@ -542,16 +542,7 @@
         if (none) setPopover(true);
       }
 
-      // The app's library menu ("New library…") opens this page as
-      // `index.html#new`, with the form showing.
-      render()
-        .then(() => {
-          if (location.hash === "#new") setPopover(true);
-        })
-        .catch(fail);
-      window.addEventListener("hashchange", () => {
-        if (location.hash === "#new") setPopover(true);
-      });
+      render().catch(fail);
     </script>
   </body>
 </html>

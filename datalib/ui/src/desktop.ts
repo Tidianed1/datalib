@@ -124,15 +124,12 @@ export async function switchLibrary(path: string): Promise<string | null> {
   }
 }
 
-/**
- * Close this library and go back to the libraries screen, with the
- * new-library form open when `newLibrary`.
- */
-export async function showLibraries(newLibrary = false): Promise<void> {
+/** Close this library and go back to the libraries screen. */
+export async function showLibraries(): Promise<void> {
   const t = internals();
   if (!t) return;
   try {
-    await t.invoke("libraries_show", { newLibrary });
+    await t.invoke("libraries_show");
   } catch (e) {
     console.warn("libraries_show failed", e);
   }

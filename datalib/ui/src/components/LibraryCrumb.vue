@@ -1,15 +1,13 @@
 <script setup lang="ts">
 // "Data Liberation ✊ › <library>" at the start of the top bar. In the
 // desktop app the name goes up to the libraries screen and the
-// library's name opens a menu: the other libraries, all of them, a new
-// one, and this one in Finder. A browser shows the same two words with
-// nothing behind them, since only the app can open another library.
+// library's name opens a menu of the other libraries to switch to. A
+// browser shows the same two words with nothing behind them, since only
+// the app can open another library.
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import {
   isDesktopApp,
   libraryMenu,
-  revealActionLabel,
-  revealInFileManager,
   showLibraries,
   switchLibrary,
   type LibraryMenu,
@@ -40,14 +38,9 @@ async function pick(path: string) {
   if (refused) pushToast(refused, "error");
 }
 
-function goUp(newLibrary = false) {
+function goUp() {
   open.value = false;
-  void showLibraries(newLibrary);
-}
-
-async function reveal() {
-  open.value = false;
-  if (rootPath.value) await revealInFileManager(rootPath.value);
+  void showLibraries();
 }
 
 function onDocDown(e: MouseEvent) {
@@ -109,16 +102,6 @@ onBeforeUnmount(() => (open.value = false));
       >
         <span class="crumb-gap" />{{ o.name }}
         <small v-if="!o.found">not found</small>
-      </button>
-      <div class="crumb-hr" />
-      <button class="crumb-item" role="menuitem" @click="goUp()">
-        <span class="crumb-gap" />All libraries
-      </button>
-      <button class="crumb-item" role="menuitem" @click="goUp(true)">
-        <span class="crumb-gap" />New library…
-      </button>
-      <button class="crumb-item" role="menuitem" @click="reveal">
-        <span class="crumb-gap" />{{ revealActionLabel() }}
       </button>
     </div>
   </div>
@@ -224,10 +207,5 @@ button.crumb-lib:hover,
 .crumb-gap {
   width: 14px;
   flex: 0 0 auto;
-}
-.crumb-hr {
-  height: 1px;
-  margin: 5px 4px;
-  background: var(--datalib-border-soft);
 }
 </style>
