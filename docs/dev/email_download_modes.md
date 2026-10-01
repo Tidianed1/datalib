@@ -15,6 +15,9 @@ changes when a mode is added. See
 [`data_architecture_ingestion.md`](data_architecture_ingestion.md) for
 the surrounding ingestion architecture.
 
+Which Fastmail credential reaches what — and the read-only API token
+the JMAP mode can use — is in [`fastmail.md`](fastmail.md).
+
 Two of the three have a wizard form: **Gmail** and **Fastmail** are
 separate entries in `datalib/ui/src/config/catalog.ts`, each writing the
 table that selects its mode. They are not one form with a mode dropdown

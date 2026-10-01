@@ -494,7 +494,7 @@ describe("the Slack pickers", () => {
     expect(dms.kind === "string_list" && dms.probe).toBe("conversations");
   });
 
-  /// What "Test connection" authenticates with is what Save writes —
+  /// What "Check account" authenticates with is what Save writes —
   /// the `api` table that selects the live method, defaults included.
   it("probe with the ingest params the form would write", () => {
     expect(paramsObject(SLACK, seedFieldValues(SLACK), "download")).toEqual({
@@ -935,7 +935,7 @@ inputs = ["bridge/keyword_index"]
   });
 });
 
-describe("what Test connection is sent", () => {
+describe("what Check account is sent", () => {
   /// The form's `<input type=number>` hands back a string, and the
   /// backend's `Option<i64>` will not take `"30"`.
   it("sends numbers as numbers", () => {
@@ -948,7 +948,7 @@ describe("what Test connection is sent", () => {
   });
 });
 
-describe("what Test connection authenticates as", () => {
+describe("what Check account authenticates as", () => {
   /// The probe runs as `latchkey --account <acct> curl`, so an account
   /// left out of its params tests a different identity from the one
   /// picked — and comes back looking perfectly healthy while describing

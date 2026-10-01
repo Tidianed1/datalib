@@ -21,14 +21,14 @@ export type Field =
   | ({ kind: "text" } & FieldBase & {
         required?: boolean;
         /// Renders as the latchkey-account control rather than a bare
-        /// text box: a dropdown of the accounts latchkey has stored for
-        /// the entry's `credentialService`, a "Latchkey auth" button,
-        /// and — still — somewhere to type.
+        /// text box: a box that lists the accounts latchkey has stored
+        /// for the entry's `credentialService` and still takes typing,
+        /// with the sign-in tabs under it.
         ///
         /// Typing matters. latchkey may hold an account this server
         /// can't enumerate (no keyring access, latchkey not installed),
-        /// and a dropdown that came back empty must not be the only way
-        /// in. The value written is the account string either way.
+        /// and a list that came back empty must not be the only way in.
+        /// The value written is the account string either way.
         latchkey?: boolean;
       })
   /// A path on the machine running the backend.
@@ -152,11 +152,15 @@ export type CatalogEntry = {
   /// Shown beside the Connect button, when connecting this way costs
   /// something the person should decide about before clicking.
   credentialConnectWarning?: string;
-  /// The "Paste a credential" form. `help` says where the credential
+  /// The "Paste a key" tab. `help` says where the credential
   /// comes from; `headers` replaces the shape latchkey's own example
   /// gives, for a service whose example is wrong — `{secret}` marks
   /// where the pasted value goes (see `credentialShape.ts`).
-  credentialPaste?: { help?: string; headers?: string[] };
+  /// `accountSuffix` follows the username in the name the credential is
+  /// offered under, for entries that share one service but want
+  /// different credentials: Fastmail Contacts and Calendar both use
+  /// `fastmail-dav`, and a read-only app password covers only one.
+  credentialPaste?: { help?: string; headers?: string[]; accountSuffix?: string };
   /// Dotted params path whose presence identifies this entry among the
   /// several that share one `type`. Undefined on a type with only one
   /// entry, which is nearly all of them.
@@ -170,7 +174,7 @@ export type CatalogEntry = {
   requiresOneOf?: string[];
   /// Params this entry always writes, with no field to edit them.
   preset?: Preset[];
-  /// Offer "Test connection", and populate any `probe:` field from
+  /// Offer "Check account", and populate any `probe:` field from
   /// what comes back. Requires a `datalib-step probe <type>` on the
   /// backend side; see `datalib/backend/datalib_step/src/probe.rs`.
   canProbe?: boolean;
@@ -552,7 +556,7 @@ export const CATALOG: CatalogEntry[] = [
       help:
         "For read-only access, make an API token at app.fastmail.com → Settings → Privacy & " +
         "Security → Integrations → API tokens, with Read-only access ticked, and paste it " +
-        "here. Latchkey auth signs in with full read and write access instead.",
+        "here. Web login signs in with full read and write access instead.",
     },
     preset: [
       // The JMAP server. A preset rather than a field because this
@@ -698,7 +702,9 @@ export const CATALOG: CatalogEntry[] = [
     credentialPaste: {
       help:
         "Your Fastmail address and an app password from app.fastmail.com → Settings → " +
-        "Privacy & Security → Integrations → App passwords, with calendar access.",
+        "Privacy & Security → Integrations → App passwords: Access “Calendars (CalDAV)”, " +
+        "with Read-only access ticked. An API token won’t do: CalDAV refuses them.",
+      accountSuffix: "calendar",
     },
     canProbe: true,
     fields: [
@@ -707,7 +713,9 @@ export const CATALOG: CatalogEntry[] = [
         latchkey: true,
         target: "latchkey_settings.account",
         label: "Fastmail account",
-        help: "Which stored Fastmail app password to use. Leave it empty if latchkey holds only one.",
+        help:
+          "The name the app password is stored under in latchkey — “you@fastmail.com calendar”, " +
+          "say. Leave it empty if latchkey holds only one.",
       },
       {
         kind: "string_list",
@@ -843,7 +851,9 @@ export const CATALOG: CatalogEntry[] = [
     credentialPaste: {
       help:
         "Your Fastmail address and an app password from app.fastmail.com → Settings → " +
-        "Privacy & Security → Integrations → App passwords, with contacts access.",
+        "Privacy & Security → Integrations → App passwords: Access “Contacts (CardDAV)”, " +
+        "with Read-only access ticked. An API token won’t do: CardDAV refuses them.",
+      accountSuffix: "contacts",
     },
     canProbe: true,
     fields: [
@@ -852,7 +862,9 @@ export const CATALOG: CatalogEntry[] = [
         latchkey: true,
         target: "latchkey_settings.account",
         label: "Fastmail account",
-        help: "Which stored Fastmail app password to use. Leave it empty if latchkey holds only one.",
+        help:
+          "The name the app password is stored under in latchkey — “you@fastmail.com contacts”, " +
+          "say. Leave it empty if latchkey holds only one.",
       },
       {
         kind: "string_list",

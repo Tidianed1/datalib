@@ -15,9 +15,9 @@
 // the `[[groups]]` entry; the steps written under it carry neither.
 
 // A descriptor with a `credentialService` also gets a **Connection**
-// block: which latchkey account to use, "Latchkey auth", which runs
-// latchkey's browser login, "Paste a credential", which stores a token
-// or app password with `latchkey auth set`, and "Test connection", which calls the
+// block: which latchkey account to use, the "Web login" tab, which runs
+// latchkey's browser login, the "Paste a key" tab, which stores a token
+// or app password with `latchkey auth set`, and "Check account", which calls the
 // provider's own probe (`datalib-step probe <type>`). What comes back is not just a
 // green tick — it names the account actually reached, and it fills
 // every `probe:` field's checklist, the render step's included. A
@@ -49,8 +49,15 @@ import {
 } from "@/config/sourceSteps";
 import { type ProbeItem, type ProbeItemKind, type ProbeReport, type StoredAccount } from "@/api";
 import { useApi } from "@/cards/cardApi";
+import AccountCombo, { type AccountOption } from "@/components/AccountCombo.vue";
 import { iconUrl } from "@/config/icons";
-import { SECRET, credentialShape, pastedCredential } from "@/config/credentialShape";
+import {
+  SECRET,
+  credentialShape,
+  pastedCredential,
+  pasteTarget,
+  suggestedAccount,
+} from "@/config/credentialShape";
 import { ingestReach } from "@/config/ingestMethods";
 import { isDesktopApp, pickPath } from "@/desktop";
 import {
@@ -563,8 +570,8 @@ async function loadAccounts() {
     latchkeyCli.value = info.cli;
     gateway.value = info.gateway;
     accountsError.value = info.error;
-    // Where pasting is the only way in, the form is the next step.
-    if (setOnlyService.value && !pasteOpen.value) openPaste();
+    if (!signInTab.value || !signInWays.value.includes(signInTab.value))
+      chooseSignIn(signInWays.value[0] ?? null);
   } catch (e) {
     accounts.value = [];
     accountsError.value = String(e);
@@ -613,21 +620,44 @@ const canPaste = computed(() => !gateway.value && authOptions.value.includes("se
 const pasteShape = computed(() =>
   credentialShape(setExample.value, chosen.value?.credentialPaste?.headers),
 );
-/// Open from the start where pasting is the only way in.
-const pasteOpen = ref(false);
 const pasteUsername = ref("");
 const pasteSecret = ref("");
-const pasteAccount = ref("");
+/// Set once the account field is typed in or picked from, or already
+/// named an account when the paste form opened. Until then the field
+/// follows the pasted username, since that is what it is stored under.
+const accountChosen = ref(false);
 const paste = ref<{ state: "idle" | "saving" | "ok" | "failed"; message: string }>({
   state: "idle",
   message: "",
 });
-function openPaste() {
-  pasteOpen.value = true;
-  pasteAccount.value = accountValue.value;
-  if (!pasteUsername.value && accountValue.value.includes("@"))
-    pasteUsername.value = accountValue.value;
+/// The ways in this service offers, in the order the tabs show them: a
+/// browser login gets whatever the sign-in grants, usually everything; a
+/// pasted key can be one made with less, where the service offers that.
+type SignInWay = "web" | "paste";
+const signInWays = computed<SignInWay[]>(() => [
+  ...(canConnect.value ? (["web"] as const) : []),
+  ...(canPaste.value ? (["paste"] as const) : []),
+]);
+const signInTab = ref<SignInWay | null>(null);
+
+function chooseSignIn(way: SignInWay | null) {
+  signInTab.value = way;
+  if (way === "paste") preparePaste();
 }
+
+function preparePaste() {
+  accountChosen.value = !!accountValue.value;
+  const address = accountValue.value.split(/\s/)[0] ?? "";
+  if (!pasteUsername.value && address.includes("@")) pasteUsername.value = address;
+}
+watch(pasteUsername, (username) => {
+  const field = accountField.value;
+  if (field && !accountChosen.value)
+    values.value[field.target] = suggestedAccount(
+      username,
+      chosen.value?.credentialPaste?.accountSuffix,
+    );
+});
 
 /// latchkey's own word for the secret: "Token", "App password".
 const pasteSecretLabel = computed(() => {
@@ -647,24 +677,23 @@ const pasteHeaderHint = computed(() =>
     : "",
 );
 
-/// latchkey files a credential stored with no account over the one it
-/// already holds, if it holds exactly one, and refuses if it holds
-/// several. Both are said before the button is pressed.
-const pasteReplaces = computed(() => {
-  const list = accounts.value ?? [];
-  const named = pasteAccount.value.trim();
-  if (named) return list.some((a) => a.account === named) ? named : null;
-  return list.length === 1 ? list[0]!.account || "latchkey’s default account" : null;
-});
-const pasteAmbiguous = computed(
-  () => !pasteAccount.value.trim() && (accounts.value?.length ?? 0) > 1,
+/// Where the source names an account, the paste is stored under that
+/// name and must have one: an unnamed paste lands on whichever
+/// credential latchkey holds alone.
+const pasteNeedsName = computed(() => !!accountField.value);
+const pasteLandsOn = computed(() =>
+  pasteTarget(
+    (accounts.value ?? []).map((a) => a.account),
+    accountValue.value,
+  ),
 );
 
 async function savePasted() {
   const name = service.value;
   const credential = pasted.value;
   if (!name || !credential || paste.value.state === "saving") return;
-  const account = accountField.value ? pasteAccount.value.trim() : "";
+  const account = pasteNeedsName.value ? accountValue.value : "";
+  if (pasteNeedsName.value && !account) return;
   paste.value = { state: "saving", message: "" };
   try {
     await setLatchkeyCredential(name, account, credential);
@@ -673,8 +702,6 @@ async function savePasted() {
     return;
   }
   pasteSecret.value = "";
-  const field = accountField.value;
-  if (field && account) values.value[field.target] = account;
   paste.value = { state: "ok", message: "Stored in latchkey." };
   await loadAccounts();
   // The credential is only a guess until something uses it; the probe is
@@ -786,6 +813,30 @@ async function connectViaLatchkey() {
   }
 }
 
+/// The names latchkey holds for this service, with what it says of each.
+/// Its status is a hint, not a verdict: `fastmail-dav` checks every
+/// credential against CardDAV, so a calendar-only password reads invalid.
+const accountOptions = computed<AccountOption[] | null>(() =>
+  accounts.value === null
+    ? null
+    : accounts.value.map((a) => ({
+        value: a.account,
+        note:
+          a.credential_status === "valid"
+            ? "✓"
+            : a.credential_status === "invalid"
+              ? "latchkey reports it invalid"
+              : undefined,
+      })),
+);
+
+function chooseAccount(name: string) {
+  const field = accountField.value;
+  if (!field) return;
+  values.value[field.target] = name;
+  accountChosen.value = true;
+}
+
 /// The account currently in the form. Empty means "latchkey's unnamed
 /// default", which is addressed by writing no `account` at all — so
 /// empty is a real answer, not a missing one.
@@ -801,7 +852,7 @@ const probe = ref<{
   report: ProbeReport | null;
 }>({ state: "idle", message: "", report: null });
 
-/// Can "Test connection" be offered here at all?
+/// Can "Check account" be offered here at all?
 const canProbe = computed(() => !!chosen.value?.canProbe && !!probeParams.value);
 
 async function testConnection() {
@@ -938,7 +989,7 @@ watch(
   service,
   (name) => {
     // A half-typed secret belongs to the service it was typed for.
-    pasteOpen.value = false;
+    signInTab.value = null;
     pasteSecret.value = "";
     paste.value = { state: "idle", message: "" };
     if (name) void loadAccounts();
@@ -1034,49 +1085,15 @@ function submit() {
             <code>{{ service }}</code> service — datalib never stores them itself.
           </p>
 
-          <label v-if="accountField" class="wiz-field">
+          <div v-if="accountField" class="wiz-field">
             <span class="wiz-label">{{ accountField.label }}</span>
-            <span class="wiz-accountrow">
-              <!-- A dropdown *and* a box. latchkey may hold an account
-                   this server cannot enumerate, and a list that came
-                   back empty must not be the only way in. -->
-              <select
-                class="wiz-input wiz-select wiz-accountpick"
-                :value="
-                  accounts?.some((a) => a.account === accountValue) ? accountValue : '__other'
-                "
-                @change="
-                  values[accountField.target] =
-                    ($event.target as HTMLSelectElement).value === '__other'
-                      ? ''
-                      : ($event.target as HTMLSelectElement).value
-                "
-              >
-                <option value="__other">
-                  {{ accounts === null ? "Loading accounts…" : "Type an account…" }}
-                </option>
-                <option
-                  v-for="a in accounts ?? []"
-                  :key="a.account || '(default)'"
-                  :value="a.account"
-                >
-                  {{ a.account || "(latchkey’s default account)" }}
-                  {{
-                    a.credential_status === "valid"
-                      ? "✓"
-                      : a.credential_status === "invalid"
-                        ? "— expired"
-                        : ""
-                  }}
-                </option>
-              </select>
-              <input
-                class="wiz-input"
-                :value="values[accountField.target] as string"
-                spellcheck="false"
-                @input="values[accountField.target] = ($event.target as HTMLInputElement).value"
-              />
-            </span>
+            <AccountCombo
+              :model-value="accountValue"
+              :options="accountOptions"
+              :label="accountField.label"
+              placeholder="you@example.com"
+              @update:model-value="chooseAccount"
+            />
             <small v-if="accountField.help" class="wiz-help">{{ accountField.help }}</small>
             <small v-if="accounts && accounts.length === 0 && !accountsError" class="wiz-help">
               latchkey has no <code>{{ service }}</code> credential stored yet.
@@ -1086,139 +1103,183 @@ function submit() {
               Couldn’t ask latchkey which accounts it holds ({{ accountsError }}). Type the account
               name — the sync uses latchkey directly and is unaffected by this.
             </small>
-          </label>
+          </div>
 
-          <div class="wiz-conn-actions">
-            <button
-              v-if="canConnect"
-              type="button"
-              class="btn ghost"
-              :disabled="connect.state === 'running'"
-              @click="connectViaLatchkey"
+          <!-- Under a gateway the login happens on the gateway's side,
+               and every command a sign-in would run is refused. -->
+          <p v-if="gateway" class="wiz-help wiz-conn-note">
+            Credentials are held by a latchkey gateway (<code>{{ gateway }}</code
+            >). Sign in where that gateway is managed, then press <b>Check account</b>.
+          </p>
+          <!-- How a credential gets into latchkey under the name above. A
+               tab per way the service offers; a lone way is shown bare. -->
+          <div v-if="signInWays.length" class="wiz-signin">
+            <div v-if="signInWays.length > 1" class="wiz-tabs" role="tablist">
+              <button
+                v-for="way in signInWays"
+                :id="`wiz-tab-${way}`"
+                :key="way"
+                type="button"
+                role="tab"
+                class="wiz-tab"
+                :aria-selected="signInTab === way"
+                aria-controls="wiz-signin-panel"
+                @click="chooseSignIn(way)"
+              >
+                {{ way === "web" ? "Web login" : "Paste a key" }}
+              </button>
+            </div>
+            <div
+              v-if="signInTab === 'web'"
+              id="wiz-signin-panel"
+              class="wiz-tabpanel"
+              :role="signInWays.length > 1 ? 'tabpanel' : undefined"
+              :aria-labelledby="signInWays.length > 1 ? 'wiz-tab-web' : undefined"
             >
-              {{ connect.state === "running" ? "Waiting for the browser…" : "Latchkey auth" }}
-            </button>
-            <button
-              v-if="canPaste && !pasteOpen"
-              type="button"
-              class="btn ghost"
-              @click="openPaste"
+              <p class="wiz-help">
+                Opens a browser window to sign in. latchkey keeps what the sign-in grants, which is
+                usually full access: it can read and change everything the account can.
+                <template v-if="signInWays.includes('paste')"
+                  >For less, use <b>Paste a key</b>.</template
+                >
+              </p>
+              <p v-if="chosen.credentialConnectWarning" class="wiz-help">
+                {{ chosen.credentialConnectWarning }}
+              </p>
+              <div class="wiz-conn-actions">
+                <button
+                  type="button"
+                  class="btn"
+                  :disabled="connect.state === 'running'"
+                  @click="connectViaLatchkey"
+                >
+                  {{
+                    connect.state === "running"
+                      ? "Waiting for the browser…"
+                      : "Sign in with browser"
+                  }}
+                </button>
+              </div>
+              <p v-if="connect.state !== 'idle'" class="wiz-help">
+                {{ connect.message }}
+              </p>
+              <!-- What the button says on a service that has no browser
+                   login. Shown rather than done: latchkey refuses to
+                   re-register a name it holds, so the only way to add one
+                   destroys the credentials already stored under it. -->
+              <div v-if="showConversion" class="wiz-conn-note wiz-convert">
+                <p class="wiz-help wiz-convert-head">
+                  latchkey holds <code>{{ service }}</code> without a browser login, and won’t add
+                  one to a name it already has. Adding one means taking the service apart and
+                  registering it again — which
+                  <b
+                    >deletes every credential stored under <code>{{ service }}</code></b
+                  >, so it is yours to run, not this dialog’s:
+                </p>
+                <pre class="wiz-probe-detail">{{ conversionCommands }}</pre>
+                <p class="wiz-help">
+                  Then come back and press <b>Sign in with browser</b>. Or skip all of it and use
+                  the <b>Paste a key</b> tab — that needs no conversion and is what this service
+                  does today.
+                </p>
+              </div>
+            </div>
+            <!-- latchkey's `auth set`, run by the server. The secret is
+                 sent once and never kept in the form after it is stored. -->
+            <div
+              v-else-if="signInTab === 'paste'"
+              id="wiz-signin-panel"
+              class="wiz-tabpanel wiz-paste"
+              :role="signInWays.length > 1 ? 'tabpanel' : undefined"
+              :aria-labelledby="signInWays.length > 1 ? 'wiz-tab-paste' : undefined"
             >
-              Paste a credential
-            </button>
+              <p v-if="!signInWays.includes('web')" class="wiz-help">
+                <code>{{ service }}</code> has no web login, so its credential is pasted here.
+              </p>
+              <p v-if="chosen.credentialPaste?.help" class="wiz-help">
+                {{ chosen.credentialPaste.help }}
+              </p>
+              <label v-if="pasteShape.kind === 'basic'" class="wiz-field">
+                <span class="wiz-label">Username</span>
+                <input
+                  v-model="pasteUsername"
+                  class="wiz-input"
+                  :placeholder="pasteShape.userHint"
+                  autocomplete="off"
+                  spellcheck="false"
+                />
+              </label>
+              <label class="wiz-field">
+                <span class="wiz-label">{{ pasteSecretLabel }}</span>
+                <input
+                  v-model="pasteSecret"
+                  class="wiz-input"
+                  type="password"
+                  autocomplete="off"
+                  spellcheck="false"
+                />
+                <small v-if="pasteHeaderHint" class="wiz-help">
+                  Sent as <code>{{ pasteHeaderHint }}</code>
+                </small>
+              </label>
+              <p v-if="pasteNeedsName" class="wiz-help">
+                <template v-if="pasteLandsOn.kind === 'unnamed'">
+                  Name the {{ accountField?.label ?? "account" }} above: latchkey stores this
+                  credential under that name.
+                </template>
+                <template v-else-if="pasteLandsOn.kind === 'replaces'">
+                  Stored as <code>{{ pasteLandsOn.account }}</code
+                  >, replacing the <code>{{ service }}</code> credential latchkey already holds
+                  under that name — every source that uses it gets this one. Choose another name
+                  above to keep it.
+                </template>
+                <template v-else>
+                  Stored as <code>{{ accountValue }}</code
+                  >.
+                  <template v-if="pasteLandsOn.besideUnnamed">
+                    latchkey also holds an unnamed <code>{{ service }}</code> credential; with both
+                    stored, it won’t pick one for a source that names no account, so name an account
+                    in those sources too.
+                  </template>
+                </template>
+              </p>
+              <div class="wiz-conn-actions">
+                <button
+                  type="button"
+                  class="btn"
+                  :disabled="
+                    !pasted ||
+                    (pasteNeedsName && pasteLandsOn.kind === 'unnamed') ||
+                    paste.state === 'saving'
+                  "
+                  @click="savePasted"
+                >
+                  {{ paste.state === "saving" ? "Storing…" : "Store in latchkey" }}
+                </button>
+              </div>
+              <p
+                v-if="paste.message"
+                class="wiz-help"
+                :class="{ 'wiz-error': paste.state === 'failed' }"
+              >
+                {{ paste.message }}
+              </p>
+              <p class="wiz-help">
+                From a terminal instead: <code>{{ setCommand }}</code>
+              </p>
+            </div>
+          </div>
+
+          <div v-if="canProbe" class="wiz-conn-actions wiz-check">
             <button
-              v-if="canProbe"
               type="button"
               class="btn ghost"
               :disabled="probe.state === 'running'"
               @click="testConnection"
             >
-              {{ probe.state === "running" ? "Testing…" : "Test connection" }}
+              {{ probe.state === "running" ? "Checking…" : "Check account" }}
             </button>
           </div>
-
-          <p v-if="canConnect && chosen.credentialConnectWarning" class="wiz-help wiz-conn-note">
-            {{ chosen.credentialConnectWarning }}
-          </p>
-          <!-- Under a gateway the login happens on the gateway's side,
-               and every command the button would run is refused. -->
-          <p v-if="gateway" class="wiz-help wiz-conn-note">
-            Credentials are held by a latchkey gateway (<code>{{ gateway }}</code
-            >). Sign in where that gateway is managed, then press <b>Test connection</b>.
-          </p>
-          <!-- What the button says on a service that has no browser
-               login. Shown rather than done: latchkey refuses to
-               re-register a name it holds, so the only way to add one
-               destroys the credentials already stored under it. -->
-          <div v-if="showConversion" class="wiz-conn-note wiz-convert">
-            <p class="wiz-help wiz-convert-head">
-              latchkey holds <code>{{ service }}</code> without a browser login, and won’t add one
-              to a name it already has. Adding one means taking the service apart and registering it
-              again — which
-              <b
-                >deletes every credential stored under <code>{{ service }}</code></b
-              >, so it is yours to run, not this dialog’s:
-            </p>
-            <pre class="wiz-probe-detail">{{ conversionCommands }}</pre>
-            <p class="wiz-help">
-              Then come back and press <b>Latchkey auth</b>. Or skip all of it and paste a
-              credential, below — that needs no conversion and is what this service does today.
-            </p>
-          </div>
-
-          <!-- Only where the button cannot help: a service its owner
-               registered without a browser login. -->
-          <p v-if="setOnlyService" class="wiz-help wiz-conn-note">
-            <code>{{ service }}</code> has no browser login, so its credential is pasted — below, or
-            from a terminal: <code>{{ setCommand }}</code>
-          </p>
-          <!-- latchkey's `auth set`, run by the server. The secret is
-               sent once and never kept in the form after it is stored. -->
-          <div v-if="canPaste && pasteOpen" class="wiz-conn-note wiz-paste">
-            <p v-if="chosen.credentialPaste?.help" class="wiz-help">
-              {{ chosen.credentialPaste.help }}
-            </p>
-            <label v-if="pasteShape.kind === 'basic'" class="wiz-field">
-              <span class="wiz-label">Username</span>
-              <input
-                v-model="pasteUsername"
-                class="wiz-input"
-                :placeholder="pasteShape.userHint"
-                autocomplete="off"
-                spellcheck="false"
-              />
-            </label>
-            <label class="wiz-field">
-              <span class="wiz-label">{{ pasteSecretLabel }}</span>
-              <input
-                v-model="pasteSecret"
-                class="wiz-input"
-                type="password"
-                autocomplete="off"
-                spellcheck="false"
-              />
-              <small v-if="pasteHeaderHint" class="wiz-help">
-                Sent as <code>{{ pasteHeaderHint }}</code>
-              </small>
-            </label>
-            <label v-if="accountField" class="wiz-field">
-              <span class="wiz-label">Store under account</span>
-              <input
-                v-model="pasteAccount"
-                class="wiz-input"
-                placeholder="latchkey’s default account"
-                spellcheck="false"
-              />
-              <small v-if="pasteAmbiguous" class="wiz-help">
-                latchkey holds several <code>{{ service }}</code> credentials; name the one to store
-                this under.
-              </small>
-              <small v-else-if="pasteReplaces" class="wiz-help">
-                This replaces the credential stored for <code>{{ pasteReplaces }}</code
-                >. Name a new account to keep it.
-              </small>
-            </label>
-            <div class="wiz-conn-actions">
-              <button
-                type="button"
-                class="btn"
-                :disabled="!pasted || pasteAmbiguous || paste.state === 'saving'"
-                @click="savePasted"
-              >
-                {{ paste.state === "saving" ? "Storing…" : "Store in latchkey" }}
-              </button>
-            </div>
-            <p
-              v-if="paste.message"
-              class="wiz-help"
-              :class="{ 'wiz-error': paste.state === 'failed' }"
-            >
-              {{ paste.message }}
-            </p>
-          </div>
-          <p v-if="connect.state !== 'idle'" class="wiz-help wiz-conn-note">
-            {{ connect.message }}
-          </p>
           <!-- The verdict is a mark before the words — the Manage
                screen's own tick and "!", in its colours — so the eye
                gets the answer before reading what it was. -->
@@ -1236,8 +1297,8 @@ function submit() {
                  is the button above rather than the terminal command
                  the probe's own recipe names. -->
             <p v-if="canConnect" class="wiz-help">
-              If the sign-in has expired, press <b>Latchkey auth</b> to sign in again, then
-              <b>Test connection</b>.
+              If the sign-in has expired, sign in again on the <b>Web login</b> tab, then press
+              <b>Check account</b>.
             </p>
             <details v-if="probeDetail">
               <summary class="wiz-help">How to fix it</summary>
@@ -1489,7 +1550,7 @@ function submit() {
                 a name the account doesn’t have — check the spelling, or tick it in the list.
               </small>
               <small v-else-if="f.probe && !probe.report" class="wiz-help">
-                Run “Test connection” to pick from this account’s real
+                Run “Check account” to pick from this account’s real
                 {{ probeNoun(f.probe) }} instead of typing them.
               </small>
             </span>
@@ -1808,12 +1869,38 @@ function submit() {
 .wiz-convert-head {
   margin: 0;
 }
-.wiz-paste {
+.wiz-signin {
+  border: 1px solid var(--datalib-border);
+  border-radius: var(--datalib-radius);
+  margin-bottom: 10px;
+}
+.wiz-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--datalib-border);
+}
+.wiz-tab {
+  padding: 8px 14px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  background: none;
+  color: var(--datalib-muted);
+  font: inherit;
+  cursor: pointer;
+}
+.wiz-tab[aria-selected="true"] {
+  color: var(--datalib-fg);
+  border-bottom-color: var(--datalib-accent);
+}
+.wiz-tabpanel {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  border-left: 3px solid var(--datalib-border);
-  padding-left: 10px;
+  padding: 12px;
+}
+.wiz-tabpanel > p,
+.wiz-tabpanel > .wiz-conn-actions {
+  margin: 0;
 }
 .wiz-paste p,
 .wiz-paste .wiz-field {
@@ -1918,17 +2005,6 @@ function submit() {
 .wiz-conn-note {
   margin: 0 0 10px;
 }
-/* Dropdown over box, not side by side: an account is an email address
-   and both halves need the width. */
-.wiz-accountrow {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.wiz-accountpick {
-  max-width: 100%;
-}
-
 .wiz-listfield {
   display: flex;
   flex-direction: column;

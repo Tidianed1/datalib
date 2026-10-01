@@ -140,6 +140,18 @@ async function openManager(page: Page) {
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
 }
 
+/// Opens the account box's list and picks a stored name from it.
+async function pickAccount(page: Page, name: string) {
+  await wizard(page)
+    .getByRole("combobox", { name: / account$/ })
+    .click();
+  await wizard(page)
+    .getByRole("listbox", { name: / account$/ })
+    .getByRole("option")
+    .filter({ hasText: name })
+    .click();
+}
+
 async function pickTile(page: Page, query: string, blurb: string) {
   await page.getByRole("button", { name: "Add source" }).click();
   await page.locator(".wiz-filter").fill(query);
@@ -184,21 +196,33 @@ test("Gmail and Fastmail are separate tiles over one step type", async ({ page }
 test("a probe fills the label picker, and ticking a row writes the filter", async ({ page }) => {
   await pickTile(page, "gmail", "Mirror a Gmail account through Google's API.");
 
-  // The account list comes from latchkey, and the dropdown says which
-  // credentials are actually usable.
-  const account = wizard(page).locator("select.wiz-accountpick");
-  await expect(account.locator("option")).toHaveText([
-    "Type an account…",
-    /picard@enterprise\.gov ✓/,
-    /riker@enterprise\.gov — expired/,
+  // The account list comes from latchkey, and says which credentials
+  // latchkey thinks are usable.
+  await wizard(page)
+    .getByRole("combobox", { name: / account$/ })
+    .click();
+  await expect(
+    wizard(page)
+      .getByRole("listbox", { name: / account$/ })
+      .getByRole("option"),
+  ).toHaveText([
+    /picard@enterprise\.gov\s*✓/,
+    /riker@enterprise\.gov\s*latchkey reports it invalid/,
   ]);
-  await account.selectOption("picard@enterprise.gov");
+  await wizard(page)
+    .getByRole("listbox", { name: / account$/ })
+    .getByRole("option")
+    .filter({ hasText: "picard@enterprise.gov" })
+    .click();
+  await expect(wizard(page).getByRole("combobox", { name: / account$/ })).toHaveValue(
+    "picard@enterprise.gov",
+  );
 
   // Before the probe there is nothing to pick from, and the form says
   // so rather than showing an empty box.
   await expect(picker(page, "Download only these labels")).toHaveCount(0);
 
-  await wizard(page).getByRole("button", { name: "Test connection" }).click();
+  await wizard(page).getByRole("button", { name: "Check account" }).click();
   await expect(wizard(page).locator(".wiz-probe-note")).toContainText(
     "Reached picard@enterprise.gov",
   );
@@ -237,7 +261,7 @@ test("a probe fills the label picker, and ticking a row writes the filter", asyn
 test("a typed label the account doesn't have is called out before saving", async ({ page }) => {
   await pickTile(page, "gmail", "Mirror a Gmail account through Google's API.");
   await field(page, "Download only these labels").fill("Inbox, Bridg/Logs");
-  await wizard(page).getByRole("button", { name: "Test connection" }).click();
+  await wizard(page).getByRole("button", { name: "Check account" }).click();
 
   // Gmail's downloader *refuses* a run whose filter names a label the
   // account lacks — an empty filter would mean "everything", so it
@@ -248,13 +272,13 @@ test("a typed label the account doesn't have is called out before saving", async
 test("the render filter is offered folders, never flags", async ({ page }) => {
   await pickTile(page, "gmail", "Mirror a Gmail account through Google's API.");
   await field(page, "Name").fill("Bridge mail");
-  await wizard(page).locator("select.wiz-accountpick").selectOption("picard@enterprise.gov");
+  await pickAccount(page, "picard@enterprise.gov");
 
   // One probe fills both pickers: the ingest step's, and the render
   // step's under the Rendering heading. The render step holds no
   // credentials of its own — the probe authenticates with what the
   // ingest step will write.
-  await wizard(page).getByRole("button", { name: "Test connection" }).click();
+  await wizard(page).getByRole("button", { name: "Check account" }).click();
   await expect
     .poll(() => lastProbeRequest.params)
     .toEqual({
@@ -291,8 +315,8 @@ test("the render filter is offered folders, never flags", async ({ page }) => {
 
 test("Fastmail writes its JMAP host without asking, and shows folder counts", async ({ page }) => {
   await pickTile(page, "fastmail", "Mirror a Fastmail mailbox over JMAP.");
-  await wizard(page).locator("select.wiz-accountpick").selectOption("troi@betazed.example");
-  await wizard(page).getByRole("button", { name: "Test connection" }).click();
+  await pickAccount(page, "troi@betazed.example");
+  await wizard(page).getByRole("button", { name: "Check account" }).click();
 
   expect(lastProbeRequest.params).toEqual({
     latchkey_settings: { account: "troi@betazed.example" },
@@ -324,7 +348,7 @@ test("Fastmail writes its JMAP host without asking, and shows folder counts", as
 /// credential that is not there.
 test("the account follows the login, not the box", async ({ page }) => {
   await pickTile(page, "fastmail", "Mirror a Fastmail mailbox over JMAP.");
-  await wizard(page).locator("select.wiz-accountpick").selectOption("troi@betazed.example");
+  await pickAccount(page, "troi@betazed.example");
 
   let connectBody: { ephemeral_browser?: boolean } | null = null;
   await page.route("**/api/latchkey/fastmail/connect", (route) => {
@@ -339,22 +363,18 @@ test("the account follows the login, not the box", async ({ page }) => {
     }),
   );
 
-  await wizard(page).getByRole("button", { name: "Latchkey auth" }).click();
-  await expect(wizard(page).locator(".wiz-conn-note")).toContainText(
+  await wizard(page).getByRole("button", { name: "Sign in with browser" }).click();
+  await expect(wizard(page).getByRole("tabpanel")).toContainText(
     "Connected as crusher@enterprise.gov",
   );
   // An OAuth login keeps latchkey's saved browser session — arriving
   // already signed in is one less password, and the identity is
   // re-derived either way. Only a cookie capture needs it discarded.
   await expect.poll(() => connectBody?.ephemeral_browser).toBe(false);
-  // The text box, not the dropdown beside it: both carry `.wiz-input`,
-  // and the dropdown reads `__other` because a just-created account is
-  // not in the list this stub keeps returning.
-  await expect(
-    wizard(page).locator(
-      '.wiz-field:has(> .wiz-label:text-is("Fastmail account")) input.wiz-input',
-    ),
-  ).toHaveValue("crusher@enterprise.gov");
+  // Shown even though the list this stub keeps returning lacks it.
+  await expect(wizard(page).getByRole("combobox", { name: "Fastmail account" })).toHaveValue(
+    "crusher@enterprise.gov",
+  );
 
   // …and that is what the config gets, not the address that was picked.
   await wizard(page).getByText("Review the TOML this writes").click();

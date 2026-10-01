@@ -50,7 +50,7 @@ test("the auth button is offered even when the service can't do it yet", async (
 
   // The regression this guards: the button was hidden entirely on a
   // set-only service, which reads as the feature being missing.
-  const auth = wizard(page).getByRole("button", { name: "Latchkey auth" });
+  const auth = wizard(page).getByRole("button", { name: "Sign in with browser" });
   await expect(auth).toBeVisible();
 
   // Clicking it must not touch latchkey. A conversion destroys every
@@ -75,7 +75,9 @@ test("the auth button is offered even when the service can't do it yet", async (
   expect(connectCalls).toBe(0);
 
   // The paste route is named too — it needs no conversion and is what
-  // this service already does.
+  // this service already does — and its tab gives the terminal command.
+  await expect(convert).toContainText("Paste a key");
+  await wizard(page).getByRole("tab", { name: "Paste a key" }).click();
   await expect(wizard(page)).toContainText("latchkey auth set claude-ai");
 });
 
@@ -97,14 +99,14 @@ test("no account picker, and the login runs as latchkey's default", async ({ pag
   await expect(
     wizard(page).locator('.wiz-field:has(> .wiz-label:text-is("Claude account"))'),
   ).toHaveCount(0);
-  await expect(wizard(page).locator("select.wiz-accountpick")).toHaveCount(0);
+  await expect(wizard(page).getByRole("combobox", { name: "Claude account" })).toHaveCount(0);
 
   let connectBody: { account?: string; ephemeral_browser?: boolean } | null = null;
   await page.route("**/api/latchkey/claude-ai/connect", (route) => {
     connectBody = route.request().postDataJSON();
     return route.fulfill({ json: { id: "a1", status: "running", output: "" } });
   });
-  await wizard(page).getByRole("button", { name: "Latchkey auth" }).click();
+  await wizard(page).getByRole("button", { name: "Sign in with browser" }).click();
 
   // Empty means "latchkey's own default", which is addressed by sending
   // no `--account` at all.
@@ -128,11 +130,11 @@ test("a new source writes no account at all", async ({ page }) => {
   await expect(wizard(page).locator(".wiz-review pre")).not.toContainText("latchkey_settings");
 });
 
-/// An expired sign-in shows up as a failed Test connection, and the
+/// An expired sign-in shows up as a failed Check account, and the
 /// probe's own recipe names a terminal command. The button beside it is
 /// the fix, so the failure says so — and a login that then succeeds
 /// clears the failure it answered rather than leaving it on screen.
-test("a failed Test connection points back at the login button", async ({ page }) => {
+test("a failed Check account points back at the login button", async ({ page }) => {
   await openClaude(page, WITH_BROWSER);
   await page.route("**/api/probe", (route) =>
     route.fulfill({
@@ -144,9 +146,9 @@ test("a failed Test connection points back at the login button", async ({ page }
       },
     }),
   );
-  await wizard(page).getByRole("button", { name: "Test connection" }).click();
+  await wizard(page).getByRole("button", { name: "Check account" }).click();
   const failed = wizard(page).locator(".wiz-probe-failed");
-  await expect(failed).toContainText("press Latchkey auth to sign in again");
+  await expect(failed).toContainText("sign in again on the Web login tab");
 
   await page.route("**/api/latchkey/claude-ai/connect", (route) =>
     route.fulfill({ json: { id: "a1", status: "running", output: "" } }),
@@ -154,7 +156,7 @@ test("a failed Test connection points back at the login button", async ({ page }
   await page.route("**/api/latchkey/connect/a1/status", (route) =>
     route.fulfill({ json: { id: "a1", status: "ok", account: null, output: "" } }),
   );
-  await wizard(page).getByRole("button", { name: "Latchkey auth" }).click();
+  await wizard(page).getByRole("button", { name: "Sign in with browser" }).click();
   await expect(wizard(page)).toContainText("Connected.");
   await expect(failed).toHaveCount(0);
 });
@@ -168,11 +170,11 @@ test("a failed Test connection points back at the login button", async ({ page }
 test("behind a gateway there is no login button, only where to sign in", async ({ page }) => {
   await openClaude(page, { ...WITH_BROWSER, gateway: "http://gw.example:8080" });
 
-  await expect(wizard(page).getByRole("button", { name: "Latchkey auth" })).toHaveCount(0);
+  await expect(wizard(page).getByRole("button", { name: "Sign in with browser" })).toHaveCount(0);
   await expect(wizard(page)).not.toContainText("may log out your other claude.ai session");
   await expect(wizard(page)).not.toContainText("latchkey auth set");
   await expect(wizard(page)).toContainText("held by a latchkey gateway (http://gw.example:8080)");
-  // Test connection still works there: the probe goes through
+  // Check account still works there: the probe goes through
   // `latchkey curl`, which the gateway serves.
-  await expect(wizard(page).getByRole("button", { name: "Test connection" })).toBeVisible();
+  await expect(wizard(page).getByRole("button", { name: "Check account" })).toBeVisible();
 });
