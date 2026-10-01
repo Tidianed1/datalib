@@ -131,7 +131,7 @@ test("a probe fills the channel picker, and ticking rows writes `channels`", asy
 
   // Nothing to pick from until the workspace has been asked.
   await expect(picker(page, "Channels")).toHaveCount(0);
-  await wizard(page).getByRole("button", { name: "Test connection" }).click();
+  await wizard(page).getByRole("button", { name: "Check account" }).click();
 
   // A Slack account has no address, so the line names the handle and
   // the workspace, and counts both kinds of thing that came back.
@@ -165,10 +165,10 @@ test("a probe fills the channel picker, and ticking rows writes `channels`", asy
 
 test("turning DMs on reveals a DM picker filled from the same probe", async ({ page }) => {
   await pickSlack(page);
-  await wizard(page).getByRole("button", { name: "Test connection" }).click();
+  await wizard(page).getByRole("button", { name: "Check account" }).click();
   await expect(wizard(page).locator(".wiz-probe-note")).toContainText("Reached");
 
-  // One probe, both pickers: no second "Test connection" after the
+  // One probe, both pickers: no second "Check account" after the
   // toggle.
   await toggle(page, "Download direct messages").check();
   // Titled after who is on the far end, a group DM tagged and counted.
@@ -195,7 +195,7 @@ test("a typed name is checked the way the downloader reads it", async ({ page })
   // The link `Copy link` hands out resolves to its id; a person's
   // handle is not a conversation and would mirror nothing.
   await field(page, "Only these DMs").fill("https://enterprise.slack.com/archives/D_RIKER, @riker");
-  await wizard(page).getByRole("button", { name: "Test connection" }).click();
+  await wizard(page).getByRole("button", { name: "Check account" }).click();
 
   await expect(wizard(page).getByText(/Not on this account: bridg\./)).toBeVisible();
   await expect(wizard(page).getByText(/Not on this account: @riker\./)).toBeVisible();

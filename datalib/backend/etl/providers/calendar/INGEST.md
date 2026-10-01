@@ -40,6 +40,9 @@ no longer names is dropped, and the calendar's token is cleared.
 
 ## Fastmail (CalDAV) — measured against a live account
 
+Which credential to use, and how to make it read-only, is in
+[`docs/dev/fastmail.md`](../../../../../docs/dev/fastmail.md).
+
 - **Discovery starts at `https://caldav.fastmail.com/dav/`.** The bare
   host answers a `PROPFIND` with 404; `/.well-known/caldav` 301s to
   `/dav/calendars`. The `fastmail` method hardcodes the first, and the

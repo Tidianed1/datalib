@@ -67,3 +67,27 @@ export function pastedCredential(
   }
   return { kind: "headers", headers: shape.headers.map((h) => h.replace(SECRET, s)) };
 }
+
+/// What storing a pasted credential under `name` does to the credentials
+/// latchkey already holds for the service. latchkey keeps one credential
+/// per account name and overwrites it without asking, and once a named
+/// credential sits beside the unnamed one it refuses to pick for a
+/// source that names no account.
+export type PasteTarget =
+  | { kind: "unnamed" }
+  | { kind: "replaces"; account: string }
+  | { kind: "new"; besideUnnamed: boolean };
+
+export function pasteTarget(stored: string[], name: string): PasteTarget {
+  const account = name.trim();
+  if (!account) return { kind: "unnamed" };
+  if (stored.includes(account)) return { kind: "replaces", account };
+  return { kind: "new", besideUnnamed: stored.includes("") };
+}
+
+/// The name a pasted credential is offered under: the username, and the
+/// entry's suffix where two entries share one latchkey service.
+export function suggestedAccount(username: string, suffix?: string): string {
+  const user = username.trim();
+  return user && suffix ? `${user} ${suffix}` : user;
+}
