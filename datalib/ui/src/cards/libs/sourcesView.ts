@@ -9,5 +9,9 @@ import { vueCard } from "../vueCard";
 import type { CardRender } from "../types";
 
 export function sourcesView(opts?: { add?: boolean }): CardRender {
-  return vueCard(SourcesCard, { add: opts?.add === true }, { styleSources: [slickCss, tableGridCss, sourcesCardCss] });
+  return vueCard(
+    SourcesCard,
+    { add: opts?.add === true },
+    { styleSources: [slickCss, tableGridCss, sourcesCardCss] },
+  );
 }

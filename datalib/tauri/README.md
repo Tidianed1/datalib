@@ -1,9 +1,9 @@
 # Datalib Tauri shell
 
 Tauri v2 bin crate (bundle identifier `com.imbue.datalib`). On launch
-the **launcher window** (`launcher-dist/index.html`) asks which data
-library to open — one of the recent ones, an existing folder via the
-native picker, or a new empty one in `Documents` — and the app then
+the **libraries screen** (`launcher-dist/index.html`) asks which
+library to open — one it lists, an existing folder via the native
+picker, or a new one — and the app then
 spawns the bundled **`datalib-http` binary** — the same binary the
 web packaging runs — on an ephemeral 127.0.0.1 port and opens the main
 window at that URL. That server serves both the rust-embed'd Vue UI and
@@ -74,16 +74,33 @@ cargo build
 The window always points at the spawned backend serving its embedded
 UI, so Tauri's own dev-server (`devUrl` / `beforeDevCommand`) is unused —
 there is no `tauri dev` Vite workflow here, and `frontendDist` points at
-`launcher-dist/`, whose single page is the launcher — the one bundled
+`launcher-dist/`, whose single page is the libraries screen — the one bundled
 page this shell has. Boot takes a data root from the first positional
-arg or `$DATALIB_DATA_ROOT`; with neither set the launcher window opens
-and asks.
+arg or `$DATALIB_DATA_ROOT`; with neither set the libraries screen
+opens and asks.
 
-## The launcher
+## The libraries screen
 
-`src/launcher.rs` holds every decision the launcher makes — the recent
-roots (`~/.datalib/recent-roots.json`), whether a directory is a data
-library at all, and where "create an empty one" puts it — and is
+It lists the recent libraries (`~/.datalib/recent-roots.json`), then
+any other library in `~/Documents/Datalib`. Each shows the source
+count, size and last sync that `datalib-http` last wrote to its
+`system/library-summary.json`; one whose folder is gone stays listed as
+not found until removed. "New library" takes a name or a folder: a
+name is a library in `~/Documents/Datalib`, the first one called
+`Default`; `/…` and `~/…` are taken as they are, and "Choose folder…"
+fills one in. A folder that is already a library is opened instead,
+and one with other files in it is refused. The new library's server
+starts with `--init`, so it opens on the Dashboard.
+
+The app's top bar leads back here: "Data Liberation ✊" closes the
+library and opens this screen, and the library's name opens a menu of
+the other libraries, all libraries, a new one, and Finder
+(`library_menu`, `library_switch`, `libraries_show`, granted to the
+app's page by `capabilities/switch-libraries.json`).
+
+`src/launcher.rs` holds every decision the screen makes — which
+libraries it lists, whether a directory is a data library at all,
+where a new one goes and what is already there — and is
 written **free of `tauri` and of every dependency but `serde_json`** on
 purpose: it is compiled a second time, as its own crate, by
 `//datalib/tauri:launcher_test`. `src/raw_store.rs` (what Browse does
@@ -120,9 +137,9 @@ Microsoft's [Fluent Emoji](https://github.com/microsoft/fluentui-emoji)
 
 ## Behaviour worth knowing
 
-- The full backend runs against the picked data root. Canceling the
-  picker returns to the launcher; the launcher's Quit button exits the
-  app.
+- The full backend runs against the chosen data root, one at a time:
+  switching library stops the open one's server and closes its
+  windows. Canceling a picker returns to the libraries screen.
 - No blocking model download at startup: qmd's models are fetched on
   first need by the steps and the search applet (`datalib_qmd_models`),
   the same as the web packaging — the shell passes nothing besides

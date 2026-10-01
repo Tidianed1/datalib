@@ -31,21 +31,85 @@ fn version() -> &'static str {
 
 #[tauri::command]
 fn launcher_state(app: AppHandle) -> serde_json::Value {
-    let recents: Vec<serde_json::Value> = home_dir(&app)
-        .map(|home| launcher::load_recents(&launcher::recents_file(&home)))
-        .unwrap_or_default()
-        .into_iter()
-        .map(|p| {
-            serde_json::json!({
-                "name": launcher::display_name(&p),
-                "path": p.to_string_lossy(),
+    let dir = libraries_dir(&app);
+    let home = home_dir(&app).unwrap_or_default();
+    let libraries: Vec<serde_json::Value> =
+        launcher::libraries(&launcher::recents_file(&home), &dir)
+            .into_iter()
+            .map(|l| {
+                // A library in the Datalib folder is known by its name; only
+                // one somewhere else shows where it is.
+                let elsewhere = l.path.parent() != Some(dir.as_path());
+                serde_json::json!({
+                    "name": launcher::display_name(&l.path),
+                    "path": l.path.to_string_lossy(),
+                    "shown_path": elsewhere.then(|| launcher::tilde(&l.path, &home)),
+                    "found": l.found,
+                    "summary": launcher::summary(&l.path),
+                })
             })
-        })
-        .collect();
+            .collect();
     serde_json::json!({
-        "recents": recents,
-        "default_new_root": new_root_path(&app).to_string_lossy(),
+        "libraries": libraries,
+        "libraries_dir": launcher::tilde(&dir, &home),
+        "suggested_name": launcher::suggested_name(&dir),
     })
+}
+
+/// What the new-library field names: the folder, as the popover shows
+/// it, and what is there now. Null for an empty field.
+#[tauri::command]
+fn launcher_resolve(app: AppHandle, input: String) -> serde_json::Value {
+    let home = home_dir(&app).unwrap_or_default();
+    match launcher::resolve_new(&input, &home, &libraries_dir(&app)) {
+        Some(root) => serde_json::json!({
+            "shown_path": launcher::tilde(&root, &home),
+            "path": root.to_string_lossy(),
+            "target": launcher::classify(&root).as_str(),
+        }),
+        None => serde_json::Value::Null,
+    }
+}
+
+/// Make the library the field names and open it on its Dashboard: the
+/// starter config is written before the server starts (`--init`). A
+/// folder that is already a library is opened instead.
+#[tauri::command]
+fn launcher_create(app: AppHandle, input: String) -> Result<(), String> {
+    let home = home_dir(&app).unwrap_or_default();
+    let root = launcher::resolve_new(&input, &home, &libraries_dir(&app))
+        .ok_or("Type a name for the library, or a folder.")?;
+    let shown = launcher::tilde(&root, &home);
+    match launcher::classify(&root) {
+        launcher::Target::Library => {
+            tauri::async_runtime::spawn(boot(app, root, false));
+        }
+        launcher::Target::New => {
+            std::fs::create_dir_all(&root).map_err(|e| format!("Could not create {shown}: {e}"))?;
+            tauri::async_runtime::spawn(boot(app, root, true));
+        }
+        launcher::Target::Occupied => {
+            return Err(format!(
+                "{shown} has other files in it. Choose an empty folder, or a new name."
+            ))
+        }
+        launcher::Target::NotAFolder => return Err(format!("{shown} is a file, not a folder.")),
+    }
+    Ok(())
+}
+
+/// The native folder picker, for the new-library field: the chosen
+/// folder comes back as text for the field, and nothing is created
+/// until Create.
+#[tauri::command]
+async fn launcher_choose_folder(app: AppHandle) -> Option<String> {
+    let home = home_dir(&app).unwrap_or_default();
+    app.dialog()
+        .file()
+        .set_title("Choose a folder for the new library")
+        .blocking_pick_folder()
+        .and_then(|choice| choice.into_path().ok())
+        .map(|root| launcher::tilde(&root, &home))
 }
 
 /// Open a library the launcher listed. The path is checked rather than
@@ -59,45 +123,111 @@ fn launcher_open(app: AppHandle, path: String) -> Result<(), String> {
             root.display()
         ));
     }
-    tauri::async_runtime::spawn(boot(app, root));
+    tauri::async_runtime::spawn(boot(app, root, false));
     Ok(())
 }
 
-/// The native folder picker, now reached deliberately from a window
-/// that has already said what the folder is for. Any folder is
-/// accepted: an empty one gets the app's own first-run screen (see
-/// `ui/src/views/FirstRunView.vue`), which is a better place to explain
-/// initialization than a rejection dialog here.
+/// Open a library by picking its folder. Any folder is accepted: an
+/// empty one gets the app's own first-run screen (see
+/// `ui/src/views/FirstRunView.vue`).
 #[tauri::command]
 fn launcher_pick(app: AppHandle) {
     app.dialog()
         .file()
-        .set_title("Open a Datalib data library")
-        .pick_folder(move |choice| match choice {
-            Some(file_path) => match file_path.into_path() {
+        .set_title("Open a library folder")
+        .pick_folder(move |choice| {
+            // Canceling returns to the launcher, which is still up.
+            let Some(file_path) = choice else { return };
+            match file_path.into_path() {
                 Ok(root) => {
-                    tauri::async_runtime::spawn(boot(app, root));
+                    tauri::async_runtime::spawn(boot(app, root, false));
                 }
                 Err(e) => fatal(&app, format!("unusable folder selection: {e}")),
-            },
-            // Canceling returns to the launcher, which is still up —
-            // unlike the old flow, where canceling the picker exited
-            // the app because there was nothing behind it.
-            None => {}
+            }
         });
 }
 
+/// Take a library whose folder is gone off the list.
 #[tauri::command]
-fn launcher_create(app: AppHandle) -> Result<(), String> {
-    let root = new_root_path(&app);
-    std::fs::create_dir_all(&root).map_err(|e| format!("create {}: {e}", root.display()))?;
-    tauri::async_runtime::spawn(boot(app, root));
+fn launcher_forget(app: AppHandle, path: String) -> Result<(), String> {
+    let home = home_dir(&app).ok_or("No home directory.")?;
+    launcher::forget_recent(&launcher::recents_file(&home), Path::new(&path))
+        .map_err(|e| e.to_string())
+}
+
+// --- The library menu, from the app's top bar -------------------------------
+
+/// The open library and the others the menu offers.
+#[tauri::command]
+fn library_menu(app: AppHandle) -> serde_json::Value {
+    let current = app
+        .state::<DataRoot>()
+        .0
+        .lock()
+        .expect("data root lock")
+        .clone();
+    let home = home_dir(&app).unwrap_or_default();
+    let others: Vec<serde_json::Value> =
+        launcher::libraries(&launcher::recents_file(&home), &libraries_dir(&app))
+            .into_iter()
+            .filter(|l| Some(&l.path) != current.as_ref())
+            .map(|l| {
+                serde_json::json!({
+                    "name": launcher::display_name(&l.path),
+                    "path": l.path.to_string_lossy(),
+                    "found": l.found,
+                })
+            })
+            .collect();
+    serde_json::json!({
+        "current": current.map(|p| p.to_string_lossy().into_owned()),
+        "others": others,
+    })
+}
+
+/// Close this library and open another.
+#[tauri::command]
+fn library_switch(app: AppHandle, path: String) -> Result<(), String> {
+    let root = PathBuf::from(path);
+    if !launcher::is_data_root(&root) {
+        return Err(format!("{} is no longer a data library.", root.display()));
+    }
+    leave_library(&app, false).map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn(boot(app, root, false));
     Ok(())
 }
 
+/// Close this library and go back to the libraries screen, with the
+/// new-library form open when `new_library`.
 #[tauri::command]
-fn launcher_quit(app: AppHandle) {
-    app.exit(0);
+fn libraries_show(app: AppHandle, new_library: bool) -> Result<(), String> {
+    leave_library(&app, new_library).map_err(|e| e.to_string())
+}
+
+/// Close the open library: its windows and its server. The launcher
+/// opens first, because the app quits when its last window closes, and
+/// it stays up through the next boot to report a failure.
+fn leave_library(app: &AppHandle, new_library: bool) -> tauri::Result<()> {
+    if app.get_webview_window(LAUNCHER_WINDOW).is_none() {
+        show_launcher(app, new_library)?;
+    }
+    for (label, window) in app.webview_windows() {
+        if label != LAUNCHER_WINDOW {
+            let _ = window.destroy();
+        }
+    }
+    let child = app
+        .state::<HttpChild>()
+        .0
+        .lock()
+        .expect("http child lock")
+        .take();
+    if let Some(mut c) = child {
+        let _ = c.kill();
+        let _ = c.wait();
+    }
+    *app.state::<DataRoot>().0.lock().expect("data root lock") = None;
+    Ok(())
 }
 
 // --- Browse a raw store (src/raw_store.rs) ---------------------------------
@@ -190,15 +320,14 @@ fn home_dir(app: &AppHandle) -> Option<PathBuf> {
     app.path().home_dir().ok()
 }
 
-fn new_root_path(app: &AppHandle) -> PathBuf {
-    let documents = app.path().document_dir().ok().or_else(|| {
-        let home = home_dir(app)?;
-        Some(home.join("Documents"))
-    });
-    match documents {
-        Some(d) => launcher::default_new_root(&d),
-        None => PathBuf::from("Datalib"),
-    }
+fn libraries_dir(app: &AppHandle) -> PathBuf {
+    let documents = app
+        .path()
+        .document_dir()
+        .ok()
+        .or_else(|| Some(home_dir(app)?.join("Documents")))
+        .unwrap_or_else(|| PathBuf::from("Documents"));
+    launcher::libraries_dir(&documents)
 }
 
 fn main() {
@@ -230,10 +359,15 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             version,
             launcher_state,
+            launcher_resolve,
+            launcher_create,
+            launcher_choose_folder,
             launcher_open,
             launcher_pick,
-            launcher_create,
-            launcher_quit,
+            launcher_forget,
+            library_menu,
+            library_switch,
+            libraries_show,
             open_raw_store
         ])
         .manage(HttpChild(Mutex::new(None)))
@@ -247,9 +381,9 @@ fn main() {
             // launcher window asks which library to open.
             match explicit_data_root() {
                 Some(root) => {
-                    tauri::async_runtime::spawn(boot(handle, root));
+                    tauri::async_runtime::spawn(boot(handle, root, false));
                 }
-                None => show_launcher(&handle)?,
+                None => show_launcher(&handle, false)?,
             }
             Ok(())
         })
@@ -324,12 +458,20 @@ fn explicit_data_root() -> Option<PathBuf> {
     Some(PathBuf::from(expanded))
 }
 
-fn show_launcher(app: &AppHandle) -> tauri::Result<()> {
-    WebviewWindowBuilder::new(app, LAUNCHER_WINDOW, WebviewUrl::App("index.html".into()))
-        .title("Datalib")
-        .inner_size(620.0, 700.0)
-        .resizable(true)
-        .build()?;
+/// `new_library` opens it with the new-library form showing.
+fn show_launcher(app: &AppHandle, new_library: bool) -> tauri::Result<()> {
+    let page = if new_library {
+        "index.html#new"
+    } else {
+        "index.html"
+    };
+    under_title_bar(
+        WebviewWindowBuilder::new(app, LAUNCHER_WINDOW, WebviewUrl::App(page.into()))
+            .title("Data Liberation")
+            .inner_size(1000.0, 720.0)
+            .resizable(true),
+    )
+    .build()?;
     Ok(())
 }
 
@@ -358,11 +500,13 @@ fn resolve_bundled(app: &AppHandle, name: &str, env: &str) -> Option<PathBuf> {
     p.is_file().then_some(p)
 }
 
-async fn boot(app: AppHandle, root: PathBuf) {
+/// Start `root`'s server and open its window. `init` writes the starter
+/// config first, for a library just created.
+async fn boot(app: AppHandle, root: PathBuf, init: bool) {
     remember(&app, &root);
     let url = match tauri::async_runtime::spawn_blocking({
         let app = app.clone();
-        move || start_backend(&app, root)
+        move || start_backend(&app, root, init)
     })
     .await
     {
@@ -379,7 +523,7 @@ async fn boot(app: AppHandle, root: PathBuf) {
     let app_origin = url.origin().ascii_serialization();
     let window = app_window(
         WebviewWindowBuilder::new(&app, "main", WebviewUrl::External(url))
-            .title("Datalib")
+            .title("Data Liberation")
             .inner_size(1280.0, 800.0),
         &app,
         &app_origin,
@@ -523,7 +667,7 @@ fn leaves_the_app(next: &Url, app_origin: &str) -> bool {
 /// so startup failures can quote it in the error dialog (a
 /// Finder-launched app has no terminal). Blocking: run on a worker
 /// thread, not the event loop.
-fn start_backend(app: &AppHandle, root: PathBuf) -> anyhow::Result<String> {
+fn start_backend(app: &AppHandle, root: PathBuf, init: bool) -> anyhow::Result<String> {
     let http_bin = resolve_bundled(app, "datalib-http", "DATALIB_HTTP_BIN").ok_or_else(|| {
         anyhow::anyhow!(
             "datalib-http binary not found (no bundled copy and \
@@ -559,6 +703,7 @@ fn start_backend(app: &AppHandle, root: PathBuf) -> anyhow::Result<String> {
         .arg("--no-open")
         .arg("--url-file")
         .arg(&url_file)
+        .args(init.then_some("--init"))
         .env("DATALIB_BIND", "127.0.0.1:0")
         // The backend exits when this pipe hits EOF, which the kernel
         // arranges however the shell goes — the `kill` at exit is for

@@ -10,6 +10,7 @@ import NewerRootView from "@/views/NewerRootView.vue";
 import { fetchConfig, type ConfigResponse } from "@/api";
 import { subscribeLive } from "@/live";
 import CommandBox from "@/components/CommandBox.vue";
+import LibraryCrumb from "@/components/LibraryCrumb.vue";
 import { isDesktopApp } from "@/desktop";
 
 // The app window has no browser chrome, so it draws the two buttons a
@@ -89,8 +90,8 @@ onUnmounted(() => stop?.());
 
 <template>
   <main class="datalib-shell" data-feedback-root>
-    <!-- The toolbar: back and forward in the desktop app, the name,
-         and the search box. -->
+    <!-- The toolbar: back and forward in the desktop app, the app and
+         library names, and the search box. -->
     <nav
       v-if="!gate"
       class="datalib-toolbar"
@@ -111,7 +112,7 @@ onUnmounted(() => stop?.());
             </svg>
           </button>
         </template>
-        <div class="datalib-brand" data-tauri-drag-region>Data Liberation ✊</div>
+        <LibraryCrumb :config-path="config?.path ?? null" />
       </div>
       <div class="datalib-toolbar-center"><CommandBox /></div>
       <!-- Lightweight sync indicator in the toolbar's flexible space —
@@ -185,15 +186,6 @@ onUnmounted(() => stop?.());
   padding-left: 92px;
   -webkit-user-select: none;
   user-select: none;
-}
-.datalib-brand {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-left: 6px;
-  font-size: var(--datalib-title-size);
-  font-weight: 600;
-  white-space: nowrap;
 }
 /* The search box centred on the window, whatever sits either side:
    the two ends share the leftover width equally. */
