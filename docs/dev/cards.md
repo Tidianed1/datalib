@@ -66,11 +66,12 @@ itself. CSS custom properties (the app's `--datalib-*` theme variables) do
 inherit across the boundary and are the supported way to pick up
 theming. They live in `datalib/ui/src/theme.css`: the colours for
 light and dark, the system font, and every size — row height, control
-height, padding, font sizes — keyed off `<html data-density>`, which
-the status bar's **Compact / Comfortable** switch sets
-(`datalib/ui/src/density.ts`). A card that sizes itself with
+height, padding, font sizes — drawn from one number,
+`--datalib-density`, which the status bar's **density** sets on `<html>`
+(`datalib/ui/src/density.ts`; the scale is `densityScale.ts`: 0 to 2 in
+quarter steps). A card that sizes itself with
 `var(--datalib-font-size)`, `var(--datalib-row-h)` and the rest
-follows that switch without knowing it exists. `--datalib-bg` is a
+follows the density without knowing it exists. `--datalib-bg` is a
 card's own background; `--datalib-ground` is the grey the cards sit
 on.
 
@@ -468,8 +469,7 @@ programs against:
   drawn by `TableGrid`, with the row actions and the dialogs they open
   — the wizard, a removal's confirm — teleported to `<body>`. Its
   header says how the last sync went, the config's notices are strips above the table, its status column reads
-  word first ("Failed · 2 hours ago"), and its rows follow the density
-  switch. Through `host.openCards` it opens beside
+  word first ("Failed · 2 hours ago"), and its rows follow the density. Through `host.openCards` it opens beside
   itself a `gridView(...)` for Browse or a problems count, a
   `logView(...)` for a step's log or the server's, a `historyView(...)`
   for a row's commit history, a `syncDashboardView(...)` for a group's

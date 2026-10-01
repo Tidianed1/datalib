@@ -49,14 +49,21 @@ test.describe("toolbar", () => {
     await expect(cardOf(page, "logView()")).toHaveCount(1);
   });
 
-  test("the status bar's density switch resizes the chrome, and is kept", async ({ page }) => {
+  test("the status bar's density resizes the chrome, and is kept", async ({ page }) => {
     await page.goto("/");
-    const html = page.locator("html");
-    await expect(html).toHaveAttribute("data-density", "compact");
-    await page.getByRole("button", { name: "Comfortable" }).click();
-    await expect(html).toHaveAttribute("data-density", "comfortable");
+    const toolbar = page.locator(".datalib-toolbar");
+    const group = page.getByRole("group", { name: "density" });
+    const meter = group.getByRole("meter");
+    await expect(meter).toHaveAttribute("aria-valuenow", "0");
+    await expect(group.getByRole("button", { name: "More compact" })).toBeDisabled();
+    const before = (await toolbar.boundingBox())!.height;
+
+    for (let i = 0; i < 4; i++) await group.getByRole("button", { name: "More spacious" }).click();
+    await expect(meter).toHaveAttribute("aria-valuenow", "4");
+    expect((await toolbar.boundingBox())!.height).toBeGreaterThan(before);
+
     await page.reload();
-    await expect(html).toHaveAttribute("data-density", "comfortable");
+    await expect(meter).toHaveAttribute("aria-valuenow", "4");
   });
 
   test("the status bar copies the data root's path in a browser", async ({ page }) => {
@@ -83,11 +90,13 @@ test.describe("toolbar", () => {
     expect(1280 - (wide.x + wide.width)).toBeLessThan(16);
     const truncated = () => name.evaluate((el) => el.scrollWidth > el.clientWidth);
 
-    for (const density of ["Compact", "Comfortable"]) {
+    // Step 0, then step 1 (four quarter steps larger).
+    for (const larger of [0, 4]) {
       await page.setViewportSize({ width: 1280, height: 800 });
-      await page.getByRole("button", { name: density }).click();
+      for (let i = 0; i < larger; i++)
+        await page.getByRole("button", { name: "More spacious" }).click();
       // 700px leaves the name room whatever its random suffix measures;
-      // 600px was within a few letters of it in Comfortable.
+      // 600px was within a few letters of it at step 1.
       for (const width of [700, 420]) {
         await page.setViewportSize({ width, height: 800 });
         const b = (await box.boundingBox())!;

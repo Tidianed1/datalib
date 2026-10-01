@@ -52,32 +52,22 @@
 
 
 
-/* Density: the status bar's Compact / Comfortable switch (density.ts)
-   sets `data-density` on <html>. Sizes only; the content is the same. */
-:root,
-:root[data-density="compact"] {
-  --datalib-font-size: 12px;
-  --datalib-font-size-small: 11px;
-  --datalib-title-size: 13px;
-  --datalib-row-h: 24px;
-  --datalib-control-h: 24px;
-  --datalib-icon-size: 14px;
-  --datalib-pad: 8px;
-  --datalib-gap: 8px;
-  --datalib-toolbar-h: 38px;
-  --datalib-statusbar-h: 26px;
-}
-:root[data-density="comfortable"] {
-  --datalib-font-size: 14px;
-  --datalib-font-size-small: 12px;
-  --datalib-title-size: 16px;
-  --datalib-row-h: 34px;
-  --datalib-control-h: 32px;
-  --datalib-icon-size: 18px;
-  --datalib-pad: 14px;
-  --datalib-gap: 14px;
-  --datalib-toolbar-h: 50px;
-  --datalib-statusbar-h: 34px;
+/* Size: the status bar's size step (density.ts) sets
+   `--datalib-density` on <html>, from 0 (the most on screen) to 2 in
+   quarter steps. Every size is drawn from it: its value at step 0, and
+   how much it grows per step. Sizes only; the content is the same. */
+:root {
+  --datalib-density: 0;
+  --datalib-font-size: calc(12px + 2px * var(--datalib-density));
+  --datalib-font-size-small: calc(11px + 1px * var(--datalib-density));
+  --datalib-title-size: calc(13px + 3px * var(--datalib-density));
+  --datalib-row-h: calc(24px + 10px * var(--datalib-density));
+  --datalib-control-h: calc(24px + 8px * var(--datalib-density));
+  --datalib-icon-size: calc(14px + 4px * var(--datalib-density));
+  --datalib-pad: calc(8px + 6px * var(--datalib-density));
+  --datalib-gap: calc(8px + 6px * var(--datalib-density));
+  --datalib-toolbar-h: calc(38px + 12px * var(--datalib-density));
+  --datalib-statusbar-h: calc(26px + 8px * var(--datalib-density));
 }
 
 html,

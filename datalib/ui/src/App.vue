@@ -163,7 +163,7 @@ onUnmounted(() => stop?.());
   background: var(--datalib-ground);
   border-bottom: 1px solid var(--datalib-border);
 }
-/* The title bar's height, whatever the density: the window buttons are
+/* The title bar's height, whatever the size step: the window buttons are
    placed once, when the window opens, at this bar's middle. So what is
    in it keeps the compact sizes too; the comfortable ones crowd a 40px
    bar. */
