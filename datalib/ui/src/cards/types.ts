@@ -119,7 +119,7 @@ export type EdgeHoverPayload = {
 export type ViewLibs = {
   // Where a person starts: what needs them, the library, the sources
   // and the newest documents. The card a new window opens on.
-  homeView: () => CardRender;
+  dashboardView: () => CardRender;
   // The Search card: results as a list, the picked one read in place.
   // The same search as gridView, which shows it as a table.
   searchView: (opts?: { q?: string }) => CardRender;

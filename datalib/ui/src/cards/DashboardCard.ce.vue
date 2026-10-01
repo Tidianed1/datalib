@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// The Home card: where a person starts. What needs them, how big the
+// The Dashboard card: where a person starts. What needs them, how big the
 // library is, each source's state, and the newest documents — all read
 // from endpoints other cards already use (the manage rows and the
 // search), so it adds no backend of its own.
@@ -16,12 +16,12 @@ import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop"
 import { copyToClipboard } from "@/clipboard";
 import { pushToast } from "@/toasts";
 import { logSource } from "./libs/logView";
-import { statusTone, needsYou, type Tone } from "./home";
+import { statusTone, needsYou, type Tone } from "./dashboard";
 
 const props = defineProps<{ ctx: CardCtx }>();
 const api = useApi();
 
-props.ctx.setTitle("Home");
+props.ctx.setTitle("Dashboard");
 
 const manage = ref<ManageResponse | null>(null);
 const recent = ref<SearchRow[]>([]);
@@ -171,13 +171,13 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="home">
-    <header class="home-head">
-      <span class="home-state" :class="`tone-${lastRun.tone}`">
+  <div class="dashboard">
+    <header class="dashboard-head">
+      <span class="dashboard-state" :class="`tone-${lastRun.tone}`">
         <span class="dot" />{{ lastRun.text }}
       </span>
       <button
-        class="home-btn"
+        class="dashboard-btn"
         :disabled="!!syncAll.blocked"
         :title="syncAll.blocked ?? syncAll.label"
         @click="syncEverything"
@@ -186,8 +186,8 @@ onBeforeUnmount(() => {
       </button>
     </header>
 
-    <div class="home-body">
-      <p v-if="loadError" class="home-error">Could not load the sources: {{ loadError }}</p>
+    <div class="dashboard-body">
+      <p v-if="loadError" class="dashboard-error">Could not load the sources: {{ loadError }}</p>
 
       <section v-if="attention.length" class="panel panel-warn" aria-label="Needs you">
         <h2 class="panel-head panel-head-warn">
@@ -206,7 +206,9 @@ onBeforeUnmount(() => {
           <button v-if="a.problems" class="link" @click="openProblems(a.row)">Review</button>
           <template v-if="a.failed">
             <button class="link" @click="openLog(a.row)">View log</button>
-            <button class="home-btn home-btn-strong" @click="syncRow(a.row)">Sync again</button>
+            <button class="dashboard-btn dashboard-btn-strong" @click="syncRow(a.row)">
+              Sync again
+            </button>
           </template>
         </div>
       </section>
@@ -297,7 +299,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.home {
+.dashboard {
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -305,7 +307,7 @@ onBeforeUnmount(() => {
   color: var(--datalib-fg);
   background: var(--datalib-surface-2);
 }
-.home-head {
+.dashboard-head {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
@@ -315,7 +317,7 @@ onBeforeUnmount(() => {
   background: var(--datalib-bg);
   border-bottom: 1px solid var(--datalib-border-soft);
 }
-.home-body {
+.dashboard-body {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
@@ -324,12 +326,12 @@ onBeforeUnmount(() => {
   gap: var(--datalib-gap);
   padding: var(--datalib-pad);
 }
-.home-state {
+.dashboard-state {
   display: flex;
   align-items: center;
   gap: 6px;
 }
-.home-btn {
+.dashboard-btn {
   height: var(--datalib-control-h);
   padding: 0 10px;
   font: inherit;
@@ -340,22 +342,22 @@ onBeforeUnmount(() => {
   color: var(--datalib-fg);
   cursor: pointer;
 }
-.home-btn:hover:not(:disabled) {
+.dashboard-btn:hover:not(:disabled) {
   background: var(--datalib-hover);
 }
-.home-btn:disabled {
+.dashboard-btn:disabled {
   opacity: 0.5;
   cursor: default;
 }
-.home-btn-strong {
+.dashboard-btn-strong {
   border-color: var(--datalib-accent);
   background: var(--datalib-accent);
   color: var(--datalib-on-accent);
 }
-.home-btn-strong:hover {
+.dashboard-btn-strong:hover {
   background: color-mix(in srgb, var(--datalib-accent) 85%, black);
 }
-.home-error {
+.dashboard-error {
   margin: 0;
   color: var(--datalib-error-fg);
 }

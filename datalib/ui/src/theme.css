@@ -131,7 +131,7 @@ a {
   color: var(--datalib-accent);
 }
 
-/* Section headings inside cards: small capitals, the way the Home card
+/* Section headings inside cards: small capitals, the way the Dashboard card
    labels its panels. */
 .datalib-section-title {
   margin: 0;

@@ -110,8 +110,13 @@ the bundle puts them. The spawned backend logs to
 `$TMPDIR/datalib-http-<pid>.log`;
 startup failures quote the log tail in the error dialog.
 
-`icons/` is generated from `app-icon.png` (placeholder) via
-`pnpm exec tauri icon app-icon.png -o icons`.
+`app-icon.png` is ✊ on a rounded tile: `app-icon/app-icon.html` drawn
+at 1024×1024 by headless Chromium. The fist is "Raised fist" from
+Microsoft's [Fluent Emoji](https://github.com/microsoft/fluentui-emoji)
+(MIT, `app-icon/LICENSE-fluentui-emoji`; the notice ships in the .app's
+`licenses/fluentui-emoji/`). `icons/` is generated from it with
+`pnpm exec tauri icon app-icon.png -o icons` (delete the `android/` and
+`ios/` folders it also writes).
 
 ## Behaviour worth knowing
 

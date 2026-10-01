@@ -67,8 +67,8 @@ describe("reconcile", () => {
 
 describe("pathFor", () => {
   it("writes the pristine default stack as /", () => {
-    expect(pathFor([specOf("homeView()")])).toBe("/");
-    expect(pathFor([{ code: "homeView()", size: null, state: "x" }])).not.toBe("/");
+    expect(pathFor([specOf("dashboardView()")])).toBe("/");
+    expect(pathFor([{ code: "dashboardView()", size: null, state: "x" }])).not.toBe("/");
   });
 });
 

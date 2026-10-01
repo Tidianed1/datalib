@@ -132,7 +132,7 @@ card — the **new-card gallery**
 (`datalib/ui/src/cards/libs/galleryView.ts`). It lists, each with a
 short description:
 
-1. the builtins `cards/catalog.ts` offers, `homeView` first and
+1. the builtins `cards/catalog.ts` offers, `dashboardView` first and
    `sourcesView` second;
 2. every titled component in the frontend store, each expanding to its
    qualified name called with its stored `component_args` — so one
@@ -352,7 +352,7 @@ reads or writes the URL; one switched back to puts its own stack back.
 
 The layout the app opens on, until the person picks another in the
 status bar (the choice is kept in this browser). Every layout opens a
-new window on `homeView()` (`DEFAULT_SPECS` in `views/millerStack.ts`),
+new window on `dashboardView()` (`DEFAULT_SPECS` in `views/millerStack.ts`),
 which the URL writes as `/`. One card at a time, full size, beside a sidebar listing every open
 card as a tree: each tab sits under the tab that opened it, as in
 Firefox's Tree Style Tab. `views/tabTree.ts` holds the decisions as
@@ -385,13 +385,13 @@ card is named by its card again.
 The factories in `ViewLibs` are the public surface card source
 programs against:
 
-- `homeView()` — the card a new window opens on
-  (`cards/HomeCard.ce.vue`): what needs a person (a source whose last
+- `dashboardView()` — "Dashboard", the card a new window opens on
+  (`cards/DashboardCard.ce.vue`): what needs a person (a source whose last
   sync failed or stopped, a store holding errors or warnings), the
   library's item count and size on disk, each source's state, and the
   newest documents by their own timestamps. It reads only
   `GET /api/manage/rows` and the search; its decisions are
-  `cards/home.ts`.
+  `cards/dashboard.ts`.
 - `searchView(opts?: { q? })` — "Unified Search (new)", the friendly search
   (`cards/SearchCard.ce.vue`): a box that takes words and filters, a
   "Meaning only" switch that moves the free text into a `qmd_vsearch:`

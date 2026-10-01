@@ -14,7 +14,7 @@ import ConfirmDialog from "@/components/ConfirmDialog.vue";
 import { SOURCES_HELP, useSourcesCard, type Row } from "./sourcesCardModel";
 import { formatRelative, formatStamp } from "@/config/timeFormat";
 import { density } from "@/density";
-import { statusTone } from "./home";
+import { statusTone } from "./dashboard";
 
 const props = defineProps<{ ctx: CardCtx }>();
 

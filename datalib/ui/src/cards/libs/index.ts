@@ -16,12 +16,12 @@ import { logLineView } from "./logLineView";
 import { historyView } from "./historyView";
 import { umapView } from "./umapView";
 import { syncDashboardView } from "./syncDashboardView";
-import { homeView } from "./homeView";
+import { dashboardView } from "./dashboardView";
 import { searchView } from "./searchView";
 
 // The names in scope when card source is evaluated (cardSource.ts).
 export const viewLibs: ViewLibs = {
-  homeView,
+  dashboardView,
   searchView,
   gridView,
   documentView,
