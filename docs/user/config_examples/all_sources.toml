@@ -1494,8 +1494,8 @@ function = "ingest"
 #
 # A table with no `id_global` keeps its own declared key (`id_local` for
 # most of them). A table the source gave no `PRIMARY KEY` (mostly the
-# cloud-sync bookkeeping) is keyed on its UNIQUE index when it has one
-# that is non-NULL in every row; otherwise it stays keyless and doltlite
+# cloud-sync bookkeeping) is keyed on its only UNIQUE index when no row
+# has a NULL in it; otherwise it stays keyless and doltlite
 # diffs it by position, which shows as added/removed/modified runs
 # rather than as edits.
 #

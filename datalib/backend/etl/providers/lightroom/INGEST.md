@@ -189,16 +189,16 @@ But Lightroom does declare those tables' keys, not as a `PRIMARY KEY`
 but as a composite UNIQUE index: `index_<Table>_primaryKey` on
 `(image, payloadKey)` for `AgLibraryImageSyncedAssetData`, on
 `(ozCatalogId, ozSpaceId)` for `AgOzSpaceIds`, and a `UNIQUE (localId,
-ozCatalogId)` constraint on `MigratedImages`. So the provider gives the
-engine a rule (`src/keys.rs`): key a table on its only UNIQUE index, or
-on the one named `…primaryKey` among several. The engine asks it only
-about a table no other step keys (no `primary_keys` entry, no
-`id_global`, no declared key), and uses the index only when every
-column of it is mirrored and no row holds a NULL in it, since a UNIQUE
-index lets NULLs repeat and a key does not. Otherwise the table stays
-keyless and the run warns; neither case fails the run. A store synced
-before this rule re-mirrors its newest backup once (the `key_rule`
-entry in its scope).
+ozCatalogId)` constraint on `MigratedImages`. So the mirror engine keys
+a table that declares no key on its only UNIQUE index, for every source
+(Apple Messages' join tables are the same shape). It does so only when
+every column of the index is mirrored and no row holds a NULL in it,
+since a UNIQUE index lets NULLs repeat and a key does not; a table with
+NULLs there stays keyless and the run warns. A table with two UNIQUE
+indexes stays keyless too, since neither is more its key than the
+other; none of the test catalogs has one. A `primary_keys` entry
+or an `id_global` still wins. A store synced before this rule re-mirrors
+its newest backup once (the `key_rule` entry in its scope).
 
 Set `stable_key_columns = []` to mirror declared keys verbatim, or use
 `primary_keys = { Table = ["a", "b"] }` to pin one explicitly (an empty
