@@ -111,10 +111,6 @@
         margin: 0;
         font-size: 28px;
       }
-      .sub {
-        margin: 4px 0 0;
-        color: var(--muted);
-      }
       button {
         font: inherit;
         cursor: pointer;
@@ -318,7 +314,6 @@
         <div class="head">
           <div class="titles">
             <h1>Your libraries</h1>
-            <p class="sub" id="sub">Open one, or start a new one.</p>
           </div>
           <button class="btn" id="pick">Open a folder…</button>
           <button class="btn primary" id="new" aria-expanded="false" aria-controls="pop">
@@ -542,9 +537,6 @@
         const none = state.libraries.length === 0;
         list.hidden = none;
         $("empty").hidden = !none;
-        $("sub").textContent = none
-          ? "You don't have a library yet."
-          : "Open one, or start a new one.";
         if (!$("name").value) $("name").value = state.suggested_name;
         // The first time, the one thing to do is make a library.
         if (none) setPopover(true);
