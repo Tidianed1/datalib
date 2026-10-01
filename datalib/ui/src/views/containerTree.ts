@@ -17,6 +17,14 @@ export const LAYOUT_LABELS: Record<Layout, string> = {
   columns: "Columns",
 };
 
+// Each layout's glyph, as stroked paths on a 24px grid.
+export const LAYOUT_ICONS: Record<Layout, string> = {
+  tabs: "M3 9h18v11H3zM3 9V5h8v4",
+  stack: "M4 3h16v7H4zM4 14h16v7H4z",
+  row: "M3 4h7v16H3zM14 4h7v16h-7z",
+  columns: "M3 4h18v16H3zM9 4v16M15 4v16",
+};
+
 type Common = {
   id: string;
   // The node's size along its container's axis, in px: its height in a
@@ -97,7 +105,7 @@ export function makeBox(
 
 // The nodes from the root down to `id`, both ends included; empty when
 // `id` is not in the tree.
-export function pathTo(root: TreeNode, id: string): TreeNode[] {
+function pathTo(root: TreeNode, id: string): TreeNode[] {
   if (root.id === id) return [root];
   if (root.kind === "box") {
     for (const child of root.children) {
@@ -308,14 +316,28 @@ export function setTemplate(root: TreeNode, id: string, template: string): TreeN
   return mapBox(root, id, (b) => ({ ...b, template, name: b.name ?? template }));
 }
 
+// Put `next` where `id` is, with its size and opener. What in the parent
+// pointed at `id` — the tab it shows, the siblings opened from it —
+// points at `next` instead.
+function replace(root: TreeNode, id: string, next: TreeNode): TreeNode {
+  const parent = parentOf(root, id);
+  const old = find(root, id);
+  if (!parent || !old) return root;
+  const placed = { ...next, basis: old.basis, openedBy: old.openedBy };
+  return mapBox(root, parent.id, (b) => ({
+    ...b,
+    selected: b.selected === id ? placed.id : b.selected,
+    children: b.children.map((c) =>
+      c.id === id ? placed : c.openedBy === id ? { ...c, openedBy: placed.id } : c,
+    ),
+  }));
+}
+
 // Put `id` inside a new container of its own, which takes its place.
 export function wrap(root: TreeNode, id: string, layout: Layout, boxId: string): TreeNode {
-  return mapNode(root, id, (n) => {
-    const box = makeBox(boxId, layout, [{ ...n, basis: null, openedBy: null }], {
-      basis: n.basis,
-    });
-    return { ...box, openedBy: n.openedBy };
-  });
+  const node = find(root, id);
+  if (!node) return root;
+  return replace(root, id, makeBox(boxId, layout, [{ ...node, basis: null, openedBy: null }]));
 }
 
 // Replace container `id` with its children, in place.
@@ -381,8 +403,7 @@ export function resetTo(
   template: TreeNode,
   freshId: () => string,
 ): TreeNode {
-  const fresh = instantiate(template, freshId);
-  return mapNode(root, id, (n) => ({ ...fresh, basis: n.basis, openedBy: n.openedBy }));
+  return replace(root, id, instantiate(template, freshId));
 }
 
 // ---- storing ----

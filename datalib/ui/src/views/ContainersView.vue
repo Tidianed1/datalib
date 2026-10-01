@@ -36,6 +36,7 @@ import {
 } from "@/views/composites";
 import {
   LAYOUTS,
+  LAYOUT_ICONS,
   LAYOUT_LABELS,
   addChild,
   cards,
@@ -89,26 +90,22 @@ function dashboard(): TreeNode {
   return instantiate(BUILTIN_COMPOSITES.Dashboard, newCardId);
 }
 
-// The outermost container is always tabs, never solidified, and never
-// empty: a tree left with no tabs gets the Dashboard back.
-function settle(box: BoxNode): BoxNode {
-  const fixed: BoxNode = { ...box, layout: "tabs", solidified: false };
-  if (fixed.children.length === 0) {
-    const fresh = dashboard();
-    return { ...fixed, children: [fresh], selected: fresh.id };
-  }
-  const selected = fixed.children.some((c) => c.id === fixed.selected)
-    ? fixed.selected
-    : fixed.children[0].id;
-  return { ...fixed, selected };
+// Closing the last tab brings the Dashboard back: the outermost
+// container is never empty.
+function withATab(box: BoxNode): BoxNode {
+  if (box.children.length > 0) return box;
+  const fresh = dashboard();
+  return { ...box, children: [fresh], selected: fresh.id };
 }
 
-const root = ref<BoxNode>(settle(makeBox(newCardId(), "tabs", [])));
+// Empty until start() has read the kept tree, so nothing is mounted
+// only to be thrown away.
+const root = ref<BoxNode>(makeBox(newCardId(), "tabs", []));
 const ready = ref(false);
 let mainWindow = false;
 
 function update(next: TreeNode) {
-  if (next.kind === "box") root.value = settle(next);
+  if (next.kind === "box") root.value = withATab(next);
 }
 
 // ---- keeping the tree ----
@@ -186,7 +183,8 @@ async function start() {
   const fromUrl = props.openUrlOnMount || !mainWindow ? routeNode() : null;
   let tree = kept ?? makeBox(newCardId(), "tabs", mainWindow ? [dashboard()] : []);
   if (fromUrl) tree = addChild(tree, tree.id, fromUrl) as BoxNode;
-  root.value = settle(tree);
+  // The outermost container is tabs and never solidified, whatever was stored.
+  root.value = withATab({ ...tree, layout: "tabs", solidified: false });
   ready.value = true;
   if (fromUrl) void router.replace("/");
 }
@@ -540,12 +538,8 @@ provide(CONTAINERS_API, api);
           @auxclick.prevent="(e: MouseEvent) => e.button === 1 && close(row.node.id)"
         >
           <CardIcon v-if="row.node.kind === 'card'" class="ct-tab-icon" :source="row.node.source" />
-          <svg v-else class="ct-tab-icon" viewBox="0 0 24 24" aria-hidden="true">
-            <path
-              fill="currentColor"
-              d="M4 4h7v7H4zm9 0h7v7h-7zM4 13h7v7H4zm9 0h7v7h-7z"
-              :opacity="row.node.solidified ? 1 : 0.55"
-            />
+          <svg v-else class="ct-tab-icon ct-tab-glyph" viewBox="0 0 24 24" aria-hidden="true">
+            <path :d="LAYOUT_ICONS[row.node.layout]" />
           </svg>
           <span class="ct-tab-label">{{ titleOf(row.node) }}</span>
           <button class="ct-tab-action" title="more" @click.stop="rowMenu(row.node, $event)">
@@ -636,6 +630,12 @@ provide(CONTAINERS_API, api);
   width: var(--datalib-icon-size);
   height: var(--datalib-icon-size);
   color: var(--datalib-muted);
+}
+.ct-tab-glyph {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linejoin: round;
 }
 .ct-tab.is-selected .ct-tab-icon {
   color: var(--datalib-accent);

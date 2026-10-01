@@ -10,6 +10,7 @@ import {
   parseTree,
   remove,
   rename,
+  resetTo,
   setCard,
   setSolidified,
   tabRows,
@@ -100,6 +101,31 @@ describe("changing the tree", () => {
     const root = remove(fixture(), "i1");
     expect(find(root, "inner")).toBeUndefined();
     expect(ids(find(root, "sandbox")!)).toEqual(["s1", "s3"]);
+  });
+
+  // A nested tabs container showed nothing after either: it still
+  // pointed at the id the replaced node had.
+  it("wrapping or resetting the shown tab keeps it shown", () => {
+    const tabsBox = makeBox("t", "tabs", [
+      makeCard("a", "x()"),
+      { ...makeCard("b", "y()"), openedBy: "a" },
+    ]);
+    const root = makeBox("root", "tabs", [{ ...tabsBox, selected: "a" }]);
+
+    const wrapped = wrap(root, "a", "stack", "w");
+    const t = find(wrapped, "t") as BoxNode;
+    expect(t.selected).toBe("w");
+    expect(t.children[1].openedBy).toBe("w");
+
+    let n = 0;
+    const reset = resetTo(
+      wrapped,
+      "w",
+      makeBox("tpl", "row", [makeCard("z", "z()")]),
+      () => `n${n++}`,
+    );
+    expect((find(reset, "t") as BoxNode).selected).toBe("n0");
+    expect(ids(find(reset, "n0")!)).toEqual(["n1"]);
   });
 
   it("wrapping a card and taking it out again puts it back as it was", () => {

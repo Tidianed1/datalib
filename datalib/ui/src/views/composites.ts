@@ -3,13 +3,13 @@
 // kept in the library (`/api/ui/state/composites`).
 import { ref } from "vue";
 import { fetchUiState, putUiState } from "@/api";
-import { DASHBOARD_PARTS } from "@/cards/dashboard";
+import { DASHBOARD_PARTS, type DashboardPart } from "@/cards/dashboard";
 import { makeBox, makeCard, parseComposites, type BoxNode } from "@/views/containerTree";
 
 const STATE_NAME = "composites";
 
 // Fixed heights for the two short parts; the other two share the rest.
-const PART_BASIS: Record<string, number | null> = {
+const PART_BASIS: Record<DashboardPart, number | null> = {
   sync: 44,
   library: 112,
   sources: null,

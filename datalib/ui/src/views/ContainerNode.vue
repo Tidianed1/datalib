@@ -7,19 +7,17 @@ import { computed, inject } from "vue";
 import CardControls from "@/components/CardControls.vue";
 import { growSourceBox, vAutoGrow } from "@/components/autoGrow";
 import { devMode } from "@/devMode";
-import { DEFAULT_COLUMN, LAYOUT_LABELS, type Layout, type TreeNode } from "@/views/containerTree";
+import {
+  DEFAULT_COLUMN,
+  LAYOUT_ICONS,
+  LAYOUT_LABELS,
+  type Layout,
+  type TreeNode,
+} from "@/views/containerTree";
 import { CONTAINERS_API } from "@/views/containersApi";
 
 // `height`: the fixed height a stack gives this node. It sizes the
 // node's body, not its header, so showing chrome never squeezes a card.
-// Each layout's glyph, drawn as strokes on a 24px grid.
-const LAYOUT_ICONS: Record<Layout, string> = {
-  tabs: "M3 9h18v11H3zM3 9V5h8v4",
-  stack: "M4 3h16v7H4zM4 14h16v7H4z",
-  row: "M3 4h7v16H3zM14 4h7v16h-7z",
-  columns: "M3 4h18v16H3zM9 4v16M15 4v16",
-};
-
 const props = defineProps<{ node: TreeNode; parentLayout: Layout; height?: number | null }>();
 const api = inject(CONTAINERS_API)!;
 
