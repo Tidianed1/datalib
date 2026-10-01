@@ -5,7 +5,25 @@ import type { InjectionKey } from "vue";
 import type { CardCtx } from "@/cards/types";
 import type { BoxNode, CardNode, TreeNode } from "./containerTree";
 
-export type MenuItem = { label: string; run: () => void; checked?: boolean } | "separator";
+// What a container's or a card's panel offers, in sections. An icon is
+// a stroked path on a 24px grid (panelIcons.ts, LAYOUT_ICONS).
+export type PanelAction = {
+  label: string;
+  icon: string;
+  run: () => void;
+  // The choice in effect, in a tiles section (the current layout).
+  current?: boolean;
+  danger?: boolean;
+  // The panel stays open after it, to show the change (a layout, a flag).
+  stay?: boolean;
+};
+
+export type PanelSection =
+  | { kind: "tiles"; title: string; actions: PanelAction[] }
+  | { kind: "rows"; title?: string; actions: PanelAction[] }
+  | { kind: "toggle"; label: string; hint: string; icon: string; on: boolean; run: () => void };
+
+export type Panel = { title: string; icon: string; sections: PanelSection[] };
 
 export type ContainersApi = {
   ctxFor(card: CardNode): CardCtx;
@@ -21,9 +39,11 @@ export type ContainersApi = {
   select(id: string): void;
   close(id: string): void;
   commitSource(card: CardNode, e: Event): void;
-  openMenu(ev: MouseEvent, items: MenuItem[]): void;
-  boxMenu(box: BoxNode): MenuItem[];
-  cardMenu(card: CardNode): MenuItem[];
+  // Open the panel `build` describes at the pointer. It is rebuilt as
+  // the tree changes, so an action that keeps it open shows its effect.
+  openPanel(ev: MouseEvent, build: () => Panel): void;
+  // The panel of node `id`, as a builder for openPanel.
+  panelFor(id: string): () => Panel;
   // Drag the edge after child `id` to resize it along `axis`.
   startResize(id: string, axis: "x" | "y", ev: PointerEvent): void;
 };

@@ -11,7 +11,7 @@ test.describe.configure({ mode: "serial" });
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
-    localStorage.setItem("datalib-layout", "containers");
+    localStorage.removeItem("datalib-layout-unsaved");
     localStorage.setItem("datalib-dev-mode", "0");
   });
   const cleared = await page.request.put("/api/ui/state/layout", {

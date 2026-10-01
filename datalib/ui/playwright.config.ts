@@ -450,14 +450,16 @@ export default defineConfig({
   snapshotPathTemplate: "{snapshotDir}/{testFileDir}/{testFileName}-snapshots/{arg}{ext}",
   use: {
     baseURL: BACKEND_URL,
-    // The specs drive the columns layout (`.miller-col-*`, a URL of
-    // several columns); the app opens on tabs. A spec about another
-    // layout picks it with an init script (tabs-rename.spec.ts).
+    // Specs running side by side share a library, so the layout is
+    // neither read from nor written to it (ContainersView's UNSAVED_KEY):
+    // every page starts on the Dashboard plus what its URL names.
+    // containers.spec.ts, about keeping the layout, clears this and has a
+    // library of its own.
     storageState: {
       cookies: [],
       origins: SERVERS.map((s) => ({
         origin: s.url,
-        localStorage: [{ name: "datalib-layout", value: "columns" }],
+        localStorage: [{ name: "datalib-layout-unsaved", value: "1" }],
       })),
     },
     headless: true,

@@ -152,7 +152,7 @@ onUnmounted(() => stop?.());
 .datalib-shell {
   /* Viewport-pinned flex column: the toolbar takes its natural height
      and the routed view flexes into the rest, so full-height views
-     (MillerView) reach the bottom without guessing the chrome height.
+     (the card layout) reach the bottom without guessing the chrome height.
      min-height (not height) so taller views (sync) still
      scroll the page normally. */
   display: flex;

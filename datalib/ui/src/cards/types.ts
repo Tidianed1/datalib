@@ -1,12 +1,12 @@
-// Shapes for the card-based miller view.
+// Shapes for cards and the host that lays them out.
 //
-// A column IS a card, and a card is defined by a piece of JS source —
-// an expression like `gridView()` or `documentView("abcd…")` — that
-// the host shows in the column's header and evaluates with the view
-// factories in scope (see cardSource.ts). The expression must produce
-// a CardRender: a function that takes a ShadowRoot and a CardCtx and
-// returns a Teardown. The host (MillerView) mounts each card inside
-// its own Shadow DOM and runs the render function there.
+// A card is defined by a piece of JS source — an expression like
+// `gridView()` or `documentView("abcd…")` — that the host shows in
+// the card's header in dev mode and evaluates with the view factories
+// in scope (see cardSource.ts). The expression must produce a
+// CardRender: a function that takes a ShadowRoot and a CardCtx and
+// returns a Teardown. The host (ContainersView) mounts each card
+// inside its own Shadow DOM and runs the render function there.
 
 export type Teardown = () => void;
 
@@ -19,41 +19,37 @@ export type Bus = {
 };
 
 // Commands a card can issue against the host. Each card gets its own
-// instance, pre-bound to that card. What "opening" means is up to the
-// active layout: the miller layout opens a column to the right
-// (replacing everything further right), the tree layout spawns a
-// child node pointing from this card.
+// instance, pre-bound to that card. Where an opened card goes is the
+// host's call (docs/dev/cards.md § "The containers layout"): the
+// nearest container above this card that is not solidified, placed by
+// that container's layout.
 export type HostCommands = {
   // Open a chain of cards. The first source opens "from" this card;
   // each subsequent source opens from the card the previous source
   // produced — i.e. `openCards(a, b, c)` is `openCard(a)` from this
   // card, then `openCard(b)` from a, then `openCard(c)` from b.
-  // Layout-dependent placement (see above): in the miller layout the
-  // chain lays out as consecutive columns to the right (replacing
-  // everything further right, so re-opening swaps the panels); in the
-  // tree layout it's a parent→child spine; in the tiling layout each
-  // is a sibling of the previous. Returns the new cards' ids in chain
-  // order. Calling with a single source opens one card, the common
-  // case (a grid row → its document).
+  // The whole chain lands in one container: in Columns as consecutive
+  // columns to the right of this card's (replacing what was further
+  // right, so re-opening swaps the panels), in Tabs as tabs each under
+  // the one before. Returns the new cards' ids in chain order. Calling
+  // with a single source opens one card, the common case (a grid row →
+  // its document).
   openCards(...sources: string[]): string[];
   // The URL `openCards(...sources)` would land on, so a card can draw a
   // real link: a plain click goes through openCards, and a modified
   // click, a middle click, the context menu and a drag are the
-  // browser's — a new tab, a copied link, a bookmark. A layout the URL
-  // does not describe answers with the chain alone.
+  // browser's — a new tab, a copied link, a bookmark. The link is the
+  // chain alone (chainHref.ts), which a new window opens as a tab.
   hrefFor(...sources: string[]): string;
   // Replace THIS card's own source (and clear its state, since the old
-  // state no longer applies to new code). Layout-agnostic: the miller
-  // layout rewrites the column's URL segment, the tree layout rewrites
-  // the node. Used by the agent hand-off to repoint a card at a freshly
-  // minted component alias.
+  // state no longer applies to new code). Used by the agent hand-off to
+  // repoint a card at a freshly minted component alias.
   setSource(source: string): void;
   // Close this card.
   close(): void;
   // Replace this card's persisted state string. The string is opaque
-  // to the host — in the miller layout it lands in the card's URL
-  // segment (`code:state`); the card decides the format. Setting ""
-  // clears it (a column with empty state serializes as bare `code`).
+  // to the host, which keeps it with the card in the layout it saves to
+  // the library; the card decides the format. Setting "" clears it.
   setState(state: string): void;
 };
 

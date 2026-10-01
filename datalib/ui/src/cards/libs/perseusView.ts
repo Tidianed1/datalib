@@ -5,10 +5,10 @@
 // published edition/translation (`grc2`, `eng1`, `eng6`, `fre1`,
 // `ger2`, …) — and a collapsible hierarchy of locators (book → chapter
 // → section). Clicking any locator opens one reader panel per enabled
-// version via `ctx.host.openCards(…)` — in the miller layout that lands
-// the panels as columns to the right of this one (and re-clicking swaps
-// them out), which is the scaife "open the same passage side-by-side in
-// every version" gesture.
+// version via `ctx.host.openCards(…)` — in a Columns container that
+// lands the panels as columns to the right of this one (and re-clicking
+// swaps them out), which is the scaife "open the same passage
+// side-by-side in every version" gesture.
 import { cardApi } from "../cardApi";
 import type { CardRender } from "../types";
 

@@ -66,7 +66,7 @@ export type BoxNode = Common & {
 
 export type TreeNode = CardNode | BoxNode;
 
-export const DEFAULT_COLUMN = 480;
+export const DEFAULT_COLUMN = 640;
 
 export function makeCard(id: string, source: string, state = ""): CardNode {
   return {

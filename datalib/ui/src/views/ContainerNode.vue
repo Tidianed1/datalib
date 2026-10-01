@@ -75,7 +75,7 @@ const slotRef = (el: unknown) => api.setSlot(props.node.id, (el as Element | nul
       <button
         class="ct-icon-btn"
         title="arrange this card"
-        @click="api.openMenu($event, api.cardMenu(node))"
+        @click="api.openPanel($event, api.panelFor(node.id))"
       >
         ⋯
       </button>
@@ -94,7 +94,7 @@ const slotRef = (el: unknown) => api.setSlot(props.node.id, (el as Element | nul
       v-if="chrome"
       class="ct-foldertab"
       :title="`${LAYOUT_LABELS[node.layout]} container: layout, solidifying and more`"
-      @click="api.openMenu($event, api.boxMenu(node))"
+      @click="api.openPanel($event, api.panelFor(node.id))"
     >
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path :d="LAYOUT_ICONS[node.layout]" />
