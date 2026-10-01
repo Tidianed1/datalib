@@ -70,8 +70,20 @@ const segments = computed(() => {
   return out.map((s) => ({ ...s, pct: (100 * s.bytes) / total }));
 });
 
+/// A library with no sources, or with sources that have never synced,
+/// gets one next step instead of a status: add a source, or start the
+/// first sync.
+const stage = computed<"loading" | "empty" | "first_sync" | "normal">(() => {
+  if (!manage.value) return "loading";
+  if (sources.value.length === 0) return "empty";
+  if (!manage.value.run) return "first_sync";
+  return "normal";
+});
+
 const lastRun = computed(() => {
   const run = manage.value?.run;
+  if (stage.value === "empty") return { tone: "muted" as Tone, text: "Nothing to sync yet" };
+  if (stage.value === "first_sync") return { tone: "run" as Tone, text: "Start your first sync" };
   if (!run) return { tone: "muted" as Tone, text: "Not synced yet" };
   if (run.live) return { tone: "run" as Tone, text: "Syncing now" };
   return { tone: "ok" as Tone, text: `Synced ${formatRelative(run.finished_at, now.value)}` };
@@ -99,6 +111,10 @@ async function syncRow(row: ManageRow) {
 
 function open(...sources: string[]) {
   props.ctx.host.openCards(...sources);
+}
+
+function addSource() {
+  open(`sourcesView(${JSON.stringify({ add: true })})`);
 }
 
 function openLog(row: ManageRow) {
@@ -172,12 +188,13 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="dashboard">
-    <header class="dashboard-head">
+    <header class="dashboard-head" :class="{ 'dashboard-head-next': stage === 'first_sync' }">
       <span class="dashboard-state" :class="`tone-${lastRun.tone}`">
         <span class="dot" />{{ lastRun.text }}
       </span>
       <button
         class="dashboard-btn"
+        :class="{ 'dashboard-btn-strong': stage === 'first_sync' }"
         :disabled="!!syncAll.blocked"
         :title="syncAll.blocked ?? syncAll.label"
         @click="syncEverything"
@@ -251,18 +268,19 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <section class="panel" aria-label="Sources">
+      <section class="panel" :class="{ 'panel-next': stage === 'empty' }" aria-label="Sources">
         <h2 class="panel-head">
           <span class="section-title">Sources</span>
           <button class="link" @click="open('sourcesView()')">Open Sources</button>
         </h2>
-        <div class="grid grid-head">
+        <div v-if="sources.length" class="grid grid-head">
           <span /><span>Name</span><span>Status</span><span>Updated</span
           ><span class="num">Items</span><span class="num">Size</span>
         </div>
-        <p v-if="manage && sources.length === 0" class="empty">
-          No sources yet. Open Sources to add one.
-        </p>
+        <div v-if="stage === 'empty'" class="row add-first">
+          <span class="row-text">No sources yet.</span>
+          <button class="dashboard-btn dashboard-btn-strong" @click="addSource">Add source</button>
+        </div>
         <div v-for="r in sources" :key="r.id" class="grid grid-row">
           <img v-if="iconUrl(r.name.icon)" class="tile" :src="iconUrl(r.name.icon)!" alt="" />
           <span v-else />
@@ -326,6 +344,14 @@ onBeforeUnmount(() => {
   gap: var(--datalib-gap);
   padding: var(--datalib-pad);
 }
+/* The one next step for a library that has never synced. */
+.dashboard-head-next {
+  justify-content: space-between;
+  background: color-mix(in srgb, var(--datalib-accent) 8%, var(--datalib-bg));
+}
+.dashboard-head-next .dashboard-state {
+  font-weight: 600;
+}
 .dashboard-state {
   display: flex;
   align-items: center;
@@ -377,6 +403,19 @@ onBeforeUnmount(() => {
   border: 1px solid var(--datalib-border-soft);
   border-radius: var(--datalib-radius);
   overflow: hidden;
+}
+.panel-next {
+  border-color: var(--datalib-accent);
+}
+.panel-next .panel-head {
+  background: color-mix(in srgb, var(--datalib-accent) 8%, var(--datalib-bg));
+}
+.panel-next .section-title {
+  color: var(--datalib-accent);
+}
+.add-first {
+  border-top: none;
+  padding: 8px 10px;
 }
 .panel-warn {
   border-color: var(--datalib-warn-border);

@@ -159,7 +159,7 @@ export type ViewLibs = {
   tableView: (opts: { url: string }) => CardRender;
   // The Manage screen as a card: every source and step config.toml
   // declares, with status, actions and the panels they open.
-  sourcesView: () => CardRender;
+  sourcesView: (opts?: { add?: boolean }) => CardRender;
   // config.toml itself, edited directly.
   configView: () => CardRender;
   // The run log: one process's lines — a step's newest attempt, the

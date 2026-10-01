@@ -978,44 +978,39 @@ pub struct InitConfigResponse {
 /// makes the check and the write one operation.
 async fn init_config(State(s): State<AppState>) -> Result<Json<InitConfigResponse>, StatusCode> {
     let path = s.config_path();
-
-    if let Some(parent) = path.parent() {
-        datalib_core::layout::create_data_root(parent).map_err(|e| {
-            tracing::error!("init_config: mkdir {}: {e}", parent.display());
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let created = write_starter_config(&s.root).map_err(|e| {
+        tracing::error!("init_config: {}: {e}", path.display());
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    if created {
+        reload_applets(&s).await;
     }
+    Ok(Json(InitConfigResponse {
+        created,
+        path: path.display().to_string(),
+        text: std::fs::read_to_string(&path).unwrap_or_default(),
+        error: None,
+    }))
+}
 
-    let text = scaffold_toml();
-    // `create_new` is the whole point: the existence check and the
-    // write are one syscall, so this can never overwrite a config that
-    // arrived between them.
+/// Write the starter `config.toml` into `root`, creating the root, unless
+/// a config is already there. True when this call wrote it.
+/// `POST /api/config/init` and `datalib-http --init` both come here.
+///
+/// `create_new` is the whole point: the existence check and the write
+/// are one syscall, so this can never overwrite a config that arrived
+/// between them.
+pub fn write_starter_config(root: &std::path::Path) -> std::io::Result<bool> {
+    use std::io::Write;
+    datalib_core::layout::create_data_root(root)?;
+    let path = datalib_dag::config::root_config_path(root);
     match owner_only_options().create_new(true).open(&path) {
         Ok(mut f) => {
-            use std::io::Write;
-            f.write_all(text.as_bytes()).map_err(|e| {
-                tracing::error!("init_config: write {}: {e}", path.display());
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?;
-            drop(f);
-            reload_applets(&s).await;
-            Ok(Json(InitConfigResponse {
-                created: true,
-                path: path.display().to_string(),
-                text,
-                error: None,
-            }))
+            f.write_all(scaffold_toml().as_bytes())?;
+            Ok(true)
         }
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(Json(InitConfigResponse {
-            created: false,
-            path: path.display().to_string(),
-            text: std::fs::read_to_string(&path).unwrap_or_default(),
-            error: None,
-        })),
-        Err(e) => {
-            tracing::error!("init_config: create {}: {e}", path.display());
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(e) => Err(e),
     }
 }
 

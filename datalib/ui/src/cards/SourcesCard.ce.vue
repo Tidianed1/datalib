@@ -4,7 +4,7 @@
 // the last sync did, notices as strips above the table, and a status
 // column that says its word before its time. Its logic is
 // sourcesCardModel.ts.
-import { computed } from "vue";
+import { computed, onMounted } from "vue";
 import type { Column } from "@slickgrid-universal/common";
 import type { CardCtx } from "./types";
 import type { StatusView } from "@/api";
@@ -16,7 +16,8 @@ import { formatRelative, formatStamp } from "@/config/timeFormat";
 import { density } from "@/density";
 import { statusTone } from "./dashboard";
 
-const props = defineProps<{ ctx: CardCtx }>();
+// `add`: open on the add-source form, as the Dashboard's "Add source" does.
+const props = defineProps<{ ctx: CardCtx; add?: boolean }>();
 
 props.ctx.setTitle("Sources");
 props.ctx.setHelp(SOURCES_HELP);
@@ -99,6 +100,10 @@ const columnOverrides: Record<string, Partial<Column<Row>>> = {
     formatter: (_r, _c, value) => statusCell(value as StatusView | null),
   },
 };
+
+onMounted(() => {
+  if (props.add) openAdd();
+});
 
 // Rows sized to the density switch; the grid reads its height once, so
 // a switch rebuilds it.

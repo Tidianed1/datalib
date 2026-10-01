@@ -389,9 +389,11 @@ programs against:
   (`cards/DashboardCard.ce.vue`): what needs a person (a source whose last
   sync failed or stopped, a store holding errors or warnings), the
   library's item count and size on disk, each source's state, and the
-  newest documents by their own timestamps. It reads only
-  `GET /api/manage/rows` and the search; its decisions are
-  `cards/dashboard.ts`.
+  newest documents by their own timestamps. A library with no sources
+  gets "No sources yet." and an "Add source" button in the Sources
+  panel; one whose sources have never synced gets "Start your first
+  sync" in the header. It reads only `GET /api/manage/rows` and the
+  search; its decisions are `cards/dashboard.ts`.
 - `searchView(opts?: { q? })` — "Unified Search (new)", the friendly search
   (`cards/SearchCard.ce.vue`): a box that takes words and filters, a
   "Meaning only" switch that moves the free text into a `qmd_vsearch:`
@@ -450,12 +452,13 @@ programs against:
 - `tableView({ url })` — the typed table viewer over any endpoint that
   answers `{columns, rows}` (plus `tree: true` when each row carries a
   `path`). See "Typed tables" below.
-- `sourcesView()` — the Manage screen as a card
-  (`cards/SourcesCard.ce.vue`): the tree of what `config.toml` declares
-  over `GET /api/manage/rows`, drawn by `TableGrid`, with the row
-  actions and the dialogs they open — the wizard, a removal's confirm —
-  teleported to `<body>`. Its header says how the last sync went, the
-  config's notices are strips above the table, its status column reads
+- `sourcesView(opts?: { add? })` — the Manage screen as a card
+  (`cards/SourcesCard.ce.vue`); `add: true` opens it on the add-source
+  form, which is what the Dashboard's "Add source" does. It shows the
+  tree of what `config.toml` declares over `GET /api/manage/rows`,
+  drawn by `TableGrid`, with the row actions and the dialogs they open
+  — the wizard, a removal's confirm — teleported to `<body>`. Its
+  header says how the last sync went, the config's notices are strips above the table, its status column reads
   word first ("Failed · 2 hours ago"), and its rows follow the density
   switch. Through `host.openCards` it opens beside
   itself a `gridView(...)` for Browse or a problems count, a
