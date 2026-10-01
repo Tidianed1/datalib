@@ -2,5 +2,4 @@
 //! Classic catalog.
 
 pub mod ingest;
-pub mod keys;
 pub mod processor;

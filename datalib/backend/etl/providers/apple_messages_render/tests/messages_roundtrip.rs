@@ -2,7 +2,7 @@
 //! rendered the way the render step renders it. What is Messages-shaped
 //! and so covered nowhere else: bodies read out of `attributedBody`,
 //! tapbacks folded onto their messages and unfolded by a removal, the
-//! join tables keyed by the config's override, `skip_churn` making an
+//! join tables keyed on their UNIQUE pair, `skip_churn` making an
 //! untouched database no commit at all, and the newest message read out
 //! of `chat.db-wal`, where Messages leaves it.
 
@@ -320,5 +320,28 @@ async fn a_second_run_renders_only_what_moved() -> Result<()> {
         Some(chat_uuid("messages", BRIDGE).as_str())
     );
     assert!(pages(&docs, BRIDGE).contains("Recalibrating now."));
+    Ok(())
+}
+
+/// Two join tables are declared `UNIQUE` but not `PRIMARY KEY`; the
+/// mirror keys them on that pair, so `dolt_diff` names their rows rather
+/// than diffing them by position.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_join_tables_are_keyed_on_their_unique_pair() -> Result<()> {
+    let fx = Fixture::new();
+    fx.ingest().await?.expect("first ingest commits");
+    let pool = mirror::open_sqlite(&dr::db_path_for(&fx.raw), false).await?;
+    for (table, key) in [
+        ("chat_handle_join", ["chat_id", "handle_id"]),
+        ("message_attachment_join", ["message_id", "attachment_id"]),
+    ] {
+        let got: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk")
+                .bind(table)
+                .fetch_all(&pool)
+                .await?;
+        assert_eq!(got, key, "{table}");
+    }
+    pool.close().await;
     Ok(())
 }

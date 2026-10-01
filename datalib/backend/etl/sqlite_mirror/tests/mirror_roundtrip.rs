@@ -9,7 +9,7 @@ use sqlx::Row;
 
 use datalib_etl::doltlite_raw as dr;
 use datalib_etl::progress::Progress;
-use datalib_etl_sqlite_mirror::{mirror, MirrorOptions, MirrorStats, UniqueIndex};
+use datalib_etl_sqlite_mirror::{mirror, MirrorOptions, MirrorStats};
 
 /// What `lightroom`'s `skip_xmp` expands to; spelled out here so the
 /// engine's tests do not depend on a provider's config crate.
@@ -562,15 +562,6 @@ async fn stable_key_is_used_where_available_and_declared_key_elsewhere() -> Resu
     Ok(())
 }
 
-/// The table's only complete UNIQUE index, as a provider's
-/// `key_index` rule might pick it.
-fn the_only_index(indexes: &[UniqueIndex]) -> Option<&UniqueIndex> {
-    match indexes {
-        [only] => Some(only),
-        _ => None,
-    }
-}
-
 async fn mirror_key(pool: &SqlitePool, table: &str) -> Vec<String> {
     sqlx::query_scalar("SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk")
         .bind(table)
@@ -579,28 +570,25 @@ async fn mirror_key(pool: &SqlitePool, table: &str) -> Vec<String> {
         .unwrap_or_else(|e| panic!("pragma_table_info({table}): {e}"))
 }
 
-/// Guards the reason `key_index` exists: keyed on its UNIQUE index, a
-/// keyless source table diffs by key, so deleting its first row is one
+/// Guards why a sole UNIQUE index becomes the key: keyed on it, a table
+/// with no `PRIMARY KEY` diffs by key, so deleting its first row is one
 /// removed row rather than every later row read as modified.
 #[tokio::test]
-async fn a_keyless_table_keys_on_the_unique_index_the_rule_picks() -> Result<()> {
+async fn a_table_with_no_declared_key_keys_on_its_only_unique_index() -> Result<()> {
     let f = Fixture::new();
     f.edit_catalog(&[
         "CREATE TABLE Synced (image INTEGER, payloadKey TEXT, payload TEXT)",
         "CREATE UNIQUE INDEX index_Synced_primaryKey ON Synced(image, payloadKey)",
-        // Partial: constrains some rows only, so the rule never sees it.
+        // Partial: it constrains some rows only, so it is not a second
+        // UNIQUE index competing with the first.
         "CREATE UNIQUE INDEX partial_only ON Synced(image) WHERE payloadKey = 'a'",
         "INSERT INTO Synced VALUES (1,'a','x'),(2,'a','y'),(3,'b','z')",
     ])
     .await?;
-    let opts = MirrorOptions {
-        key_index: Some(the_only_index),
-        ..f.options()
-    };
-    f.ingest_with(opts.clone()).await?;
+    f.ingest().await?;
     f.edit_catalog(&["DELETE FROM Synced WHERE image = 1"])
         .await?;
-    let (_, commit) = f.ingest_with(opts).await?;
+    let (_, commit) = f.ingest().await?;
 
     let pool = f.mirror_pool().await?;
     assert_eq!(mirror_key(&pool, "Synced").await, ["image", "payloadKey"]);
@@ -611,36 +599,28 @@ async fn a_keyless_table_keys_on_the_unique_index_the_rule_picks() -> Result<()>
 }
 
 #[tokio::test]
-async fn a_unique_index_with_nulls_or_no_rule_leaves_the_table_keyless() -> Result<()> {
+async fn a_unique_index_with_nulls_or_a_rival_leaves_the_table_keyless() -> Result<()> {
     let f = Fixture::new();
     f.edit_catalog(&[
-        "CREATE TABLE Clean (a INTEGER, b TEXT)",
-        "CREATE UNIQUE INDEX clean_key ON Clean(a, b)",
-        "INSERT INTO Clean VALUES (1,'x')",
         "CREATE TABLE Holey (a INTEGER, b TEXT)",
         "CREATE UNIQUE INDEX holey_key ON Holey(a, b)",
         "INSERT INTO Holey VALUES (1,'x'),(2,NULL)",
+        "CREATE TABLE Rivals (a INTEGER, b TEXT)",
+        "CREATE UNIQUE INDEX by_a ON Rivals(a)",
+        "CREATE UNIQUE INDEX by_b ON Rivals(b)",
+        "INSERT INTO Rivals VALUES (1,'x')",
     ])
     .await?;
-
     f.ingest().await?;
-    let pool = f.mirror_pool().await?;
-    assert!(
-        mirror_key(&pool, "Clean").await.is_empty(),
-        "no rule, no key"
-    );
-    pool.close().await;
 
-    f.ingest_with(MirrorOptions {
-        key_index: Some(the_only_index),
-        ..f.options()
-    })
-    .await?;
     let pool = f.mirror_pool().await?;
-    assert_eq!(mirror_key(&pool, "Clean").await, ["a", "b"]);
     assert!(
         mirror_key(&pool, "Holey").await.is_empty(),
         "a key holds no NULLs"
+    );
+    assert!(
+        mirror_key(&pool, "Rivals").await.is_empty(),
+        "neither index is more the key than the other"
     );
     pool.close().await;
     Ok(())

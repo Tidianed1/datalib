@@ -72,7 +72,6 @@ pub async fn mirror_file(
     let options = MirrorOptions {
         source_path: catalog.path().to_path_buf(),
         snapshot: options.snapshot && !catalog.is_copy(),
-        key_index: Some(crate::keys::key_index),
         ..options.clone()
     };
     mirror::run(pool, &options, progress).await

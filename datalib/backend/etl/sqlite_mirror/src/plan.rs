@@ -70,9 +70,9 @@ pub enum KeyOrigin {
     StableVerified,
     /// An explicit `primary_keys` config override.
     Override,
-    /// A UNIQUE index the provider's `key_index` rule chose for a table
-    /// with no other key, which this run checked holds no NULLs. This is
-    /// the Lightroom `index_<Table>_primaryKey` case.
+    /// The table's only UNIQUE index, for a table that declares no key,
+    /// which this run checked holds no NULLs. This is the Lightroom
+    /// `index_<Table>_primaryKey` case.
     UniqueIndex,
     /// No key: the source had none and no stable candidate matched.
     Keyless,
