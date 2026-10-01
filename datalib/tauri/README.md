@@ -87,7 +87,7 @@ count, size and last sync that `datalib-http` last wrote to its
 `system/library-summary.json`; one whose folder is gone stays listed as
 not found until removed. "New library" takes a name or a folder: a
 name is a library in `~/Documents/Datalib`, the first one called
-`Default`; `/…` and `~/…` are taken as they are, and "Choose folder…"
+`Default`; `/…` and `~/…` are taken as they are, and "Create elsewhere…"
 fills one in. A folder that is already a library is opened instead,
 and one with other files in it is refused. The new library's server
 starts with `--init`, so it opens on the Dashboard.
