@@ -9,7 +9,7 @@ use sqlx::Row;
 
 use datalib_etl::doltlite_raw as dr;
 use datalib_etl::progress::Progress;
-use datalib_etl_lightroom::ingest::{mirror, unpack, MirrorOptions, MirrorStats};
+use datalib_etl_lightroom::ingest::{self, mirror, FetchOptions, MirrorOptions, MirrorStats};
 
 /// Every table in these catalogs. Two of the 115 `sqlite_master` rows are
 /// SQLite's own `sqlite_stat1` / `sqlite_stat4` query-planner statistics,
@@ -46,11 +46,16 @@ impl Store {
 
     async fn ingest(&self, catalog: &Path) -> Result<(MirrorStats, Option<String>)> {
         let pool = mirror::open_mirror(&self.path).await?;
-        let options = MirrorOptions {
-            stable_key_columns: vec!["id_global".to_string()],
-            ..MirrorOptions::new(catalog)
-        };
-        let stats = unpack::mirror_file(&pool, catalog, &options, &Progress::noop()).await?;
+        let stats = ingest::fetch(FetchOptions {
+            mirror_path: self.path.clone(),
+            pool: Some(pool.clone()),
+            options: MirrorOptions {
+                stable_key_columns: vec!["id_global".to_string()],
+                ..MirrorOptions::new(catalog)
+            },
+            progress: Progress::noop(),
+        })
+        .await?;
         let commit = dr::commit_run(&pool, &format!("lightroom: {}", stats.summary())).await?;
         pool.close().await;
         Ok((stats, commit))
@@ -183,17 +188,12 @@ async fn sync_tables_are_keyed_on_their_unique_index() -> Result<()> {
         ("AgOzSpaceIds", vec!["ozCatalogId", "ozSpaceId"]),
         ("MigratedImages", vec!["localId", "ozCatalogId"]),
     ] {
-        // Test: the names are literals above.
-        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT name FROM pragma_table_info('{table}') WHERE pk > 0 ORDER BY name"
-        )))
-        .fetch_all(&pool)
-        .await?;
-        let mut got: Vec<String> = rows.iter().map(|r| r.get::<String, _>("name")).collect();
-        let mut want: Vec<String> = key.iter().map(|c| c.to_string()).collect();
-        got.sort();
-        want.sort();
-        assert_eq!(got, want, "{table}");
+        let got: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk")
+                .bind(table)
+                .fetch_all(&pool)
+                .await?;
+        assert_eq!(got, key, "{table}");
     }
     pool.close().await;
     Ok(())

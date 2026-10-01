@@ -16,7 +16,7 @@ use datalib_etl::fsscan::{self, Scan, ScanOptions};
 use datalib_etl::progress::Progress;
 use datalib_etl::scope_config;
 use datalib_etl::stop::StopFlag;
-use datalib_etl_sqlite_mirror::{MirrorOptions, MirrorStats};
+use datalib_etl_sqlite_mirror::{MirrorOptions, MirrorStats, KEY_RULE_VERSION};
 
 use super::backups::{self, Backup, LEDGER, LEDGER_DDL};
 use super::unpack::{self, is_catalog, is_zip};
@@ -290,9 +290,9 @@ async fn scan_catalog(cache: &FingerprintCache, catalog: &Path) -> Result<Scan> 
     Ok(scan)
 }
 
-/// The options that decide what a mirrored catalog looks like. Not
-/// `snapshot` or `gc`: those change how a run reads and stores, not what
-/// lands.
+/// The options that decide what a mirrored catalog looks like, and the
+/// engine's rule for its keys. Not `snapshot` or `gc`: those change how a
+/// run reads and stores, not what lands.
 fn scope_of(o: &MirrorOptions) -> serde_json::Value {
     serde_json::json!({
         "include_tables": o.include_tables,
@@ -300,9 +300,7 @@ fn scope_of(o: &MirrorOptions) -> serde_json::Value {
         "exclude_columns": o.exclude_columns,
         "stable_key_columns": o.stable_key_columns,
         "primary_keys": o.primary_keys,
-        // Bump when the way tables are keyed changes: a store synced
-        // under the old rule then re-mirrors its newest backup once.
-        "key_rule": "unique_index",
+        "key_rule": KEY_RULE_VERSION,
     })
 }
 

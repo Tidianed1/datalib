@@ -24,6 +24,11 @@ const SRC_SCHEMA: &str = "datalib_mirror_src";
 /// silent clobber of the store's own metadata.
 const RESERVED_TABLES: &[&str] = datalib_etl::doltlite_raw::SHARED_TABLES;
 
+/// Which rule picks a table's key. Bumped whenever that rule changes, so
+/// a provider that does not mirror an unchanged file again can record it
+/// beside its cursor and mirror once more under the new rule.
+pub const KEY_RULE_VERSION: u32 = 1;
+
 /// Everything the engine needs. Built from a provider's config by its
 /// processor, or from flags by a standalone CLI.
 #[derive(Debug, Clone)]

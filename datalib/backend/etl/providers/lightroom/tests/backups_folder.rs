@@ -11,6 +11,7 @@ use sqlx::sqlite::SqlitePool;
 use datalib_etl::doltlite_raw as dr;
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::progress::Progress;
+use datalib_etl::scope_config;
 use datalib_etl::stop::StopFlag;
 use datalib_etl_lightroom::ingest::sync::{self, SyncRun};
 use datalib_etl_lightroom::ingest::{mirror, MirrorOptions};
@@ -421,11 +422,11 @@ async fn a_backup_is_mirrored_with_the_keys_its_catalog_declares() -> Result<()>
     f.sync(&options()).await?;
 
     let pool = f.read().await;
-    let mut key: Vec<String> =
-        sqlx::query_scalar("SELECT name FROM pragma_table_info('SyncedPayload') WHERE pk > 0")
-            .fetch_all(&pool)
-            .await?;
-    key.sort();
+    let key: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM pragma_table_info('SyncedPayload') WHERE pk > 0 ORDER BY pk",
+    )
+    .fetch_all(&pool)
+    .await?;
     assert_eq!(key, ["image", "payloadKey"]);
     pool.close().await;
     Ok(())
@@ -466,6 +467,44 @@ async fn a_changed_filter_mirrors_the_newest_backup_again() -> Result<()> {
     let run = f.sync(&narrowed).await?;
     assert!(run.mirrored.is_empty(), "the new filters are recorded now");
     assert_eq!(head(&f.read().await).await, before);
+    Ok(())
+}
+
+/// A store synced under an older key rule mirrors its newest backup
+/// again, so its tables take the keys the engine gives them now.
+#[tokio::test]
+async fn a_store_from_an_older_key_rule_mirrors_the_newest_backup_again() -> Result<()> {
+    let f = Fixture::new();
+    f.backup(
+        "2021-03-01 0900",
+        "TngCatalog.lrcat",
+        Some("TngCatalog.zip"),
+        &[],
+    )
+    .await;
+    f.sync(&options()).await?;
+
+    // What a store synced before the rule was recorded has: no `key_rule`.
+    let pool = mirror::open_mirror(&f.store()).await?;
+    let mut scope = scope_config::load(&pool, "backups")
+        .await?
+        .expect("the first sync records its scope");
+    scope
+        .as_object_mut()
+        .and_then(|o| o.remove("key_rule"))
+        .expect("the scope records the key rule");
+    scope_config::store(&pool, "backups", &scope).await?;
+    dr::commit_run(&pool, "a store from an older key rule").await?;
+    pool.close().await;
+
+    // This store already has the keys, so mirroring again changes no row
+    // and commits nothing; `last` is what says it ran.
+    let run = f.sync(&options()).await?;
+    assert!(run.mirrored.is_empty(), "{:?}", run.mirrored);
+    assert!(run.last.is_some(), "the newest backup is mirrored again");
+
+    let run = f.sync(&options()).await?;
+    assert!(run.last.is_none(), "the rule is recorded now");
     Ok(())
 }
 
