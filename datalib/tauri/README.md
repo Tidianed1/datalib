@@ -85,7 +85,10 @@ It lists the recent libraries (`~/.datalib/recent-roots.json`), then
 any other library in `~/Documents/Datalib`. Each shows the source
 count, size and last sync that `datalib-http` last wrote to its
 `system/library-summary.json`; one whose folder is gone stays listed as
-not found until removed. "New library" takes a name or a folder: a
+not found. A library outside the Datalib folder, or one whose folder
+is gone, can be forgotten: it leaves the recent list and its folder is
+left as it is. One in the Datalib folder is always listed while it is
+there, so it has no Forget. "New library" takes a name or a folder: a
 name is a library in `~/Documents/Datalib`, the first one called
 `Default`; `/…` and `~/…` are taken as they are, and "Create elsewhere…"
 fills one in. A folder that is already a library is opened instead,

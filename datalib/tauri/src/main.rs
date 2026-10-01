@@ -51,6 +51,7 @@ fn launcher_state(app: AppHandle) -> serde_json::Value {
                     "name": launcher::display_name(&l.path),
                     "path": l.path.to_string_lossy(),
                     "shown_path": elsewhere.then(|| launcher::tilde(&l.path, &home)),
+                    "forgettable": launcher::forgettable(&l.path, &dir),
                     "found": l.found,
                     "summary": launcher::summary(&l.path),
                 })
@@ -155,9 +156,14 @@ async fn launcher_pick(app: AppHandle) -> Result<bool, String> {
     Ok(true)
 }
 
-/// Take a library whose folder is gone off the list.
+/// Take a library off the list; its folder is not touched. One in the
+/// Datalib folder is always listed while it is there, so it cannot be
+/// forgotten.
 #[tauri::command]
 fn launcher_forget(app: AppHandle, path: String) -> Result<(), String> {
+    if !launcher::forgettable(Path::new(&path), &libraries_dir(&app)) {
+        return Err("A library in the Datalib folder is always listed.".into());
+    }
     let home = home_dir(&app).ok_or("No home directory.")?;
     launcher::forget_recent(&launcher::recents_file(&home), Path::new(&path))
         .map_err(|e| e.to_string())

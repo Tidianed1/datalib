@@ -34,7 +34,17 @@ pub fn record_recent(file: &Path, root: &Path) -> std::io::Result<()> {
     write_recents(file, &roots)
 }
 
-/// Take `root` off the recent list: a library that is gone for good.
+/// Whether the screen offers to forget `root`. A library in the Datalib
+/// folder is listed because it is there, not because it was opened, so
+/// it stays while it is there; one elsewhere is listed only from the
+/// recent list, and so is one whose folder is gone.
+pub fn forgettable(root: &Path, libraries_dir: &Path) -> bool {
+    root.parent() != Some(libraries_dir) || !is_data_root(root)
+}
+
+/// Take `root` off the recent list. Only the list changes: the library's
+/// folder and everything in it stay where they are, and opening it again
+/// lists it again.
 pub fn forget_recent(file: &Path, root: &Path) -> std::io::Result<()> {
     let existing = std::fs::read_to_string(file).unwrap_or_default();
     let roots: Vec<PathBuf> = parse_recents(&existing)
@@ -338,6 +348,26 @@ mod tests {
         record_recent(&f, &elsewhere).unwrap();
 
         assert_eq!(paths(&libraries(&f, &dir)), vec![elsewhere, work, default]);
+    }
+
+    /// The Datalib folder's libraries are always listed, so forgetting
+    /// one would not stick; one whose folder is gone can be, or it would
+    /// sit on the list for good.
+    #[test]
+    fn only_a_library_outside_the_datalib_folder_or_gone_can_be_forgotten() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = libraries_dir(&tmp.path().join("Documents"));
+        let default = dir.join(DEFAULT_NAME);
+        let nested = dir.join("nested").join("lib");
+        let elsewhere = tmp.path().join("elsewhere");
+        make_root(&default);
+        make_root(&nested);
+        make_root(&elsewhere);
+
+        assert!(!forgettable(&default, &dir));
+        assert!(forgettable(&elsewhere, &dir));
+        assert!(forgettable(&nested, &dir));
+        assert!(forgettable(&dir.join("Deleted"), &dir));
     }
 
     #[test]

@@ -171,24 +171,45 @@
         border-radius: 10px;
         overflow: hidden;
       }
+      /* A row is the library (a button that opens it, or the same
+         content when its folder is gone) and, for a library outside the
+         Datalib folder, a Forget button beside it: two controls side by
+         side, since a button cannot hold another. */
       .lib {
         display: flex;
         align-items: center;
-        gap: 14px;
-        width: 100%;
-        box-sizing: border-box;
-        padding: 14px 16px;
-        border: none;
         border-bottom: 1px solid var(--row-line);
-        background: none;
-        color: inherit;
-        text-align: left;
       }
       .lib:last-child {
         border-bottom: none;
       }
-      button.lib:hover:not(:disabled) {
+      .lib:not(.missing):hover {
         background: var(--hover);
+      }
+      .lib-open {
+        flex: 1 1 auto;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 14px 16px;
+        border: none;
+        background: none;
+        color: inherit;
+        text-align: left;
+      }
+      /* Out of the way until the row is pointed at or tabbed into; always
+         there on a row whose folder is gone, where it is the one thing
+         to do. */
+      .forget {
+        flex: 0 0 auto;
+        margin-right: 14px;
+        visibility: hidden;
+      }
+      .lib:hover .forget,
+      .lib:focus-within .forget,
+      .lib.missing .forget {
+        visibility: visible;
       }
       .icon {
         flex: 0 0 auto;
@@ -404,8 +425,10 @@
       }
 
       function libraryRow(lib) {
-        const row = document.createElement(lib.found ? "button" : "div");
+        const row = document.createElement("div");
         row.className = "lib" + (lib.found ? "" : " missing");
+        const open = document.createElement(lib.found ? "button" : "div");
+        open.className = "lib-open";
         const icon = document.createElement("span");
         icon.className = "icon";
         icon.innerHTML = BOOK;
@@ -422,18 +445,21 @@
         const right = document.createElement("span");
         right.className = "facts";
         const lines = lib.found ? facts(lib.summary) : ["Not found.", "Is its drive connected?"];
-        right.innerHTML = "";
         lines.forEach((l, i) => {
           if (i) right.append(document.createElement("br"));
           right.append(l);
         });
-        row.append(icon, name, right);
+        open.append(icon, name, right);
         if (lib.found) {
-          row.addEventListener("click", () => run("launcher_open", { path: lib.path }));
-        } else {
+          open.addEventListener("click", () => run("launcher_open", { path: lib.path }));
+        }
+        row.append(open);
+        if (lib.forgettable) {
           const forget = document.createElement("button");
-          forget.className = "btn small";
-          forget.textContent = "Remove";
+          forget.className = "btn small forget";
+          forget.textContent = "Forget";
+          forget.title = "Take it off this list. Its folder is left as it is.";
+          forget.setAttribute("aria-label", `Forget ${lib.name}`);
           forget.addEventListener("click", async () => {
             try {
               await invoke("launcher_forget", { path: lib.path });
