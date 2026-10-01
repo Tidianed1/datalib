@@ -17,15 +17,13 @@ pub fn mirror_options(config: &AppleMessagesConfig) -> Result<MirrorOptions> {
         .ok_or_else(|| anyhow!("apple_messages: missing `database.path` (the chat.db to mirror)"))?
         .path();
     Ok(MirrorOptions {
-        source_path: database,
         snapshot: config.snapshot,
         include_tables: config.include_tables.clone(),
         exclude_tables: config.effective_excluded_tables(),
         exclude_columns: config.effective_excluded_columns(),
-        stable_key_columns: Vec::new(),
         primary_keys: join_table_keys(),
         gc: config.gc,
-        sidecar_tables: Vec::new(),
+        ..MirrorOptions::new(database)
     })
 }
 

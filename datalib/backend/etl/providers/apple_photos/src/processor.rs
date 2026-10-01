@@ -20,7 +20,6 @@ pub fn mirror_options(config: &ApplePhotosConfig) -> Result<MirrorOptions> {
         })?
         .path();
     Ok(MirrorOptions {
-        source_path: photos_sqlite_path(&library),
         snapshot: config.snapshot,
         include_tables: config.include_tables.clone(),
         exclude_tables: config.effective_excluded_tables(),
@@ -28,7 +27,7 @@ pub fn mirror_options(config: &ApplePhotosConfig) -> Result<MirrorOptions> {
         stable_key_columns: config.stable_key_columns.clone(),
         primary_keys: config.primary_keys.clone(),
         gc: config.gc,
-        sidecar_tables: Vec::new(),
+        ..MirrorOptions::new(photos_sqlite_path(&library))
     })
 }
 

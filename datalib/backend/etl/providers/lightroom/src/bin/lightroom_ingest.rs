@@ -1,6 +1,5 @@
 //! `lightroom-ingest` — mirror a Lightroom catalog into a doltlite store.
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -74,7 +73,6 @@ async fn main() -> Result<()> {
         exclude_columns.extend(XMP_COLUMN_PATTERNS.iter().map(|s| s.to_string()));
     }
     let options = MirrorOptions {
-        source_path: args.catalog.clone(),
         snapshot: !args.no_snapshot,
         include_tables: if args.include_tables.is_empty() {
             vec!["*".to_string()]
@@ -88,9 +86,9 @@ async fn main() -> Result<()> {
         } else {
             vec!["id_global".to_string()]
         },
-        primary_keys: BTreeMap::new(),
+        key_from_unique_index: true,
         gc: args.gc,
-        sidecar_tables: Vec::new(),
+        ..MirrorOptions::new(&args.catalog)
     };
 
     ingest::fetch_and_commit(&args.db, options, "lightroom", started).await

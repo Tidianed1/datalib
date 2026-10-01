@@ -1,7 +1,6 @@
 //! End-to-end tests for the SQLite→doltlite mirror engine, against a
 //! Lightroom-shaped fixture.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -54,15 +53,8 @@ impl Fixture {
 
     fn options(&self) -> MirrorOptions {
         MirrorOptions {
-            source_path: self.catalog.clone(),
-            snapshot: true,
-            include_tables: vec!["*".to_string()],
-            exclude_tables: Vec::new(),
-            exclude_columns: Vec::new(),
             stable_key_columns: vec!["id_global".to_string()],
-            primary_keys: BTreeMap::new(),
-            gc: false,
-            sidecar_tables: Vec::new(),
+            ..MirrorOptions::new(&self.catalog)
         }
     }
 
@@ -566,6 +558,106 @@ async fn stable_key_is_used_where_available_and_declared_key_elsewhere() -> Resu
     );
     // Has neither → keyless.
     assert!(mirror_pk(&pool, "AgOzSpaceIds").await.is_empty());
+    pool.close().await;
+    Ok(())
+}
+
+const SYNCED: &str =
+    "CREATE TABLE SyncedPayload (image INTEGER, payloadKey TEXT, payloadData TEXT)";
+const SYNCED_KEY: &str =
+    "CREATE UNIQUE INDEX synced_primaryKey ON SyncedPayload(image, payloadKey)";
+
+fn from_unique_index(f: &Fixture) -> MirrorOptions {
+    MirrorOptions {
+        key_from_unique_index: true,
+        ..f.options()
+    }
+}
+
+#[tokio::test]
+async fn a_unique_index_makes_a_deletion_one_removal_not_a_run_of_modifications() -> Result<()> {
+    // A table the source leaves keyless is diffed by position, so one row
+    // removed from the middle reads as every later row modified.
+    let f = Fixture::new();
+    f.edit_catalog(&[
+        SYNCED,
+        SYNCED_KEY,
+        "INSERT INTO SyncedPayload VALUES (1,'a','x'),(2,'a','y'),(3,'a','z'),(4,'a','w')",
+    ])
+    .await?;
+    f.ingest_with(from_unique_index(&f)).await?;
+
+    f.edit_catalog(&["DELETE FROM SyncedPayload WHERE image = 2"])
+        .await?;
+    let (_, commit) = f.ingest_with(from_unique_index(&f)).await?;
+    let commit = commit.expect("a removed row changes stored bytes");
+
+    let pool = f.mirror_pool().await?;
+    assert_eq!(
+        mirror_pk(&pool, "SyncedPayload").await,
+        vec!["image", "payloadKey"]
+    );
+    assert_eq!(
+        diff_types(&pool, "SyncedPayload", &commit).await,
+        vec!["removed"]
+    );
+    pool.close().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_unique_index_is_not_used_unless_asked_for() -> Result<()> {
+    let f = Fixture::new();
+    f.edit_catalog(&[
+        SYNCED,
+        SYNCED_KEY,
+        "INSERT INTO SyncedPayload VALUES (1,'a','x')",
+    ])
+    .await?;
+    f.ingest().await?;
+
+    let pool = f.mirror_pool().await?;
+    assert!(mirror_pk(&pool, "SyncedPayload").await.is_empty());
+    pool.close().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_unique_index_with_a_null_is_not_a_key() -> Result<()> {
+    // A UNIQUE index lets NULLs repeat; a primary key does not, and a
+    // table that cannot be keyed must be mirrored, not fail the run.
+    let f = Fixture::new();
+    f.edit_catalog(&[
+        SYNCED,
+        SYNCED_KEY,
+        "INSERT INTO SyncedPayload VALUES (1,'a','x'),(2,NULL,'y'),(3,NULL,'z')",
+    ])
+    .await?;
+    f.ingest_with(from_unique_index(&f)).await?;
+
+    let pool = f.mirror_pool().await?;
+    assert!(mirror_pk(&pool, "SyncedPayload").await.is_empty());
+    assert_eq!(
+        scalar_i64(&pool, "SELECT COUNT(*) FROM SyncedPayload").await,
+        3
+    );
+    pool.close().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_partial_unique_index_is_not_a_key() -> Result<()> {
+    let f = Fixture::new();
+    f.edit_catalog(&[
+        SYNCED,
+        "CREATE UNIQUE INDEX synced_partial ON SyncedPayload(image) WHERE payloadKey = 'a'",
+        "INSERT INTO SyncedPayload VALUES (1,'a','x'),(1,'b','y')",
+    ])
+    .await?;
+    f.ingest_with(from_unique_index(&f)).await?;
+
+    let pool = f.mirror_pool().await?;
+    assert!(mirror_pk(&pool, "SyncedPayload").await.is_empty());
     pool.close().await;
     Ok(())
 }

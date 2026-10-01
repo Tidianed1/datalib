@@ -68,6 +68,10 @@ pub enum KeyOrigin {
     /// non-NULL value in every row. This is the Apple Photos `ZUUID`
     /// case.
     StableVerified,
+    /// A UNIQUE index the source declares on a table it gave no
+    /// `PRIMARY KEY`, which this run checked is non-NULL in every row.
+    /// Lightroom names these `index_<Table>_primaryKey`.
+    UniqueIndexVerified,
     /// An explicit `primary_keys` config override.
     Override,
     /// No key: the source had none and no stable candidate matched.
@@ -221,6 +225,60 @@ pub async fn table_columns(
         });
     }
     Ok(out)
+}
+
+/// The column lists of every complete UNIQUE index on `table`, best key
+/// first: an index named `…primaryKey` (Lightroom's convention for the key
+/// it did not declare), then fewer columns, then name. Partial and
+/// expression indexes are left out.
+pub async fn unique_index_keys(
+    conn: &mut SqliteConnection,
+    schema: &str,
+    table: &str,
+) -> Result<Vec<Vec<String>>> {
+    let sql = format!(
+        "PRAGMA {}.index_list({})",
+        quote_ident(schema),
+        quote_ident(table)
+    );
+    let idx_rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .fetch_all(&mut *conn)
+        .await
+        .with_context(|| format!("index_list({schema}.{table})"))?;
+    let mut found: Vec<(String, Vec<String>)> = Vec::new();
+    for r in &idx_rows {
+        let unique: i64 = r.try_get("unique").unwrap_or(0);
+        let partial: i64 = r.try_get("partial").unwrap_or(0);
+        let idx_name: String = r.try_get("name").unwrap_or_default();
+        if unique == 0 || partial != 0 || idx_name.is_empty() {
+            continue;
+        }
+        let info_sql = format!(
+            "PRAGMA {}.index_info({})",
+            quote_ident(schema),
+            quote_ident(&idx_name)
+        );
+        let cols = sqlx::query(sqlx::AssertSqlSafe(info_sql))
+            .fetch_all(&mut *conn)
+            .await
+            .with_context(|| format!("index_info({schema}.{idx_name})"))?;
+        // A NULL name means an expression index — nothing to key on.
+        let names: Vec<String> = cols
+            .iter()
+            .filter_map(|c| c.try_get::<Option<String>, _>("name").ok().flatten())
+            .collect();
+        if !names.is_empty() && names.len() == cols.len() {
+            found.push((idx_name, names));
+        }
+    }
+    found.sort_by_key(|(name, cols)| {
+        (
+            !name.to_ascii_lowercase().contains("primarykey"),
+            cols.len(),
+            name.clone(),
+        )
+    });
+    Ok(found.into_iter().map(|(_, cols)| cols).collect())
 }
 
 /// Columns covered by a single-column UNIQUE index on `table` — the

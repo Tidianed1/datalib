@@ -1493,10 +1493,11 @@ function = "ingest"
 # stable_key_columns = ["id_global"]
 #
 # A table with no `id_global` keeps its own declared key (`id_local` for
-# most of them), and a table the source left keyless stays keyless — those
-# are the cloud-sync bookkeeping tables, which have no candidate column at
-# all. doltlite still versions a keyless table, by row multiset, so you see
-# every change; you just see it as added/removed rather than modified.
+# most of them). A table the source gave no `PRIMARY KEY` (mostly the
+# cloud-sync bookkeeping) is keyed on its UNIQUE index when it has one
+# that is non-NULL in every row; otherwise it stays keyless and doltlite
+# diffs it by position, which shows as added/removed/modified runs
+# rather than as edits.
 #
 # Pin a key yourself when you know one the source didn't declare. An empty
 # list forces a table keyless. Be sure before you use this: the key is

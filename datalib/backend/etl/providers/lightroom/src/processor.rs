@@ -18,15 +18,15 @@ pub fn mirror_options(config: &LightroomConfig) -> Result<MirrorOptions> {
         .ok_or_else(|| anyhow!("lightroom: missing `catalog.path` (the .lrcat to mirror)"))?
         .path();
     Ok(MirrorOptions {
-        source_path,
         snapshot: config.snapshot,
         include_tables: config.include_tables.clone(),
         exclude_tables: config.exclude_tables.clone(),
         exclude_columns: config.effective_excluded_columns(),
         stable_key_columns: config.stable_key_columns.clone(),
         primary_keys: config.primary_keys.clone(),
+        key_from_unique_index: true,
         gc: config.gc,
-        sidecar_tables: Vec::new(),
+        ..MirrorOptions::new(source_path)
     })
 }
 
