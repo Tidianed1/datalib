@@ -11,6 +11,7 @@ use sqlx::sqlite::SqlitePool;
 use datalib_etl::doltlite_raw as dr;
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::progress::Progress;
+use datalib_etl::scope_config;
 use datalib_etl::stop::StopFlag;
 use datalib_etl_lightroom::ingest::sync::{self, SyncRun};
 use datalib_etl_lightroom::ingest::{mirror, MirrorOptions};
@@ -142,15 +143,8 @@ fn fixture_catalog() -> PathBuf {
 
 fn options() -> MirrorOptions {
     MirrorOptions {
-        source_path: PathBuf::new(),
-        snapshot: true,
-        include_tables: vec!["*".into()],
-        exclude_tables: Vec::new(),
-        exclude_columns: Vec::new(),
         stable_key_columns: vec!["id_global".into()],
-        primary_keys: Default::default(),
-        gc: false,
-        sidecar_tables: Vec::new(),
+        ..MirrorOptions::new(PathBuf::new())
     }
 }
 
@@ -408,6 +402,36 @@ async fn an_older_backup_is_replayed_and_the_newest_put_back_on_top() -> Result<
     Ok(())
 }
 
+/// A sync mirrors a backup with the keys that backup's own catalog
+/// declares as UNIQUE indexes, so a table with no PRIMARY KEY still diffs
+/// by key.
+#[tokio::test]
+async fn a_backup_is_mirrored_with_the_keys_its_catalog_declares() -> Result<()> {
+    let f = Fixture::new();
+    f.backup(
+        "2021-03-01 0900",
+        "TngCatalog.lrcat",
+        Some("TngCatalog.zip"),
+        &[
+            "CREATE TABLE SyncedPayload (image INTEGER, payloadKey TEXT, payloadData TEXT)",
+            "CREATE UNIQUE INDEX index_SyncedPayload_primaryKey ON SyncedPayload(image, payloadKey)",
+            "INSERT INTO SyncedPayload VALUES (1,'a','x'),(2,'a','y')",
+        ],
+    )
+    .await;
+    f.sync(&options()).await?;
+
+    let pool = f.read().await;
+    let key: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM pragma_table_info('SyncedPayload') WHERE pk > 0 ORDER BY pk",
+    )
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(key, ["image", "payloadKey"]);
+    pool.close().await;
+    Ok(())
+}
+
 /// A filter changed with no new backup to carry it: the newest backup is
 /// mirrored again, so HEAD shows the catalog as the filters now say.
 #[tokio::test]
@@ -443,6 +467,44 @@ async fn a_changed_filter_mirrors_the_newest_backup_again() -> Result<()> {
     let run = f.sync(&narrowed).await?;
     assert!(run.mirrored.is_empty(), "the new filters are recorded now");
     assert_eq!(head(&f.read().await).await, before);
+    Ok(())
+}
+
+/// A store synced under an older key rule mirrors its newest backup
+/// again, so its tables take the keys the engine gives them now.
+#[tokio::test]
+async fn a_store_from_an_older_key_rule_mirrors_the_newest_backup_again() -> Result<()> {
+    let f = Fixture::new();
+    f.backup(
+        "2021-03-01 0900",
+        "TngCatalog.lrcat",
+        Some("TngCatalog.zip"),
+        &[],
+    )
+    .await;
+    f.sync(&options()).await?;
+
+    // What a store synced before the rule was recorded has: no `key_rule`.
+    let pool = mirror::open_mirror(&f.store()).await?;
+    let mut scope = scope_config::load(&pool, "backups")
+        .await?
+        .expect("the first sync records its scope");
+    scope
+        .as_object_mut()
+        .and_then(|o| o.remove("key_rule"))
+        .expect("the scope records the key rule");
+    scope_config::store(&pool, "backups", &scope).await?;
+    dr::commit_run(&pool, "a store from an older key rule").await?;
+    pool.close().await;
+
+    // This store already has the keys, so mirroring again changes no row
+    // and commits nothing; `last` is what says it ran.
+    let run = f.sync(&options()).await?;
+    assert!(run.mirrored.is_empty(), "{:?}", run.mirrored);
+    assert!(run.last.is_some(), "the newest backup is mirrored again");
+
+    let run = f.sync(&options()).await?;
+    assert!(run.last.is_none(), "the rule is recorded now");
     Ok(())
 }
 

@@ -25,7 +25,6 @@ pub fn mirror_options(config: &LightroomConfig) -> Result<MirrorOptions> {
         .ok_or_else(|| anyhow!("lightroom: set `catalog.path`, `backups.path`, or both"))?
         .path();
     Ok(MirrorOptions {
-        source_path,
         snapshot: config.snapshot,
         include_tables: config.include_tables.clone(),
         exclude_tables: config.exclude_tables.clone(),
@@ -33,7 +32,7 @@ pub fn mirror_options(config: &LightroomConfig) -> Result<MirrorOptions> {
         stable_key_columns: config.stable_key_columns.clone(),
         primary_keys: config.primary_keys.clone(),
         gc: config.gc,
-        sidecar_tables: Vec::new(),
+        ..MirrorOptions::new(source_path)
     })
 }
 

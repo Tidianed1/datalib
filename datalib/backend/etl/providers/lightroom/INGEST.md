@@ -163,7 +163,8 @@ the rule, not the numbers.
 | `id_global` | 26 | the source has a single-column UNIQUE index on it, so the rewrite fires |
 | `id_local` | 53 | the table has no `id_global` column, and `id_local` is its declared key |
 | another declared column | 12 | `image`, `collection`, `fileId`, `version`… — whatever the source declared |
-| **keyless** | 22 | the source table has no key, and no candidate column to make one from |
+| a UNIQUE index | 20 | the source declares no `PRIMARY KEY`, but a UNIQUE index says what the key is (below) |
+| **keyless** | 2 | no `PRIMARY KEY` and no UNIQUE index: `AgLibraryCollectionStackData`, `AgLibraryFolderStackData` |
 
 The middle two rows are the declared-key fallback, and it is *complete*
 rather than best-effort: **79 tables carry an `id_local` column, and in
@@ -172,30 +173,39 @@ KEY`.** So there is no table where a stable-looking column sits unused —
 26 of those 79 also have `id_global` and prefer it, the other 53 keep
 `id_local`, and the fallback reaches all of them without a special case.
 
-The 22 keyless tables are the Adobe cloud-sync bookkeeping
-(`AgOzSpaceIds`, `AgPendingOzAssets`, `Migrated*`, …), and the reason
-they stay keyless is worth being precise about: **they have no
-`id_local` column either.** Their columns are things like `(ozCatalogId,
-ozSpaceId)` — so "just use `id_local` when there's no `id_global`" is
-already what happens above, and there is nothing left for it to key
-here. Only a *composite* natural key would work, and the source does not
-declare one. A keyless table diffs by position, not content
+The 22 tables with no `PRIMARY KEY` are mostly the Adobe cloud-sync
+bookkeeping (`AgOzSpaceIds`, `AgPendingOzAssets`, `Migrated*`, …), plus
+two stack tables and `AgLibraryImageSyncedAssetData`. Most have no
+`id_local` either; their columns are things like `(ozCatalogId,
+ozSpaceId)`. Without a key, a table diffs by position, not content
 ([doltlite.md § Diffs](/docs/dev/doltlite.md#diffs)): the mirror copies
 it in the source's scan order, so an unchanged table is no change, but
-one row deleted from the middle reads as a run of `modified` rows. You
-still see every change, just not as the edit a person would name.
+a row added or deleted in the middle reads as a run of `modified` rows.
+On a real set of weekly backups, `AgLibraryImageSyncedAssetData` showed
+121,114 of 224,500 rows modified between two of them although the
+payload column differed in fewer than 20,000.
 
-All 22 are `Ag*`- or `Migrated*`-prefixed (19 and 3), which reads at a
-glance as "the Ag* tables have no primary keys". They do: of the
-catalog's 93 `Ag*` tables, 19 are keyless and the other 74 are keyed —
-47 on `id_local`, 18 on `id_global`, 9 on another declared column.
+But Lightroom does declare those tables' keys, not as a `PRIMARY KEY`
+but as a composite UNIQUE index: `index_<Table>_primaryKey` on
+`(image, payloadKey)` for `AgLibraryImageSyncedAssetData`, on
+`(ozCatalogId, ozSpaceId)` for `AgOzSpaceIds`, and a `UNIQUE (localId,
+ozCatalogId)` constraint on `MigratedImages`. So the mirror engine keys
+a table that declares no key on its only UNIQUE index, for every source
+(Apple Messages' join tables are the same shape). It does so only when
+every column of the index is mirrored and no row holds a NULL in it,
+since a UNIQUE index lets NULLs repeat and a key does not; a table with
+NULLs there stays keyless and the run warns. A table with two UNIQUE
+indexes stays keyless too, since neither is more its key than the
+other; none of the test catalogs has one. A `primary_keys` entry
+or an `id_global` still wins. A store synced before this rule re-mirrors
+its newest backup once (the `key_rule` entry in its scope).
 
 Set `stable_key_columns = []` to mirror declared keys verbatim, or use
 `primary_keys = { Table = ["a", "b"] }` to pin one explicitly (an empty
-list forces keyless). The override is also the way to give a keyless
-table a composite key if you know one holds — but the mirror will not
-guess for you, and a wrong guess fails the whole run rather than that
-one table: `rebuild_table` creates the table with the key and then does
+list forces keyless). The override is also the way to give a table a
+key the source declares nowhere — but unlike a UNIQUE index it is not
+checked: a wrong entry fails the whole run rather than that one table,
+because `rebuild_table` creates the table with the key and then does
 `INSERT … SELECT`, so a duplicate aborts the ingest.
 
 ## The XMP question
@@ -466,8 +476,9 @@ What three catalogs from different Lightroom generations (2016, 2018,
 - **A stable key is why this reads as an edit.** `id_global` keys most
   tables, so a changed column is a modified row rather than a delete and
   an add ([When the primary key changes](#when-the-primary-key-changes)).
-  Keyless tables (`AgDNGProxyInfo` was one) compare by position, so they
-  show as wholly modified whenever rows are added.
+  Keyless tables compare by position, so they show as wholly modified
+  whenever rows are added; `AgLibraryImageSyncedAssetData` did before the
+  mirror keyed it on its unique index.
 - **The size ratio is not the diff.** A catalog that shrank in the source
   still grew the store, because a store keeps every version. Part of the
   growth may also be uncollected garbage; `dolt_gc` (above) reclaims it.

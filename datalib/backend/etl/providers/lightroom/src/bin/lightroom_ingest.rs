@@ -1,7 +1,6 @@
 //! `lightroom-ingest` — mirror a Lightroom catalog, or a folder of its
 //! backups, into a doltlite store.
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -94,7 +93,6 @@ async fn main() -> Result<()> {
         .or(args.backups.clone())
         .expect("clap requires one");
     let options = MirrorOptions {
-        source_path: input,
         snapshot: !args.no_snapshot,
         include_tables: if args.include_tables.is_empty() {
             vec!["*".to_string()]
@@ -108,9 +106,8 @@ async fn main() -> Result<()> {
         } else {
             vec!["id_global".to_string()]
         },
-        primary_keys: BTreeMap::new(),
         gc: args.gc,
-        sidecar_tables: Vec::new(),
+        ..MirrorOptions::new(input)
     };
 
     let progress = Progress::new(Arc::new(TracingSink::new("lightroom")));

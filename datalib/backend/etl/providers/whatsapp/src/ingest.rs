@@ -136,15 +136,13 @@ pub async fn fetch(
     drop(plaintext);
 
     let options = MirrorOptions {
-        source_path: tmp.path().to_path_buf(),
         snapshot: false,
         include_tables: knobs.include_tables.clone(),
         exclude_tables: knobs.exclude_tables.clone(),
         exclude_columns: knobs.exclude_columns.clone(),
-        stable_key_columns: Vec::new(),
-        primary_keys: Default::default(),
         gc: knobs.gc,
         sidecar_tables: vec![WA_MEDIA_FILES.to_string(), WA_DB_CONTACTS.to_string()],
+        ..MirrorOptions::new(tmp.path())
     };
     let mut summary = IngestSummary {
         mirror: mirror::run(db.pool(), &options, progress).await?,

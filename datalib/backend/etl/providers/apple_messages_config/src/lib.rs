@@ -3,7 +3,6 @@
 //! anyhow), so the orchestrator can name [`AppleMessagesConfig`] without
 //! linking the provider.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use datalib_source_common::{LocalPath, SourceCommon};
@@ -30,18 +29,6 @@ pub const CHURN_COLUMN_PATTERNS: &[&str] = &["*.index_state"];
 
 /// The database's name inside the Messages folder.
 pub const DATABASE_IN_FOLDER: &str = "chat.db";
-
-/// The join tables Messages declares UNIQUE but not PRIMARY KEY. The
-/// mirror keys them on that pair so `dolt_diff` can name their rows.
-pub fn join_table_keys() -> BTreeMap<String, Vec<String>> {
-    [
-        ("message_attachment_join", ["message_id", "attachment_id"]),
-        ("chat_handle_join", ["chat_id", "handle_id"]),
-    ]
-    .into_iter()
-    .map(|(t, cols)| (t.to_string(), cols.map(str::to_string).to_vec()))
-    .collect()
-}
 
 /// The apple_messages-owned slice of an `apple_messages` source. The
 /// `messages` table is its one way in; the rest are the mirror engine's

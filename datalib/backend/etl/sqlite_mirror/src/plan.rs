@@ -70,6 +70,9 @@ pub enum KeyOrigin {
     StableVerified,
     /// An explicit `primary_keys` config override.
     Override,
+    /// The table's only UNIQUE index, for a table that declares no key,
+    /// which this run checked holds no NULLs.
+    UniqueIndex,
     /// No key: the source had none and no stable candidate matched.
     Keyless,
 }
@@ -223,15 +226,22 @@ pub async fn table_columns(
     Ok(out)
 }
 
-/// Columns covered by a single-column UNIQUE index on `table` — the
-/// candidate stable keys. Includes both `UNIQUE` constraints (`origin`
-/// `u`) and standalone `CREATE UNIQUE INDEX` (`origin` `c`); excludes
-/// partial indexes, which don't constrain every row.
-pub async fn unique_single_columns(
+/// A UNIQUE index over plain columns, in index order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UniqueIndex {
+    pub name: String,
+    pub columns: Vec<String>,
+}
+
+/// The UNIQUE indexes on `table` that constrain every row by plain
+/// columns: `UNIQUE` constraints (`origin` `u`), standalone `CREATE
+/// UNIQUE INDEX` (`origin` `c`) and a non-rowid key's own index. Partial
+/// indexes and indexes over an expression are left out.
+pub async fn unique_indexes(
     conn: &mut SqliteConnection,
     schema: &str,
     table: &str,
-) -> Result<Vec<String>> {
+) -> Result<Vec<UniqueIndex>> {
     let sql = format!(
         "PRAGMA {}.index_list({})",
         quote_ident(schema),
@@ -261,15 +271,31 @@ pub async fn unique_single_columns(
             .fetch_all(&mut *conn)
             .await
             .with_context(|| format!("index_info({schema}.{idx_name})"))?;
-        if cols.len() != 1 {
-            continue;
-        }
-        // A NULL name means an expression index — nothing to key on.
-        if let Ok(Some(name)) = cols[0].try_get::<Option<String>, _>("name") {
-            out.push(name);
+        // A NULL name is an expression, not a column.
+        let columns: Vec<String> = cols
+            .iter()
+            .filter_map(|c| c.try_get::<Option<String>, _>("name").ok().flatten())
+            .collect();
+        if !columns.is_empty() && columns.len() == cols.len() {
+            out.push(UniqueIndex {
+                name: idx_name,
+                columns,
+            });
         }
     }
     Ok(out)
+}
+
+/// The columns that are by themselves a UNIQUE index: the candidate
+/// stable keys.
+pub fn single_columns(indexes: &[UniqueIndex]) -> Vec<String> {
+    indexes
+        .iter()
+        .filter_map(|ix| match ix.columns.as_slice() {
+            [only] => Some(only.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 #[cfg(test)]
