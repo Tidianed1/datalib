@@ -7,14 +7,27 @@
 // unsolidified one grows. The decisions are pure functions here;
 // ContainersView applies them.
 
-export const LAYOUTS = ["tabs", "page", "stack", "row", "columns"] as const;
+export const LAYOUTS = ["tabs", "page", "split", "columns"] as const;
 export type Layout = (typeof LAYOUTS)[number];
+
+// Which way a Split container shares its space.
+export const DIRECTIONS = ["row", "column"] as const;
+export type Direction = (typeof DIRECTIONS)[number];
+
+export const DIRECTION_LABELS: Record<Direction, string> = {
+  row: "Side by side",
+  column: "Top to bottom",
+};
+
+export const DIRECTION_ICONS: Record<Direction, string> = {
+  row: "M3 4h7v16H3zM14 4h7v16h-7z",
+  column: "M4 3h16v7H4zM4 14h16v7H4z",
+};
 
 export const LAYOUT_LABELS: Record<Layout, string> = {
   tabs: "Tabs",
   page: "Page",
-  stack: "Stack",
-  row: "Row",
+  split: "Split",
   columns: "Columns",
 };
 
@@ -22,15 +35,14 @@ export const LAYOUT_LABELS: Record<Layout, string> = {
 export const LAYOUT_ICONS: Record<Layout, string> = {
   tabs: "M3 9h18v11H3zM3 9V5h8v4",
   page: "M4 3h16v4H4zM4 10h16v7H4zM4 20h16",
-  stack: "M4 3h16v7H4zM4 14h16v7H4z",
-  row: "M3 4h7v16H3zM14 4h7v16h-7z",
+  split: "M3 4h18v16H3zM12 4v16",
   columns: "M3 4h18v16H3zM9 4v16M15 4v16",
 };
 
 type Common = {
   id: string;
   // The node's size along its container's axis, in px: its height in a
-  // stack, its width in a row or columns. null shares what is left
+  // top-to-bottom split, its width in a side-by-side one or in columns. null shares what is left
   // (a column without one is DEFAULT_COLUMN px wide). A page ignores
   // it: each child there is as tall as its content.
   basis: number | null;
@@ -53,6 +65,9 @@ export type CardNode = Common & {
 export type BoxNode = Common & {
   kind: "box";
   layout: Layout;
+  // Which way a Split shares its space; kept, unused, by the others, so
+  // switching back to Split finds it.
+  direction: Direction;
   // This container and everything inside it keep their shape: a card
   // opened from inside lands further out, and outside edit mode none of
   // it shows chrome. A flag set further in counts again once this one
@@ -88,12 +103,13 @@ export function makeBox(
   id: string,
   layout: Layout,
   children: TreeNode[],
-  opts: Partial<Pick<BoxNode, "solidified" | "name" | "template" | "basis">> = {},
+  opts: Partial<Pick<BoxNode, "solidified" | "name" | "template" | "basis" | "direction">> = {},
 ): BoxNode {
   return {
     kind: "box",
     id,
     layout,
+    direction: opts.direction ?? "row",
     children,
     solidified: opts.solidified ?? false,
     selected: layout === "tabs" ? (children[0]?.id ?? null) : null,
@@ -316,6 +332,16 @@ export function setLayout(root: TreeNode, id: string, layout: Layout): TreeNode 
   }));
 }
 
+export function setDirection(root: TreeNode, id: string, direction: Direction): TreeNode {
+  return mapBox(root, id, (b) => ({
+    ...b,
+    direction,
+    // Sizes along one axis mean nothing along the other.
+    children:
+      b.direction === direction ? b.children : b.children.map((c) => ({ ...c, basis: null })),
+  }));
+}
+
 // The outermost container is never solidified.
 export function setSolidified(root: TreeNode, id: string, solidified: boolean): TreeNode {
   if (id === root.id) return root;
@@ -458,6 +484,7 @@ function readNode(v: unknown): TreeNode | null {
     ...common,
     kind: "box",
     layout,
+    direction: DIRECTIONS.find((d) => d === n.direction) ?? "row",
     children: kids,
     solidified: n.solidified === true,
     selected: kids.some((c) => c.id === selected) ? selected : (kids[0]?.id ?? null),

@@ -16,7 +16,7 @@ import {
 } from "@/views/containerTree";
 import { CONTAINERS_API } from "@/views/containersApi";
 
-// `height`: the fixed height a stack gives this node. It sizes the
+// `height`: the fixed height a top-to-bottom split gives this node. It sizes the
 // node's body, not its header, so showing chrome never squeezes a card.
 const props = defineProps<{ node: TreeNode; parentLayout: Layout; height?: number | null }>();
 const api = inject(CONTAINERS_API)!;
@@ -35,9 +35,12 @@ const cardHead = computed(
 // A container's edge is dashed while cards open into it, and a thick
 // solid line once it is solidified (itself or from further out).
 const solid = computed(() => props.node.kind === "box" && api.isSolidified(props.node.id));
-const axis = computed(() =>
-  props.node.kind === "box" && props.node.layout === "stack" ? "y" : "x",
+// A top-to-bottom split shares its height; everything else its width.
+const vertical = computed(
+  () =>
+    props.node.kind === "box" && props.node.layout === "split" && props.node.direction === "column",
 );
+const axis = computed(() => (vertical.value ? "y" : "x"));
 
 const bodyStyle = computed(() => (props.height != null ? { flex: `0 0 ${props.height}px` } : {}));
 
@@ -48,8 +51,9 @@ function childStyle(child: TreeNode) {
     return { flex: `0 0 ${child.basis ?? DEFAULT_COLUMN}px` };
   }
   if (child.basis === null) return { flex: "1 1 0" };
-  // A stack sizes the child's body (see `height`); a row its whole width.
-  return props.node.layout === "stack" ? { flex: "0 0 auto" } : { flex: `0 0 ${child.basis}px` };
+  // Top to bottom sizes the child's body (see `height`); side by side
+  // its whole width.
+  return vertical.value ? { flex: "0 0 auto" } : { flex: `0 0 ${child.basis}px` };
 }
 
 function hasHandle(i: number): boolean {
@@ -171,7 +175,7 @@ const slotRef = (el: unknown) => api.setSlot(props.node.id, (el as Element | nul
       v-else
       ref="childrenEl"
       class="ct-children"
-      :class="`ct-children--${node.layout}`"
+      :class="[`ct-children--${node.layout}`, { 'ct-children--vertical': vertical }]"
       data-body
       :style="bodyStyle"
     >
@@ -180,7 +184,7 @@ const slotRef = (el: unknown) => api.setSlot(props.node.id, (el as Element | nul
           <ContainerNode
             :node="child"
             :parent-layout="node.layout"
-            :height="node.layout === 'stack' ? child.basis : null"
+            :height="vertical ? child.basis : null"
           />
         </div>
         <div
@@ -270,10 +274,10 @@ const slotRef = (el: unknown) => api.setSlot(props.node.id, (el as Element | nul
 .ct-frame--tabs {
   --ct-color: #a8601c;
 }
-.ct-frame--stack {
+.ct-frame--split {
   --ct-color: #1d7a72;
 }
-.ct-frame--row {
+.ct-frame--page {
   --ct-color: #7a4fb0;
 }
 .ct-frame--columns {
@@ -386,7 +390,7 @@ const slotRef = (el: unknown) => api.setSlot(props.node.id, (el as Element | nul
   min-height: 0;
   display: flex;
 }
-.ct-children--stack {
+.ct-children--vertical {
   flex-direction: column;
 }
 /* A page: children one after another at their natural height, and
@@ -396,10 +400,13 @@ const slotRef = (el: unknown) => api.setSlot(props.node.id, (el as Element | nul
   gap: 6px;
   overflow-y: auto;
 }
-/* In edit mode every card shows its own edge, inside its container's. */
+/* In edit mode every card shows its own edge, inside its container's,
+   with room between the edge and what the card draws, so an edge the
+   card draws itself (a panel's border) never lands on it. */
 .ct-card.is-edit {
   border: 1px solid var(--datalib-border);
   border-radius: 4px;
+  padding: 3px;
 }
 .ct-card.is-natural,
 .ct-card.is-natural .ct-slot {

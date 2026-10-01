@@ -295,8 +295,8 @@ container lays out its own children:
 - **Page** puts children one after another at their natural height and
   scrolls. A card there is as tall as its content (`ShadowCard`'s
   `natural`, honoured by `vueCard`).
-- **Stack** and **Row** share the space top to bottom or side by side,
-  with dividers to resize.
+- **Split** shares the space side by side or top to bottom (its
+  direction), with dividers to resize.
 - **Columns** puts children side by side at set widths and scrolls
   sideways; a column that appears is scrolled into view.
 
@@ -304,8 +304,8 @@ container lays out its own children:
 holds for everything inside it too. When a card opens cards
 (`openCards`), they land in the nearest container above the opener that
 is not solidified, and that container's layout decides where: Columns
-drop what was right of the opener's column and add the chain; a Stack,
-Row or Page insert it after the opener's child; Tabs take it as one new
+drop what was right of the opener's column and add the chain; a Split or
+Page insert it after the opener's child; Tabs take it as one new
 tab — a Columns container holding the chain, under the opener's tab —
 so what those cards open lands beside them. The outermost container is
 never solidified, so an open always lands somewhere. A link or the

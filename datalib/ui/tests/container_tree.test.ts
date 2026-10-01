@@ -11,6 +11,8 @@ import {
   remove,
   rename,
   resetTo,
+  setBasis,
+  setDirection,
   setCard,
   setSolidified,
   tabRows,
@@ -23,10 +25,13 @@ import {
 // The tabs root, holding a Dashboard-like solidified composite and a
 // sandbox of columns that itself holds a solidified stack.
 function fixture(): BoxNode {
-  const dash = makeBox("dash", "stack", [makeCard("d1", "a()"), makeCard("d2", "b()")], {
+  const dash = makeBox("dash", "page", [makeCard("d1", "a()"), makeCard("d2", "b()")], {
     solidified: true,
   });
-  const inner = makeBox("inner", "stack", [makeCard("i1", "c()")], { solidified: true });
+  const inner = makeBox("inner", "split", [makeCard("i1", "c()")], {
+    solidified: true,
+    direction: "column",
+  });
   const sandbox = makeBox("sandbox", "columns", [
     makeCard("s1", "d()"),
     inner,
@@ -117,7 +122,7 @@ describe("changing the tree", () => {
     ]);
     const root = makeBox("root", "tabs", [{ ...tabsBox, selected: "a" }]);
 
-    const wrapped = wrap(root, "a", "stack", "w");
+    const wrapped = wrap(root, "a", "split", "w");
     const t = find(wrapped, "t") as BoxNode;
     expect(t.selected).toBe("w");
     expect(t.children[1].openedBy).toBe("w");
@@ -126,11 +131,19 @@ describe("changing the tree", () => {
     const reset = resetTo(
       wrapped,
       "w",
-      makeBox("tpl", "row", [makeCard("z", "z()")]),
+      makeBox("tpl", "split", [makeCard("z", "z()")]),
       () => `n${n++}`,
     );
     expect((find(reset, "t") as BoxNode).selected).toBe("n0");
     expect(ids(find(reset, "n0")!)).toEqual(["n1"]);
+  });
+
+  it("turning a split the other way forgets sizes set along the old axis", () => {
+    let root = setBasis(fixture(), "i1", 200);
+    root = setDirection(root, "inner", "row");
+    const inner = find(root, "inner") as BoxNode;
+    expect(inner.direction).toBe("row");
+    expect(inner.children[0].basis).toBeNull();
   });
 
   it("wrapping a card and taking it out again puts it back as it was", () => {

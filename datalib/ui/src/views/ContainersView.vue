@@ -34,6 +34,9 @@ import {
 } from "@/views/composites";
 import {
   DEFAULT_COLUMN,
+  DIRECTIONS,
+  DIRECTION_ICONS,
+  DIRECTION_LABELS,
   LAYOUTS,
   LAYOUT_ICONS,
   LAYOUT_LABELS,
@@ -54,6 +57,7 @@ import {
   reveal,
   setBasis,
   setCard,
+  setDirection,
   setLayout as setBoxLayout,
   setSolidified,
   setTemplate,
@@ -426,7 +430,8 @@ function openPanel(ev: MouseEvent, build: () => Panel) {
 function moveActions(node: TreeNode): PanelAction[] {
   const parent = parentOf(root.value, node.id);
   if (!parent || parent.children.length < 2) return [];
-  const across = parent.layout === "row" || parent.layout === "columns";
+  const across =
+    parent.layout === "columns" || (parent.layout === "split" && parent.direction === "row");
   return [
     {
       label: across ? "Move left" : "Move up",
@@ -487,6 +492,21 @@ function boxPanel(box: BoxNode): Panel {
           stay: true,
         })),
       },
+      ...(box.layout === "split"
+        ? [
+            {
+              kind: "tiles" as const,
+              title: "Direction",
+              actions: DIRECTIONS.map((direction) => ({
+                label: DIRECTION_LABELS[direction],
+                icon: DIRECTION_ICONS[direction],
+                current: box.direction === direction,
+                run: () => update(setDirection(root.value, box.id, direction)),
+                stay: true,
+              })),
+            },
+          ]
+        : []),
       {
         kind: "toggle",
         label: "Solidified",
