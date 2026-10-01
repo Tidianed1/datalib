@@ -75,6 +75,15 @@ test("Show sync dashboard opens the group step by step, each with its row's acti
   await expect(page.locator(".sd-btn", { hasText: "Edit settings…" })).toHaveCount(0);
 });
 
+/// The same card, from the row's own button rather than its menu.
+test("a row's chart button opens its group's sync dashboard", async ({ page }) => {
+  await openManager(page);
+  const row = groupRow(page, "unified_index");
+  await expect(row).toBeVisible({ timeout: 10_000 });
+  await row.locator('[col-id="actions"] button[aria-label="Show sync dashboard"]').click();
+  await expect(page.locator('.sd-section[data-step="unified_index"]')).toBeVisible();
+});
+
 test("right-clicking inside a selection targets all of it; outside it, the one row", async ({
   page,
 }) => {
