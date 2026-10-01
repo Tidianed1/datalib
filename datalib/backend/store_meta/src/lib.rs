@@ -52,6 +52,9 @@ pub enum StoreKind {
     Runs,
     /// `system/supervisor.sqlite`: requests, steps turned off, and the loop's facts.
     Supervisor,
+    /// `datalib_curated/datalib_contacts/contacts.doltlite_db`: contacts a person
+    /// made and the handles they linked to them.
+    Contacts,
 }
 
 impl StoreKind {

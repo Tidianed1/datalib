@@ -171,7 +171,7 @@ fn build_chat(
         let msg_id = ids::message(source_id, &m.message_id, ms);
         items.push(NormalizedChatItem {
             message_uuid: msg_id.uuid.clone(),
-            author_id: m.role.clone().unwrap_or_else(|| "unknown".into()),
+            author_handle: None,
             author_display,
             date_ms: ms,
             text: body,

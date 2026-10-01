@@ -510,6 +510,7 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
             s.push_str(
                 &MessageHeader {
                     author: &item.author_display,
+                    handle: item.author_handle.as_ref(),
                     date_ms: item.date_ms,
                     source_url: item.source_url.as_deref(),
                 }
@@ -980,7 +981,7 @@ mod tests {
                 orphan_reactions: Vec::new(),
                 items: vec![NormalizedChatItem {
                     message_uuid: "33333333-3333-3333-3333-333333333333".to_string(),
-                    author_id: "1".to_string(),
+                    author_handle: None,
                     author_display: "Picard".to_string(),
                     date_ms: Some(12442118400000),
                     text: Some("Make it so.".to_string()),
@@ -1158,7 +1159,7 @@ mod tests {
         let mut chat = mk_chat();
         chat.buckets[0].items.push(NormalizedChatItem {
             message_uuid: "55555555-5555-5555-5555-555555555555".to_string(),
-            author_id: "2".to_string(),
+            author_handle: None,
             author_display: "Worf".to_string(),
             date_ms: Some(12442118420000),
             text: None,
@@ -1316,7 +1317,7 @@ mod tests {
     fn aside_item(uuid: &str, text: &str) -> NormalizedChatItem {
         NormalizedChatItem {
             message_uuid: uuid.to_string(),
-            author_id: "tool".to_string(),
+            author_handle: None,
             author_display: "tool".to_string(),
             date_ms: Some(12442118400000),
             text: Some(text.to_string()),

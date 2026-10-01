@@ -20,6 +20,7 @@ use datalib_etl_chat_common::{
     NormalizedReaction,
 };
 use datalib_etl_render::inputs::{Inputs, RawRange};
+use datalib_handle::Handle;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
@@ -470,7 +471,11 @@ fn build_item(
         // 1:1 incoming: the chat JID IS the sender, by definition.
         names.label(&key.chat_jid, inputs)
     };
-    let author_id = sender_jid.unwrap_or_else(|| format!("chat:{}", key.chat_jid));
+    let author_handle = if key.from_me == 1 {
+        None
+    } else {
+        Handle::whatsapp_jid(sender_jid.as_deref().unwrap_or(&key.chat_jid))
+    };
 
     // WhatsApp message_type codes (Android schema):
     //   0  text
@@ -503,7 +508,7 @@ fn build_item(
     );
     NormalizedChatItem {
         message_uuid: id.uuid,
-        author_id,
+        author_handle,
         author_display,
         // A NULL `timestamp` column is "we don't know when", which is a
         // null `created_at` — not 1970. See

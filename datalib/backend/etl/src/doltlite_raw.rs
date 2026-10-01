@@ -605,6 +605,13 @@ pub async fn open_migrating(
     .await
 }
 
+/// A store whose rows a person wrote by hand, for its one writer: no
+/// download bookkeeping, and [`OnSchemaBreak::Refuse`], since nothing
+/// can rebuild it.
+pub async fn open_curated(db_path: &Path, ddl: &[&str], kind: StoreKind) -> Result<SqlitePool> {
+    open_inner(db_path, ddl, false, kind, OnSchemaBreak::Refuse, &[]).await
+}
+
 /// [`open`] with the policy said rather than taken from the process.
 pub async fn open_with(
     db_path: &Path,

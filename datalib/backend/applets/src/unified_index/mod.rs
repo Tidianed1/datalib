@@ -126,7 +126,7 @@ pub fn serve(port: u16) -> Result<()> {
     })
 }
 
-async fn require_gateway(
+pub(crate) async fn require_gateway(
     State(gate): State<Arc<crate::gate::Gate>>,
     req: axum::extract::Request,
     next: Next,

@@ -18,6 +18,8 @@
 import { ref, computed, watch, nextTick, onMounted } from "vue";
 import type { EdgeOut } from "@/api";
 import { decorateRemoteMedia, type RemoteContext, type RemoteRef } from "./remoteMedia";
+import { decorateHandles, type Resolved } from "./contacts";
+import HandlePopover from "./HandlePopover.ce.vue";
 import { renderDocument } from "./renderDocument";
 import { isBrowserClick } from "./chatLink";
 // Shared with `tools/chat_preview.mjs`, which inlines this same file so
@@ -105,6 +107,36 @@ watch(
     bodyChanged = true;
   },
 );
+
+type ChipTarget = {
+  handle: string;
+  shownAs: string;
+  resolved: Resolved | null;
+  x: number;
+  y: number;
+};
+const chipTarget = ref<ChipTarget | null>(null);
+const resolvedHandles = ref<Record<string, Resolved>>({});
+
+async function redrawHandles() {
+  if (!root.value) return;
+  resolvedHandles.value = (await decorateHandles(root.value)) ?? {};
+}
+
+function onHandleChipClick(ev: MouseEvent) {
+  const chip = (ev.target as HTMLElement | null)?.closest<HTMLElement>(".handle-chip[data-handle]");
+  if (!chip) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  const handle = chip.dataset.handle ?? "";
+  chipTarget.value = {
+    handle,
+    shownAs: chip.dataset.shownAs ?? "",
+    resolved: resolvedHandles.value[handle] ?? null,
+    x: ev.clientX,
+    y: ev.clientY,
+  };
+}
 
 function onRemoteChipClick(ev: MouseEvent) {
   const chip = (ev.target as HTMLElement | null)?.closest<HTMLButtonElement>("button.remote-media");
@@ -263,6 +295,7 @@ watch(html, async () => {
     decorateRemoteMedia(root.value);
     decorateLongMessages(root.value);
   }
+  void redrawHandles();
   decorateEdgeSources();
   applySelection(bodyChanged);
   bodyChanged = false;
@@ -298,6 +331,7 @@ onMounted(() => {
     decorateRemoteMedia(root.value);
     decorateLongMessages(root.value);
   }
+  void redrawHandles();
   decorateEdgeSources();
   applySelection();
   applyHoverDst();
@@ -311,6 +345,7 @@ onMounted(() => {
     v-html="html"
     @click="
       (ev) => {
+        onHandleChipClick(ev);
         onBodyEdgeClick(ev);
         onCopyClick(ev);
         onRemoteChipClick(ev);
@@ -319,6 +354,13 @@ onMounted(() => {
     @mouseover="onBodyMouseOver"
     @mouseout="onBodyMouseOut"
   ></div>
+  <HandlePopover
+    v-if="chipTarget"
+    :key="chipTarget.handle"
+    v-bind="chipTarget"
+    @close="chipTarget = null"
+    @changed="redrawHandles"
+  />
 </template>
 
 <style>
@@ -691,6 +733,46 @@ onMounted(() => {
 }
 .chat-body .msg-author {
   font-weight: 600;
+}
+/* A handle the contacts app can name: a chip. One it cannot yet: the
+   source's own text, marked as clickable to link it. */
+.chat-body .handle-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: pointer;
+  border-radius: 999px;
+}
+.chat-body .handle-resolved {
+  padding: 0 0.5rem 0 0.15rem;
+  background: var(--datalib-hover, #f0f0f0);
+}
+.chat-body .handle-stale {
+  opacity: 0.7;
+  font-style: italic;
+}
+.chat-body .handle-initial {
+  display: inline-grid;
+  place-items: center;
+  width: 1.3em;
+  height: 1.3em;
+  border-radius: 50%;
+  font-size: 0.75em;
+  background: var(--datalib-accent, #4f46e5);
+  color: #fff;
+}
+.chat-body .handle-mark {
+  width: 0.9em;
+  height: 0.9em;
+  opacity: 0.6;
+}
+.chat-body .handle-unresolved::after {
+  content: "+";
+  font-weight: 400;
+  color: var(--datalib-muted, #94a3b8);
+}
+.chat-body .handle-chip:hover {
+  outline: 1px solid var(--datalib-border, #d8d8d8);
 }
 .chat-body .msg-ts {
   font-size: 0.75rem;

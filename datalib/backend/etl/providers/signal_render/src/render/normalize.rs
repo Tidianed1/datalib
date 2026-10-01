@@ -128,7 +128,7 @@ fn to_item(
     let id = ids::message(source_id, &chat.id, &item.author_id, item.date_sent);
     NormalizedChatItem {
         message_uuid: id.uuid,
-        author_id: item.author_id.clone(),
+        author_handle: None,
         author_display: author_display(recipients, item),
         date_ms: Some(item.date_sent),
         text: item.text.clone(),

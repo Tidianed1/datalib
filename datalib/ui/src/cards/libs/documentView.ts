@@ -4,6 +4,7 @@
 // selection is a different card — the grid opens a fresh column.
 import DocCard from "../DocCard.ce.vue";
 import ChatBody from "../ChatBody.ce.vue";
+import HandlePopover from "../HandlePopover.ce.vue";
 import FeedbackButton from "@/components/FeedbackButton.ce.vue";
 // Inside a shadow root we have to inject stylesheets ourselves —
 // the document-head styles Vite would normally produce don't pierce
@@ -25,6 +26,6 @@ export function documentView(
       markdownUuid: markdownUuid ?? null,
       sectionUuid: sectionUuid ?? null,
     },
-    { styleSources: [ChatBody, FeedbackButton, hljsCss] },
+    { styleSources: [ChatBody, HandlePopover, FeedbackButton, hljsCss] },
   );
 }

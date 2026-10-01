@@ -111,7 +111,6 @@ fn timeline_post(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
         None,
         chat_item(
             item_id,
-            "me".to_string(),
             owner.name.clone(),
             date_ms,
             (!text.is_empty()).then_some(text),
@@ -161,7 +160,6 @@ fn other_page_post(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
         None,
         chat_item(
             item_id,
-            "me".to_string(),
             owner.name.clone(),
             date_ms,
             (!text.is_empty()).then_some(text),

@@ -16,6 +16,7 @@ use datalib_etl_chat_common::types::{
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{Inputs, RawRange};
+use datalib_handle::Handle;
 use datalib_schema::problems::Problem;
 use serde_json::Value;
 
@@ -32,7 +33,8 @@ use datalib_schema::providers::Provider;
 ///     backpointer, and a message's id carries its stamp in its leading
 ///     bits (`datalib_id`'s v8 layout). Every uuid moved, `chat_uuid`
 ///     among them.
-pub const RENDER_VERSION: u32 = 4;
+/// v5: the author span carries the author's handle as `data-handle`.
+pub const RENDER_VERSION: u32 = 5;
 
 /// Projection for [`BlobBundle::load_many`] over the Voice CAS edge: the
 /// `ref_name` (attachment filename) is the bundle key; `content_type`
@@ -295,10 +297,10 @@ fn build_chats(
                     .and_then(|c| c.get("name"))
                     .and_then(Value::as_str)
                     .unwrap_or("Unknown");
-                let email = creator
+                let handle = creator
                     .and_then(|c| c.get("email"))
                     .and_then(Value::as_str)
-                    .unwrap_or(name);
+                    .and_then(Handle::email);
                 let id = m.get("message_id").and_then(Value::as_str).unwrap_or("");
                 let text = m.get("text").and_then(Value::as_str);
                 let mut problems = Vec::new();
@@ -311,7 +313,7 @@ fn build_chats(
                 let msg_id = ids::message(source_id, id, date_ms);
                 NormalizedChatItem {
                     message_uuid: msg_id.uuid.clone(),
-                    author_id: email.to_string(),
+                    author_handle: handle,
                     author_display: name.to_string(),
                     date_ms,
                     text: text.filter(|s| !s.is_empty()).map(str::to_string),
@@ -555,10 +557,10 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                     .unwrap_or("Unknown")
                     .to_string()
             };
-            let author_id = sender
+            let author_handle = sender
                 .and_then(|s| s.get("tel").and_then(Value::as_str))
-                .map(str::to_string)
-                .unwrap_or_else(|| if is_me { "me".into() } else { "unknown".into() });
+                .filter(|_| !is_me)
+                .and_then(Handle::tel);
             let body = m
                 .get("body")
                 .and_then(Value::as_str)
@@ -566,7 +568,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 .map(str::to_string);
             NormalizedChatItem {
                 message_uuid,
-                author_id,
+                author_handle,
                 author_display,
                 date_ms,
                 text: body,
@@ -602,7 +604,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
             };
             NormalizedChatItem {
                 message_uuid,
-                author_id: party_id(party),
+                author_handle: party_handle(party),
                 author_display,
                 date_ms,
                 text: Some(caption),
@@ -631,7 +633,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
             };
             NormalizedChatItem {
                 message_uuid,
-                author_id: party_id(party),
+                author_handle: party_handle(party),
                 author_display: party_display(party),
                 date_ms,
                 text: None,
@@ -660,11 +662,10 @@ fn party_display(party: Option<&Value>) -> String {
         .to_string()
 }
 
-fn party_id(party: Option<&Value>) -> String {
+fn party_handle(party: Option<&Value>) -> Option<Handle> {
     party
         .and_then(|p| p.get("tel").and_then(Value::as_str))
-        .map(str::to_string)
-        .unwrap_or_else(|| "unknown".to_string())
+        .and_then(Handle::tel)
 }
 
 /// Unix millis from the canonical `when` (RFC 3339), falling back to the

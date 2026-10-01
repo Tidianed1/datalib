@@ -1,8 +1,9 @@
 # Contacts: one person (or household, or list) across every source
 
-*Proposal (2026-10-01); nothing here is built. The facts about the tree
-it starts from were read that day and are cited by path; check them
-before relying on one.*
+*Proposal (2026-10-01), partly built: a first slice of phases 1 and 2
+(see "Order of work") landed with the PR that added this banner. The
+facts about the tree it starts from were read on 2026-10-01 and are
+cited by path; check them before relying on one.*
 
 The same person shows up in a mirror under many identifiers: an email
 address, a phone number in WhatsApp and Signal and Messages, a Slack
@@ -147,24 +148,24 @@ the core gains is generic, and the contacts app is its first user:
 
 Nothing in the core opens the contacts store. So removing the app is:
 take its `[[applets]]` entry and its group out of the config, and
-delete `<data_root>/curated/datalib_contacts/`. Every source, the index
+delete `<data_root>/datalib_curated/datalib_contacts/`. Every source, the index
 and search keep working; handle spans go back to plain text.
 
 ## The app's store
 
-`<data_root>/curated/datalib_contacts/contacts.doltlite_db`, with the
+`<data_root>/datalib_curated/datalib_contacts/contacts.doltlite_db`, with the
 export and anything else the app keeps beside it.
 
 **It lives apart because it is the one store that cannot be rebuilt.**
 Every other store under a root is either derived (render, index, qmd)
 from something that can be fetched again, or the machine's own
-bookkeeping. This one is a person's work. `curated/` holds one
+bookkeeping. This one is a person's work. `datalib_curated/` holds one
 directory per app, so an app's state can be managed or deleted on its
 own; the next app of this kind (tags, notes, saved queries) gets a
 sibling. `feedback` and the remote-media allow rows stay in `system/`:
 they belong to the core. `system` is today the only reserved top-level
 name (`SYSTEM_DIR`, `dag/src/config.rs`); `usable_group_id` has to
-refuse `curated` too.
+refuse `datalib_curated` too.
 
 **Why doltlite:** every edit is a commit, so the history is an audit
 trail ("when did I merge these two?") and undo is a revert; and a
@@ -176,7 +177,7 @@ reaches `main` without a person accepting it.
 | table | key | holds |
 |---|---|---|
 | `contacts` | `contact_id` | `kind` (`person` / `group`), name, note, photo, `merged_into` (set when merged away), created/updated `_at_utc` + `tz_offset` |
-| `handles` | `(kind, value)` | `contact_id`, how it was linked (`manual`, `card`, `suggestion`), `linked_at_utc`, `stopped_working_by` |
+| `handles` | `handle` (`kind:value`, as `datalib_handle` spells it) | `contact_id`, how it was linked (`manual`, `card`, `suggestion`), `linked_at_utc`, `stopped_working_by` |
 | `members` | `(group_id, member_id)` | `added_at_utc` |
 
 - **A handle belongs to exactly one contact.** An address two people
@@ -215,7 +216,7 @@ contact card lists such handles after the working ones, struck
 through, and the vCard export leaves them out.
 
 This does not cover a number that was *reassigned* to someone else:
-the key is still `(kind, value)`, so a handle has one owner for all
+the key is still the handle alone, so a handle has one owner for all
 time. If that case turns up, the key gains a validity range;
 `stopped_working_by` is already its end.
 
@@ -357,7 +358,7 @@ value)`, each identity belonging to one contact; a `messageAttributes`
 table with a row per identity per message for From, To, Cc and Bcc;
 and the address-book name looked up when a message is shown. The
 index is rebuildable and the address book a separate store a person
-edits — the split between the index and `curated/` here.
+edits — the split between the index and `datalib_curated/` here.
 
 Two things it does that this plan does not:
 
@@ -379,10 +380,21 @@ a measurement to ask for.
 
 ## Order of work
 
+**Built so far** (the first slice, so it could be tried): `datalib_handle`
+(`email`, `tel`, `slack`); `data-handle` on the author span for email
+(From), Slack, WhatsApp, Messages and Google Chat/Voice; the
+`datalib_contacts` crate and applet (create, link, unlink, rename,
+stopped working, resolve, search); and in the document view, chips and
+a link/create popover (`ui/src/cards/contacts.ts`,
+`HandlePopover.ce.vue`). Not yet: email To/Cc, Signal's e164,
+address-book cards, reactions and mentions, `row_handles`, groups,
+merge, undo, the contact card, `IdentityChip` in the grid, and
+everything in phases 3–5.
+
 1. **Handles end to end, nothing visible.** The handle crate (pure,
    unit-tested), `data-handle` in chat-common, email and contacts, the
    email and Signal fixes, `row_handles`.
-2. **Store, applet, chips.** `curated/datalib_contacts/`, the
+2. **Store, applet, chips.** `datalib_curated/datalib_contacts/`, the
    applet and its routes, `IdentityChip`, `decorateHandles`, the
    link/create popover.
 3. **Managing contacts.** The contact card, merge, unlink and undo,

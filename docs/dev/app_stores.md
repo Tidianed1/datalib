@@ -10,6 +10,10 @@
                                                   every embedded document's place on
                                                   the map card; replaced whole by
                                                   each run, deleted by a reset
+<data_root>/datalib_curated/datalib_contacts/contacts.doltlite_db
+                                                  contacts a person made and the handles
+                                                  linked to them; written only by the
+                                                  `datalib_contacts` applet
 <data_root>/system/feedback.doltlite_db           filed feedback
 <data_root>/system/usage.doltlite_db              bytes-on-disk over time
 <data_root>/system/remote_media.doltlite_db       what remote media a person let a document
@@ -58,6 +62,13 @@ know what it is looking at reads that before its first query — and
 every owner does, refusing a store a newer `major.minor` of datalib
 wrote (`datalib_store_meta::guard`; the app server then boots only to
 show the screen that says so, and `datalib-dag` refuses the root).
+
+`datalib_curated/` holds what a person curates by hand, one directory
+per app, so each can be managed or deleted on its own. Nothing can
+rebuild it: no reset or source deletion touches it, and its store
+refuses a schema it cannot reach rather than rebuilding
+(`doltlite_raw::open_curated`). No group or step may claim the name
+(`datalib_dag::config::CURATED_DIR`).
 
 One writer per file ([`etl/README.md`](../../datalib/backend/etl/README.md)
 § "Connection pools" has the rule and why). The `ingest` step owns its group's

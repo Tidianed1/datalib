@@ -60,14 +60,8 @@ pub fn build_comments(comments: &[(String, Value)], owner: &Owner) -> Vec<Normal
             .collect();
         let date_ms = ts_ms(v, "timestamp");
         let item_id = ids::comment(&owner.source_id, row_id, date_ms);
-        let author_id = if author == owner.name {
-            "me".to_string()
-        } else {
-            author.clone()
-        };
         items.push(chat_item(
             item_id,
-            author_id,
             author,
             date_ms,
             (!text.is_empty()).then_some(text),
@@ -147,7 +141,6 @@ pub fn build_reactions(reactions: &[(String, Value)], owner: &Owner) -> Vec<Norm
                 source_url: r.url.clone(),
                 ..chat_item(
                     item_id,
-                    "me".to_string(),
                     owner.name.clone(),
                     Some(ms),
                     Some(text),
@@ -311,7 +304,7 @@ mod tests {
             first.text.as_deref(),
             Some("Enjoy the chair, Will.\n\n*Jean-Luc Picard commented on William Riker's post.*")
         );
-        assert_eq!(first.author_id, "me");
+        assert_eq!(first.author_display, owner().name);
         let second = &chats[0].buckets[1].items[0];
         assert_eq!(second.kind, ItemKind::Attachment);
         assert_eq!(second.attachments[0].ref_id.as_deref(), Some("m/4.png"));
