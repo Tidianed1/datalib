@@ -105,6 +105,7 @@ onBeforeUnmount(() => {
       ref="containers"
       v-show="layout === 'containers'"
       :active="layout === 'containers'"
+      :open-url-on-mount="initialLayout === 'containers'"
     />
     <div class="cards-statusbar">
       <RootStorageBar />

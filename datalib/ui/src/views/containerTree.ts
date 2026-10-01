@@ -34,6 +34,8 @@ export type CardNode = Common & {
   state: string;
   // What the card last called itself, kept so an unmounted tab has a name.
   title: string | null;
+  // A name the person gave it, which the card's own title never replaces.
+  name: string | null;
 };
 
 export type BoxNode = Common & {
@@ -58,7 +60,16 @@ export type TreeNode = CardNode | BoxNode;
 export const DEFAULT_COLUMN = 480;
 
 export function makeCard(id: string, source: string, state = ""): CardNode {
-  return { kind: "card", id, source, state, title: null, basis: null, openedBy: null };
+  return {
+    kind: "card",
+    id,
+    source,
+    state,
+    title: null,
+    name: null,
+    basis: null,
+    openedBy: null,
+  };
 }
 
 export function makeBox(
@@ -266,10 +277,6 @@ export function remove(root: TreeNode, id: string): TreeNode {
   return mapBox(root, parent.id, (b) => ({ ...b, children, selected }));
 }
 
-export function select(root: TreeNode, id: string): TreeNode {
-  return reveal(root, id);
-}
-
 export function setCard(
   root: TreeNode,
   id: string,
@@ -304,9 +311,7 @@ export function setFlag(
 }
 
 export function rename(root: TreeNode, id: string, name: string | null): TreeNode {
-  return mapNode(root, id, (n) =>
-    n.kind === "box" ? { ...n, name } : { ...n, title: name ?? n.title },
-  );
+  return mapNode(root, id, (n) => ({ ...n, name }));
 }
 
 // Mark box `id` as made from the composite `template`, so it can be
@@ -394,29 +399,62 @@ export function resetTo(
 
 // ---- storing ----
 
-function isNode(v: unknown): v is TreeNode {
-  if (typeof v !== "object" || v === null) return false;
+const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
+const num = (v: unknown): number | null =>
+  typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null;
+
+// A node read back from storage, with every optional field filled in;
+// null when what is there cannot be a node, or holds one that cannot.
+function readNode(v: unknown): TreeNode | null {
+  if (typeof v !== "object" || v === null) return null;
   const n = v as Record<string, unknown>;
-  if (typeof n.id !== "string") return false;
-  if (n.kind === "card") return typeof n.source === "string" && typeof n.state === "string";
-  return (
-    n.kind === "box" &&
-    LAYOUTS.includes(n.layout as Layout) &&
-    Array.isArray(n.children) &&
-    n.children.every(isNode)
-  );
+  const id = str(n.id);
+  if (id === null) return null;
+  const common = { id, basis: num(n.basis), openedBy: str(n.openedBy) };
+  if (n.kind === "card") {
+    const source = str(n.source);
+    if (source === null) return null;
+    return {
+      ...common,
+      kind: "card",
+      source,
+      state: str(n.state) ?? "",
+      title: str(n.title),
+      name: str(n.name),
+    };
+  }
+  const layout = LAYOUTS.find((l) => l === n.layout);
+  if (n.kind !== "box" || !layout || !Array.isArray(n.children)) return null;
+  const children = n.children.map(readNode);
+  if (children.some((c) => c === null)) return null;
+  const kids = children as TreeNode[];
+  const selected = str(n.selected);
+  return {
+    ...common,
+    kind: "box",
+    layout,
+    children: kids,
+    solidified: n.solidified === true,
+    solidifyAll: n.solidifyAll === true,
+    selected: kids.some((c) => c.id === selected) ? selected : (kids[0]?.id ?? null),
+    name: str(n.name),
+    template: str(n.template),
+  };
 }
 
-// A stored tree, or null for anything this build cannot read.
+// A stored container tree, or null for anything this build cannot read:
+// a tree is used whole or not at all.
 export function parseTree(v: unknown): BoxNode | null {
-  return isNode(v) && v.kind === "box" ? v : null;
+  const node = readNode(v);
+  return node?.kind === "box" ? node : null;
 }
 
 export function parseComposites(v: unknown): Record<string, BoxNode> {
   const out: Record<string, BoxNode> = {};
   if (typeof v !== "object" || v === null) return out;
-  for (const [name, node] of Object.entries(v)) {
-    if (isNode(node) && node.kind === "box") out[name] = node;
+  for (const [name, stored] of Object.entries(v)) {
+    const node = parseTree(stored);
+    if (node) out[name] = node;
   }
   return out;
 }

@@ -41,25 +41,20 @@ export async function loadComposites() {
 }
 
 export function composite(name: string): BoxNode | undefined {
-  return BUILTIN_COMPOSITES[name] ?? savedComposites.value[name];
+  return isBuiltinComposite(name) ? BUILTIN_COMPOSITES[name] : savedComposites.value[name];
 }
 
-// Keep `box` as the composite `name`, replacing one of that name.
-// Built-in names are taken.
-export async function saveComposite(name: string, box: BoxNode): Promise<boolean> {
-  if (name in BUILTIN_COMPOSITES) return false;
+export function isBuiltinComposite(name: string): boolean {
+  return Object.hasOwn(BUILTIN_COMPOSITES, name);
+}
+
+// Keep `box` as the composite `name`, replacing a saved one of that
+// name. A built-in name is the caller's to refuse (isBuiltinComposite).
+export async function saveComposite(name: string, box: BoxNode): Promise<void> {
   const next = {
     ...savedComposites.value,
     [name]: { ...box, name, template: name, basis: null, openedBy: null },
   };
-  await putUiState(STATE_NAME, next);
-  savedComposites.value = next;
-  return true;
-}
-
-export async function deleteComposite(name: string) {
-  const next = { ...savedComposites.value };
-  delete next[name];
   await putUiState(STATE_NAME, next);
   savedComposites.value = next;
 }

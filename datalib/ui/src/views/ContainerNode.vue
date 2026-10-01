@@ -130,25 +130,29 @@ const slotRef = (el: unknown) => api.setSlot(props.node.id, (el as Element | nul
 
     <div v-if="node.layout === 'tabs'" class="ct-tabs-body" data-body :style="bodyStyle">
       <div class="ct-strip" role="tablist">
-        <button
+        <div
           v-for="child in node.children"
           :key="child.id"
           class="ct-strip-tab"
           :class="{ 'is-selected': child.id === node.selected }"
-          role="tab"
-          :aria-selected="child.id === node.selected"
-          @click="api.select(child.id)"
         >
-          {{ api.titleOf(child) }}
-          <span
+          <button
+            class="ct-strip-name"
+            role="tab"
+            :aria-selected="child.id === node.selected"
+            @click="api.select(child.id)"
+          >
+            {{ api.titleOf(child) }}
+          </button>
+          <button
             v-if="chrome"
             class="ct-strip-close"
-            role="button"
-            aria-label="close"
-            @click.stop="api.close(child.id)"
-            >✕</span
+            :aria-label="`close ${api.titleOf(child)}`"
+            @click="api.close(child.id)"
           >
-        </button>
+            ✕
+          </button>
+        </div>
       </div>
       <template v-for="child in node.children" :key="child.id">
         <ContainerNode
@@ -318,14 +322,20 @@ const slotRef = (el: unknown) => api.setSlot(props.node.id, (el as Element | nul
 .ct-strip-tab {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 2px;
   max-width: 14rem;
-  padding: 3px 8px;
+  padding: 0 4px;
   border: 1px solid transparent;
   border-bottom: none;
   border-radius: var(--datalib-radius) var(--datalib-radius) 0 0;
-  background: transparent;
   color: var(--datalib-muted);
+}
+.ct-strip-name {
+  min-width: 0;
+  padding: 3px 4px;
+  border: none;
+  background: transparent;
+  color: inherit;
   font: inherit;
   white-space: nowrap;
   overflow: hidden;
@@ -339,8 +349,12 @@ const slotRef = (el: unknown) => api.setSlot(props.node.id, (el as Element | nul
   font-weight: 600;
 }
 .ct-strip-close {
+  padding: 0 3px;
+  border: none;
+  background: transparent;
   font-size: 10px;
   color: var(--datalib-muted);
+  cursor: pointer;
 }
 .ct-children {
   flex: 1 1 auto;

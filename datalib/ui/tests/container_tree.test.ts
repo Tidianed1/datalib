@@ -9,6 +9,8 @@ import {
   openFrom,
   parseTree,
   remove,
+  rename,
+  setCard,
   setFlag,
   tabRows,
   underSolidifyAll,
@@ -110,6 +112,16 @@ describe("changing the tree", () => {
   });
 });
 
+describe("names", () => {
+  it("a name the person gave a card outlasts the title the card gives itself", () => {
+    let root = rename(fixture(), "s1", "My search");
+    root = setCard(root, "s1", { title: "Search: launch plan" });
+    const card = find(root, "s1");
+    expect(card?.name).toBe("My search");
+    expect(card?.kind === "card" && card.title).toBe("Search: launch plan");
+  });
+});
+
 describe("composites", () => {
   it("a copy takes fresh ids, with its openers and selection re-pointed", () => {
     const tabs = makeBox("t", "tabs", [
@@ -124,10 +136,28 @@ describe("composites", () => {
     expect(copy.selected).toBe("n2");
   });
 
+  it("a stored tree is read with what it leaves out filled in", () => {
+    const stored = {
+      kind: "box",
+      id: "r",
+      layout: "tabs",
+      selected: "gone",
+      children: [{ kind: "card", id: "c", source: "x()" }],
+    };
+    const tree = parseTree(stored)!;
+    expect(tree.selected).toBe("c");
+    expect(tree.solidified).toBe(false);
+    expect(tree.children[0]).toEqual(makeCard("c", "x()"));
+  });
+
   it("a stored tree this build cannot read is dropped, not half-used", () => {
     expect(parseTree(fixture())).not.toBeNull();
     expect(parseTree(null)).toBeNull();
     expect(parseTree({ kind: "box", id: "r", layout: "grid", children: [] })).toBeNull();
     expect(parseTree(makeCard("c", "x()"))).toBeNull();
+    // One unreadable card anywhere drops the whole tree.
+    expect(
+      parseTree(makeBox("r", "tabs", [{ ...makeCard("c", "x()"), source: 1 } as never])),
+    ).toBeNull();
   });
 });

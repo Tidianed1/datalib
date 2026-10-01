@@ -14,8 +14,9 @@ use std::path::{Path as FsPath, PathBuf};
 use crate::AppState;
 
 /// Far more than a layout tree; small enough that a runaway page cannot
-/// fill the disk through here.
-pub const MAX_BYTES: usize = 2 << 20;
+/// fill the disk through here. Below axum's own 2 MiB body limit, so
+/// this check is the one that answers.
+pub const MAX_BYTES: usize = 1 << 20;
 
 /// A name is a short word: `layout`, `composites`.
 pub fn valid_name(name: &str) -> bool {

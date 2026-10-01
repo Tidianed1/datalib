@@ -13,6 +13,8 @@ import { useRoute, useRouter } from "vue-router";
 import ShadowCard from "@/components/ShadowCard.vue";
 import CardIcon from "@/components/CardIcon.vue";
 import ContainerNode from "@/views/ContainerNode.vue";
+import ContainerMenu from "@/views/ContainerMenu.vue";
+import NameDialog from "@/views/NameDialog.vue";
 import { fetchUiState, putUiState } from "@/api";
 import { createBus } from "@/cards/bus";
 import { chainHref } from "@/cards/chainHref";
@@ -21,11 +23,13 @@ import { cardType, newCardId } from "@/cards/cardId";
 import { displayTitle } from "@/cards/title";
 import { devMode } from "@/devMode";
 import { decodeColumns } from "@/router/columns";
+import { pushToast } from "@/toasts";
 import { pageTitle } from "@/views/millerStack";
 import { isMainWindow } from "@/views/tabsWindow";
 import {
   BUILTIN_COMPOSITES,
   composite,
+  isBuiltinComposite,
   loadComposites,
   saveComposite,
   savedComposites,
@@ -65,64 +69,78 @@ import {
 import { CONTAINERS_API, type ContainersApi, type MenuItem } from "@/views/containersApi";
 import type { CardCtx, HostCommands } from "@/cards/types";
 
-defineProps<{ active: boolean }>();
+const props = defineProps<{
+  // Whether this layout is on screen, and so owns the URL and the page title.
+  active: boolean;
+  // Page load into this layout: a URL naming cards is what the person
+  // asked for, so open it.
+  openUrlOnMount: boolean;
+}>();
 
 const route = useRoute();
 const router = useRouter();
 const bus = createBus();
 
 const STATE_NAME = "layout";
+// How long the tree sits unchanged before it is written: a resize drag
+// or a burst of card state is one write, not dozens.
+const SAVE_DELAY_MS = 400;
 
 function dashboard(): TreeNode {
   return instantiate(BUILTIN_COMPOSITES.Dashboard, newCardId);
 }
 
-function startingRoot(): BoxNode {
-  return makeBox(newCardId(), "tabs", [dashboard()]);
+// The outermost container is always tabs, never solidified, and never
+// empty: a tree left with no tabs gets the Dashboard back.
+function settle(box: BoxNode): BoxNode {
+  const fixed: BoxNode = { ...box, layout: "tabs", solidified: false, solidifyAll: false };
+  if (fixed.children.length === 0) {
+    const fresh = dashboard();
+    return { ...fixed, children: [fresh], selected: fresh.id };
+  }
+  const selected = fixed.children.some((c) => c.id === fixed.selected)
+    ? fixed.selected
+    : fixed.children[0].id;
+  return { ...fixed, selected };
 }
 
-const root = ref<BoxNode>(startingRoot());
+const root = ref<BoxNode>(settle(makeBox(newCardId(), "tabs", [])));
 const ready = ref(false);
 let mainWindow = false;
 
-// The outermost container is always tabs, and never empty.
-function settle(next: TreeNode): BoxNode {
-  const box = next.kind === "box" ? next : makeBox(newCardId(), "tabs", [next]);
-  const fixed: BoxNode = { ...box, layout: "tabs", solidified: false, solidifyAll: false };
-  if (fixed.children.length > 0) {
-    const selected = fixed.children.some((c) => c.id === fixed.selected)
-      ? fixed.selected
-      : fixed.children[0].id;
-    return { ...fixed, selected };
-  }
-  const fresh = dashboard();
-  return { ...fixed, children: [fresh], selected: fresh.id };
-}
-
 function update(next: TreeNode) {
-  root.value = settle(next);
+  if (next.kind === "box") root.value = settle(next);
 }
 
 // ---- keeping the tree ----
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
-function save() {
+let saveFailed = false;
+
+// Only the main window keeps its tree; a popped-out card's window is
+// a scratch space that goes when it closes.
+async function save(keepalive = false) {
   saveTimer = null;
-  if (!mainWindow) return;
-  putUiState(STATE_NAME, root.value).catch((e: unknown) =>
-    console.warn("could not keep the layout", e),
-  );
+  if (!mainWindow || !ready.value) return;
+  try {
+    await putUiState(STATE_NAME, root.value, { keepalive });
+    saveFailed = false;
+  } catch (e) {
+    console.warn("could not keep the layout", e);
+    // Once per run of failures, not once per change.
+    if (!saveFailed) pushToast("Could not save the layout to the library.");
+    saveFailed = true;
+  }
 }
 watch(root, () => {
   if (!ready.value) return;
   if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(save, 400);
+  saveTimer = setTimeout(() => void save(), SAVE_DELAY_MS);
 });
 function flush() {
-  if (saveTimer) {
-    clearTimeout(saveTimer);
-    save();
-  }
+  if (!saveTimer) return;
+  clearTimeout(saveTimer);
+  void save(true);
 }
 window.addEventListener("pagehide", flush);
 onBeforeUnmount(() => {
@@ -130,43 +148,50 @@ onBeforeUnmount(() => {
   flush();
 });
 
-// A URL naming cards (a link, a popped-out card) opens them in a tab of
-// their own, then the address goes back to "/": the tree, not the URL,
-// is what this layout keeps.
-function adoptRoute() {
+// The cards a URL names (a link, a popped-out card), as one node: a
+// card, or a columns container for a chain. The tree, not the URL, is
+// what this layout keeps, so once opened the address goes back to "/".
+function routeNode(): TreeNode | null {
   const specs = decodeColumns(route.path);
-  if (specs.length === 0) return;
+  if (specs.length === 0) return null;
   const nodes = specs.map((s) => makeCard(newCardId(), s.code, s.state));
-  const node: TreeNode =
-    nodes.length === 1 ? nodes[0] : makeBox(newCardId(), "columns", nodes, { name: null });
+  return nodes.length === 1 ? nodes[0] : makeBox(newCardId(), "columns", nodes);
+}
+
+function openRoute() {
+  const node = routeNode();
+  if (!node) return;
   update(addChild(root.value, root.value.id, node));
   void router.replace("/");
 }
 watch(
   () => route.path,
   () => {
-    if (ready.value) adoptRoute();
+    if (ready.value && props.active) openRoute();
   },
 );
 
-void (async () => {
+async function start() {
   mainWindow = await isMainWindow();
   void loadComposites();
+  let kept: BoxNode | null = null;
   if (mainWindow) {
     try {
-      const kept = parseTree(await fetchUiState(STATE_NAME));
-      if (kept) root.value = settle(kept);
+      kept = parseTree(await fetchUiState(STATE_NAME));
     } catch (e) {
       console.warn("could not read the kept layout", e);
+      pushToast("Could not read the saved layout from the library; starting afresh.");
     }
-  } else {
-    // A second window (a popped-out card) starts empty but for its URL.
-    root.value = { ...root.value, children: [] };
   }
+  // A second window starts with nothing but the cards its URL names.
+  const fromUrl = props.openUrlOnMount || !mainWindow ? routeNode() : null;
+  let tree = kept ?? makeBox(newCardId(), "tabs", mainWindow ? [dashboard()] : []);
+  if (fromUrl) tree = addChild(tree, tree.id, fromUrl) as BoxNode;
+  root.value = settle(tree);
   ready.value = true;
-  adoptRoute();
-  if (root.value.children.length === 0) update(root.value);
-})();
+  if (fromUrl) void router.replace("/");
+}
+void start();
 
 // ---- the cards ----
 
@@ -222,6 +247,8 @@ function ctxFor(card: CardNode): CardCtx {
       get initialState() {
         return cardById(cardId)?.state ?? "";
       },
+      // A card resets its title to null each time it runs, then names
+      // itself; keeping the last real name means an unmounted tab has one.
       setTitle: (title) => {
         if (title !== null && cardById(cardId)?.title !== title) {
           update(setCard(root.value, cardId, { title }));
@@ -237,8 +264,8 @@ function ctxFor(card: CardNode): CardCtx {
 }
 
 function titleOf(node: TreeNode): string {
-  if (node.kind === "card") return displayTitle(node.source, node.title);
   if (node.name) return node.name;
+  if (node.kind === "card") return displayTitle(node.source, node.title);
   const first = node.children[0];
   return first ? `${titleOf(first)}${node.children.length > 1 ? " …" : ""}` : "Empty";
 }
@@ -293,25 +320,26 @@ defineExpose({ addCard: newTab, showCard });
 
 // ---- naming ----
 
-const asking = ref<{ title: string; value: string; done: (v: string | null) => void } | null>(null);
-function askName(title: string, value: string): Promise<string | null> {
+const asking = ref<{
+  title: string;
+  initial: string;
+  check?: (name: string) => string | null;
+  resolve: (name: string | null) => void;
+} | null>(null);
+
+function askName(
+  title: string,
+  initial: string,
+  check?: (name: string) => string | null,
+): Promise<string | null> {
   return new Promise((resolve) => {
-    asking.value = {
-      title,
-      value,
-      done: (v) => {
-        asking.value = null;
-        resolve(v === null || v.trim() === "" ? null : v.trim());
-      },
-    };
+    asking.value = { title, initial, check, resolve };
   });
 }
-const vFocusSelect = {
-  mounted(el: HTMLInputElement) {
-    el.focus();
-    el.select();
-  },
-};
+function answer(name: string | null) {
+  asking.value?.resolve(name);
+  asking.value = null;
+}
 
 async function renameNode(node: TreeNode) {
   const name = await askName("Name", titleOf(node));
@@ -319,13 +347,17 @@ async function renameNode(node: TreeNode) {
 }
 
 async function saveAsComposite(box: BoxNode) {
-  const name = await askName("Save as composite", box.name ?? titleOf(box));
+  const name = await askName("Save as composite", box.name ?? titleOf(box), (n) =>
+    isBuiltinComposite(n) ? `"${n}" is a built-in composite; pick another name.` : null,
+  );
   if (name === null) return;
-  if (name in BUILTIN_COMPOSITES) {
-    window.alert(`"${name}" is a built-in composite; pick another name.`);
+  try {
+    await saveComposite(name, box);
+  } catch (e) {
+    console.warn("could not save the composite", e);
+    pushToast(`Could not save the composite "${name}" to the library.`);
     return;
   }
-  await saveComposite(name, box);
   update(setTemplate(root.value, box.id, name));
 }
 
@@ -336,35 +368,7 @@ const menu = ref<{ items: MenuItem[]; x: number; y: number } | null>(null);
 function openMenu(ev: MouseEvent, items: MenuItem[]) {
   ev.preventDefault();
   ev.stopPropagation();
-  // Kept on screen: a menu opened near the right or bottom edge opens
-  // leftward or upward instead.
-  const width = 260;
-  const height = items.length * 24 + 12;
-  menu.value = {
-    items,
-    x: Math.max(4, Math.min(ev.clientX, window.innerWidth - width - 4)),
-    y: Math.max(4, Math.min(ev.clientY, window.innerHeight - height - 4)),
-  };
-  window.addEventListener("pointerdown", onPointerOutside, true);
-  window.addEventListener("keydown", onMenuKey, true);
-  window.addEventListener("blur", closeMenu);
-}
-function closeMenu() {
-  menu.value = null;
-  window.removeEventListener("pointerdown", onPointerOutside, true);
-  window.removeEventListener("keydown", onMenuKey, true);
-  window.removeEventListener("blur", closeMenu);
-}
-onBeforeUnmount(closeMenu);
-function onPointerOutside(ev: PointerEvent) {
-  if (!(ev.target as Element | null)?.closest?.(".ct-menu")) closeMenu();
-}
-function onMenuKey(ev: KeyboardEvent) {
-  if (ev.key === "Escape") closeMenu();
-}
-function runItem(item: MenuItem) {
-  closeMenu();
-  if (item !== "separator") item.run();
+  menu.value = { items, x: ev.clientX, y: ev.clientY };
 }
 
 function placeItems(node: TreeNode): MenuItem[] {
@@ -383,38 +387,35 @@ function placeItems(node: TreeNode): MenuItem[] {
   return out;
 }
 
-function compositeItems(boxId: string): MenuItem[] {
-  return Object.keys({ ...BUILTIN_COMPOSITES, ...savedComposites.value }).map((name) => ({
-    label: `Add composite: ${name}`,
-    run: () => addComposite(boxId, name),
-  }));
-}
+const compositeNames = computed(() =>
+  Object.keys({ ...BUILTIN_COMPOSITES, ...savedComposites.value }),
+);
 
 function boxMenu(box: BoxNode): MenuItem[] {
-  const isRoot = box.id === root.value.id;
   const items: MenuItem[] = [
     { label: "Add card", run: () => addCard(box.id) },
     ...LAYOUTS.map((layout) => ({
       label: `Add ${LAYOUT_LABELS[layout]} container`,
       run: () => addBox(box.id, layout),
     })),
-    ...compositeItems(box.id),
+    ...compositeNames.value.map((name) => ({
+      label: `Add composite: ${name}`,
+      run: () => addComposite(box.id, name),
+    })),
   ];
-  if (isRoot) return items;
-  items.push("separator");
-  items.push({
-    label: "Solidified",
-    checked: box.solidified,
-    run: () => toggleFlag(box, "solidified"),
-  });
-  items.push({
-    label: "Solidify all",
-    checked: box.solidifyAll,
-    run: () => toggleFlag(box, "solidifyAll"),
-  });
-  items.push("separator");
-  items.push({ label: "Rename…", run: () => void renameNode(box) });
-  items.push({ label: "Save as composite…", run: () => void saveAsComposite(box) });
+  if (box.id === root.value.id) return items;
+  items.push(
+    "separator",
+    { label: "Solidified", checked: box.solidified, run: () => toggleFlag(box, "solidified") },
+    {
+      label: "Solidify all",
+      checked: box.solidifyAll,
+      run: () => toggleFlag(box, "solidifyAll"),
+    },
+    "separator",
+    { label: "Rename…", run: () => void renameNode(box) },
+    { label: "Save as composite…", run: () => void saveAsComposite(box) },
+  );
   const template = box.template ? composite(box.template) : undefined;
   if (template) {
     items.push({
@@ -422,13 +423,15 @@ function boxMenu(box: BoxNode): MenuItem[] {
       run: () => update(resetTo(root.value, box.id, template, newCardId)),
     });
   }
-  items.push("separator");
-  items.push(...placeItems(box));
-  items.push({
-    label: "Take the cards out of this container",
-    run: () => update(unwrap(root.value, box.id)),
-  });
-  items.push({ label: "Close", run: () => close(box.id) });
+  items.push(
+    "separator",
+    ...placeItems(box),
+    {
+      label: "Take the cards out of this container",
+      run: () => update(unwrap(root.value, box.id)),
+    },
+    { label: "Close", run: () => close(box.id) },
+  );
   return items;
 }
 
@@ -450,7 +453,7 @@ function newMenu(ev: MouseEvent) {
       run: () => addBox(root.value.id, layout),
     })),
     "separator",
-    ...Object.keys({ ...BUILTIN_COMPOSITES, ...savedComposites.value }).map((name) => ({
+    ...compositeNames.value.map((name) => ({
       label: name,
       run: () => addComposite(root.value.id, name),
     })),
@@ -497,6 +500,7 @@ const rows = computed(() => tabRows(root.value));
 const selectedTab = computed(() => root.value.children.find((c) => c.id === root.value.selected));
 
 watchEffect(() => {
+  if (!props.active) return;
   const tab = selectedTab.value;
   document.title = pageTitle(tab ? [titleOf(tab)] : []);
 });
@@ -578,36 +582,14 @@ provide(CONTAINERS_API, api);
       </Teleport>
     </div>
 
-    <ul
-      v-if="menu"
-      class="ct-menu"
-      role="menu"
-      :style="{ left: menu.x + 'px', top: menu.y + 'px' }"
-    >
-      <template v-for="(item, i) in menu.items" :key="i">
-        <li v-if="item === 'separator'" class="ct-menu-sep" role="separator" />
-        <li v-else role="menuitem" @click="runItem(item)">
-          <span class="ct-menu-check">{{ item.checked ? "✓" : "" }}</span
-          >{{ item.label }}
-        </li>
-      </template>
-    </ul>
-
-    <div v-if="asking" class="ct-ask-backdrop" @click.self="asking.done(null)">
-      <form class="ct-ask" @submit.prevent="asking.done(asking.value)">
-        <label class="ct-ask-title" for="ct-ask-input">{{ asking.title }}</label>
-        <input
-          id="ct-ask-input"
-          v-model="asking.value"
-          v-focus-select
-          @keydown.esc.prevent="asking.done(null)"
-        />
-        <div class="ct-ask-buttons">
-          <button type="button" @click="asking.done(null)">Cancel</button>
-          <button type="submit" class="ct-ask-ok">OK</button>
-        </div>
-      </form>
-    </div>
+    <ContainerMenu v-if="menu" :items="menu.items" :x="menu.x" :y="menu.y" @close="menu = null" />
+    <NameDialog
+      v-if="asking"
+      :title="asking.title"
+      :initial="asking.initial"
+      :check="asking.check"
+      @done="answer"
+    />
   </div>
 </template>
 
@@ -720,88 +702,5 @@ provide(CONTAINERS_API, api);
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
-}
-.ct-menu {
-  position: fixed;
-  z-index: 20;
-  margin: 0;
-  padding: 4px;
-  list-style: none;
-  min-width: 13rem;
-  background: var(--datalib-surface);
-  color: var(--datalib-fg);
-  border: 1px solid var(--datalib-border);
-  border-radius: calc(var(--datalib-radius) + 2px);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
-}
-.ct-menu li[role="menuitem"] {
-  padding: 4px 8px 4px 2px;
-  border-radius: var(--datalib-radius);
-  cursor: pointer;
-  white-space: nowrap;
-}
-.ct-menu li[role="menuitem"]:hover {
-  background: var(--datalib-hover);
-}
-.ct-menu-check {
-  display: inline-block;
-  width: 1.2em;
-  text-align: center;
-}
-.ct-menu-sep {
-  height: 1px;
-  margin: 4px 6px;
-  background: var(--datalib-border-soft);
-}
-.ct-ask-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 30;
-  background: rgba(0, 0, 0, 0.3);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.ct-ask {
-  width: min(360px, 90vw);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 16px;
-  background: var(--datalib-bg);
-  color: var(--datalib-fg);
-  border: 1px solid var(--datalib-border);
-  border-radius: calc(var(--datalib-radius) + 4px);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.22);
-}
-.ct-ask-title {
-  font-weight: 600;
-}
-.ct-ask input {
-  font: inherit;
-  padding: 4px 6px;
-  border: 1px solid var(--datalib-border);
-  border-radius: var(--datalib-radius);
-  background: var(--datalib-input-bg);
-  color: var(--datalib-fg);
-}
-.ct-ask-buttons {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-.ct-ask-buttons button {
-  font: inherit;
-  padding: 3px 12px;
-  border: 1px solid var(--datalib-border);
-  border-radius: var(--datalib-radius);
-  background: var(--datalib-surface);
-  color: var(--datalib-fg);
-  cursor: pointer;
-}
-.ct-ask-buttons .ct-ask-ok {
-  background: var(--datalib-accent);
-  border-color: var(--datalib-accent);
-  color: var(--datalib-on-accent);
 }
 </style>

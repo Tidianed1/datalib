@@ -1477,11 +1477,17 @@ export async function fetchUiState(name: string): Promise<unknown> {
   return (await r.json()) as unknown;
 }
 
-export async function putUiState(name: string, value: unknown): Promise<void> {
+// `keepalive` lets a write sent as the page goes away finish anyway.
+export async function putUiState(
+  name: string,
+  value: unknown,
+  opts: { keepalive?: boolean } = {},
+): Promise<void> {
   const r = await fetch(`/api/ui/state/${encodeURIComponent(name)}`, {
     method: "PUT",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(value),
+    keepalive: opts.keepalive,
   });
   if (!r.ok) throw new Error(`PUT /api/ui/state/${name} → ${r.status}`);
 }

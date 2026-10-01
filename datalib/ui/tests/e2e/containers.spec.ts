@@ -24,11 +24,17 @@ test.beforeEach(async ({ page }) => {
 const tabs = (page: Page) => page.locator(".ct-tab");
 const mainCards = (page: Page) => page.locator(".ct-main .ct-card");
 
-async function savedTabCount(page: Page): Promise<number> {
+type SavedTab = { name?: string | null };
+
+async function savedTabs(page: Page): Promise<SavedTab[] | null> {
   const r = await page.request.get("/api/ui/state/layout");
-  if (!r.ok()) return -1;
-  const tree = (await r.json()) as { children?: unknown[] } | null;
-  return tree?.children?.length ?? -1;
+  if (!r.ok()) return null;
+  const tree = (await r.json()) as { children?: SavedTab[] } | null;
+  return tree?.children ?? null;
+}
+
+async function savedTabCount(page: Page): Promise<number> {
+  return (await savedTabs(page))?.length ?? -1;
 }
 
 test("the Dashboard is four cards that read as one page", async ({ page }) => {
@@ -79,4 +85,36 @@ test("the layout is kept in the library across a reload", async ({ page }) => {
   await page.reload();
   await expect(tabs(page)).toHaveCount(2);
   await expect(tabs(page).nth(1)).toHaveClass(/is-selected/);
+});
+
+test("a tab the person renames keeps its name after a reload", async ({ page }) => {
+  await page.goto("/");
+  await expect(mainCards(page)).toHaveCount(4);
+  await page.getByRole("button", { name: "Open Sources" }).click();
+  await expect(tabs(page)).toHaveCount(2);
+  await tabs(page).nth(1).getByTitle("more").click();
+  await page.getByRole("menuitem", { name: "Rename…" }).click();
+  await page.getByLabel("Name").fill("My sources");
+  await page.getByRole("button", { name: "OK" }).click();
+  await expect(tabs(page).nth(1)).toContainText("My sources");
+
+  await expect
+    .poll(async () => (await savedTabs(page))?.[1]?.name, { timeout: 10_000 })
+    .toBe("My sources");
+  await page.reload();
+  // The card names itself again as it mounts; the person's name stays.
+  await expect(mainCards(page)).toHaveCount(1);
+  await expect(tabs(page).nth(1)).toContainText("My sources");
+});
+
+test("a composite cannot take a built-in composite's name", async ({ page }) => {
+  await page.goto("/");
+  await expect(mainCards(page)).toHaveCount(4);
+  await tabs(page).first().getByTitle("more").click();
+  await page.getByRole("menuitem", { name: "Save as composite…" }).click();
+  await page.getByLabel("Save as composite").fill("Dashboard");
+  await page.getByRole("button", { name: "OK" }).click();
+  await expect(page.getByText('"Dashboard" is a built-in composite')).toBeVisible();
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByLabel("Save as composite")).toHaveCount(0);
 });
