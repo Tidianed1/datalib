@@ -368,8 +368,9 @@
         setBusy(true);
         $("error").hidden = true;
         try {
-          await invoke(command, args);
           // On success the shell replaces this window; nothing to do.
+          // `false` means nothing is opening: a canceled picker.
+          if ((await invoke(command, args)) === false) setBusy(false);
         } catch (e) {
           fail(e);
         }

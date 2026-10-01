@@ -129,22 +129,23 @@ fn launcher_open(app: AppHandle, path: String) -> Result<(), String> {
 
 /// Open a library by picking its folder. Any folder is accepted: an
 /// empty one gets the app's own first-run screen (see
-/// `ui/src/views/FirstRunView.vue`).
+/// `ui/src/views/FirstRunView.vue`). False when the picker was
+/// canceled, so the page knows nothing is opening.
 #[tauri::command]
-fn launcher_pick(app: AppHandle) {
-    app.dialog()
+async fn launcher_pick(app: AppHandle) -> Result<bool, String> {
+    let Some(choice) = app
+        .dialog()
         .file()
         .set_title("Open a library folder")
-        .pick_folder(move |choice| {
-            // Canceling returns to the launcher, which is still up.
-            let Some(file_path) = choice else { return };
-            match file_path.into_path() {
-                Ok(root) => {
-                    tauri::async_runtime::spawn(boot(app, root, false));
-                }
-                Err(e) => fatal(&app, format!("unusable folder selection: {e}")),
-            }
-        });
+        .blocking_pick_folder()
+    else {
+        return Ok(false);
+    };
+    let root = choice
+        .into_path()
+        .map_err(|e| format!("unusable folder selection: {e}"))?;
+    tauri::async_runtime::spawn(boot(app, root, false));
+    Ok(true)
 }
 
 /// Take a library whose folder is gone off the list.
