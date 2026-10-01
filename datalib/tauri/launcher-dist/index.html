@@ -10,8 +10,9 @@
   the first one's name is filled in for you.
 
   This is the ONLY page the shell bundles. Once a library is chosen the
-  window is replaced by one pointing at the spawned `datalib-http`,
-  which serves the real (rust-embed'd Vue) UI — see src/main.rs.
+  same window loads the spawned `datalib-http`'s page, which serves the
+  real (rust-embed'd Vue) UI, and closing the library brings the window
+  back here — see src/main.rs.
 
   Every decision here is in `src/launcher.rs` (which libraries are
   listed, where a new one goes, what is already at that folder), which
@@ -354,8 +355,8 @@
         setBusy(false);
       }
 
-      // Every way out of this screen starts a server and swaps this
-      // window out, so a second click while that is in flight would
+      // Every way out of this screen starts a server and loads it in
+      // this window, so a second click while that is in flight would
       // start a second one.
       let busy = false;
       function setBusy(on) {
@@ -368,7 +369,7 @@
         setBusy(true);
         $("error").hidden = true;
         try {
-          // On success the shell replaces this window; nothing to do.
+          // On success the shell loads the library here; nothing to do.
           // `false` means nothing is opening: a canceled picker.
           if ((await invoke(command, args)) === false) setBusy(false);
         } catch (e) {
@@ -556,6 +557,9 @@
           if (location.hash === "#new") setPopover(true);
         })
         .catch(fail);
+      window.addEventListener("hashchange", () => {
+        if (location.hash === "#new") setPopover(true);
+      });
     </script>
   </body>
 </html>

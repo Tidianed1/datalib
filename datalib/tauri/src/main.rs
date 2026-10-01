@@ -22,6 +22,13 @@ struct HttpChild(Mutex<Option<Child>>);
 /// The data root the backend was started on; `None` until boot succeeds.
 struct DataRoot(Mutex<Option<PathBuf>>);
 
+/// The open library's server, as an origin (`http://127.0.0.1:<port>`):
+/// what a window may navigate within. `None` on the libraries screen.
+/// Serialized rather than kept as a `url::Origin`: that type is not
+/// re-exported by tauri, and naming it would mean adding a direct `url`
+/// dependency for one comparison.
+struct AppOrigin(Mutex<Option<String>>);
+
 #[tauri::command]
 fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
@@ -205,15 +212,12 @@ fn libraries_show(app: AppHandle, new_library: bool) -> Result<(), String> {
     leave_library(&app, new_library).map_err(|e| e.to_string())
 }
 
-/// Close the open library: its windows and its server. The launcher
-/// opens first, because the app quits when its last window closes, and
-/// it stays up through the next boot to report a failure.
+/// Close the open library: the main window goes back to the libraries
+/// screen, the library's other windows close, and its server stops.
 fn leave_library(app: &AppHandle, new_library: bool) -> tauri::Result<()> {
-    if app.get_webview_window(LAUNCHER_WINDOW).is_none() {
-        show_launcher(app, new_library)?;
-    }
+    show_launcher(app, new_library)?;
     for (label, window) in app.webview_windows() {
-        if label != LAUNCHER_WINDOW {
+        if label != MAIN_WINDOW {
             let _ = window.destroy();
         }
     }
@@ -373,13 +377,14 @@ fn main() {
         ])
         .manage(HttpChild(Mutex::new(None)))
         .manage(DataRoot(Mutex::new(None)))
+        .manage(AppOrigin(Mutex::new(None)))
         .setup(|app| {
             let handle = app.handle().clone();
             // A data root supplied non-interactively (positional arg or
             // `$DATALIB_DATA_ROOT`) skips the launcher and boots
             // straight into it — mirrors `datalib_http_bin <root>`
             // and makes the app scriptable/testable. Otherwise the
-            // launcher window asks which library to open.
+            // libraries screen asks which library to open.
             match explicit_data_root() {
                 Some(root) => {
                     tauri::async_runtime::spawn(boot(handle, root, false));
@@ -459,28 +464,51 @@ fn explicit_data_root() -> Option<PathBuf> {
     Some(PathBuf::from(expanded))
 }
 
-/// `new_library` opens it with the new-library form showing.
+/// Show the libraries screen in the main window, opening the window if
+/// there is none yet. `new_library` opens it with the new-library form
+/// showing.
 fn show_launcher(app: &AppHandle, new_library: bool) -> tauri::Result<()> {
+    *app.state::<AppOrigin>().0.lock().expect("app origin lock") = None;
     let page = if new_library {
         "index.html#new"
     } else {
         "index.html"
     };
-    under_title_bar(
-        WebviewWindowBuilder::new(app, LAUNCHER_WINDOW, WebviewUrl::App(page.into()))
-            .title("Data Liberation")
-            .inner_size(1000.0, 720.0)
-            .resizable(true),
-    )
-    .build()?;
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+        return window.navigate(launcher_page_url(page));
+    }
+    main_window(app, WebviewUrl::App(page.into())).build()?;
     Ok(())
 }
 
-/// Label of the launcher window. Also named in
-/// `capabilities/default.json`, which is what lets it call commands at
-/// all — a window missing from every capability gets no IPC, and the
-/// page's first `invoke` fails with nothing on screen to say why.
-const LAUNCHER_WINDOW: &str = "launcher";
+/// Where the shell serves its bundled page, as a URL to navigate to:
+/// a custom scheme on macOS and Linux, a `http://tauri.localhost` host
+/// on Windows.
+fn launcher_page_url(page: &str) -> Url {
+    let base = if cfg!(windows) {
+        "http://tauri.localhost/"
+    } else {
+        "tauri://localhost/"
+    };
+    format!("{base}{page}")
+        .parse()
+        .expect("the bundled page's URL parses")
+}
+
+/// The app's one window: the libraries screen, or the open library's
+/// page. Its label is what `capabilities/` grant commands to — a window
+/// missing from every capability gets no IPC, and the page's first
+/// `invoke` fails with nothing on screen to say why.
+const MAIN_WINDOW: &str = "main";
+
+fn main_window(app: &AppHandle, url: WebviewUrl) -> WebviewWindowBuilder<'_, Wry, AppHandle> {
+    app_window(
+        WebviewWindowBuilder::new(app, MAIN_WINDOW, url)
+            .title("Data Liberation")
+            .inner_size(1280.0, 800.0),
+        app,
+    )
+}
 
 /// Locate a bundled binary. The dev override `$<env>` wins (point it at
 /// a fresh Bazel build without rebundling); otherwise the copy bundled
@@ -501,8 +529,8 @@ fn resolve_bundled(app: &AppHandle, name: &str, env: &str) -> Option<PathBuf> {
     p.is_file().then_some(p)
 }
 
-/// Start `root`'s server and open its window. `init` writes the starter
-/// config first, for a library just created.
+/// Start `root`'s server and show it in the main window. `init` writes
+/// the starter config first, for a library just created.
 async fn boot(app: AppHandle, root: PathBuf, init: bool) {
     remember(&app, &root);
     let url = match tauri::async_runtime::spawn_blocking({
@@ -518,36 +546,27 @@ async fn boot(app: AppHandle, root: PathBuf, init: bool) {
     let Ok(url) = url.parse::<Url>() else {
         return boot_failed(&app, format!("backend produced an unusable URL: {url}"));
     };
-    // Serialized rather than kept as a `url::Origin`: that type is
-    // not re-exported by tauri, and naming it would mean adding a
-    // direct `url` dependency for one comparison.
-    let app_origin = url.origin().ascii_serialization();
-    let window = app_window(
-        WebviewWindowBuilder::new(&app, "main", WebviewUrl::External(url))
-            .title("Data Liberation")
-            .inner_size(1280.0, 800.0),
-        &app,
-        &app_origin,
-    )
-    .build();
-    if let Err(e) = window {
-        return boot_failed(&app, format!("could not open the main window: {e}"));
-    }
-    // The app is up; the launcher has nothing left to offer. Closed
-    // only here, at the end, so every failure above still has a window
-    // to return to.
-    if let Some(w) = app.get_webview_window(LAUNCHER_WINDOW) {
-        let _ = w.close();
+    *app.state::<AppOrigin>().0.lock().expect("app origin lock") =
+        Some(url.origin().ascii_serialization());
+    let shown = match app.get_webview_window(MAIN_WINDOW) {
+        Some(window) => window.navigate(url),
+        None => main_window(&app, WebviewUrl::External(url))
+            .build()
+            .map(|_| ()),
+    };
+    if let Err(e) = shown {
+        boot_failed(&app, format!("could not open the library: {e}"));
     }
 }
 
-/// A boot that did not produce a window.
+/// A boot that did not show its library. The main window is still on
+/// the libraries screen, which reloads to take its buttons back.
 fn boot_failed(app: &AppHandle, msg: String) {
-    let Some(launcher) = app.get_webview_window(LAUNCHER_WINDOW) else {
+    let Some(window) = app.get_webview_window(MAIN_WINDOW) else {
         return fatal(app, msg);
     };
     eprintln!("{msg}");
-    let _ = launcher.eval("location.reload()");
+    let _ = window.eval("location.reload()");
     app.dialog()
         .message(msg)
         .title("Datalib could not open that data library")
@@ -601,25 +620,26 @@ fn under_title_bar<'a>(
 /// and the grid's double-click were dead in the app. Same origin gets a
 /// second window of the app, under the same rules; anything else goes
 /// to the OS browser, as above.
+///
+/// The app's origin is read at each navigation, not fixed when the
+/// window opens: the main window moves between the libraries screen and
+/// each library's server, and each server has a port of its own.
 fn app_window<'a>(
     builder: WebviewWindowBuilder<'a, Wry, AppHandle>,
     app: &AppHandle,
-    app_origin: &str,
 ) -> WebviewWindowBuilder<'a, Wry, AppHandle> {
     let nav_app = app.clone();
-    let nav_origin = app_origin.to_string();
     let new_app = app.clone();
-    let new_origin = app_origin.to_string();
     under_title_bar(builder)
         .on_navigation(move |next| {
-            if !leaves_the_app(next, &nav_origin) {
+            if !leaves_the_app(next, &nav_app) {
                 return true;
             }
             open_externally(&nav_app, next);
             false
         })
         .on_new_window(move |url, features: NewWindowFeatures| {
-            if leaves_the_app(&url, &new_origin) {
+            if leaves_the_app(&url, &new_app) {
                 open_externally(&new_app, &url);
                 return NewWindowResponse::Deny;
             }
@@ -631,11 +651,10 @@ fn app_window<'a>(
             let blank: Url = "about:blank".parse().expect("about:blank parses");
             let built = app_window(
                 WebviewWindowBuilder::new(&new_app, &label, WebviewUrl::External(blank))
-                    .title("Datalib")
+                    .title("Data Liberation")
                     .inner_size(1100.0, 760.0)
                     .window_features(features),
                 &new_app,
-                &new_origin,
             )
             .build();
             match built {
@@ -654,9 +673,21 @@ fn open_externally(app: &AppHandle, url: &Url) {
     }
 }
 
-fn leaves_the_app(next: &Url, app_origin: &str) -> bool {
+/// The libraries screen's own page counts as the app: on Windows it is
+/// served from `http://tauri.localhost`.
+fn leaves_the_app(next: &Url, app: &AppHandle) -> bool {
+    let origin = next.origin().ascii_serialization();
+    let app_origin = app
+        .state::<AppOrigin>()
+        .0
+        .lock()
+        .expect("app origin lock")
+        .clone();
+    let launcher_origin = launcher_page_url("index.html")
+        .origin()
+        .ascii_serialization();
     match next.scheme() {
-        "http" | "https" => next.origin().ascii_serialization() != app_origin,
+        "http" | "https" => Some(&origin) != app_origin.as_ref() && origin != launcher_origin,
         "mailto" | "tel" => true,
         _ => false,
     }

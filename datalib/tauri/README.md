@@ -137,9 +137,13 @@ Microsoft's [Fluent Emoji](https://github.com/microsoft/fluentui-emoji)
 
 ## Behaviour worth knowing
 
-- The full backend runs against the chosen data root, one at a time:
-  switching library stops the open one's server and closes its
-  windows. Canceling a picker returns to the libraries screen.
+- The full backend runs against the chosen data root, one at a time,
+  in one window: the main window shows the libraries screen, then the
+  library's page, and goes back to the libraries screen when the
+  library closes. Switching library stops the open one's server and
+  closes the windows it opened. The window's navigation rules
+  (`app_window`) read the open server's origin at each navigation,
+  since each library's server has a port of its own.
 - No blocking model download at startup: qmd's models are fetched on
   first need by the steps and the search applet (`datalib_qmd_models`),
   the same as the web packaging — the shell passes nothing besides
