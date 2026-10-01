@@ -281,9 +281,7 @@ async fn mirror_attached(
         .filter(|s| {
             matches!(
                 s.key_origin,
-                KeyOrigin::StableUnique
-                    | KeyOrigin::StableVerified
-                    | KeyOrigin::UniqueIndexVerified
+                KeyOrigin::StableUnique | KeyOrigin::StableVerified
             )
         })
         .count();
@@ -356,22 +354,12 @@ async fn build_specs(
         let unique_cols = plan::unique_single_columns(&mut *conn, SRC_SCHEMA, &name).await?;
         let verified_cols =
             verified_stable_columns(&mut *conn, opts, &name, &source_cols, &unique_cols).await?;
-        let natural = verified_unique_index_key(
-            &mut *conn,
-            opts,
-            &name,
-            &source_cols,
-            &unique_cols,
-            &verified_cols,
-        )
-        .await?;
         specs.push(build_spec(
             opts,
             &name,
             &source_cols,
             &unique_cols,
             &verified_cols,
-            natural,
         )?);
     }
     Ok(specs)
@@ -427,86 +415,6 @@ async fn verified_stable_columns(
     Ok(out)
 }
 
-/// The first UNIQUE index of a table the source gave no `PRIMARY KEY`
-/// that this run finds non-NULL in every row (a unique index lets NULLs
-/// repeat, a key does not). `None` when the table has a key by another
-/// route or no index holds, in which case it stays keyless with a
-/// warning: unlike `primary_keys`, this can never cost the run.
-async fn verified_unique_index_key(
-    conn: &mut SqliteConnection,
-    opts: &MirrorOptions,
-    table: &str,
-    source_cols: &[SourceColumn],
-    unique_cols: &[String],
-    verified_cols: &[String],
-) -> Result<Option<Vec<String>>> {
-    let has_declared = source_cols.iter().any(|c| c.pk_seq > 0);
-    let has_stable = opts
-        .stable_key_columns
-        .iter()
-        .any(|c| unique_cols.contains(c) || verified_cols.contains(c));
-    if has_declared || has_stable || opts.primary_keys.contains_key(table) {
-        return Ok(None);
-    }
-    let indexes = plan::unique_indexes(&mut *conn, SRC_SCHEMA, table).await?;
-    let Some(index) = plan::key_index(&indexes) else {
-        if indexes.len() > 1 {
-            tracing::warn!(
-                table,
-                indexes = %indexes.iter().map(|i| i.name.as_str()).collect::<Vec<_>>().join(", "),
-                "sqlite_mirror: several UNIQUE indexes and none is named as the key; \
-                 mirroring the table keyless (pin one with primary_keys)"
-            );
-        }
-        return Ok(None);
-    };
-    let key = &index.columns;
-    let mirrored = |c: &String| {
-        source_cols.iter().any(|s| {
-            &s.spec.name == c
-                && !s.generated
-                && !opts
-                    .exclude_columns
-                    .iter()
-                    .any(|p| glob_match(p, &format!("{table}.{c}")))
-        })
-    };
-    if !key.iter().all(mirrored) {
-        return Ok(None);
-    }
-    let cols: Vec<String> = key.iter().map(|c| plan::quote_ident(c)).collect();
-    let any_null = cols
-        .iter()
-        .map(|c| format!("{c} IS NULL"))
-        .collect::<Vec<_>>()
-        .join(" OR ");
-    // Audited: names come out of the source's own schema through
-    // `plan::quote_ident`; the schema alias is a const.
-    let sql = format!(
-        "SELECT COUNT(*) AS n, COALESCE(SUM({any_null}), 0) AS nulls FROM {s}.{t}",
-        s = plan::quote_ident(SRC_SCHEMA),
-        t = plan::quote_ident(table),
-    );
-    let row = sqlx::query(sqlx::AssertSqlSafe(sql))
-        .fetch_one(&mut *conn)
-        .await
-        .with_context(|| format!("check unique index key {table}({})", key.join(", ")))?;
-    let n: i64 = row.get("n");
-    let nulls: i64 = row.get("nulls");
-    if nulls == 0 {
-        return Ok(Some(key.clone()));
-    }
-    tracing::warn!(
-        table,
-        index = %index.name,
-        rows = n,
-        nulls,
-        "sqlite_mirror: the UNIQUE index has NULLs in some rows, so it cannot be the key; \
-         mirroring the table keyless"
-    );
-    Ok(None)
-}
-
 fn wants_table(opts: &MirrorOptions, name: &str) -> bool {
     opts.include_tables.iter().any(|p| glob_match(p, name))
         && !opts.exclude_tables.iter().any(|p| glob_match(p, name))
@@ -518,7 +426,6 @@ pub fn build_spec(
     source_cols: &[SourceColumn],
     unique_cols: &[String],
     verified_cols: &[String],
-    natural: Option<Vec<String>>,
 ) -> Result<TableSpec> {
     let mut columns: Vec<ColumnSpec> = Vec::new();
     let mut dropped: Vec<String> = Vec::new();
@@ -577,8 +484,6 @@ pub fn build_spec(
         (vec![stable.clone()], origin)
     } else if !declared.is_empty() && declared.iter().all(present) {
         (declared, KeyOrigin::Declared)
-    } else if let Some(key) = natural.filter(|k| k.iter().all(present)) {
-        (key, KeyOrigin::UniqueIndexVerified)
     } else {
         // Either the source table is keyless, or its key was filtered
         // out. Keyless is a legitimate mirror shape: doltlite still
@@ -718,7 +623,6 @@ mod tests {
             &lightroom_cols(),
             &["id_global".to_string()],
             &[],
-            None,
         )
         .unwrap();
         assert_eq!(s.pk, vec!["id_global".to_string()]);
@@ -738,11 +642,11 @@ mod tests {
         ];
         let mut o = opts();
         o.stable_key_columns = vec!["ZUUID".into()];
-        let s = build_spec(&o, "ZASSET", &cols, &[], &["ZUUID".to_string()], None).unwrap();
+        let s = build_spec(&o, "ZASSET", &cols, &[], &["ZUUID".to_string()]).unwrap();
         assert_eq!(s.pk, vec!["ZUUID".to_string()]);
         assert_eq!(s.key_origin, KeyOrigin::StableVerified);
         // Unverified and undeclared, the same column is not a key.
-        let s = build_spec(&o, "ZASSET", &cols, &[], &[], None).unwrap();
+        let s = build_spec(&o, "ZASSET", &cols, &[], &[]).unwrap();
         assert_eq!(s.pk, vec!["Z_PK".to_string()]);
         assert_eq!(s.key_origin, KeyOrigin::Declared);
     }
@@ -750,7 +654,7 @@ mod tests {
     #[test]
     fn declared_key_is_used_when_no_stable_candidate_exists() {
         let cols = vec![scol("id_local", "INTEGER", 1), scol("v", "", 0)];
-        let s = build_spec(&opts(), "AgHarvestedExifMetadata", &cols, &[], &[], None).unwrap();
+        let s = build_spec(&opts(), "AgHarvestedExifMetadata", &cols, &[], &[]).unwrap();
         assert_eq!(s.pk, vec!["id_local".to_string()]);
         assert_eq!(s.key_origin, KeyOrigin::Declared);
     }
@@ -765,7 +669,6 @@ mod tests {
             &lightroom_cols(),
             &["id_global".to_string()],
             &[],
-            None,
         )
         .unwrap();
         assert_eq!(s.pk, vec!["id_local".to_string()]);
@@ -790,7 +693,7 @@ mod tests {
             pk_seq: 1,
             generated: false,
         }];
-        let s = build_spec(&opts(), "MigrationSchemaVersion", &cols, &[], &[], None).unwrap();
+        let s = build_spec(&opts(), "MigrationSchemaVersion", &cols, &[], &[]).unwrap();
         assert_eq!(s.pk, vec!["version".to_string()]);
         assert_eq!(s.key_origin, KeyOrigin::Declared);
         assert!(s.create_ddl().contains(r#"PRIMARY KEY ("version")"#));
@@ -799,7 +702,7 @@ mod tests {
     #[test]
     fn a_source_table_with_no_key_mirrors_keyless() {
         let cols = vec![scol("a", "", 0), scol("b", "", 0)];
-        let s = build_spec(&opts(), "AgOzSpaceIds", &cols, &[], &[], None).unwrap();
+        let s = build_spec(&opts(), "AgOzSpaceIds", &cols, &[], &[]).unwrap();
         assert!(s.pk.is_empty());
         assert_eq!(s.key_origin, KeyOrigin::Keyless);
     }
@@ -809,7 +712,7 @@ mod tests {
         let mut o = opts();
         o.exclude_columns = vec!["T.id_local".into()];
         o.stable_key_columns.clear();
-        let s = build_spec(&o, "T", &lightroom_cols(), &[], &[], None).unwrap();
+        let s = build_spec(&o, "T", &lightroom_cols(), &[], &[]).unwrap();
         assert!(s.pk.is_empty());
         assert_eq!(s.key_origin, KeyOrigin::Keyless);
         assert_eq!(s.dropped_columns, vec!["id_local".to_string()]);
@@ -819,15 +722,7 @@ mod tests {
     fn excluded_columns_are_absent_not_blanked() {
         let mut o = opts();
         o.exclude_columns = vec!["Adobe_AdditionalMetadata.xmp".into()];
-        let s = build_spec(
-            &o,
-            "Adobe_AdditionalMetadata",
-            &lightroom_cols(),
-            &[],
-            &[],
-            None,
-        )
-        .unwrap();
+        let s = build_spec(&o, "Adobe_AdditionalMetadata", &lightroom_cols(), &[], &[]).unwrap();
         assert!(!s.columns.iter().any(|c| c.name == "xmp"));
         assert_eq!(s.dropped_columns, vec!["xmp".to_string()]);
         assert!(!s.create_ddl().contains("xmp"));
@@ -839,15 +734,7 @@ mod tests {
         let mut o = opts();
         o.primary_keys
             .insert("T".into(), vec!["id_local".into(), "id_global".into()]);
-        let s = build_spec(
-            &o,
-            "T",
-            &lightroom_cols(),
-            &["id_global".to_string()],
-            &[],
-            None,
-        )
-        .unwrap();
+        let s = build_spec(&o, "T", &lightroom_cols(), &["id_global".to_string()], &[]).unwrap();
         assert_eq!(s.pk, vec!["id_local".to_string(), "id_global".to_string()]);
         assert_eq!(s.key_origin, KeyOrigin::Override);
         assert!(s
@@ -859,15 +746,7 @@ mod tests {
     fn an_empty_override_forces_keyless() {
         let mut o = opts();
         o.primary_keys.insert("T".into(), Vec::new());
-        let s = build_spec(
-            &o,
-            "T",
-            &lightroom_cols(),
-            &["id_global".to_string()],
-            &[],
-            None,
-        )
-        .unwrap();
+        let s = build_spec(&o, "T", &lightroom_cols(), &["id_global".to_string()], &[]).unwrap();
         assert!(s.pk.is_empty());
         assert_eq!(s.key_origin, KeyOrigin::Keyless);
     }
@@ -877,7 +756,7 @@ mod tests {
         let mut o = opts();
         o.exclude_columns = vec!["T.xmp".into()];
         o.primary_keys.insert("T".into(), vec!["xmp".into()]);
-        assert!(build_spec(&o, "T", &lightroom_cols(), &[], &[], None).is_err());
+        assert!(build_spec(&o, "T", &lightroom_cols(), &[], &[]).is_err());
     }
 
     #[test]
@@ -892,7 +771,7 @@ mod tests {
             pk_seq: 0,
             generated: true,
         });
-        let s = build_spec(&opts(), "T", &cols, &[], &[], None).unwrap();
+        let s = build_spec(&opts(), "T", &cols, &[], &[]).unwrap();
         assert!(!s.columns.iter().any(|c| c.name == "computed"));
         assert!(s.dropped_columns.contains(&"computed".to_string()));
     }
@@ -901,7 +780,7 @@ mod tests {
     fn excluding_every_column_is_an_error_not_an_empty_table() {
         let mut o = opts();
         o.exclude_columns = vec!["T.*".into()];
-        assert!(build_spec(&o, "T", &lightroom_cols(), &[], &[], None).is_err());
+        assert!(build_spec(&o, "T", &lightroom_cols(), &[], &[]).is_err());
     }
 
     #[test]
@@ -912,41 +791,5 @@ mod tests {
         assert!(wants_table(&o, "AgLibraryFile"));
         assert!(!wants_table(&o, "AgOzSpaceIds"));
         assert!(!wants_table(&o, "Adobe_images"));
-    }
-    #[test]
-    fn a_verified_unique_index_keys_a_keyless_table() {
-        let cols = vec![
-            scol("image", "", 0),
-            scol("payloadKey", "", 0),
-            scol("payloadData", "", 0),
-        ];
-        let key = Some(vec!["image".to_string(), "payloadKey".to_string()]);
-        let s = build_spec(
-            &opts(),
-            "AgLibraryImageSyncedAssetData",
-            &cols,
-            &[],
-            &[],
-            key,
-        )
-        .unwrap();
-        assert_eq!(s.pk, vec!["image".to_string(), "payloadKey".to_string()]);
-        assert_eq!(s.key_origin, KeyOrigin::UniqueIndexVerified);
-    }
-
-    #[test]
-    fn a_declared_key_beats_a_unique_index() {
-        let key = Some(vec!["id_global".to_string()]);
-        let s = build_spec(&opts(), "T", &lightroom_cols(), &[], &[], key).unwrap();
-        assert_eq!(s.key_origin, KeyOrigin::Declared);
-    }
-
-    #[test]
-    fn an_override_beats_a_unique_index() {
-        let mut o = opts();
-        o.primary_keys.insert("T".into(), vec!["xmp".into()]);
-        let key = Some(vec!["id_global".to_string()]);
-        let s = build_spec(&o, "T", &lightroom_cols(), &[], &[], key).unwrap();
-        assert_eq!(s.key_origin, KeyOrigin::Override);
     }
 }

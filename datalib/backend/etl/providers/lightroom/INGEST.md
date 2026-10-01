@@ -189,17 +189,19 @@ But Lightroom does declare those tables' keys, not as a `PRIMARY KEY`
 but as a composite UNIQUE index, named `index_<Table>_primaryKey`:
 `(image, payloadKey)` for `AgLibraryImageSyncedAssetData`,
 `(ozCatalogId, ozSpaceId)` for `AgOzSpaceIds`, `(localId, ozCatalogId)`
-for `MigratedImages`. So for a table with no declared key and no `id_global`, the mirror keys
-on its UNIQUE index, for every provider that mirrors a SQLite file. A
-UNIQUE index is a constraint, not an identity, so it does so only when
-the source leaves no doubt: the table's only unique index, or the one
-named `…primaryKey`. With several and no such name the table stays
-keyless and the run warns; `primary_keys` pins one. A unique index also
-lets NULLs repeat and a key does not, so each run checks the columns are
-non-NULL in every row (one query per table); if not, the table stays
-keyless with a warning. Neither case fails the run. A table keyed this
-way counts toward `stable_keys=` in the run summary, and a sync that
-last ran before the rule existed re-mirrors its newest backup once.
+for `MigratedImages`. So before mirroring a catalog, the provider (`src/keys.rs`) reads these
+indexes out of it and hands the engine the key columns per table, as
+`primary_keys`. It does so for a table with no declared key and no
+`id_global`, and only when the source leaves no doubt: the table's only
+UNIQUE index, or the one named `…primaryKey`. A UNIQUE index is a
+constraint, not an identity, so with several and no such name the table
+stays keyless and the run warns. A unique index also lets NULLs repeat
+and a key does not, so each chosen key is checked non-NULL in every row;
+if not, the table stays keyless with a warning. Neither case fails the
+run, and a `primary_keys` entry you set yourself wins. The engine knows
+nothing of the naming; a backup is read from its own copy, a live
+catalog as it is just before the engine snapshots it. A sync that last
+ran before this rule existed re-mirrors its newest backup once.
 
 All the keyless tables are `Ag*`- or `Migrated*`-prefixed, which reads at
 a glance as "the Ag* tables have no primary keys". Most of them do.

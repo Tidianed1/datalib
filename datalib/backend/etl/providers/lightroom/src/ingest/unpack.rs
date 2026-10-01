@@ -74,6 +74,7 @@ pub async fn mirror_file(
         snapshot: options.snapshot && !catalog.is_copy(),
         ..options.clone()
     };
+    let options = crate::keys::with_catalog_keys(&options).await?;
     mirror::run(pool, &options, progress).await
 }
 

@@ -7,7 +7,7 @@ use async_trait::async_trait;
 
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl::raw_layout;
-use datalib_etl_apple_messages_config::{chat_db_path, AppleMessagesConfig};
+use datalib_etl_apple_messages_config::{chat_db_path, join_table_keys, AppleMessagesConfig};
 use datalib_etl_sqlite_mirror::{mirror, MirrorOptions};
 
 pub fn mirror_options(config: &AppleMessagesConfig) -> Result<MirrorOptions> {
@@ -23,6 +23,7 @@ pub fn mirror_options(config: &AppleMessagesConfig) -> Result<MirrorOptions> {
         include_tables: config.include_tables.clone(),
         exclude_tables: config.effective_excluded_tables(),
         exclude_columns: config.effective_excluded_columns(),
+        primary_keys: join_table_keys(),
         gc: config.gc,
         ..MirrorOptions::new(chat_db_path(&messages, messages.is_dir()))
     })

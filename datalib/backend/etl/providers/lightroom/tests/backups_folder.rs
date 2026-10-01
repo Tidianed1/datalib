@@ -401,6 +401,36 @@ async fn an_older_backup_is_replayed_and_the_newest_put_back_on_top() -> Result<
     Ok(())
 }
 
+/// A sync mirrors a backup with the keys that backup's own catalog
+/// declares as UNIQUE indexes, so a table with no PRIMARY KEY still diffs
+/// by key.
+#[tokio::test]
+async fn a_backup_is_mirrored_with_the_keys_its_catalog_declares() -> Result<()> {
+    let f = Fixture::new();
+    f.backup(
+        "2021-03-01 0900",
+        "TngCatalog.lrcat",
+        Some("TngCatalog.zip"),
+        &[
+            "CREATE TABLE SyncedPayload (image INTEGER, payloadKey TEXT, payloadData TEXT)",
+            "CREATE UNIQUE INDEX index_SyncedPayload_primaryKey ON SyncedPayload(image, payloadKey)",
+            "INSERT INTO SyncedPayload VALUES (1,'a','x'),(2,'a','y')",
+        ],
+    )
+    .await;
+    f.sync(&options()).await?;
+
+    let pool = f.read().await;
+    let mut key: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM pragma_table_info('SyncedPayload') WHERE pk > 0")
+            .fetch_all(&pool)
+            .await?;
+    key.sort();
+    assert_eq!(key, ["image", "payloadKey"]);
+    pool.close().await;
+    Ok(())
+}
+
 /// A filter changed with no new backup to carry it: the newest backup is
 /// mirrored again, so HEAD shows the catalog as the filters now say.
 #[tokio::test]

@@ -49,10 +49,11 @@ impl Store {
         let stats = ingest::fetch(FetchOptions {
             mirror_path: self.path.clone(),
             pool: Some(pool.clone()),
-            options: MirrorOptions {
+            options: datalib_etl_lightroom::keys::with_catalog_keys(&MirrorOptions {
                 stable_key_columns: vec!["id_global".to_string()],
                 ..MirrorOptions::new(catalog)
-            },
+            })
+            .await?,
             progress: Progress::noop(),
         })
         .await?;
