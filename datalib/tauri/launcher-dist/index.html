@@ -198,9 +198,6 @@
         color: inherit;
         text-align: left;
       }
-      /* Out of the way until the row is pointed at or tabbed into; always
-         there on a row whose folder is gone, where it is the one thing
-         to do. */
       .forget,
       .folder {
         flex: 0 0 auto;
@@ -214,11 +211,12 @@
         align-items: center;
         justify-content: center;
       }
+      /* Every row has the slot, so the folder icons line up; a library
+         in the Datalib folder leaves it empty. */
       .forget {
         margin-right: 2px;
-        visibility: hidden;
       }
-      .forget:hover,
+      button.forget:hover,
       .folder:hover:not(:disabled) {
         background: var(--border-soft);
         color: var(--fg);
@@ -228,11 +226,6 @@
       }
       .folder:disabled {
         visibility: hidden;
-      }
-      .lib:hover .forget,
-      .lib:focus-within .forget,
-      .lib.missing .forget {
-        visibility: visible;
       }
       .icon {
         flex: 0 0 auto;
@@ -516,6 +509,11 @@
             }
           });
           row.append(forget);
+        } else {
+          const slot = document.createElement("span");
+          slot.className = "forget";
+          slot.setAttribute("aria-hidden", "true");
+          row.append(slot);
         }
         const folder = document.createElement("button");
         folder.className = "folder";
