@@ -15,6 +15,7 @@ import {
   type TreeNode,
 } from "@/views/containerTree";
 import { CONTAINERS_API } from "@/views/containersApi";
+import { revealScrollLeft } from "@/views/columnReveal";
 
 // `height`: the fixed height a top-to-bottom split gives this node. It sizes the
 // node's body, not its header, so showing chrome never squeezes a card.
@@ -64,7 +65,10 @@ function hasHandle(i: number): boolean {
 
 // A column that appears in a Columns container is scrolled into view: a
 // row wider than the window would otherwise open it off the right edge,
-// with nothing moving to show the click did anything.
+// with nothing moving to show the click did anything. Only the
+// container scrolls (columnReveal.ts says where): scrollIntoView would
+// move every scrolling ancestor too, and its "nearest" never moves a
+// column wider than the container.
 const childrenEl = useTemplateRef<HTMLElement>("childrenEl");
 watch(
   () => (props.node.kind === "box" ? props.node.children.map((c) => c.id) : []),
@@ -73,10 +77,17 @@ watch(
     const added = now.filter((id) => !before.includes(id));
     if (added.length === 0) return;
     await nextTick();
+    const row = childrenEl.value;
     const last = added[added.length - 1];
-    childrenEl.value
-      ?.querySelector(`:scope > [data-child-id="${CSS.escape(last)}"]`)
-      ?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+    const el = row?.querySelector<HTMLElement>(`:scope > [data-child-id="${CSS.escape(last)}"]`);
+    if (!row || !el) return;
+    const start =
+      el.getBoundingClientRect().left - row.getBoundingClientRect().left + row.scrollLeft;
+    const left = revealScrollLeft(
+      { start: row.scrollLeft, width: row.clientWidth },
+      { start, width: el.offsetWidth },
+    );
+    row.scrollTo({ left, behavior: "smooth" });
   },
 );
 
