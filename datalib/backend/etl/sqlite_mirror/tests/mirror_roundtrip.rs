@@ -9,7 +9,7 @@ use sqlx::Row;
 
 use datalib_etl::doltlite_raw as dr;
 use datalib_etl::progress::Progress;
-use datalib_etl_sqlite_mirror::{mirror, MirrorOptions, MirrorStats};
+use datalib_etl_sqlite_mirror::{mirror, read_schema, MirrorOptions, MirrorStats, Snapshot};
 
 /// What `lightroom`'s `skip_xmp` expands to; spelled out here so the
 /// engine's tests do not depend on a provider's config crate.
@@ -559,6 +559,90 @@ async fn stable_key_is_used_where_available_and_declared_key_elsewhere() -> Resu
     // Has neither → keyless.
     assert!(mirror_pk(&pool, "AgOzSpaceIds").await.is_empty());
     pool.close().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_schema_reports_declared_keys_and_complete_unique_indexes() -> Result<()> {
+    let f = Fixture::new();
+    f.edit_catalog(&[
+        "CREATE TABLE Synced (image INTEGER, payloadKey TEXT)",
+        "CREATE UNIQUE INDEX index_Synced_primaryKey ON Synced(image, payloadKey)",
+        "CREATE UNIQUE INDEX partial_only ON Synced(image) WHERE payloadKey = 'a'",
+        "INSERT INTO Synced VALUES (1,'a'),(2,NULL)",
+        "CREATE TABLE Clean (a INTEGER, b TEXT)",
+        "CREATE UNIQUE INDEX clean_unique ON Clean(a)",
+        "INSERT INTO Clean VALUES (1,'x')",
+        "CREATE TABLE Keyed (id INTEGER PRIMARY KEY, a INTEGER)",
+        "CREATE UNIQUE INDEX keyed_unique ON Keyed(a)",
+    ])
+    .await?;
+    let snap = Snapshot::in_place(&f.catalog)?;
+    let schema = read_schema(&snap).await?;
+    let table = |name: &str| schema.tables.iter().find(|t| t.name == name).unwrap();
+
+    let synced = table("Synced");
+    assert!(synced.declared_key.is_empty());
+    assert_eq!(
+        synced.unique_indexes.len(),
+        1,
+        "the partial index is left out"
+    );
+    assert_eq!(synced.unique_indexes[0].columns, ["image", "payloadKey"]);
+    assert!(synced.unique_indexes[0].has_nulls);
+
+    assert!(!table("Clean").unique_indexes[0].has_nulls);
+
+    let keyed = table("Keyed");
+    assert_eq!(keyed.declared_key, ["id"]);
+    assert!(
+        keyed.unique_indexes.is_empty(),
+        "read only where an index could key"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_run_over_a_snapshot_reports_both_sizes() -> Result<()> {
+    let f = Fixture::new();
+    // Free pages are in the source file but not in a `VACUUM INTO` copy,
+    // so the two sizes differ.
+    f.edit_catalog(&[
+        "CREATE TABLE Bloat (x TEXT)",
+        "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 2000) \
+         INSERT INTO Bloat SELECT hex(randomblob(500)) FROM n",
+        "DROP TABLE Bloat",
+    ])
+    .await?;
+    let pool = mirror::open_mirror(&f.mirror).await?;
+    let snap = mirror::snapshot(&f.catalog).await?;
+    let original = std::fs::metadata(&f.catalog)?.len();
+    assert_eq!(snap.source_bytes(), original);
+    assert!(snap.is_copy());
+
+    let stats = mirror::run_snapshot(&pool, &snap, &f.options(), &Progress::noop()).await?;
+    assert_eq!(stats.source_bytes, original);
+    assert_eq!(stats.snapshot_bytes, snap.snapshot_bytes());
+    assert!(
+        stats.snapshot_bytes < stats.source_bytes,
+        "{} vs {}",
+        stats.snapshot_bytes,
+        stats.source_bytes
+    );
+    assert!(stats
+        .summary()
+        .contains(&format!("source_bytes={original}")));
+    pool.close().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_in_place_snapshot_is_the_file_itself() -> Result<()> {
+    let f = Fixture::new();
+    let snap = Snapshot::in_place(&f.catalog)?;
+    assert!(!snap.is_copy());
+    assert_eq!(snap.path(), f.catalog);
+    assert_eq!(snap.source_bytes(), snap.snapshot_bytes());
     Ok(())
 }
 

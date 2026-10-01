@@ -9,9 +9,13 @@
 //! (`MirrorOptions::sidecar_tables`).
 
 pub mod ingest;
+pub mod inspect;
 pub mod mirror;
 pub mod plan;
 
 pub use ingest::{fetch, fetch_and_commit, FetchOptions};
-pub use mirror::{open_mirror, open_sqlite, run, snapshot, MirrorOptions, MirrorStats, Snapshot};
+pub use inspect::{read_schema, SourceSchema, TableInfo, UniqueIndex};
+pub use mirror::{
+    open_mirror, open_sqlite, run, run_snapshot, snapshot, MirrorOptions, MirrorStats, Snapshot,
+};
 pub use plan::{KeyOrigin, TableKind};

@@ -93,32 +93,69 @@ pub struct MirrorStats {
     /// Virtual tables whose module this build lacks, so their rows
     /// could not be read. Each one is also a warning in the log.
     pub virtual_tables_skipped: usize,
+    /// The source file as it stood on disk.
     pub source_bytes: u64,
+    /// The snapshot the run read. `VACUUM INTO` rewrites the file, so
+    /// this differs from `source_bytes` whenever the source has free pages
+    /// or WAL content; it is what the mirror actually copied from.
+    pub snapshot_bytes: u64,
 }
 
-/// A `VACUUM INTO` snapshot that deletes itself when dropped.
+/// A frozen copy of a source database to inspect and then mirror, so both
+/// see the same bytes. A `VACUUM INTO` snapshot deletes itself when
+/// dropped; [`Snapshot::in_place`] wraps a file that is already private.
 pub struct Snapshot {
     dir: Option<tempfile::TempDir>,
     path: PathBuf,
+    source_bytes: u64,
+    snapshot_bytes: u64,
 }
 
 impl Snapshot {
+    /// Wrap a file nobody else writes (a backup unzipped for this run, a
+    /// decrypted temporary): no copy, and both sizes are the file's.
+    pub fn in_place(path: &Path) -> Result<Self> {
+        let bytes = file_len(path)?;
+        Ok(Self {
+            dir: None,
+            path: path.to_path_buf(),
+            source_bytes: bytes,
+            snapshot_bytes: bytes,
+        })
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }
     pub fn is_copy(&self) -> bool {
         self.dir.is_some()
     }
+    /// The source file's size when the snapshot was taken.
+    pub fn source_bytes(&self) -> u64 {
+        self.source_bytes
+    }
+    pub fn snapshot_bytes(&self) -> u64 {
+        self.snapshot_bytes
+    }
+}
+
+fn file_len(path: &Path) -> Result<u64> {
+    Ok(std::fs::metadata(path)
+        .with_context(|| format!("stat {}", path.display()))?
+        .len())
 }
 
 pub async fn snapshot(source: &Path) -> Result<Snapshot> {
     let dir = tempfile::tempdir().context("create snapshot tempdir")?;
     let dest = dir.path().join("snapshot.sqlite");
+    let source_bytes = file_len(source)?;
 
     match vacuum_into(source, &dest).await {
         Ok(()) => Ok(Snapshot {
+            snapshot_bytes: file_len(&dest)?,
             path: dest,
             dir: Some(dir),
+            source_bytes,
         }),
         Err(e) => {
             tracing::warn!(
@@ -152,8 +189,10 @@ pub async fn snapshot(source: &Path) -> Result<Snapshot> {
                 }
             }
             Ok(Snapshot {
+                snapshot_bytes: file_len(&dest)?,
                 path: dest,
                 dir: Some(dir),
+                source_bytes,
             })
         }
     }
@@ -202,15 +241,32 @@ pub async fn open_sqlite(path: &Path, create: bool) -> Result<SqlitePool> {
         .with_context(|| format!("open sqlite pool at {}", path.display()))
 }
 
+/// Mirror `opts.source_path` into `pool`: snapshot it first when
+/// `opts.snapshot` says to, then [`run_snapshot`]. A provider that wants
+/// to look at the source before mirroring it takes the [`Snapshot`]
+/// itself, inspects it with [`crate::read_schema`], and calls
+/// [`run_snapshot`] with what it decided.
 pub async fn run(
     pool: &SqlitePool,
     opts: &MirrorOptions,
     progress: &Progress,
 ) -> Result<MirrorStats> {
-    let source_bytes = std::fs::metadata(&opts.source_path)
-        .with_context(|| format!("stat {}", opts.source_path.display()))?
-        .len();
+    let snap = if opts.snapshot {
+        snapshot(&opts.source_path).await?
+    } else {
+        Snapshot::in_place(&opts.source_path)?
+    };
+    run_snapshot(pool, &snap, opts, progress).await
+}
 
+/// Mirror a snapshot into `pool`. `opts.source_path` and `opts.snapshot`
+/// are not used here: the snapshot is the source.
+pub async fn run_snapshot(
+    pool: &SqlitePool,
+    snap: &Snapshot,
+    opts: &MirrorOptions,
+    progress: &Progress,
+) -> Result<MirrorStats> {
     if opts.gc {
         // Best-effort: a failed collection costs disk, not correctness,
         // and must not fail the backup.
@@ -223,22 +279,12 @@ pub async fn run(
         }
     }
 
-    let snap = if opts.snapshot {
-        Some(snapshot(&opts.source_path).await?)
-    } else {
-        None
-    };
-    let src_path = snap
-        .as_ref()
-        .map(|s| s.path().to_path_buf())
-        .unwrap_or_else(|| opts.source_path.clone());
-
     // One connection for the whole run: ATTACH is connection-scoped, and
     // the pool is `max_connections(1)` anyway (doltlite's HEAD pointer is
     // per-connection — see `doltlite_raw`'s notes).
     let mut conn = pool.acquire().await.context("acquire mirror connection")?;
 
-    let literal = src_path.display().to_string().replace('\'', "''");
+    let literal = snap.path().display().to_string().replace('\'', "''");
     // Audited: `literal` is the source path, `'`-escaped; the schema alias is
     // a const through `quote_ident`.
     sqlx::query(sqlx::AssertSqlSafe(format!(
@@ -247,7 +293,7 @@ pub async fn run(
     )))
     .execute(&mut *conn)
     .await
-    .with_context(|| format!("attach source {}", src_path.display()))?;
+    .with_context(|| format!("attach source {}", snap.path().display()))?;
 
     let result = mirror_attached(&mut conn, opts, progress).await;
 
@@ -260,10 +306,10 @@ pub async fn run(
     .execute(&mut *conn)
     .await;
     drop(conn);
-    drop(snap);
 
     let mut stats = result?;
-    stats.source_bytes = source_bytes;
+    stats.source_bytes = snap.source_bytes();
+    stats.snapshot_bytes = snap.snapshot_bytes();
     Ok(stats)
 }
 
@@ -568,7 +614,7 @@ impl MirrorStats {
         format!(
             "tables={} rows={} stale_tables_dropped={} dropped_columns={} \
              stable_keys={} shadow_tables_skipped={} virtual_tables_skipped={} \
-             source_bytes={}",
+             source_bytes={} snapshot_bytes={}",
             self.tables,
             self.rows,
             self.stale_tables_dropped,
@@ -577,6 +623,7 @@ impl MirrorStats {
             self.shadow_tables_skipped,
             self.virtual_tables_skipped,
             self.source_bytes,
+            self.snapshot_bytes,
         )
     }
 }

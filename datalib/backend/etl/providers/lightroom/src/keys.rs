@@ -1,50 +1,43 @@
 //! The keys of the Lightroom catalog tables that have no PRIMARY KEY.
 //! Lightroom declares those tables' keys as a UNIQUE index named
-//! `index_<Table>_primaryKey`; this reads them out of the catalog and
-//! hands the mirror engine the key columns per table, as `primary_keys`.
+//! `index_<Table>_primaryKey`. The rule here is a pure function of the
+//! catalog's [`SourceSchema`]; [`keyed_options`] applies it, handing the
+//! mirror engine the key columns per table as `primary_keys`.
 
 use std::collections::BTreeMap;
-use std::path::Path;
-use std::str::FromStr;
-
-use anyhow::{Context, Result};
-use sqlx::sqlite::SqliteConnectOptions;
-use sqlx::{Connection, Row, SqliteConnection};
 
 use datalib_etl_lightroom_config::glob_match;
-use datalib_etl_sqlite_mirror::plan::quote_ident;
+use datalib_etl_sqlite_mirror::{SourceSchema, UniqueIndex};
 
 use crate::ingest::MirrorOptions;
 
-/// A complete UNIQUE index: partial and expression indexes constrain
-/// something other than plain columns, so they are never read in.
+/// Why a table that could have been keyed was left keyless.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UniqueIndex {
-    pub name: String,
-    pub columns: Vec<String>,
+pub enum Skipped {
+    /// Several UNIQUE indexes and none named as the key.
+    Ambiguous { table: String, indexes: Vec<String> },
+    /// The chosen index has NULLs, which a key cannot.
+    HasNulls { table: String, key: Vec<String> },
 }
 
-/// One catalog table as the key rule sees it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TableShape {
-    pub name: String,
-    pub columns: Vec<String>,
-    pub has_declared_key: bool,
-    pub unique_indexes: Vec<UniqueIndex>,
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct KeyPlan {
+    pub keys: BTreeMap<String, Vec<String>>,
+    pub skipped: Vec<Skipped>,
 }
 
-/// The columns of the table's only UNIQUE index, or of the one named
-/// `…primaryKey` among several. A UNIQUE index is a constraint, not an
-/// identity, so with several and no such name there is no answer.
-pub fn key_of(indexes: &[UniqueIndex]) -> Option<&[String]> {
+/// The table's only UNIQUE index, or the one named `…primaryKey` among
+/// several. A UNIQUE index is a constraint, not an identity, so with
+/// several and no such name there is no answer.
+fn key_index(indexes: &[UniqueIndex]) -> Option<&UniqueIndex> {
     if let [only] = indexes {
-        return Some(&only.columns);
+        return Some(only);
     }
     let mut named = indexes
         .iter()
         .filter(|i| i.name.to_ascii_lowercase().contains("primarykey"));
     match (named.next(), named.next()) {
-        (Some(one), None) => Some(&one.columns),
+        (Some(one), None) => Some(one),
         _ => None,
     }
 }
@@ -53,167 +46,93 @@ pub fn key_of(indexes: &[UniqueIndex]) -> Option<&[String]> {
 /// a declared key, or with a column the engine keys on first
 /// (`id_global`), is left to the engine; a key naming a column the
 /// filters drop is left out, since the engine refuses it.
-pub fn keys_for(
-    tables: &[TableShape],
+pub fn plan_keys(
+    schema: &SourceSchema,
     stable_key_columns: &[String],
     exclude_columns: &[String],
-) -> BTreeMap<String, Vec<String>> {
-    tables
-        .iter()
-        .filter(|t| !t.has_declared_key)
-        .filter(|t| !t.columns.iter().any(|c| stable_key_columns.contains(c)))
-        .filter_map(|t| {
-            let key = key_of(&t.unique_indexes)?;
-            let dropped = key.iter().any(|c| {
-                exclude_columns
-                    .iter()
-                    .any(|p| glob_match(p, &format!("{}.{c}", t.name)))
+) -> KeyPlan {
+    let mut plan = KeyPlan::default();
+    for table in &schema.tables {
+        let engine_keys_it = !table.declared_key.is_empty()
+            || table.columns.iter().any(|c| stable_key_columns.contains(c));
+        if engine_keys_it {
+            continue;
+        }
+        let Some(index) = key_index(&table.unique_indexes) else {
+            if table.unique_indexes.len() > 1 {
+                plan.skipped.push(Skipped::Ambiguous {
+                    table: table.name.clone(),
+                    indexes: table
+                        .unique_indexes
+                        .iter()
+                        .map(|i| i.name.clone())
+                        .collect(),
+                });
+            }
+            continue;
+        };
+        let dropped = index.columns.iter().any(|c| {
+            exclude_columns
+                .iter()
+                .any(|p| glob_match(p, &format!("{}.{c}", table.name)))
+        });
+        if dropped {
+            continue;
+        }
+        if index.has_nulls {
+            plan.skipped.push(Skipped::HasNulls {
+                table: table.name.clone(),
+                key: index.columns.clone(),
             });
-            (!dropped).then(|| (t.name.clone(), key.to_vec()))
-        })
-        .collect()
+        } else {
+            plan.keys.insert(table.name.clone(), index.columns.clone());
+        }
+    }
+    plan
 }
 
-/// `options` with the catalog's keys added to `primary_keys`. An entry
-/// the user already set for a table wins.
-///
-/// The catalog is read as it is now and the engine snapshots it a moment
-/// later, so a live catalog that gains a NULL in a key column in between
-/// fails that run, loudly; a backup is a copy and cannot.
-pub async fn with_catalog_keys(options: &MirrorOptions) -> Result<MirrorOptions> {
-    let mut conn = open_read_only(&options.source_path).await?;
-    let shapes = read_shapes(&mut conn).await?;
-    let keys = keys_for(
-        &shapes,
+/// `options` with the catalog's keys added to `primary_keys`, each skipped
+/// table warned about. An entry the user already set for a table wins.
+pub fn keyed_options(options: &MirrorOptions, schema: &SourceSchema) -> MirrorOptions {
+    let plan = plan_keys(
+        schema,
         &options.stable_key_columns,
         &options.exclude_columns,
     );
-    for shape in &shapes {
-        let undecided = !shape.has_declared_key
-            && shape.unique_indexes.len() > 1
-            && !keys.contains_key(&shape.name);
-        if undecided {
-            tracing::warn!(
-                table = %shape.name,
+    for skipped in &plan.skipped {
+        match skipped {
+            Skipped::Ambiguous { table, indexes } => tracing::warn!(
+                table,
+                indexes = %indexes.join(", "),
                 "lightroom: several UNIQUE indexes and none is named as the key; \
                  mirroring the table keyless (pin one with primary_keys)"
-            );
-        }
-    }
-    let mut checked = BTreeMap::new();
-    for (table, key) in keys {
-        if has_null(&mut conn, &table, &key).await? {
-            tracing::warn!(
+            ),
+            Skipped::HasNulls { table, key } => tracing::warn!(
                 table,
                 key = %key.join(", "),
                 "lightroom: the UNIQUE index has NULLs in some rows, so it cannot be \
                  the key; mirroring the table keyless"
-            );
-        } else {
-            checked.insert(table, key);
+            ),
         }
     }
-    let _ = conn.close().await;
-    checked.extend(options.primary_keys.clone());
-    Ok(MirrorOptions {
-        primary_keys: checked,
+    let mut keys = plan.keys;
+    keys.extend(options.primary_keys.clone());
+    MirrorOptions {
+        primary_keys: keys,
         ..options.clone()
-    })
-}
-
-async fn open_read_only(path: &Path) -> Result<SqliteConnection> {
-    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
-        .with_context(|| format!("sqlite uri for {}", path.display()))?
-        .read_only(true)
-        .create_if_missing(false);
-    SqliteConnection::connect_with(&opts)
-        .await
-        .with_context(|| format!("open {} read-only", path.display()))
-}
-
-async fn read_shapes(conn: &mut SqliteConnection) -> Result<Vec<TableShape>> {
-    let names: Vec<String> = sqlx::query_scalar(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' \
-         ORDER BY name",
-    )
-    .fetch_all(&mut *conn)
-    .await
-    .context("list the catalog's tables")?;
-    let mut shapes = Vec::new();
-    for name in names {
-        let cols = sqlx::query("SELECT name, pk FROM pragma_table_info(?)")
-            .bind(&name)
-            .fetch_all(&mut *conn)
-            .await
-            .with_context(|| format!("table_info({name})"))?;
-        let columns = cols.iter().map(|r| r.get::<String, _>("name")).collect();
-        let has_declared_key = cols.iter().any(|r| r.get::<i64, _>("pk") > 0);
-        let listed = sqlx::query("SELECT name, \"unique\", partial FROM pragma_index_list(?)")
-            .bind(&name)
-            .fetch_all(&mut *conn)
-            .await
-            .with_context(|| format!("index_list({name})"))?;
-        let mut unique_indexes = Vec::new();
-        for ix in &listed {
-            if ix.get::<i64, _>("unique") == 0 || ix.get::<i64, _>("partial") != 0 {
-                continue;
-            }
-            let index: String = ix.get("name");
-            let parts = sqlx::query("SELECT name FROM pragma_index_info(?)")
-                .bind(&index)
-                .fetch_all(&mut *conn)
-                .await
-                .with_context(|| format!("index_info({index})"))?;
-            // A NULL column name is an expression, not a column.
-            let columns: Vec<String> = parts
-                .iter()
-                .filter_map(|r| r.get::<Option<String>, _>("name"))
-                .collect();
-            if !columns.is_empty() && columns.len() == parts.len() {
-                unique_indexes.push(UniqueIndex {
-                    name: index,
-                    columns,
-                });
-            }
-        }
-        shapes.push(TableShape {
-            name,
-            columns,
-            has_declared_key,
-            unique_indexes,
-        });
     }
-    Ok(shapes)
-}
-
-/// A UNIQUE index lets NULLs repeat; a primary key does not.
-async fn has_null(conn: &mut SqliteConnection, table: &str, key: &[String]) -> Result<bool> {
-    let any_null = key
-        .iter()
-        .map(|c| format!("{} IS NULL", quote_ident(c)))
-        .collect::<Vec<_>>()
-        .join(" OR ");
-    // Audited: names come out of the catalog's own schema through
-    // `quote_ident`.
-    let sql = format!(
-        "SELECT EXISTS (SELECT 1 FROM {} WHERE {any_null})",
-        quote_ident(table)
-    );
-    let found: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
-        .fetch_one(&mut *conn)
-        .await
-        .with_context(|| format!("check {table}({}) for NULLs", key.join(", ")))?;
-    Ok(found != 0)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datalib_etl_sqlite_mirror::TableInfo;
 
-    fn ix(name: &str, cols: &[&str]) -> UniqueIndex {
+    fn ix(name: &str, cols: &[&str], has_nulls: bool) -> UniqueIndex {
         UniqueIndex {
             name: name.to_string(),
             columns: cols.iter().map(|c| c.to_string()).collect(),
+            has_nulls,
         }
     }
 
@@ -221,138 +140,143 @@ mod tests {
         c.iter().map(|c| c.to_string()).collect()
     }
 
-    fn shape(name: &str, columns: &[&str], declared: bool, idx: Vec<UniqueIndex>) -> TableShape {
-        TableShape {
+    fn table(name: &str, columns: &[&str], declared: &[&str], idx: Vec<UniqueIndex>) -> TableInfo {
+        TableInfo {
             name: name.to_string(),
             columns: cols(columns),
-            has_declared_key: declared,
+            declared_key: cols(declared),
             unique_indexes: idx,
         }
     }
 
+    fn plan(tables: Vec<TableInfo>) -> KeyPlan {
+        plan_keys(&SourceSchema { tables }, &cols(&["id_global"]), &[])
+    }
+
     #[test]
     fn the_only_unique_index_is_the_key() {
-        let all = [ix(
-            "sqlite_autoindex_MigratedImages_1",
+        let p = plan(vec![table(
+            "MigratedImages",
             &["localId", "ozCatalogId"],
-        )];
-        assert_eq!(
-            key_of(&all),
-            Some(cols(&["localId", "ozCatalogId"]).as_slice())
-        );
+            &[],
+            vec![ix(
+                "sqlite_autoindex_MigratedImages_1",
+                &["localId", "ozCatalogId"],
+                false,
+            )],
+        )]);
+        assert_eq!(p.keys["MigratedImages"], cols(&["localId", "ozCatalogId"]));
     }
 
     #[test]
     fn the_one_named_primary_key_wins_among_several() {
-        let all = [
-            ix("index_T_changeCounter", &["changeCounter"]),
-            ix("index_T_primaryKey", &["ozCatalogId", "ozAssetId"]),
-        ];
+        let p = plan(vec![table(
+            "T",
+            &["a", "b", "c"],
+            &[],
+            vec![
+                ix("index_T_changeCounter", &["c"], false),
+                ix("index_T_primaryKey", &["a", "b"], false),
+            ],
+        )]);
+        assert_eq!(p.keys["T"], cols(&["a", "b"]));
+    }
+
+    #[test]
+    fn several_unique_indexes_with_no_primary_key_name_are_skipped() {
+        let p = plan(vec![table(
+            "T",
+            &["a", "b"],
+            &[],
+            vec![ix("by_a", &["a"], false), ix("by_b", &["b"], false)],
+        )]);
+        assert!(p.keys.is_empty());
         assert_eq!(
-            key_of(&all),
-            Some(cols(&["ozCatalogId", "ozAssetId"]).as_slice())
+            p.skipped,
+            [Skipped::Ambiguous {
+                table: "T".into(),
+                indexes: cols(&["by_a", "by_b"])
+            }]
         );
     }
 
     #[test]
-    fn several_unique_indexes_with_no_primary_key_name_have_no_key() {
-        assert_eq!(
-            key_of(&[ix("by_name", &["name"]), ix("by_guid", &["guid"])]),
-            None
-        );
+    fn two_indexes_named_primary_key_are_skipped() {
+        let p = plan(vec![table(
+            "T",
+            &["a", "b"],
+            &[],
+            vec![
+                ix("a_primaryKey", &["a"], false),
+                ix("b_primaryKey", &["b"], false),
+            ],
+        )]);
+        assert!(p.keys.is_empty() && p.skipped.len() == 1);
     }
 
     #[test]
-    fn two_indexes_named_primary_key_have_no_key() {
+    fn a_key_with_nulls_is_skipped() {
+        let p = plan(vec![table(
+            "T",
+            &["a"],
+            &[],
+            vec![ix("T_primaryKey", &["a"], true)],
+        )]);
+        assert!(p.keys.is_empty());
         assert_eq!(
-            key_of(&[ix("a_primaryKey", &["a"]), ix("b_primaryKey", &["b"])]),
-            None
+            p.skipped,
+            [Skipped::HasNulls {
+                table: "T".into(),
+                key: cols(&["a"])
+            }]
         );
-    }
-
-    #[test]
-    fn no_unique_index_is_no_key() {
-        assert_eq!(key_of(&[]), None);
     }
 
     #[test]
     fn tables_the_engine_keys_itself_are_left_alone() {
-        let idx = vec![ix("index_T_primaryKey", &["a"])];
-        let tables = [
-            shape("Declared", &["a"], true, idx.clone()),
-            shape("HasGlobal", &["a", "id_global"], false, idx.clone()),
-            shape("Keyless", &["a"], false, idx),
-        ];
-        let got = keys_for(&tables, &cols(&["id_global"]), &[]);
-        assert_eq!(got.keys().collect::<Vec<_>>(), ["Keyless"]);
+        let idx = vec![ix("index_T_primaryKey", &["a"], false)];
+        let p = plan(vec![
+            table("Declared", &["a"], &["a"], idx.clone()),
+            table("HasGlobal", &["a", "id_global"], &[], idx.clone()),
+            table("Keyless", &["a"], &[], idx),
+        ]);
+        assert_eq!(p.keys.keys().collect::<Vec<_>>(), ["Keyless"]);
+    }
+
+    #[test]
+    fn a_table_with_no_unique_index_stays_keyless_without_a_warning() {
+        let p = plan(vec![table("T", &["a"], &[], vec![])]);
+        assert!(p.keys.is_empty() && p.skipped.is_empty());
     }
 
     #[test]
     fn a_key_naming_an_excluded_column_is_left_out() {
-        let tables = [shape(
-            "T",
-            &["a", "b"],
-            false,
-            vec![ix("T_primaryKey", &["a", "b"])],
-        )];
-        assert!(keys_for(&tables, &[], &cols(&["T.b"])).is_empty());
-    }
-
-    async fn catalog(stmts: &[&str]) -> (tempfile::TempDir, MirrorOptions) {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("c.lrcat");
-        let opts = SqliteConnectOptions::new()
-            .filename(&path)
-            .create_if_missing(true);
-        let mut conn = SqliteConnection::connect_with(&opts).await.unwrap();
-        for s in stmts {
-            // Test: literal statements.
-            sqlx::query(sqlx::AssertSqlSafe(*s))
-                .execute(&mut conn)
-                .await
-                .unwrap();
-        }
-        conn.close().await.unwrap();
-        let options = MirrorOptions {
-            stable_key_columns: cols(&["id_global"]),
-            ..MirrorOptions::new(path)
+        let schema = SourceSchema {
+            tables: vec![table(
+                "T",
+                &["a", "b"],
+                &[],
+                vec![ix("T_primaryKey", &["a", "b"], false)],
+            )],
         };
-        (dir, options)
+        assert!(plan_keys(&schema, &[], &cols(&["T.b"])).keys.is_empty());
     }
 
-    #[tokio::test]
-    async fn the_catalogs_keys_reach_primary_keys_after_the_null_check() {
-        let (_dir, options) = catalog(&[
-            "CREATE TABLE Synced (image INTEGER, payloadKey TEXT, payloadData TEXT)",
-            "CREATE UNIQUE INDEX index_Synced_primaryKey ON Synced(image, payloadKey)",
-            "INSERT INTO Synced VALUES (1,'a','x')",
-            "CREATE TABLE WithNull (a INTEGER, b TEXT)",
-            "CREATE UNIQUE INDEX index_WithNull_primaryKey ON WithNull(a, b)",
-            "INSERT INTO WithNull VALUES (1,NULL),(2,NULL)",
-            "CREATE TABLE Two (a INTEGER, b INTEGER)",
-            "CREATE UNIQUE INDEX by_a ON Two(a)",
-            "CREATE UNIQUE INDEX by_b ON Two(b)",
-            "CREATE TABLE Declared (id INTEGER PRIMARY KEY, a INTEGER)",
-            "CREATE UNIQUE INDEX d_a ON Declared(a)",
-        ])
-        .await;
-        let got = with_catalog_keys(&options).await.unwrap().primary_keys;
-        let want: BTreeMap<String, Vec<String>> =
-            BTreeMap::from([("Synced".to_string(), cols(&["image", "payloadKey"]))]);
-        assert_eq!(got, want);
-    }
-
-    #[tokio::test]
-    async fn a_key_the_user_pinned_wins() {
-        let (_dir, mut options) = catalog(&[
-            "CREATE TABLE Synced (image INTEGER, payloadKey TEXT)",
-            "CREATE UNIQUE INDEX index_Synced_primaryKey ON Synced(image, payloadKey)",
-        ])
-        .await;
-        options
-            .primary_keys
-            .insert("Synced".into(), cols(&["image"]));
-        let got = with_catalog_keys(&options).await.unwrap().primary_keys;
-        assert_eq!(got["Synced"], cols(&["image"]));
+    #[test]
+    fn a_key_the_user_pinned_wins() {
+        let schema = SourceSchema {
+            tables: vec![table(
+                "T",
+                &["a", "b"],
+                &[],
+                vec![ix("T_primaryKey", &["a", "b"], false)],
+            )],
+        };
+        let mut options = MirrorOptions::new("/dev/null");
+        options.primary_keys.insert("T".into(), cols(&["a"]));
+        assert_eq!(
+            keyed_options(&options, &schema).primary_keys["T"],
+            cols(&["a"])
+        );
     }
 }
