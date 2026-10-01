@@ -474,7 +474,7 @@
         if (!r) {
           what.append("Type a name, or a folder.");
         } else if (r.target === "new") {
-          what.append("Path: ", code(r.shown_path));
+          what.append("Creates ", code(r.shown_path));
           ok = true;
         } else if (r.target === "library") {
           what.append(code(r.shown_path), " is already a library. ");
