@@ -185,23 +185,25 @@ onUnmounted(() => stop?.());
   -webkit-user-select: none;
   user-select: none;
 }
-/* The search box at the right end. As the window narrows it is what
-   shrinks, from 440px to its min-width; the start keeps its content
-   width (the crumb caps the library name). The desktop shell's minimum
-   window width (MIN_WINDOW_WIDTH in datalib/tauri/src/main.rs) is the
-   sum, so the search box stays in view. */
+/* The search box at the right end. As the window narrows the search
+   box shrinks first, from 440px to its min-width (its far larger
+   flex-shrink leaves it nearly all the shrinking); past that the
+   crumb's library name ellipsizes. The desktop shell's minimum window
+   width (MIN_WINDOW_WIDTH in datalib/tauri/src/main.rs) keeps both in
+   view. */
 .datalib-toolbar-start {
-  flex: 1 0 auto;
+  flex: 1 1 auto;
   display: flex;
   align-items: center;
   gap: 4px;
+  min-width: 0;
 }
 .datalib-toolbar-sync {
   flex: 0 0 auto;
   display: flex;
 }
 .datalib-toolbar-search {
-  flex: 0 1 440px;
+  flex: 0 1000 440px;
   min-width: 180px;
   display: flex;
 }

@@ -155,6 +155,7 @@ button.crumb-lib:hover,
   background: var(--datalib-hover);
 }
 .crumb-lib {
+  min-width: 0;
   max-width: 200px;
 }
 .crumb-name {

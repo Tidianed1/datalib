@@ -559,11 +559,11 @@ fn launcher_page_url() -> Url {
 /// `invoke` fails with nothing on screen to say why.
 const MAIN_WINDOW: &str = "main";
 
-/// Narrow enough to tile, wide enough that the toolbar's search box keeps
-/// its min-width beside the window buttons, back/forward, the library
-/// crumb at its capped width and the sync pill, at comfortable density
+/// Wide enough that the toolbar keeps its search box at its min-width
+/// and still shows part of the library name, beside the window buttons,
+/// back/forward and the sync pill, at comfortable density
 /// (`.datalib-toolbar-search` in `datalib/ui/src/App.vue`).
-const MIN_WINDOW_WIDTH: f64 = 840.0;
+const MIN_WINDOW_WIDTH: f64 = 720.0;
 const MIN_WINDOW_HEIGHT: f64 = 480.0;
 
 fn main_window(app: &AppHandle, url: WebviewUrl) -> WebviewWindowBuilder<'_, Wry, AppHandle> {

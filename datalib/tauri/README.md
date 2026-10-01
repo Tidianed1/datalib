@@ -160,7 +160,7 @@ Microsoft's [Fluent Emoji](https://github.com/microsoft/fluentui-emoji)
 - The main window reopens at the size (and maximized state) it was
   closed at, via `tauri-plugin-window-state`, which keeps it in
   `.window-state.json` under the app's config directory. It cannot be
-  made narrower than 840px, so the toolbar's search box stays in view.
+  made narrower than 720px, so the toolbar's search box stays in view.
 - No blocking model download at startup: qmd's models are fetched on
   first need by the steps and the search applet (`datalib_qmd_models`),
   the same as the web packaging — the shell passes nothing besides
