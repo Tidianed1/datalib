@@ -229,22 +229,25 @@ export function yRange(chart: Chart, domain: [number, number]): [number, number]
   return [min - pad, max + pad];
 }
 
-/// A line as a step function across the domain: flat until each point,
-/// then up to it, carried on to `end` — the step's finish, or now.
-export function stepPath(
-  points: Point[],
+/// A chart's lines as uPlot draws them: one shared x column (seconds,
+/// uPlot's time unit) and a y column per line, read as a step function
+/// at every instant any line moves. Points before the domain are folded
+/// into its start, so a line that began earlier starts at its value
+/// then; a line is null before its first point, so it starts where it
+/// starts; and every line is carried on to `end` — the step's finish,
+/// or now — so the last value reaches the edge it holds until.
+export function aligned(
+  chart: Chart,
+  domain: [number, number],
   end: number,
-  x: (t: number) => number,
-  y: (v: number) => number,
-): string {
-  if (points.length === 0) return "";
-  const parts: string[] = [];
-  let prev: Point | null = null;
-  for (const p of points) {
-    if (prev) parts.push(`L${x(p.t).toFixed(1)},${y(prev.v).toFixed(1)}`);
-    parts.push(`${prev ? "L" : "M"}${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`);
-    prev = p;
-  }
-  if (prev && end > prev.t) parts.push(`L${x(end).toFixed(1)},${y(prev.v).toFixed(1)}`);
-  return parts.join("");
+): { xs: number[]; ys: (number | null)[][] } {
+  const stop = Math.min(end, domain[1]);
+  const inside = chart.lines.flatMap((l) =>
+    l.points.filter((p) => p.t > domain[0] && p.t <= stop).map((p) => p.t),
+  );
+  const times = [...new Set([domain[0], ...inside, stop])].sort((a, b) => a - b);
+  return {
+    xs: times.map((t) => t / 1000),
+    ys: chart.lines.map((l) => times.map((t) => valueAt(l.points, t))),
+  };
 }
