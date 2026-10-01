@@ -74,6 +74,38 @@ test.describe("toolbar", () => {
     expect(await copied()).toBe(await path.textContent());
   });
 
+  // The window's minimum width in the desktop shell (MIN_WINDOW_WIDTH)
+  // assumes the search box shrinks first and to no less than 180px, and
+  // that the library name then ellipsizes rather than sliding under it.
+  test("the search box sits at the right end and shrinks with the window", async ({ page }) => {
+    await page.goto("/");
+    const box = page.locator(".command-box");
+    const lib = page.locator(".crumb-lib");
+    const name = page.locator(".crumb-name");
+    await expect(box).toBeVisible();
+    const wide = (await box.boundingBox())!;
+    expect(wide.width).toBe(440);
+    expect(1280 - (wide.x + wide.width)).toBeLessThan(16);
+    const truncated = () => name.evaluate((el) => el.scrollWidth > el.clientWidth);
+
+    for (const density of ["Compact", "Comfortable"]) {
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await page.getByRole("button", { name: density }).click();
+      for (const width of [600, 420]) {
+        await page.setViewportSize({ width, height: 800 });
+        const b = (await box.boundingBox())!;
+        const l = (await lib.boundingBox())!;
+        expect(b.width).toBeLessThan(440);
+        expect(b.width).toBeGreaterThanOrEqual(180);
+        expect(b.x + b.width).toBeLessThanOrEqual(width);
+        expect(b.x).toBeGreaterThanOrEqual(l.x + l.width);
+        // At 600px the search box has room to give; at 420px it is at
+        // its floor and the name gives way.
+        expect(await truncated()).toBe(width === 420);
+      }
+    }
+  });
+
   test("the syncing pill is absent when nothing runs", async ({ page }) => {
     await page.goto("/");
     await expect(page.locator(".datalib-toolbar")).toBeVisible();

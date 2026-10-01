@@ -54,7 +54,7 @@ const shortcut = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘K" : "Ctrl K";
   display: flex;
   align-items: center;
   gap: 6px;
-  width: min(440px, 100%);
+  width: 100%;
   height: calc(var(--datalib-control-h) + 2px);
   box-sizing: border-box;
   padding: 0 8px;

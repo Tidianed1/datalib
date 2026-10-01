@@ -14,6 +14,7 @@ use tauri::webview::{NewWindowFeatures, NewWindowResponse};
 use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindowBuilder, Wry};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri_plugin_opener::OpenerExt;
+use tauri_plugin_window_state::StateFlags;
 
 /// The spawned `datalib-http` child, managed in tauri state so the
 /// exit handler can kill it. `None` until boot succeeds.
@@ -412,6 +413,16 @@ fn main() {
                 .open_js_links_on_click(false)
                 .build(),
         )
+        // The main window reopens at the size it was closed at, kept in
+        // `.window-state.json` in the app's config directory. Card
+        // windows are numbered per run, so a saved size would never
+        // match one again.
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(StateFlags::SIZE | StateFlags::MAXIMIZED)
+                .with_filter(|label| label == MAIN_WINDOW)
+                .build(),
+        )
         .invoke_handler(tauri::generate_handler![
             version,
             launcher_state,
@@ -548,11 +559,19 @@ fn launcher_page_url() -> Url {
 /// `invoke` fails with nothing on screen to say why.
 const MAIN_WINDOW: &str = "main";
 
+/// Wide enough that the toolbar keeps its search box at its min-width
+/// and still shows part of the library name, beside the window buttons,
+/// back/forward and the sync pill, at comfortable density
+/// (`.datalib-toolbar-search` in `datalib/ui/src/App.vue`).
+const MIN_WINDOW_WIDTH: f64 = 720.0;
+const MIN_WINDOW_HEIGHT: f64 = 480.0;
+
 fn main_window(app: &AppHandle, url: WebviewUrl) -> WebviewWindowBuilder<'_, Wry, AppHandle> {
     app_window(
         WebviewWindowBuilder::new(app, MAIN_WINDOW, url)
             .title("Data Liberation")
-            .inner_size(1280.0, 800.0),
+            .inner_size(1280.0, 800.0)
+            .min_inner_size(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT),
         app,
     )
 }
@@ -700,6 +719,7 @@ fn app_window<'a>(
                 WebviewWindowBuilder::new(&new_app, &label, WebviewUrl::External(blank))
                     .title("Data Liberation")
                     .inner_size(1100.0, 760.0)
+                    .min_inner_size(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
                     .window_features(features),
                 &new_app,
             )
