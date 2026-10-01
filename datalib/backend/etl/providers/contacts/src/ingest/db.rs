@@ -1,6 +1,5 @@
 //! Doltlite-backed raw store for the CardDAV provider.
 
-use datalib_etl::blob_cas::{cas_path_for, BlobCas};
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_macros::RawStoreHandle;
 use std::collections::{HashMap, HashSet};
@@ -21,12 +20,6 @@ use super::schema_raw::{full_ddl, ContactCategoryRow, GroupMemberRow, LADDER};
 #[derive(Clone, Debug, RawStoreHandle)]
 pub struct RawDb {
     pool: SqlitePool,
-    /// The sibling store for inline vCard `PHOTO` bytes. `Some` on the
-    /// download path, which is the only side that touches it — render
-    /// decodes photos straight out of the payload. Opened with the
-    /// handle rather than from a path at the call site, so there is one
-    /// opener per store and `close_all` reaches it.
-    cas: Option<BlobCas>,
     /// The commit a reader's connection reads, or `None` for the download
     /// step reading back what it just wrote. Set once, at open.
     pin: Option<datalib_etl::pin::Pin>,
@@ -78,7 +71,6 @@ impl RawDb {
         let pool = reader.pool().clone();
         Ok(Some(Self {
             pool,
-            cas: None,
             pin: Some(pin),
         }))
     }
@@ -92,20 +84,7 @@ impl RawDb {
         let owned = full_ddl();
         let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
         let pool = dr::open_migrating(db_path, &slices, LADDER).await?;
-        // `db_path` is the entity db file, never the per-source directory:
-        // `cas_path_for` derives the sibling via `.parent()`, so a directory
-        // here would leak the CAS into the shared `raw/` root.
-        let cas = BlobCas::open(&cas_path_for(db_path)).await?;
-        Ok(Self {
-            pool,
-            cas: Some(cas),
-            pin: None,
-        })
-    }
-
-    /// `None` on a reader — see the field.
-    pub fn cas(&self) -> Option<&BlobCas> {
-        self.cas.as_ref()
+        Ok(Self { pool, pin: None })
     }
 
     pub fn pool(&self) -> &SqlitePool {
@@ -308,11 +287,6 @@ impl RawDb {
                     .await
                     .context("delete what a card derives")?;
             }
-            sqlx::query("DELETE FROM contact_photos WHERE owner_id = ?")
-                .bind(&id)
-                .execute(&mut *tx)
-                .await
-                .context("delete contact photo edge")?;
         }
         tx.commit().await.context("commit delete contact tx")?;
         Ok(())
@@ -356,18 +330,13 @@ impl RawDb {
                     .await
                     .context("delete what a card derives")?;
             }
-            sqlx::query("DELETE FROM contact_photos WHERE owner_id = ?")
-                .bind(&id)
-                .execute(&mut *tx)
-                .await
-                .context("delete contact photo edge")?;
         }
         tx.commit().await.context("commit delete contacts tx")?;
         Ok(())
     }
 
-    /// Drop the address book a `.vcf` file was, with its contacts, their
-    /// photo edges and sidecar rows, and forget the file's cursor entry — in
+    /// Drop the address book a `.vcf` file was, with its contacts and
+    /// their sidecar rows, and forget the file's cursor entry — in
     /// one transaction, so a crash leaves the file stamped and the next run
     /// retries. Returns how many contacts went.
     pub async fn delete_file_addressbook(
@@ -384,8 +353,6 @@ impl RawDb {
         for sql in [
             "DELETE FROM contact_group_members WHERE addressbook_id = ?",
             "DELETE FROM contact_categories WHERE addressbook_id = ?",
-            "DELETE FROM contact_photos WHERE owner_id IN \
-             (SELECT id FROM contacts WHERE addressbook_id = ?)",
             "DELETE FROM contacts_bookkeeping WHERE id IN \
              (SELECT id FROM contacts WHERE addressbook_id = ?)",
         ] {
@@ -697,10 +664,11 @@ mod tests {
         db.close().await;
     }
 
-    /// A store an older build wrote has cards and neither derived table;
-    /// its first open under this build fills both from the cards already
-    /// there, because an address book's sync-token says
-    /// nothing changed and the download would never fill it.
+    /// A store an older build wrote has cards, neither derived table, and
+    /// the retired `contact_photos`; its first open under this build fills
+    /// both from the cards already there, because an address book's
+    /// sync-token says nothing changed and the download would never fill
+    /// it, and drops `contact_photos`.
     #[tokio::test]
     async fn the_rungs_fill_the_derived_tables_from_the_cards_already_stored() {
         let dir = tempfile::tempdir().unwrap();
@@ -711,6 +679,11 @@ mod tests {
                 .filter(|d| {
                     !d.contains("contact_group_members") && !d.contains("contact_categories")
                 })
+                .chain([
+                    "CREATE TABLE contact_photos (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, \
+                         source_url TEXT NOT NULL, blake3 TEXT NULL)"
+                        .to_string(),
+                ])
                 .collect();
             let ddl: Vec<&str> = ddl.iter().map(String::as_str).collect();
             let pool = dr::open(&path, &ddl).await.unwrap();
@@ -736,6 +709,13 @@ mod tests {
             vec![("ab#bridge".to_string(), Some("ab#tng-picard".to_string()))]
         );
         assert_eq!(categories(&db).await, vec!["Away Team", "myContacts"]);
+        let photo_tables: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'contact_photos'",
+        )
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(photo_tables, 0, "contact_photos survived the open");
         db.close().await;
     }
 }

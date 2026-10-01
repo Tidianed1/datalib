@@ -278,8 +278,9 @@ pub fn member_uid(member: &str) -> Option<&str> {
 }
 
 /// The raw store's migration ladder (etl/README.md §"The migration
-/// ladder"). Each rung adds a table derived from the cards, and fills it
-/// from the cards already stored.
+/// ladder"). Every table but `contacts` is derived from the cards, so a
+/// rung that adds one fills it from the cards already stored, and a rung
+/// that drops one loses nothing.
 pub const LADDER: &[Migration] = &[
     Migration {
         version: 1,
@@ -327,6 +328,18 @@ pub const LADDER: &[Migration] = &[
                         .await?;
                     }
                 }
+                Ok(())
+            })
+        },
+    },
+    Migration {
+        version: 3,
+        name: "drop contact_photos; a photo stays in its vCard",
+        apply: |conn| {
+            Box::pin(async move {
+                sqlx::query("DROP TABLE IF EXISTS contact_photos")
+                    .execute(&mut *conn)
+                    .await?;
                 Ok(())
             })
         },
@@ -380,23 +393,6 @@ pub fn synthesized_name_uid(given: &str, family: &str) -> String {
         .to_string()
 }
 
-// contact_photos — CAS edge for contact pictures
-
-/// Edge table name. Shared (by convention, not code) with the LinkedIn
-/// provider's `contact_photos`.
-pub const CONTACT_PHOTOS_TABLE: &str = "contact_photos";
-
-pub const CONTACT_PHOTOS_DDL: &str = "CREATE TABLE IF NOT EXISTS contact_photos (
-    id         TEXT PRIMARY KEY,
-    owner_id   TEXT NOT NULL,
-    source_url TEXT NOT NULL,
-    blake3     TEXT NULL,
-    CHECK (blake3 IS NULL OR length(blake3) = 64)
-)";
-
-pub const CONTACT_PHOTOS_BY_OWNER_INDEX_DDL: &str =
-    "CREATE INDEX IF NOT EXISTS contact_photos_by_owner ON contact_photos(owner_id)";
-
 pub const CONTACTS_BY_ADDRESSBOOK_INDEX_DDL: &str =
     "CREATE INDEX IF NOT EXISTS contacts_by_addressbook ON contacts(addressbook_id)";
 
@@ -413,8 +409,6 @@ pub fn full_ddl() -> Vec<String> {
         ContactRow::ddl(),
         CONTACTS_BY_ADDRESSBOOK_INDEX_DDL.to_string(),
         CONTACTS_BY_HREF_INDEX_DDL.to_string(),
-        CONTACT_PHOTOS_DDL.to_string(),
-        CONTACT_PHOTOS_BY_OWNER_INDEX_DDL.to_string(),
         // Resume cursor for the local-`.vcf` path: skip re-ingesting a
         // file whose `(size, mtime)` hasn't moved since last run. The
         // CardDAV server path uses etags/sync-tokens instead and never

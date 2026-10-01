@@ -2,7 +2,6 @@
 
 pub mod api;
 pub mod db;
-pub mod photos;
 pub mod schema_raw;
 pub mod vcf_dir;
 
@@ -120,17 +119,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     "an addressbook could not be synced"
                 );
             }
-        }
-    }
-
-    // Lift inline vCard photos into the per-source CAS (consistent
-    // contact_photos shape). Best-effort: a CAS hiccup shouldn't fail an
-    // otherwise-good contacts sync.
-    // Through the handle's own CAS, so nothing here opens a second
-    // store. `None` is a reader, which never reaches this path.
-    if let Some(cas) = db.cas() {
-        if let Err(e) = photos::lift_photos_to_cas(&db, cas).await {
-            warn!(event = "carddav_photo_lift_failed", error = %e, "a photo could not be lifted out of its vCard");
         }
     }
 

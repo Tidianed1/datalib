@@ -1621,7 +1621,7 @@ expression: snapshot
       "message": "schema: grid index"
     },
     {
-      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=142 markdowns_read=142 markdowns_removed=3 rows_inserted=604"
+      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=142 markdowns_read=142 markdowns_removed=3 rows_inserted=598"
     }
   ],
   "grid_rows": [
@@ -12399,20 +12399,20 @@ expression: snapshot
   "storage_rows": [
     {
       "kind": "Source Size",
-      "members_sha": "sha256:e3b09ce70d4434e5e6c1be8166d187663c31575df240f1d987bc887926b5b139",
+      "members_sha": "sha256:41fed116f1a9577f652221791a74b6f242b5d26534e6059878cb09f47cc3ea0b",
       "rows": 22,
       "source": ""
     },
     {
       "kind": "Store",
-      "members_sha": "sha256:3ba416716d949ae7bbd676d113feddee847c0480de6e9ac04dfecaabd42205c5",
-      "rows": 36,
+      "members_sha": "sha256:ed56918ec6439e4fb39b3e9b40e26673e28ec3ac81966e45a9319030ab6df2da",
+      "rows": 35,
       "source": ""
     },
     {
       "kind": "Table",
-      "members_sha": "sha256:948076ffd1010397505d9141f38ba171a0be22ccda40cc823a8691e9acaf9ecf",
-      "rows": 150,
+      "members_sha": "sha256:b65b70535b93e0669e5016b57e6dcc1dad9e9f950ad4586ffed1b4e3af9b9ed6",
+      "rows": 148,
       "source": ""
     }
   ],
@@ -12420,6 +12420,6 @@ expression: snapshot
     "documents_count": 134,
     "dolt_log_count": 3,
     "grid_rows_count": 359,
-    "storage_rows_count": 208
+    "storage_rows_count": 205
   }
 }

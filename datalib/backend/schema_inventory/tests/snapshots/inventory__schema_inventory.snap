@@ -358,11 +358,6 @@ contact_group_members
     addressbook_id
     member
     member_id
-contact_photos
-    id
-    owner_id
-    source_url
-    blake3
 contacts
     id
     payload
