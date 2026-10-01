@@ -73,7 +73,8 @@ login can keep the bare address as its name: it is on another service.
   `credentialStatus: invalid`) may be fine. latchkey checks every
   `fastmail-dav` credential with a `PROPFIND` on
   `carddav.fastmail.com/dav/principals/`, where a password with only
-  calendar access gets 401. **Check account** is the real answer.
+  calendar access gets 401 ([imbue-ai/latchkey#167](https://github.com/imbue-ai/latchkey/issues/167)).
+  **Check account** is the real answer.
 
 ## Checking a credential by hand
 
