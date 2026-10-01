@@ -46,6 +46,7 @@ pub mod remote_media;
 pub mod request_log;
 pub mod supervisor;
 pub mod ui_events;
+pub mod ui_state;
 pub mod usage;
 pub mod watch;
 
@@ -210,6 +211,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/runs/{run}/log", get(run_log))
         .route("/api/log", get(log_lines))
         .route("/api/ui/events", post(ui_events::post_events))
+        .route(
+            "/api/ui/state/{name}",
+            get(ui_state::get_state).put(ui_state::put_state),
+        )
         .route("/api/sync/stream", get(sync_stream))
         .route("/api/frontend", get(get_frontend))
         // Remote media a document was let load (remote_media.rs): the

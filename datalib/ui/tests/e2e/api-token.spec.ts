@@ -7,7 +7,7 @@
 // on (search, assets, the SSE stream) rides that cookie.
 
 import { test, expect } from "@playwright/test";
-import { GRID } from "./grid-helpers";
+import { cardOf, GRID } from "./grid-helpers";
 
 // The same value playwright.config.ts minted and handed to the backend
 // via DATALIB_TOKEN. Read from env because the config caches it there
@@ -46,7 +46,7 @@ test("?token= mints a session cookie, then the app runs on it", async ({ page, c
   // the /applet/unified_index/search behind the Dashboard's latest activity, and
   // everything else the page asked for — no per-request token plumbing
   // anywhere in the UI.
-  const firstRow = page.locator(".dashboard .recent").first();
+  const firstRow = cardOf(page, "latestActivityView()").locator(".recent").first();
   await expect(firstRow).toBeVisible({ timeout: 20_000 });
 
   // And a fresh navigation with no token at all now works, because the

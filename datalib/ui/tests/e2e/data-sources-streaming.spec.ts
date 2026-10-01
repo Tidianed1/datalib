@@ -32,22 +32,23 @@
 import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { rmSync, writeFileSync } from "node:fs";
 import {
-  GRID,
-  savedConfig,
   expandGroup,
+  GRID,
+  type GridApi,
+  MANAGE_WITH_CONFIG,
   pipelineRow,
   readRow,
-  searchAndSettle,
-  settleRow,
-  settleRunner,
-  stampsBefore,
-  statusOf,
-  MANAGE_WITH_CONFIG,
-  TABLE_ROWS,
+  savedConfig,
   SEARCH_ROWS,
+  searchAndSettle,
   searchHeader,
   selectRowByUuid,
-  type GridApi,
+  settleRow,
+  settleRunner,
+  shownCards,
+  stampsBefore,
+  statusOf,
+  TABLE_ROWS,
 } from "./grid-helpers";
 import { expectSanePaints, watchPaints } from "./paint-watch";
 
@@ -386,7 +387,7 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
       .toBe("Running");
 
     await pipelineRow(page, ingest).locator('[col-id="status"] .tg-status').dblclick();
-    const log = page.locator(".miller-col").filter({ has: page.locator(".rl-panel") });
+    const log = shownCards(page).filter({ has: page.locator(".rl-panel") });
     const lines = log.locator(".rl-grid .slick-row:not(.slick-group)");
     await expect(lines.first()).toBeVisible({ timeout: 10_000 });
     const before = await logLineCount(log);

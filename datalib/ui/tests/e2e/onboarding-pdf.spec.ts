@@ -6,24 +6,25 @@
 import { test, expect, type Page } from "@playwright/test";
 import { copyFileSync } from "node:fs";
 import {
-  GRID,
-  nameCell,
+  cardOf,
   expandGroup,
   expectGridPainted,
+  GRID,
+  type GridApi,
   LAST_UPDATE_AT,
-  readRow,
+  nameCell,
   pipelineRow as row,
+  readRow,
   rowMenuEntry,
+  SEARCH_ROWS,
   searchAndSettle,
+  searchGrid,
   settle,
   settleRows,
   stampOf,
   stampsBefore,
   statusOf,
-  SEARCH_ROWS,
   TABLE_ROWS,
-  searchGrid,
-  type GridApi,
 } from "./grid-helpers";
 
 // Declared locally rather than pulling in @types/node — same reason as
@@ -125,7 +126,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
 
     // ── 3. landing on the sources card ───────────────────────────────
     await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
-    expect(decodeURIComponent(new URL(page.url()).pathname)).toContain("sourcesView()");
+    await expect(cardOf(page, "sourcesView(")).toHaveCount(1);
     // The scaffold's one group, and the System group every root has,
     // are the table's whole content; the scaffold's three entries are
     // under it.

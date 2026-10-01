@@ -55,6 +55,7 @@ rust_library(
         "src/request_log.rs",
         "src/supervisor.rs",
         "src/ui_events.rs",
+        "src/ui_state.rs",
         "src/usage.rs",
         "src/watch.rs",
     ],

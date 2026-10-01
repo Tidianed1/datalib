@@ -1,4 +1,4 @@
-// What the Dashboard card decides, as pure functions over the manage rows:
+// What the Dashboard's sections decide, as pure functions over the manage rows:
 // which colour a status reads in, and what needs a person.
 import type { ManageRow } from "@/api";
 

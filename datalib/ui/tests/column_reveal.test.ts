@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { revealScrollLeft } from "@/views/millerReveal";
+import { revealScrollLeft } from "@/views/columnReveal";
 
 // The row is 800 wide and currently scrolled to 0 unless a case says
 // otherwise; columns are 640 wide (the default) unless a case says

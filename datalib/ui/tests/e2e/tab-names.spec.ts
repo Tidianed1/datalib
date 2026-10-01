@@ -1,24 +1,21 @@
-// The tabs layout, the app's default: a tab is named by its card until
-// the person renames it, and a card's requests say which card made them.
+// A tab is named by its card until the person renames it, and a card's
+// requests say which card made them.
 
 import { test, expect, type Page } from "@playwright/test";
-import { GRID } from "./grid-helpers";
+import { GRID, tabLabels } from "./grid-helpers";
 
-test.beforeEach(async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem("datalib-layout", "tabs"));
-});
-
-const firstLabel = (page: Page) => page.locator(".tabs-row .tabs-label").first();
-const nameBox = (page: Page) => page.getByRole("textbox", { name: "tab name" });
+// The tab GRID opens, after the Dashboard's.
+const gridTab = (page: Page) => tabLabels(page).nth(1);
+const nameBox = (page: Page) => page.getByLabel("Name", { exact: true });
 
 async function search(page: Page, q: string) {
-  const card = page.locator(".tabs-main");
+  const card = page.locator(".ct-main");
   await card.getByTestId("search-input").fill(q);
   await expect(card.locator(".grid-wrap")).toHaveAttribute("data-shown-query", q);
 }
 
 async function renameFromMenu(page: Page) {
-  await page.locator(".tabs-row").first().click({ button: "right" });
+  await gridTab(page).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Rename…" }).click();
   await expect(nameBox(page)).toBeFocused();
 }
@@ -33,40 +30,42 @@ test("a card's requests name the card and its type", async ({ page }) => {
 
 test("a renamed tab keeps its name through a search and a reload", async ({ page }) => {
   await page.goto(GRID);
-  await expect(firstLabel(page)).toHaveText(/^Search/);
+  await expect(gridTab(page)).toHaveText(/^Search/);
 
   // Unrenamed, the grid names its tab after the query.
   await search(page, "kraken");
-  await expect(firstLabel(page)).toHaveText("Search: kraken");
+  await expect(gridTab(page)).toHaveText("Search: kraken");
 
   await renameFromMenu(page);
   await nameBox(page).fill("Bridge chatter");
   await nameBox(page).press("Enter");
-  await expect(firstLabel(page)).toHaveText("Bridge chatter");
+  await expect(gridTab(page)).toHaveText("Bridge chatter");
   await expect(page).toHaveTitle(/^Bridge chatter/);
 
   // The card no longer names the tab once the person has.
   await search(page, "warp");
-  await expect(firstLabel(page)).toHaveText("Bridge chatter");
+  await expect(gridTab(page)).toHaveText("Bridge chatter");
 
   await page.reload();
-  await expect(firstLabel(page)).toHaveText("Bridge chatter");
+  await expect(gridTab(page)).toHaveText("Bridge chatter");
 });
 
-test("Escape and a blank name leave the tab as it was", async ({ page }) => {
+test("Escape leaves the tab as it was, and a blank name is refused", async ({ page }) => {
   await page.goto(GRID);
-  await expect(firstLabel(page)).toHaveText(/^Search/);
-  const before = await firstLabel(page).innerText();
+  await expect(gridTab(page)).toHaveText(/^Search/);
+  const before = await gridTab(page).innerText();
 
   await renameFromMenu(page);
   await nameBox(page).fill("Not this");
   await nameBox(page).press("Escape");
   await expect(nameBox(page)).toHaveCount(0);
-  await expect(firstLabel(page)).toHaveText(before);
+  await expect(gridTab(page)).toHaveText(before);
 
   // A double-click on the name is the other way in.
-  await firstLabel(page).dblclick();
+  await gridTab(page).dblclick();
   await nameBox(page).fill("   ");
   await nameBox(page).press("Enter");
-  await expect(firstLabel(page)).toHaveText(before);
+  await expect(page.getByText("A name cannot be empty.")).toBeVisible();
+  await nameBox(page).press("Escape");
+  await expect(gridTab(page)).toHaveText(before);
 });

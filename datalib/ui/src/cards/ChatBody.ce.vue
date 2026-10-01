@@ -80,8 +80,8 @@ const emit = defineEmits<{
   /**
    * Fired when the cursor enters or leaves an `.edge-source` span.
    * Payload is the edge's destination — `{ md, anchor }` — or null
-   * on hover-out. The parent forwards this to MillerView so other
-   * columns can highlight whatever the source points at.
+   * on hover-out. The parent publishes it on the card bus so other
+   * cards can highlight whatever the source points at.
    */
   (e: "hover-edge", target: { md: string; anchor: string | null } | null): void;
 }>();

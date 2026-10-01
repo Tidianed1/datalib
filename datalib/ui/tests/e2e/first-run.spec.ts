@@ -1,6 +1,7 @@
 // First-run onboarding against a genuinely empty data root.
 
 import { test, expect } from "@playwright/test";
+import { cardOf, tabLabels } from "./grid-helpers";
 
 // Declared locally rather than pulling in @types/node — same reason as
 // api-token.spec.ts: tsconfig's `types` is deliberately narrow.
@@ -48,9 +49,8 @@ test("an empty folder gets an explained bootstrap, not a 502", async ({ page, re
   await expect(page.getByRole("button", { name: "Add source" })).toBeVisible();
   // The sources card alone: the config editor is a click away from it,
   // not open beside it.
-  const stack = decodeURIComponent(new URL(page.url()).pathname);
-  expect(stack).toContain("sourcesView()");
-  expect(stack).not.toContain("configView()");
+  await expect(cardOf(page, "sourcesView(")).toHaveCount(1);
+  await expect(cardOf(page, "configView(")).toHaveCount(0);
 
   // The file is on disk and valid, and it carries the applet whose
   // absence was the original error.
@@ -71,7 +71,9 @@ test("an empty folder gets an explained bootstrap, not a 502", async ({ page, re
   // The Dashboard of a library with no sources says so where the
   // sources would be, with nothing to sync, and its button opens the
   // add-source form.
+  // This page's tabs come back with it, so pick the Dashboard's.
   await page.goto(`${EMPTY_URL}/`);
+  await tabLabels(page).filter({ hasText: "Dashboard" }).click();
   const sources = page.getByRole("region", { name: "Sources" });
   await expect(sources.getByText("No sources yet.")).toBeVisible();
   await expect(page.getByText("Nothing to sync yet")).toBeVisible();

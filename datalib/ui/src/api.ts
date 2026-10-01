@@ -1468,6 +1468,30 @@ export async function putLib(
   return (await r.json()) as LibEntry;
 }
 
+// A JSON document the UI keeps in the library (`http/src/ui_state.rs`):
+// null when none has been kept yet.
+export async function fetchUiState(name: string): Promise<unknown> {
+  const r = await fetch(`/api/ui/state/${encodeURIComponent(name)}`);
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error(`GET /api/ui/state/${name} → ${r.status}`);
+  return (await r.json()) as unknown;
+}
+
+// `keepalive` lets a write sent as the page goes away finish anyway.
+export async function putUiState(
+  name: string,
+  value: unknown,
+  opts: { keepalive?: boolean } = {},
+): Promise<void> {
+  const r = await fetch(`/api/ui/state/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(value),
+    keepalive: opts.keepalive,
+  });
+  if (!r.ok) throw new Error(`PUT /api/ui/state/${name} → ${r.status}`);
+}
+
 export type FeedbackRequest = {
   sentiment: "up" | "down" | null;
   comment: string;

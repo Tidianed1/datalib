@@ -1,15 +1,10 @@
 import { test, expect } from "@playwright/test";
-import { stubClipboard } from "./grid-helpers";
+import { cardOf, cardTitle, shownCards, stubClipboard, tabLabels } from "./grid-helpers";
 
 // The chrome around the cards: the toolbar's search box opens a search
 // card on what was typed, and ⌘K (Ctrl+K) reaches it from anywhere;
-// the status bar's "Logs" reveals the log once. All act on the
-// URL-synced miller stack, so the path says what they did. A new
-// window opens on the Dashboard.
-
-async function stackPath(page: import("@playwright/test").Page): Promise<string> {
-  return decodeURIComponent(await page.evaluate(() => location.pathname));
-}
+// the status bar's "Logs" reveals the log once. Each opens a tab of
+// its own. A new window opens on the Dashboard.
 
 const searchBox = (page: import("@playwright/test").Page) =>
   page.getByRole("searchbox", { name: "Search your data" });
@@ -17,20 +12,19 @@ const searchBox = (page: import("@playwright/test").Page) =>
 test.describe("toolbar", () => {
   test("a new window opens on the Dashboard", async ({ page }) => {
     await page.goto("/");
-    await expect(page.locator(".miller-col")).toHaveCount(1);
-    await expect(page.locator(".miller-col-title")).toHaveText("Dashboard");
+    await expect(tabLabels(page)).toHaveText(["Dashboard"]);
+    await expect(shownCards(page)).toHaveCount(5);
   });
 
   test("the search box opens a search card on what was typed", async ({ page }) => {
     await page.goto("/");
-    // The card surface is up once the Dashboard is: a search asked before that
-    // replaces the stack instead of opening beside it.
-    await expect(page.locator(".miller-col-title")).toHaveText("Dashboard");
+    await expect(tabLabels(page)).toHaveText(["Dashboard"]);
     await searchBox(page).fill("warp");
     await searchBox(page).press("Enter");
-    await expect(page.locator(".miller-col")).toHaveCount(2);
-    await expect(page.locator(".miller-col-title").last()).toHaveText("Search: warp");
-    expect(await stackPath(page)).toContain('searchView({"q":"warp"})');
+    const card = cardOf(page, 'searchView({"q":"warp"})');
+    await expect(card).toBeVisible();
+    await expect(cardTitle(card)).toHaveText("Search: warp");
+    await expect(tabLabels(page)).toHaveCount(2);
     // The box empties, ready for the next search.
     await expect(searchBox(page)).toHaveValue("");
   });
@@ -45,13 +39,14 @@ test.describe("toolbar", () => {
   test("the status bar's Logs opens the log over every run, once", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Logs" }).click();
-    const col = page.locator(".miller-col").filter({ has: page.locator(".rl-panel") });
+    const col = shownCards(page).filter({ has: page.locator(".rl-panel") });
     await expect(col).toBeVisible({ timeout: 10_000 });
-    await expect(col.locator(".miller-col-title")).toHaveText("Log · everything");
-    expect(await stackPath(page)).toContain("logView()");
+    await expect(cardTitle(col)).toHaveText("Log · everything");
+    await expect(cardOf(page, "logView()")).toHaveCount(1);
 
     await page.getByRole("button", { name: "Logs" }).click();
-    await expect(page.locator(".miller-col")).toHaveCount(2);
+    await expect(tabLabels(page)).toHaveCount(2);
+    await expect(cardOf(page, "logView()")).toHaveCount(1);
   });
 
   test("the status bar's density switch resizes the chrome, and is kept", async ({ page }) => {
@@ -91,7 +86,9 @@ test.describe("toolbar", () => {
     for (const density of ["Compact", "Comfortable"]) {
       await page.setViewportSize({ width: 1280, height: 800 });
       await page.getByRole("button", { name: density }).click();
-      for (const width of [600, 420]) {
+      // 700px leaves the name room whatever its random suffix measures;
+      // 600px was within a few letters of it in Comfortable.
+      for (const width of [700, 420]) {
         await page.setViewportSize({ width, height: 800 });
         const b = (await box.boundingBox())!;
         const l = (await lib.boundingBox())!;
@@ -99,7 +96,7 @@ test.describe("toolbar", () => {
         expect(b.width).toBeGreaterThanOrEqual(180);
         expect(b.x + b.width).toBeLessThanOrEqual(width);
         expect(b.x).toBeGreaterThanOrEqual(l.x + l.width);
-        // At 600px the search box has room to give; at 420px it is at
+        // At 700px the search box has room to give; at 420px it is at
         // its floor and the name gives way.
         expect(await truncated()).toBe(width === 420);
       }
