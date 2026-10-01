@@ -11,16 +11,17 @@ import MillerView from "@/views/MillerView.vue";
 import TreeView from "@/views/TreeView.vue";
 import TilingView from "@/views/TilingView.vue";
 import TabsView from "@/views/TabsView.vue";
+import ContainersView from "@/views/ContainersView.vue";
 import RootStorageBar from "@/components/RootStorageBar.vue";
 import { devMode } from "@/devMode";
 import { density, DENSITIES } from "@/density";
 import { LOG_CARD, surface, type SurfaceCommands } from "@/surface";
 
-const LAYOUTS = ["columns", "tabs", "tree", "tiling"] as const;
+const LAYOUTS = ["containers", "columns", "tabs", "tree", "tiling"] as const;
 type Layout = (typeof LAYOUTS)[number];
 const LAYOUT_KEY = "datalib-layout";
 // What a browser that has never picked a layout gets.
-const DEFAULT_LAYOUT: Layout = "tabs";
+const DEFAULT_LAYOUT: Layout = "containers";
 
 function storedLayout(): Layout {
   try {
@@ -36,6 +37,7 @@ const millerMounted = ref(false);
 const tabsMounted = ref(false);
 const treeMounted = ref(false);
 const tilingMounted = ref(false);
+const containersMounted = ref(false);
 
 function setLayout(next: Layout) {
   layout.value = next;
@@ -43,6 +45,7 @@ function setLayout(next: Layout) {
   if (next === "tabs") tabsMounted.value = true;
   if (next === "tree") treeMounted.value = true;
   if (next === "tiling") tilingMounted.value = true;
+  if (next === "containers") containersMounted.value = true;
   try {
     localStorage.setItem(LAYOUT_KEY, next);
   } catch {
@@ -61,10 +64,12 @@ const miller = useTemplateRef<SurfaceCommands>("miller");
 const tabs = useTemplateRef<SurfaceCommands>("tabs");
 const tree = useTemplateRef<SurfaceCommands>("tree");
 const tiling = useTemplateRef<SurfaceCommands>("tiling");
+const containers = useTemplateRef<SurfaceCommands>("containers");
 function active(): SurfaceCommands | null {
   if (layout.value === "tabs") return tabs.value;
   if (layout.value === "tree") return tree.value;
   if (layout.value === "tiling") return tiling.value;
+  if (layout.value === "containers") return containers.value;
   return miller.value;
 }
 onMounted(() => {
@@ -95,6 +100,12 @@ onBeforeUnmount(() => {
     />
     <TreeView v-if="treeMounted" ref="tree" v-show="layout === 'tree'" />
     <TilingView v-if="tilingMounted" ref="tiling" v-show="layout === 'tiling'" />
+    <ContainersView
+      v-if="containersMounted"
+      ref="containers"
+      v-show="layout === 'containers'"
+      :active="layout === 'containers'"
+    />
     <div class="cards-statusbar">
       <RootStorageBar />
       <!-- What the system is doing belongs down here with the data
@@ -120,6 +131,13 @@ onBeforeUnmount(() => {
         </button>
       </div>
       <div class="cards-toggle" role="group" aria-label="card layout">
+        <button
+          :class="{ 'is-active': layout === 'containers' }"
+          title="containers: tabs down the side, each holding cards or containers that lay out their own children (kept in the library)"
+          @click="setLayout('containers')"
+        >
+          Containers
+        </button>
         <button
           :class="{ 'is-active': layout === 'columns' }"
           title="miller columns (synced to the URL)"
@@ -153,7 +171,7 @@ onBeforeUnmount(() => {
         class="cards-dev-toggle"
         :class="{ 'is-active': devMode }"
         :aria-pressed="devMode"
-        title="dev mode: show and edit each card's source"
+        title="dev mode: show and edit each card's source, and every container, solidified ones included"
         @click="devMode = !devMode"
       >
         Dev

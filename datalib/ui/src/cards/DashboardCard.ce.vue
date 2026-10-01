@@ -16,12 +16,15 @@ import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop"
 import { copyToClipboard } from "@/clipboard";
 import { pushToast } from "@/toasts";
 import { logSource } from "./libs/logView";
-import { statusTone, needsYou, type Tone } from "./dashboard";
+import { statusTone, needsYou, PART_TITLES, type DashboardPart, type Tone } from "./dashboard";
 
-const props = defineProps<{ ctx: CardCtx }>();
+// With a part, the card shows that one section alone, so the containers
+// layout can stack the four as cards of their own.
+const props = defineProps<{ ctx: CardCtx; part?: DashboardPart }>();
 const api = useApi();
 
-props.ctx.setTitle("Dashboard");
+props.ctx.setTitle(props.part ? PART_TITLES[props.part] : "Dashboard");
+const shows = (p: DashboardPart) => !props.part || props.part === p;
 
 const manage = ref<ManageResponse | null>(null);
 const recent = ref<SearchRow[]>([]);
@@ -188,7 +191,11 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="dashboard">
-    <header class="dashboard-head" :class="{ 'dashboard-head-next': stage === 'first_sync' }">
+    <header
+      v-if="shows('sync')"
+      class="dashboard-head"
+      :class="{ 'dashboard-head-next': stage === 'first_sync', 'dashboard-head-alone': part }"
+    >
       <span class="dashboard-state" :class="`tone-${lastRun.tone}`">
         <span class="dot" />{{ lastRun.text }}
       </span>
@@ -203,10 +210,14 @@ onBeforeUnmount(() => {
       </button>
     </header>
 
-    <div class="dashboard-body">
+    <div v-if="part !== 'sync'" class="dashboard-body">
       <p v-if="loadError" class="dashboard-error">Could not load the sources: {{ loadError }}</p>
 
-      <section v-if="attention.length" class="panel panel-warn" aria-label="Needs you">
+      <section
+        v-if="shows('sources') && attention.length"
+        class="panel panel-warn"
+        aria-label="Needs you"
+      >
         <h2 class="panel-head panel-head-warn">
           <span class="section-title">Needs you · {{ attention.length }}</span>
         </h2>
@@ -230,7 +241,7 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <section class="panel" aria-label="Your library">
+      <section v-if="shows('library')" class="panel" aria-label="Your library">
         <h2 class="panel-head">
           <span class="section-title">Your library</span>
           <button class="link" @click="showRoot">
@@ -268,7 +279,12 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <section class="panel" :class="{ 'panel-next': stage === 'empty' }" aria-label="Sources">
+      <section
+        v-if="shows('sources')"
+        class="panel"
+        :class="{ 'panel-next': stage === 'empty' }"
+        aria-label="Sources"
+      >
         <h2 class="panel-head">
           <span class="section-title">Sources</span>
           <button class="link" @click="open('sourcesView()')">Open Sources</button>
@@ -294,7 +310,7 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <section class="panel" aria-label="Latest activity">
+      <section v-if="shows('activity')" class="panel" aria-label="Latest activity">
         <h2 class="panel-head">
           <span class="section-title">Latest activity</span>
           <button class="link" @click="open('searchView()')">Search everything</button>
@@ -334,6 +350,11 @@ onBeforeUnmount(() => {
   padding: 6px var(--datalib-pad);
   background: var(--datalib-bg);
   border-bottom: 1px solid var(--datalib-border-soft);
+}
+/* The sync part alone: the bar is the whole card. */
+.dashboard-head-alone {
+  flex: 1 1 auto;
+  border-bottom: none;
 }
 .dashboard-body {
   flex: 1 1 auto;

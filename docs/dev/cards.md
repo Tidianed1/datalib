@@ -6,7 +6,8 @@ bar. The host evaluates that source to produce the card's content.
 `datalib/ui/src/cards/types.ts` is the canonical home of every
 shape described here; this doc is the narrative version.
 
-A **layout** is what arranges cards on screen — a stack of miller
+A **layout** is what arranges cards on screen — containers (the
+default), a stack of miller
 columns, tabs in a sidebar tree, a 2D tree, a tiling window manager —
 selectable from the status bar, and remembered in the browser (see `datalib/ui/src/views/CardsView.vue`). This doc is
 deliberately layout-agnostic: it describes the card contract and how a
@@ -287,6 +288,35 @@ receiver. It carries no structural operations. The topics:
 
 Payloads cross card boundaries as `unknown`; subscribers validate the
 shape before acting. Unsubscribe in the card's teardown.
+
+## The containers layout
+
+The containers layout (`ContainersView.vue`, rules in
+`containerTree.ts`) is a tree of **containers** whose leaves are cards.
+Each container lays out its own children: tabs, a stack, a row, or
+miller columns. The outermost container is always tabs, drawn as the
+sidebar tree.
+
+A container can be **solidified**. When a card opens another card
+(`openCards`), the new card lands in the nearest container above the
+opener that is not solidified, and that container's layout decides
+where: columns drop what was right of the opener, tabs add a tab under
+the opener's, a stack or row inserts beside it. **Solidify all** on a
+container counts it and everything inside it as solidified, whatever
+their own flags say. The outermost container is never solidified, so an
+open always lands somewhere.
+
+Solidifying decides only where opens land. Outside dev mode, a subtree
+under "solidify all" also hides its card and container headers, so a
+composite such as the Dashboard (a stack of four `dashboardView({part})`
+cards) reads as one page. Dev mode shows every container's controls,
+solidified ones included.
+
+A **composite** is a container subtree kept under a name
+(`composites.ts`): the built-in Dashboard, or one a person saved. Both
+the open tree and the saved composites are kept in the library through
+`/api/ui/state/{name}` (`docs/dev/app_stores.md`), not the browser: the
+desktop app's server takes a new port, and so a new origin, each launch.
 
 ## How a card and its layout interact
 

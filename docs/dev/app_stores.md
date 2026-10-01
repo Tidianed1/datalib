@@ -41,6 +41,11 @@
                                                   (`dag/README.md` § What wakes the loop)
 <data_root>/system/api-token, lock, runner-lock   the server's token and the two flocks
                                                   (the server holds both while it is up)
+<data_root>/system/ui-state/<name>.json            JSON the UI keeps in the library: the
+                                                  containers layout's open tree
+                                                  (`layout`) and saved composites
+                                                  (`composites`); opaque to the server
+                                                  (`http/src/ui_state.rs`)
 <data_root>/system/library-summary.json           source count, bytes on disk and the last
                                                   sync's end, for the desktop app's list of
                                                   libraries; datalib-http rewrites it when
@@ -48,7 +53,7 @@
                                                   moved (`http/src/manage/summary.rs`)
 ```
 
-Every store above but qmd's index and the two JSON files carries a
+Every store above but qmd's index and the JSON files carries a
 `_datalib_meta` table — which datalib and
 git commit wrote it, the doltlite it was written with, a hash of the
 DDL it was opened with, and its kind — written by the owner on open

@@ -2,6 +2,17 @@
 // which colour a status reads in, and what needs a person.
 import type { ManageRow } from "@/api";
 
+/// The Dashboard's sections, each of which can be shown as a card alone.
+export const DASHBOARD_PARTS = ["sync", "library", "sources", "activity"] as const;
+export type DashboardPart = (typeof DASHBOARD_PARTS)[number];
+
+export const PART_TITLES: Record<DashboardPart, string> = {
+  sync: "Sync",
+  library: "Your library",
+  sources: "Sources",
+  activity: "Latest activity",
+};
+
 export type Tone = "ok" | "run" | "warn" | "error" | "muted";
 
 /// A status key (manage/status.rs) as the colour it reads in.
