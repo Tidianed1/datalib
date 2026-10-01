@@ -21,12 +21,22 @@ describe("the card catalog", () => {
     }
   });
 
-  it("offers Dashboard first in the gallery, then Sources", () => {
-    expect(
-      galleryBuiltins()
-        .slice(0, 2)
-        .map((e) => e.source),
-    ).toEqual(["dashboardView()", "sourcesView()"]);
+  it("offers Sources first among the builtins", () => {
+    expect(galleryBuiltins()[0].source).toBe("sourcesView()");
+  });
+
+  /** A Dashboard section is a building block: listed only when the gallery shows every view. */
+  it("keeps the views a builtin hides out of the gallery until it shows every view", () => {
+    const hidden = Object.values(BUILTIN_META)
+      .filter((m) => m.galleryHidden)
+      .map((m) => m.gallery);
+    expect(hidden).toContain("libraryView()");
+    const shown = galleryBuiltins().map((e) => e.source);
+    const all = galleryBuiltins(true).map((e) => e.source);
+    for (const source of hidden) {
+      expect(shown).not.toContain(source);
+      expect(all).toContain(source);
+    }
   });
 
   it("answers for a builtin by the factory the source calls", () => {

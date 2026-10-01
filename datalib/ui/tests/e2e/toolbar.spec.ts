@@ -13,7 +13,7 @@ test.describe("toolbar", () => {
   test("a new window opens on the Dashboard", async ({ page }) => {
     await page.goto("/");
     await expect(tabLabels(page)).toHaveText(["Dashboard"]);
-    await expect(shownCards(page)).toHaveCount(4);
+    await expect(shownCards(page)).toHaveCount(5);
   });
 
   test("the search box opens a search card on what was typed", async ({ page }) => {

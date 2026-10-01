@@ -164,8 +164,16 @@ onUnmounted(() => stop?.());
   border-bottom: 1px solid var(--datalib-border);
 }
 /* The title bar's height, whatever the density: the window buttons are
-   placed once, when the window opens, at this bar's middle. */
+   placed once, when the window opens, at this bar's middle. So what is
+   in it keeps the compact sizes too; the comfortable ones crowd a 40px
+   bar. */
 .datalib-toolbar--titlebar {
+  --datalib-font-size: 12px;
+  --datalib-font-size-small: 11px;
+  --datalib-title-size: 13px;
+  --datalib-control-h: 24px;
+  --datalib-icon-size: 14px;
+  font-size: var(--datalib-font-size);
   height: 40px;
   padding-left: 92px;
   -webkit-user-select: none;

@@ -3,23 +3,48 @@
 // kept in the library (`/api/ui/state/composites`).
 import { ref } from "vue";
 import { fetchUiState, putUiState } from "@/api";
-import { DASHBOARD_PARTS } from "@/cards/dashboard";
 import { makeBox, makeCard, parseComposites, type BoxNode } from "@/views/containerTree";
 
 const STATE_NAME = "composites";
 
-// The Dashboard as a page of four cards, each as tall as its content,
-// solidified: a card opened from it gets a tab of its own.
+// The Dashboard: its sections as a Page, each as tall as its content,
+// solidified, so a card opened from it gets a tab of its own.
 const DASHBOARD: BoxNode = makeBox(
   "dashboard",
   "page",
-  DASHBOARD_PARTS.map((part) =>
-    makeCard(`dashboard-${part}`, `dashboardView(${JSON.stringify({ part })})`),
-  ),
+  [
+    "syncStatusView()",
+    "needsYouView()",
+    "libraryView()",
+    "sourcesOverviewView()",
+    "latestActivityView()",
+  ].map((source, i) => makeCard(`dashboard-${i}`, source)),
   { solidified: true, name: "Dashboard", template: "Dashboard" },
 );
 
 export const BUILTIN_COMPOSITES: Record<string, BoxNode> = { Dashboard: DASHBOARD };
+
+// What the new-card gallery says about a built-in composite.
+const BUILTIN_INFO: Record<string, { description: string; icon: string }> = {
+  Dashboard: {
+    description:
+      "What needs you, how big your library is, each source's state, and the newest documents.",
+    icon: "dashboard",
+  },
+};
+
+// The composites the new-card gallery offers: the built-in ones first,
+// then the person's own.
+export function galleryComposites(): { name: string; description: string; icon: string }[] {
+  const builtin = Object.keys(BUILTIN_COMPOSITES).map((name) => ({
+    name,
+    ...(BUILTIN_INFO[name] ?? { description: "", icon: "dashboard" }),
+  }));
+  const saved = Object.keys(savedComposites.value)
+    .filter((name) => !isBuiltinComposite(name))
+    .map((name) => ({ name, description: "A composite you saved.", icon: "dashboard" }));
+  return [...builtin, ...saved];
+}
 
 export const savedComposites = ref<Record<string, BoxNode>>({});
 

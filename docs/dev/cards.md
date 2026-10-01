@@ -119,19 +119,24 @@ copies a "wayfinder" prompt, plus a persisted "skip these steps next
 time" opt-out that turns the button into a straight copy.
 
 Every way to add a card — the ＋ strip at the end of a Columns
-container, the sidebar's "＋ New…", a container panel's Add → Card —
+container, the sidebar's "＋ New card", a container panel's Add → Card —
 creates a `galleryView()` card — the **new-card gallery**
 (`datalib/ui/src/cards/libs/galleryView.ts`). It lists, each with a
 short description:
 
-1. the builtins `cards/catalog.ts` offers, `dashboardView` first and
-   `sourcesView` second;
-2. every titled component in the frontend store, each expanding to its
+1. the composites (`views/composites.ts`), the Dashboard first; picking
+   one replaces the gallery card with a copy of it
+   (`host.becomeComposite`);
+2. the builtins `cards/catalog.ts` offers, `sourcesView` first. A
+   builtin marked `galleryHidden` — a building block such as a
+   Dashboard section — is listed only once the gallery's "Show every
+   view" switch is on (kept in this browser);
+3. every titled component in the frontend store, each expanding to its
    qualified name called with its stored `component_args` — so one
    component appears once per namespace with its own arguments
    (`comp.slack_work.channels("slack_work")`,
    `comp.slack_personal.channels(…)`);
-3. a "build a component with an agent" entry that mints a fresh
+4. a "build a component with an agent" entry that mints a fresh
    component seeded with `agentSeedView` (the in-card hand-off
    instructions) and repoints the card at it.
 
@@ -308,8 +313,8 @@ toolbar (Logs, Data sources, a search) opens its cards the same way, in
 a new tab holding a Columns container.
 
 **What shows.** Outside edit mode a solidified subtree shows no card
-chrome, so a composite such as the Dashboard (a Page of four
-`dashboardView({part})` cards) reads as one page; elsewhere each card
+chrome, so a composite such as the Dashboard (a Page of its five
+section cards) reads as one page; elsewhere each card
 has a header with its title and controls, and a Columns container ends
 in a ＋ strip that adds a card. In edit mode every card shows its edge
 and its source, and each container is a frame coloured by its layout,
@@ -376,15 +381,28 @@ source wizard, feedback).
 The factories in `ViewLibs` are the public surface card source
 programs against:
 
-- `dashboardView()` — "Dashboard", the card a new window opens on
-  (`cards/DashboardCard.ce.vue`): what needs a person (a source whose last
-  sync failed or stopped, a store holding errors or warnings), the
-  library's item count and size on disk, each source's state, and the
-  newest documents by their own timestamps. A library with no sources
-  gets "No sources yet." and an "Add source" button in the Sources
-  panel; one whose sources have never synced gets "Start your first
-  sync" in the header. It reads only `GET /api/manage/rows` and the
-  search; its decisions are `cards/dashboard.ts`.
+- The Dashboard's sections, each a card of its own, which the Dashboard
+  composite — what a new window opens on — lays out as a solidified
+  Page (`cards/libs/dashboardSections.ts`; hidden from the gallery
+  until it shows every view):
+  - `syncStatusView()` — when the library last synced, and Sync now /
+    Stop syncing; "Start your first sync" when its sources never have;
+  - `needsYouView()` — a source whose last sync failed or stopped, or
+    whose store holds errors or warnings, with the fix beside it;
+    nothing at all when nothing needs the person;
+  - `libraryView()` — the library's item count, its size on disk, and
+    a bar of what takes the space;
+  - `sourcesOverviewView()` — each source's state, when it synced, its
+    items and size; "No sources yet." and "Add source" in a library
+    without any;
+  - `latestActivityView()` — the newest documents by their own
+    timestamps.
+
+  Each section is a component (`cards/Dashboard*.ce.vue`) drawing from
+  `cards/useDashboard.ts`, which reads only `GET /api/manage/rows` and
+  the search; their decisions are `cards/dashboard.ts`, their look
+  `cards/dashboardCard.css`. A section card leaves the ground and the
+  space below it to the Page it sits in.
 - `searchView(opts?: { q? })` — "Unified Search (new)", the friendly search
   (`cards/SearchCard.ce.vue`): a box that takes words and filters, a
   "Meaning only" switch that moves the free text into a `qmd_vsearch:`

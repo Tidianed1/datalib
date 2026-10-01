@@ -31,7 +31,6 @@ import {
   isBuiltinComposite,
   loadComposites,
   saveComposite,
-  savedComposites,
 } from "@/views/composites";
 import {
   DEFAULT_COLUMN,
@@ -281,6 +280,10 @@ function ctxFor(card: CardNode): CardCtx {
       },
       hrefFor: (...sources) => chainHref(sources),
       setSource: (source) => update(setCard(root.value, cardId, { source, state: "" })),
+      becomeComposite: (name) => {
+        const template = composite(name);
+        if (template) update(resetTo(root.value, cardId, template, newCardId));
+      },
       close: () => close(cardId),
       setState: (state) => {
         if (cardById(cardId)?.state !== state) update(setCard(root.value, cardId, { state }));
@@ -347,11 +350,6 @@ function addCard(boxId: string) {
 function addBox(boxId: string, layout: Layout) {
   const box = makeBox(newCardId(), layout, [makeCard(newCardId(), "galleryView()")]);
   update(addChild(root.value, boxId, box));
-}
-
-function addComposite(boxId: string, name: string) {
-  const template = composite(name);
-  if (template) update(addChild(root.value, boxId, instantiate(template, newCardId)));
 }
 
 // The toolbar's "New card", and its Logs and Data sources.
@@ -424,10 +422,6 @@ function openPanel(ev: MouseEvent, build: () => Panel) {
   panel.value = { build, x: ev.clientX, y: ev.clientY };
 }
 
-const compositeNames = computed(() =>
-  Object.keys({ ...BUILTIN_COMPOSITES, ...savedComposites.value }),
-);
-
 // Moving among siblings, named for the way the parent lays them out.
 function moveActions(node: TreeNode): PanelAction[] {
   const parent = parentOf(root.value, node.id);
@@ -460,40 +454,23 @@ function wrapAction(node: TreeNode): PanelAction {
   };
 }
 
-function addSections(boxId: string): PanelSection[] {
-  const sections: PanelSection[] = [
-    {
-      kind: "tiles",
-      title: "Add",
-      actions: [
-        { label: "Card", icon: PANEL_ICONS.card, run: () => addCard(boxId) },
-        {
-          label: "Container",
-          icon: LAYOUT_ICONS[NEW_LAYOUT],
-          run: () => addBox(boxId, NEW_LAYOUT),
-        },
-      ],
-    },
-  ];
-  if (compositeNames.value.length > 0) {
-    sections.push({
-      kind: "rows",
-      title: "Add a composite",
-      actions: compositeNames.value.map((name) => ({
-        label: name,
-        icon: PANEL_ICONS.composite,
-        run: () => addComposite(boxId, name),
-      })),
-    });
-  }
-  return sections;
+function addSection(boxId: string): PanelSection {
+  return {
+    kind: "tiles",
+    title: "Add",
+    actions: [
+      { label: "Card", icon: PANEL_ICONS.card, run: () => addCard(boxId) },
+      {
+        label: "Container",
+        icon: LAYOUT_ICONS[NEW_LAYOUT],
+        run: () => addBox(boxId, NEW_LAYOUT),
+      },
+    ],
+  };
 }
 
 function boxPanel(box: BoxNode): Panel {
   const title = titleOf(box);
-  if (box.id === root.value.id) {
-    return { title: "New tab", icon: PANEL_ICONS.add, sections: addSections(box.id) };
-  }
   const template = box.template ? composite(box.template) : undefined;
   return {
     title,
@@ -518,7 +495,7 @@ function boxPanel(box: BoxNode): Panel {
         on: box.solidified,
         run: () => toggleSolidified(box),
       },
-      ...addSections(box.id),
+      addSection(box.id),
       {
         kind: "rows",
         title: "Arrange",
@@ -677,8 +654,12 @@ provide(CONTAINERS_API, api);
           <button class="ct-tab-action" title="close" @click.stop="close(row.node.id)">✕</button>
         </li>
         <li class="ct-new-row" role="none">
-          <button class="ct-new" title="a new tab" @click="openPanel($event, () => boxPanel(root))">
-            ＋ New…
+          <button
+            class="ct-new"
+            title="a new tab, with a card that asks what it should show"
+            @click="newTab"
+          >
+            ＋ New card
           </button>
         </li>
       </ul>

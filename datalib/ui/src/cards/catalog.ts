@@ -18,17 +18,13 @@ type BuiltinMeta = CardMeta & {
   // The source the gallery's entry expands to; absent when the card
   // needs arguments only another card can supply.
   gallery?: string;
+  // Listed only once the gallery shows every view: a building block of
+  // a composite, such as a Dashboard section, that is rarely wanted alone.
+  galleryHidden?: boolean;
 };
 
 /// Every builtin, in gallery order.
 export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
-  dashboardView: {
-    title: "Dashboard",
-    description:
-      "What needs you, how big your library is, each source's state, and the newest documents.",
-    icon: "dashboard",
-    gallery: "dashboardView()",
-  },
   sourcesView: {
     title: "Manage data sources",
     description: "Configure, view, and execute data ingestion steps and data stores.",
@@ -133,12 +129,48 @@ export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
     description: "One source's sync: its steps, charts over the run, and its log.",
     icon: "dashboard",
   },
+  syncStatusView: {
+    title: "Sync",
+    description: "When the library last synced, and the button that syncs everything.",
+    icon: "history",
+    gallery: "syncStatusView()",
+    galleryHidden: true,
+  },
+  needsYouView: {
+    title: "Needs you",
+    description: "Sources whose last sync failed or that hold errors, with the fix beside each.",
+    icon: "problem",
+    gallery: "needsYouView()",
+    galleryHidden: true,
+  },
+  libraryView: {
+    title: "Your library",
+    description: "How many items the library holds, and what takes its space on disk.",
+    icon: "book",
+    gallery: "libraryView()",
+    galleryHidden: true,
+  },
+  sourcesOverviewView: {
+    title: "Sources overview",
+    description: "Each source's state, when it last synced, its items and its size.",
+    icon: "sources",
+    gallery: "sourcesOverviewView()",
+    galleryHidden: true,
+  },
+  latestActivityView: {
+    title: "Latest activity",
+    description: "The newest documents in the library.",
+    icon: "document",
+    gallery: "latestActivityView()",
+    galleryHidden: true,
+  },
 };
 
-/// The builtins the gallery offers, in order, each with its source.
-export function galleryBuiltins(): (CardMeta & { source: string })[] {
+/// The builtins the gallery offers, in order, each with its source;
+/// with `all`, the ones hidden by default too.
+export function galleryBuiltins(all = false): (CardMeta & { source: string })[] {
   return Object.values(BUILTIN_META).flatMap((m) =>
-    m.gallery
+    m.gallery && (all || !m.galleryHidden)
       ? [{ title: m.title, description: m.description, icon: m.icon, source: m.gallery }]
       : [],
   );

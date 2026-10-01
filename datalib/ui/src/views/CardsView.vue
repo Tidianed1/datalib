@@ -53,10 +53,14 @@ onBeforeUnmount(() => {
         class="cards-edit-toggle"
         :class="{ 'is-active': editMode }"
         :aria-pressed="editMode"
+        aria-label="Edit"
         title="edit mode: show and edit each card's source, and every container, solidified ones included"
         @click="editMode = !editMode"
       >
-        Edit
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 20h4L19 9l-4-4L4 16z" />
+          <path d="M13.5 6.5l4 4" />
+        </svg>
       </button>
     </div>
   </div>
@@ -100,6 +104,19 @@ onBeforeUnmount(() => {
 .cards-logs:hover,
 .cards-edit-toggle:hover {
   background: var(--datalib-hover);
+}
+.cards-edit-toggle {
+  display: flex;
+  align-items: center;
+}
+.cards-edit-toggle svg {
+  width: var(--datalib-icon-size);
+  height: var(--datalib-icon-size);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 .cards-edit-toggle.is-active {
   background: var(--datalib-accent);

@@ -45,6 +45,10 @@ export type HostCommands = {
   // state no longer applies to new code). Used by the agent hand-off to
   // repoint a card at a freshly minted component alias.
   setSource(source: string): void;
+  // Replace THIS card with a fresh copy of the composite `name` — a
+  // container of cards kept under a name, such as the Dashboard
+  // (views/composites.ts). The new-card gallery's composite entries.
+  becomeComposite(name: string): void;
   // Close this card.
   close(): void;
   // Replace this card's persisted state string. The string is opaque
@@ -113,9 +117,13 @@ export type EdgeHoverPayload = {
 // CardRender. These are the names in scope when card source is
 // evaluated; `gridView()` in a card's source calls ViewLibs.gridView.
 export type ViewLibs = {
-  // Where a person starts: what needs them, the library, the sources
-  // and the newest documents. The card a new window opens on.
-  dashboardView: () => CardRender;
+  // The Dashboard's sections, each a card of its own; the Dashboard
+  // composite lays them out as a Page (libs/dashboardSections.ts).
+  syncStatusView: () => CardRender;
+  needsYouView: () => CardRender;
+  libraryView: () => CardRender;
+  sourcesOverviewView: () => CardRender;
+  latestActivityView: () => CardRender;
   // The Search card: results as a list, the picked one read in place.
   // The same search as gridView, which shows it as a table.
   searchView: (opts?: { q?: string }) => CardRender;
