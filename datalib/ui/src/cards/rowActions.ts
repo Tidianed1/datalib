@@ -427,6 +427,7 @@ export function rowActions<R extends ActionRow>(h: RowActionHost<R>) {
   /// the id.
   const buttons: Record<string, (row: R) => void> = {
     browse: (row) => openBrowse(row),
+    dashboard: (row) => openDashboard(row),
     sync: (row) => void runRows([row]),
     stop: (row) => {
       if (row.stop_request_ids.length > 0) void stopSyncs(row.stop_request_ids);

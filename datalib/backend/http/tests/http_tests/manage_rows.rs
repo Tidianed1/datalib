@@ -183,6 +183,9 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
     assert_eq!(slack["actions"][0]["enabled"], true);
     assert_eq!(slack["actions"][1]["id"], "sync");
     assert_eq!(slack["actions"][1]["enabled"], true);
+    // Then the dashboard, on a group and on each step filed under one.
+    assert_eq!(slack["actions"][2]["id"], "dashboard");
+    assert_eq!(slack["actions"][2]["enabled"], true);
     assert_eq!(slack["disk"]["value"], serde_json::Value::Null);
     assert_eq!(slack["disk"]["unit"], "bytes");
 
@@ -202,6 +205,16 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
     // A step's Browse is its group's: the same button, just as enabled.
     assert_eq!(render["actions"][0], slack["actions"][0]);
     assert_eq!(ingest["actions"][0], slack["actions"][0]);
+    assert_eq!(ingest["actions"][2]["id"], "dashboard");
+    // An applet has no sync to show.
+    let has_dashboard = |row: &serde_json::Value| {
+        row["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["id"] == "dashboard")
+    };
+    assert!(!has_dashboard(&rows["unified_index"]), "the applet");
     // A render that has never run is out of date: Sync reruns it alone,
     // and says which source to sync for fresh data.
     assert_eq!(

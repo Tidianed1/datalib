@@ -210,7 +210,11 @@ let unsubscribe: (() => void) | null = null;
 let clock: ReturnType<typeof setInterval> | null = null;
 
 onMounted(async () => {
-  await Promise.all([loadRows(true), loadDashboard()]);
+  // Draw from the server's last measurement, then walk the disk for
+  // fresh sizes: a walk of a large root takes seconds, and the card
+  // would stand blank for all of them.
+  await Promise.all([loadRows(), loadDashboard()]);
+  void loadRows(true);
   if (props.opts.step) {
     cardEl.value
       ?.querySelector(`[data-step="${CSS.escape(props.opts.step)}"]`)

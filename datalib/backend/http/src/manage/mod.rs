@@ -109,7 +109,7 @@ pub fn columns() -> Vec<ColumnSpec> {
             .editable()
             .badges("problems"),
         ColumnSpec::new("actions", "Actions", ColumnType::Actions)
-            .describe("Browse this row's data, and sync it \u{2014} or stop the sync in progress."),
+            .describe("Browse this row's data, sync it \u{2014} or stop the sync in progress \u{2014} and open its sync dashboard."),
         ColumnSpec::new("status", "Last update", ColumnType::Status)
             .describe("What it is doing now, or did last, and when it got there. Hover for why; double-click for the log."),
         ColumnSpec::new("queue", "Queue", ColumnType::Quantity)
@@ -461,6 +461,24 @@ fn browse_action(label: &str, hint: &str, blocked: Option<String>) -> Action {
         enabled: blocked.is_none(),
         hint: Some(hint.into()),
         disabled_reason: blocked,
+        danger: false,
+        on: None,
+    }
+}
+
+/// The button that opens a group's sync dashboard: the group laid out
+/// step by step, with charts over the run. A step opens its group's.
+fn dashboard_action() -> Action {
+    Action {
+        id: "dashboard".into(),
+        label: "Show sync dashboard".into(),
+        enabled: true,
+        hint: Some(
+            "Open this source\u{2019}s sync laid out step by step: what each step has queued \
+             and done, charted over the run, with its log and the same actions."
+                .into(),
+        ),
+        disabled_reason: None,
         danger: false,
         on: None,
     }
@@ -1036,6 +1054,7 @@ impl RowCtx<'_> {
             }),
         );
         let (sync, stop_request_ids) = self.sync_action(&id, sync_offer);
+        let dashboard = (matches!(e, Entry::Step(_)) && group.is_some()).then(dashboard_action);
         let turned_off_by = self.step(&id).and_then(|st| st.turned_off_by.clone());
         let switch = match e {
             Entry::Step(_) => Some(buttons::switch(
@@ -1075,7 +1094,11 @@ impl RowCtx<'_> {
             problems,
             items,
             disk,
-            actions: [browse, sync].into_iter().chain(switch).collect(),
+            actions: [browse, sync]
+                .into_iter()
+                .chain(dashboard)
+                .chain(switch)
+                .collect(),
             seeds,
             reveal_blocked,
             stop_request_ids,
@@ -1353,7 +1376,7 @@ impl RowCtx<'_> {
             last_synced,
             last_success,
             disk,
-            actions: vec![browse, sync, switch],
+            actions: vec![browse, sync, dashboard_action(), switch],
             seeds,
             reveal_blocked: on_disk.is_none().then(|| {
                 "Nothing on disk yet \u{2014} this group hasn't produced anything.".to_string()

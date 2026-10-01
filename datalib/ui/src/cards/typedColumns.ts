@@ -121,6 +121,8 @@ export const ACTION_ICONS: Record<string, string> = {
   browse: "M3 5h18v4H3V5zm0 6h8v8H3v-8zm10 0h8v8h-8v-8z",
   sync: "M8 5v14l11-7z",
   stop: "M6 6h12v12H6z",
+  // A line climbing across axes: the sync's numbers over the run.
+  dashboard: "M3.5 18.49l6-6.01 4 4L22 6.92l-1.41-1.41-7.09 7.97-4-4L2 16.99z",
 };
 
 /// The buttons of an `actions` cell. One element per row, kept across
