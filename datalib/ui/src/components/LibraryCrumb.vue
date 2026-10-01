@@ -43,19 +43,27 @@ function goUp() {
   void showLibraries();
 }
 
-function onDocDown(e: MouseEvent) {
+// A press anywhere else closes the menu. `pointerdown` in the capture
+// phase, because the top bar is a window-drag region whose handler
+// takes the `mousedown` before it would reach the document.
+function onDocDown(e: PointerEvent) {
   if (el.value && !el.value.contains(e.target as Node)) open.value = false;
 }
 function onKey(e: KeyboardEvent) {
   if (e.key === "Escape") open.value = false;
 }
+function onBlur() {
+  open.value = false;
+}
 watch(open, (now) => {
   if (now) {
-    document.addEventListener("mousedown", onDocDown);
+    document.addEventListener("pointerdown", onDocDown, true);
     window.addEventListener("keydown", onKey);
+    window.addEventListener("blur", onBlur);
   } else {
-    document.removeEventListener("mousedown", onDocDown);
+    document.removeEventListener("pointerdown", onDocDown, true);
     window.removeEventListener("keydown", onKey);
+    window.removeEventListener("blur", onBlur);
   }
 });
 onBeforeUnmount(() => (open.value = false));
