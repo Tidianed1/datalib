@@ -132,14 +132,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         summary.files_removed += 1;
     }
     download_problems::report_run(db.pool(), &scan.walk_problems()).await;
-
-    // Through the handle's own CAS, so nothing here opens a second
-    // store. `None` is a reader, which never reaches this path.
-    if let Some(cas) = db.cas() {
-        if let Err(e) = super::photos::lift_photos_to_cas(&db, cas).await {
-            warn!(event = "contacts_vcf_photo_lift_failed", error = %e, "a photo could not be lifted out of its vCard");
-        }
-    }
     Ok(summary)
 }
 
@@ -268,7 +260,6 @@ fn relative_href(root: &Path, file: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::super::db::db_path_for;
     use super::*;
 
     /// A fingerprint cache in a throwaway directory, so no test ever
@@ -299,50 +290,6 @@ mod tests {
             .fetch_one(db.pool())
             .await
             .unwrap()
-    }
-
-    // Production shape: the processor passes the per-source *directory* as
-    // `db_path`. The inline-photo CAS must land beside that source's entity
-    // db, not one level up in the shared `raw/` root — passing the bare dir
-    // to `cas_path_for`, which derives the sibling via `.parent()`, leaks
-    // the store to `raw/blobs.sqlite`.
-    #[tokio::test]
-    async fn inline_photo_cas_lands_in_per_source_dir_not_parent() {
-        // The shared raw root and the per-source dir within it.
-        let raw_root = tempfile::tempdir().unwrap();
-        let source_dir = raw_root.path().join("fastmail_contacts");
-        std::fs::create_dir_all(&source_dir).unwrap();
-
-        // A Google/Fastmail-style export dir with one inline-photo vCard
-        // (Picard's comm-badge mugshot, the PNG from the photo-decode test).
-        let export = tempfile::tempdir().unwrap();
-        let png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQMAAAAl21bKAAAAA1BMVEX/AAAZ4gk3AAAAAXRSTlMAQObYZgAAAApJREFUCNdjYAAAAAIAAeIhvDMAAAAASUVORK5CYII=";
-        std::fs::write(
-            export.path().join("Bridge.vcf"),
-            format!(
-                "BEGIN:VCARD\nVERSION:3.0\nUID:picard\nFN:Jean-Luc Picard\n\
-                 PHOTO;ENCODING=b;TYPE=PNG:{png_b64}\nEND:VCARD\n"
-            ),
-        )
-        .unwrap();
-
-        // Open the db where the processor would: the entity db inside the dir.
-        let entity_db = db_path_for(&source_dir);
-        let db = RawDb::open(&entity_db).await.unwrap();
-        let summary = fetch(options(&db, export.path(), test_cache().await))
-            .await
-            .unwrap();
-        assert_eq!(summary.contacts_new, 1);
-
-        assert!(
-            source_dir.join("blobs.sqlite").exists(),
-            "photo CAS must sit beside entities.doltlite_db in the source dir",
-        );
-        assert!(
-            !raw_root.path().join("blobs.sqlite").exists(),
-            "photo CAS must not leak into the shared raw/ parent",
-        );
-        db.close().await;
     }
 
     #[tokio::test]
