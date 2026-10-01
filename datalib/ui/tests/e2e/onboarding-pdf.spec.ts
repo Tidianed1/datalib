@@ -6,6 +6,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { copyFileSync } from "node:fs";
 import {
+  GRID,
   nameCell,
   expandGroup,
   expectGridPainted,
@@ -76,7 +77,7 @@ async function gridRows(
 
 /// Open Explore and wait for it to have painted rows from the applet.
 async function openExplore(page: Page) {
-  await page.goto(`${BASE}/`);
+  await page.goto(`${BASE}${GRID}`);
   await expect(page.locator(SEARCH_ROWS).first()).toBeVisible({
     timeout: 20_000,
   });
@@ -158,7 +159,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     await expect(row(page, "unified_index/qmd_aggregator")).toHaveCount(0);
 
     // ── 4-6. the wizard ──────────────────────────────────────────────
-    await page.getByRole("button", { name: "+ Data Source" }).click();
+    await page.getByRole("button", { name: "Add source" }).click();
     const wizard = page.getByRole("dialog");
     await wizard.getByRole("searchbox").fill("pdf");
     await wizard.getByRole("button", { name: /PDFs/ }).click();
@@ -321,7 +322,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
 
     // ── 1. add Signal through the wizard ─────────────────────────────
     const wizard = page.getByRole("dialog");
-    await page.getByRole("button", { name: "+ Data Source" }).click();
+    await page.getByRole("button", { name: "Add source" }).click();
     await wizard.getByRole("searchbox").fill("signal");
     await wizard
       .locator(".wiz-tile", { hasText: "Decrypt and mirror an Android Signal backup" })

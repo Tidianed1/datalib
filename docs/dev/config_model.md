@@ -132,11 +132,12 @@ its own `path`. There is no global vocabulary — each provider's
 | contacts | `carddav`, `vcf` |
 | email | `jmap`, `gmail`, `mbox` |
 | calendar | `google`, `fastmail`, `caldav`, `ics` |
+| lightroom | `catalog`, `backups` |
 | airvisual, facebook, google_takeout | `export` |
 | linkedin | `export`, plus `export.fetch_photos` |
 | signal, sms_backup_restore, whatsapp | `backup` |
 | fsindex, media, pdf | `fswalk` |
-| beeper `texts` · apple_messages `database` · apple_photos `library` · lightroom `catalog` · claude_code `sessions` · codex `sessions` · perseus `github` | |
+| beeper `texts` · apple_messages `database` · apple_photos `library` · claude_code `sessions` · codex `sessions` · perseus `github` | |
 
 That table is `ui/src/config/ingestMethods.json`, the one place to
 read the list from.
@@ -146,7 +147,9 @@ A method is *held* when its path is written and its value is neither
 complete selection), a flag such as linkedin's `export.fetch_photos`
 only when on. A provider with more than one table refuses a step
 naming two (its config's `validate`, e.g. `claude_config`'s), so a
-store is filled one way.
+store is filled one way. `lightroom` is the exception: its `backups`
+folder is the catalog's past and `catalog` its present, so a step may
+name both, and the catalog lands on top.
 
 Knobs that apply whatever the method (email's `only_extract_labels`,
 the `common.*` envelope) stay at the top level of `params`. Render

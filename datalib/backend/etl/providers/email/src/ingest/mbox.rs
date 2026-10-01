@@ -4,7 +4,7 @@
 //! message into the shared email raw store as if it had come off a JMAP
 //! server. No body parsing here — render handles that off the `.eml` blob.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -26,7 +26,7 @@ use tracing::{info, warn};
 
 use super::db::{EmailRow, RawDb};
 use super::envelope::{self, header_text, GmailId};
-use super::labels::{mailbox_id, map_label, split_gmail_labels, LabelMap};
+use super::labels::{self, mailbox_id, map_label, split_gmail_labels, LabelMap};
 use super::schema_raw::{AccountRow, EmailKeywordRow, EmailMailboxRow, EmlBlobRow};
 
 /// Maximum emails accumulated in memory before we flush a bulk batch
@@ -105,6 +105,8 @@ pub struct FetchSummary {
     pub parse_errors: usize,
     /// Emails deleted because no mbox file still holds them.
     pub emails_removed: usize,
+    /// Labels no message in the files carries any more, whose rows went.
+    pub mailboxes_removed: usize,
     /// `.mbox` files that are gone since the last run.
     pub files_removed: usize,
 }
@@ -321,7 +323,18 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 .collect(),
         )
     };
-    let mut accumulator = Accumulator::new(account_id.clone(), label_filter);
+    // The label rows already here, by name. A row a Gmail API sync made
+    // carries Google's real label id, and a message filed under that name
+    // lands there rather than on a second, name-keyed row.
+    let held_mailboxes = db.mailbox_names(&account_id).await?;
+    let gmail_prefix = labels::gmail_mailbox_prefix(&account_id);
+    let real_ids: HashMap<String, String> = held_mailboxes
+        .iter()
+        .filter(|(id, _)| id.starts_with(&gmail_prefix))
+        .map(|(id, name)| (name.clone(), id.clone()))
+        .collect();
+    let unfiltered = label_filter.is_none();
+    let mut accumulator = Accumulator::new(account_id.clone(), label_filter, real_ids);
     let mut summary = FetchSummary::default();
     let mut batch = PendingBatch::default();
     let mut emails_seen: u64 = 0;
@@ -399,8 +412,31 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut problems = scan.walk_problems();
     if read_all && changes.walk_errors == 0 {
         if summary.parse_errors == 0 {
-            summary.emails_removed =
-                prune_unseen(&db, &account_id, &accumulator.seen_email_ids).await?;
+            // `seen` is every message id the read met, before the label
+            // filter, so narrowing `only_labels` never deletes.
+            summary.emails_removed = db
+                .prune_emails_to(&account_id, &accumulator.seen_email_ids)
+                .await?;
+            // Every message was read and refiled, so a label this run's
+            // own recipe minted that none of them carries is gone from the
+            // export. A label filter hides the rest of the labels, and a
+            // real Gmail id is the API sync's to retire.
+            if unfiltered {
+                let minted: BTreeSet<&str> = accumulator
+                    .mailboxes
+                    .values()
+                    .map(|m| m.id.as_str())
+                    .collect();
+                let gone: Vec<(String, Option<String>)> = held_mailboxes
+                    .keys()
+                    .filter(|id| id.starts_with(labels::NAME_KEYED_PREFIX))
+                    .filter(|id| !minted.contains(id.as_str()))
+                    .map(|id| (id.clone(), None))
+                    .collect();
+                summary.mailboxes_removed = gone.len();
+                let now = datalib_time::IsoOffsetTimestamp::now_local();
+                super::refile_mailboxes(&db, &now, &gone).await?;
+            }
             let gone = changes.gone();
             summary.files_removed = gone.len();
             file_checkpoint::forget_files(db.pool(), CHECKPOINT_SCOPE, &gone).await?;
@@ -417,39 +453,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         .await;
 
     Ok(summary)
-}
-
-/// Delete this account's emails that no mbox file holds, and the
-/// threads left with none. `seen` is every message id the read met, before
-/// the label filter, so narrowing `only_labels` never deletes. Only right
-/// after reading every file. Returns how many emails went.
-async fn prune_unseen(db: &RawDb, account_id: &str, seen: &BTreeSet<String>) -> Result<usize> {
-    let held: Vec<String> = sqlx::query_scalar("SELECT id FROM emails WHERE account_id = ?")
-        .bind(account_id)
-        .fetch_all(db.pool())
-        .await
-        .context("list the account's emails")?;
-    let gone: Vec<String> = held
-        .iter()
-        .filter(|id| !seen.contains(id.as_str()))
-        .cloned()
-        .collect();
-    db.delete_emails(&gone).await?;
-    let mut tx = db.pool().begin().await.context("begin thread prune tx")?;
-    for sql in [
-        "DELETE FROM threads_bookkeeping WHERE id IN (SELECT id FROM threads \
-         WHERE account_id = ? AND id NOT IN (SELECT thread_id FROM emails))",
-        "DELETE FROM threads WHERE account_id = ? AND id NOT IN (SELECT thread_id FROM emails)",
-    ] {
-        sqlx::query(sql)
-            .bind(account_id)
-            .execute(&mut *tx)
-            .await
-            .context("delete threads with no emails")?;
-    }
-    tx.commit().await.context("commit thread prune tx")?;
-    datalib_etl::prune::record("emails", held.len(), gone.len());
-    Ok(gone.len())
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -561,6 +564,8 @@ fn unescape_from_line(line: &[u8]) -> Vec<u8> {
 struct Accumulator {
     account_id: String,
     mailboxes: BTreeMap<String, MailboxEntry>,
+    /// Label name → the real Gmail id a row already carries for it.
+    real_ids: HashMap<String, String>,
     threads: BTreeMap<String, Vec<ThreadMember>>,
     seen_email_ids: BTreeSet<String>,
     /// When `Some`, only messages carrying a label whose full path is
@@ -573,6 +578,8 @@ struct Accumulator {
 struct MailboxEntry {
     id: String,
     role: Option<&'static str>,
+    /// The row is the Gmail API sync's, and stays as it wrote it.
+    borrowed: bool,
 }
 
 #[derive(Clone)]
@@ -582,10 +589,15 @@ struct ThreadMember {
 }
 
 impl Accumulator {
-    fn new(account_id: String, label_filter: Option<HashSet<String>>) -> Self {
+    fn new(
+        account_id: String,
+        label_filter: Option<HashSet<String>>,
+        real_ids: HashMap<String, String>,
+    ) -> Self {
         Self {
             account_id,
             mailboxes: BTreeMap::new(),
+            real_ids,
             threads: BTreeMap::new(),
             seen_email_ids: BTreeSet::new(),
             label_filter,
@@ -733,12 +745,16 @@ impl Accumulator {
         if let Some(entry) = self.mailboxes.get(name) {
             return entry.id.clone();
         }
-        let id = mailbox_id(&self.account_id, name);
+        let (id, borrowed) = match self.real_ids.get(name) {
+            Some(real) => (real.clone(), true),
+            None => (mailbox_id(&self.account_id, name), false),
+        };
         self.mailboxes.insert(
             name.to_string(),
             MailboxEntry {
                 id: id.clone(),
                 role,
+                borrowed,
             },
         );
         id
@@ -846,6 +862,7 @@ async fn flush_account_and_lookups(
     let mailbox_specs: Vec<(String, String, Option<&'static str>, String)> = accumulator
         .mailboxes
         .iter()
+        .filter(|(_, entry)| !entry.borrowed)
         .map(|(name, entry)| {
             let payload = match entry.role {
                 Some(role) => serde_json::json!({

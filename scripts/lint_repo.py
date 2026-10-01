@@ -37,8 +37,8 @@ Checks 4, 5 and 6 — a render read must be pinned, a reader must not
 open writably, a download takes its store rather than opening one —
 were regexes standing in for types. The types exist now: a writer's
 handle holds the file's lock for its life, so a second open is refused
-rather than colliding later; `open_reader` pins at open and hands back
-a `Reader`; the shared loaders take a mandatory `Reads`. See
+rather than colliding later; `open_reader` opens one commit, detached
+and read-only, and hands back a `Reader`. See
 datalib/backend/etl/README.md, "Connection pools".
 
 Check 1: why it exists
@@ -965,10 +965,10 @@ def _check_icons(root: Path) -> int:
             )
 
     app_bgs = _APP_BG.findall(
-        (root / "datalib/ui/src/App.vue").read_text(encoding="utf-8")
+        (root / "datalib/ui/src/theme.css").read_text(encoding="utf-8")
     )
     if len(app_bgs) < 2:
-        bad.append("App.vue no longer sets --datalib-bg for a light and a dark theme")
+        bad.append("theme.css no longer sets --datalib-bg for a light and a dark theme")
     else:
         backgrounds = [
             ("the light theme", app_bgs[0], False),

@@ -77,6 +77,11 @@ impl FetchOptions {
 #[derive(Debug, Default, Serialize, Clone)]
 pub struct FetchSummary {
     pub mailboxes_upserted: usize,
+    /// Labels Gmail no longer has, whose rows went.
+    pub mailboxes_destroyed: usize,
+    /// Emails moved off a gone label, or onto a label's id from a row
+    /// keyed by its name.
+    pub emails_refiled: usize,
     pub threads_upserted: usize,
     pub emails_upserted: usize,
     pub emails_destroyed: usize,
@@ -247,17 +252,25 @@ async fn run_sync(
     // ── labels → mailboxes ──────────────────────────────────────────
     throttle.acquire(api::UNITS_LABELS_LIST).await;
     let index = LabelIndex::new(api::list_labels(&user_id, &client).await?);
-    let mailbox_payloads: Vec<Value> = index
-        .mailboxes(&account_id)
-        .into_iter()
+    // `labels.list` is the whole set every run, so it can say which rows
+    // are gone as well as which are new or renamed.
+    let held = db.mailbox_names(&account_id).await?.into_keys().collect();
+    let plan = index.plan_mailboxes(&account_id, &held);
+    let mailbox_payloads: Vec<Value> = plan
+        .rows
+        .iter()
         .map(|(id, name, role)| json!({ "id": id, "name": name, "role": role }))
         .collect();
     super::upsert_mailboxes(db, &now, &account_id, &mailbox_payloads).await?;
     summary.mailboxes_upserted = mailbox_payloads.len();
+    summary.emails_refiled = super::refile_mailboxes(db, &now, &plan.moves).await?;
+    summary.mailboxes_destroyed = plan.moves.iter().filter(|(_, to)| to.is_none()).count();
     info!(
         event = "gmail_labels",
         account = %account_id,
         labels = mailbox_payloads.len(),
+        gone = summary.mailboxes_destroyed,
+        rekeyed = plan.moves.len() - summary.mailboxes_destroyed,
         "listed the account's labels",
     );
 

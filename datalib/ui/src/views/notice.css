@@ -10,13 +10,15 @@
 }
 .card {
   border: 1px solid var(--datalib-border);
-  border-radius: 6px;
-  background: var(--datalib-card-bg);
+  border-radius: calc(var(--datalib-radius) + 4px);
+  background: var(--datalib-bg);
+  box-shadow: var(--datalib-shadow);
   padding: 1.5rem 1.75rem;
+  font-size: var(--datalib-font-size);
 }
 h2 {
   margin: 0 0 0.75rem;
-  font-size: 1.25rem;
+  font-size: calc(var(--datalib-title-size) + 5px);
 }
 p {
   margin: 0.6rem 0;
@@ -26,6 +28,7 @@ code {
   background: var(--datalib-code-bg);
   border-radius: 3px;
   padding: 0.05rem 0.3rem;
+  font-family: var(--datalib-mono);
   font-size: 0.9em;
 }
 /* The data root path can be long; let it wrap rather than widen the card. */
@@ -34,23 +37,27 @@ code {
   overflow-wrap: anywhere;
 }
 .lead {
-  color: var(--datalib-log-error);
+  color: var(--datalib-error-fg);
 }
 .cli {
   color: var(--datalib-muted);
-  font-size: 0.9rem;
+  font-size: var(--datalib-font-size-small);
 }
 .error {
-  color: var(--datalib-log-error);
+  color: var(--datalib-error-fg);
 }
 button {
   font: inherit;
+  font-weight: 600;
   padding: 0.45rem 0.9rem;
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
   border: 1px solid var(--datalib-border);
-  background: var(--datalib-input-bg);
+  background: var(--datalib-bg);
   color: var(--datalib-fg);
   cursor: pointer;
+}
+button:hover:not(:disabled) {
+  background: var(--datalib-hover);
 }
 button:disabled {
   cursor: default;
@@ -58,6 +65,9 @@ button:disabled {
 }
 button.primary {
   border-color: var(--datalib-accent);
-  color: var(--datalib-accent);
-  font-weight: 600;
+  background: var(--datalib-accent);
+  color: var(--datalib-on-accent);
+}
+button.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--datalib-accent) 85%, black);
 }

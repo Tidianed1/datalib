@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  absoluteStart,
   confirmAction,
   filePathFromUrl,
   isDesktopApp,
@@ -178,11 +179,16 @@ describe("pickPath", () => {
   });
 
   describe("start directory", () => {
-    const startAtOf = async (startAt: string) => {
-      const invoke = fakeTauri(() => Promise.resolve(null));
-      await pickPath({ ...folder, startAt });
-      return (invoke.mock.calls[0][1] as any).options.defaultPath;
+    /// The dialog's `defaultPath`, with `homeDir()` answering `/Users/tng`.
+    const startOf = async (req: { startAt?: string; startIn?: string }) => {
+      const invoke = fakeTauri((cmd) =>
+        Promise.resolve(cmd === "plugin:path|resolve_directory" ? "/Users/tng" : null),
+      );
+      await pickPath({ ...folder, ...req });
+      const open = invoke.mock.calls.find(([cmd]) => cmd === "plugin:dialog|open");
+      return (open![1] as any).options.defaultPath;
     };
+    const startAtOf = (startAt: string) => startOf({ startAt });
 
     it("opens at an absolute path the user already had", async () => {
       await expect(startAtOf("/Users/x/backups/WhatsApp")).resolves.toBe(
@@ -193,11 +199,36 @@ describe("pickPath", () => {
       );
     });
 
-    it("drops a `~` path, which no one expands on this route", async () => {
+    it("expands a `~` path against the home directory Tauri reports", async () => {
       // Tauri hands defaultPath to the platform dialog verbatim — no
-      // shell — so `~/backups` is a RELATIVE path resolved against the
-      // process cwd, and the dialog would open somewhere arbitrary.
-      await expect(startAtOf("~/backups/WhatsApp")).resolves.toBeUndefined();
+      // shell — so a `~/backups` left as it is would be a RELATIVE path
+      // resolved against the process cwd.
+      await expect(startAtOf("~/backups/WhatsApp")).resolves.toBe("/Users/tng/backups/WhatsApp");
+    });
+
+    it("drops a `~` path when the home directory is refused", async () => {
+      // A capability without core:path:allow-resolve-directory.
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const invoke = fakeTauri((cmd) =>
+        cmd === "plugin:path|resolve_directory"
+          ? Promise.reject(new Error("not allowed"))
+          : Promise.resolve(null),
+      );
+      await pickPath({ ...folder, startIn: "~/Library/Messages" });
+      const open = invoke.mock.calls.find(([cmd]) => cmd === "plugin:dialog|open");
+      expect((open![1] as any).options.defaultPath).toBeUndefined();
+    });
+
+    it("opens at the field's startIn while the field is empty", async () => {
+      await expect(startOf({ startAt: "", startIn: "~/Library/Messages" })).resolves.toBe(
+        "/Users/tng/Library/Messages",
+      );
+    });
+
+    it("prefers the field's own value to its startIn", async () => {
+      await expect(
+        startOf({ startAt: "/Volumes/copy/Messages", startIn: "~/Library/Messages" }),
+      ).resolves.toBe("/Volumes/copy/Messages");
     });
 
     it("drops empty and half-typed values", async () => {
@@ -205,6 +236,15 @@ describe("pickPath", () => {
       await expect(startAtOf("   ")).resolves.toBeUndefined();
       await expect(startAtOf("backups/WhatsApp")).resolves.toBeUndefined();
     });
+  });
+});
+
+describe("absoluteStart", () => {
+  it("expands only a `~` or `~/` prefix, and trims a trailing slash off home", () => {
+    expect(absoluteStart("~", "/Users/tng")).toBe("/Users/tng");
+    expect(absoluteStart("~/x", "/Users/tng/")).toBe("/Users/tng/x");
+    expect(absoluteStart("~someone/x", "/Users/tng")).toBeUndefined();
+    expect(absoluteStart("~/x", undefined)).toBeUndefined();
   });
 });
 

@@ -118,13 +118,9 @@ async fn run_fetch(out: &Path) -> FetchSummary {
 
 async fn stored(out: &Path) -> (Vec<Value>, Vec<Value>, Vec<Value>, Vec<Value>) {
     let db = RawDb::open(&db_path_for(out)).await.unwrap();
-    let content = dr::load_payloads(
-        db.pool(),
-        datalib_etl::pin::Reads::Own,
-        "channel_read_states",
-    )
-    .await
-    .unwrap();
+    let content = dr::load_payloads(db.pool(), "channel_read_states")
+        .await
+        .unwrap();
     let read_states = db.load_read_states().await.unwrap();
     let saved = db.load_saved_items().await.unwrap();
     let bookmarks = db.load_bookmarks().await.unwrap();

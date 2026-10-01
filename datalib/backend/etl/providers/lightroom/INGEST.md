@@ -19,6 +19,11 @@ the catalog per run and stores only what actually changed, with every
 prior state still queryable. There is no render step; see
 [What render will need](#what-render-will-need).
 
+A source reads `catalog.path`, a `.lrcat` or one backup `.zip`,
+mirrored again on every run; `backups.path`, a folder of Lightroom's
+backups, replayed as the catalog's history; or both, the backups first
+and the catalog on top — see [A folder of backups](#a-folder-of-backups).
+
 ## The model
 
 ```text
@@ -41,10 +46,19 @@ unchanged catalog produces **no commit at all** — asserted by
 `sqlite_mirror/tests/mirror_roundtrip.rs::unchanged_source_produces_no_commit`,
 which was watched failing against a deliberately broken build.
 
-It also means the ingester needs no resume cursor and no
-change-tracking of its own. It never has to know how Lightroom marks
-rows dirty. Whatever the catalog says today becomes HEAD; history
+It also means the ingester never has to know how Lightroom marks rows
+dirty. Whatever the catalog says today becomes HEAD; history
 accumulates behind it.
+
+**An unchanged catalog is not read at all.** Before mirroring, each run
+asks `fsscan` whether the catalog's files changed — the `.lrcat` and its
+`-wal`, where a running Lightroom keeps edits it has not yet written
+back. The host's fingerprint cache answers that with a `stat`, so a sync
+with nothing new takes milliseconds instead of a snapshot and a refill
+of every table. The hashes it compares against are the source's own, in
+`ingested_files`. A changed filter, or a backup committed under the
+catalog in the same run (below), mirrors it again whatever its files
+say.
 
 ### The copy runs inside SQLite
 
@@ -175,14 +189,17 @@ But Lightroom does declare those tables' keys, not as a `PRIMARY KEY`
 but as a composite UNIQUE index, named `index_<Table>_primaryKey`:
 `(image, payloadKey)` for `AgLibraryImageSyncedAssetData`,
 `(ozCatalogId, ozSpaceId)` for `AgOzSpaceIds`, `(localId, ozCatalogId)`
-for `MigratedImages`. So for a table with no declared key and no
-`id_global`, the mirror keys on its UNIQUE index (`key_from_unique_index`,
-on for Lightroom). With several, it takes the one named `…primaryKey`,
-then the one with fewest columns. A unique index lets NULLs repeat and a
-key does not, so each run checks the chosen columns are non-NULL in every
-row, one query per table; if not, the next index is tried, and if none
-holds the table stays keyless and the run warns. It never fails the run.
-A table keyed this way counts toward `stable_keys=` in the run summary.
+for `MigratedImages`. So for a table with no declared key and no `id_global`, the mirror keys
+on its UNIQUE index, for every provider that mirrors a SQLite file. A
+UNIQUE index is a constraint, not an identity, so it does so only when
+the source leaves no doubt: the table's only unique index, or the one
+named `…primaryKey`. With several and no such name the table stays
+keyless and the run warns; `primary_keys` pins one. A unique index also
+lets NULLs repeat and a key does not, so each run checks the columns are
+non-NULL in every row (one query per table); if not, the table stays
+keyless with a warning. Neither case fails the run. A table keyed this
+way counts toward `stable_keys=` in the run summary, and a sync that
+last ran before the rule existed re-mirrors its newest backup once.
 
 All the keyless tables are `Ag*`- or `Migrated*`-prefixed, which reads at
 a glance as "the Ag* tables have no primary keys". Most of them do.
@@ -320,6 +337,71 @@ These catalogs are also a **second Lightroom schema version** — 115
 first checked on — and `stale_tables_dropped == 0` holds across all
 four, since no table disappears between them.
 
+## A folder of backups
+
+Lightroom Classic writes each backup into a folder named for when it was
+taken, holding a zip of the catalog:
+`Backups/2026-09-27 1650/Lightroom Catalog-v13-3.zip` (older versions
+name it `<catalog>.lrcat.zip`). Point `backups.path` at `Backups/` and
+each sync mirrors every backup the store does not hold yet, oldest
+first, **one commit per backup**. Each backup is mirrored exactly as a
+catalog is; any two commits then diff like any two runs.
+
+**HEAD always ends on the newest state.** With `catalog.path` set too,
+the catalog is mirrored after the backups as the run's last commit, so
+the backups are the history and the live catalog is HEAD. Without one,
+the newest backup is HEAD. Whenever a sync replays any backup, it puts
+that newest state back on top as its last commit, whether or not it
+changed. That keeps things simple when a backup turns up late, older
+than what is already committed: it is replayed like any other, the
+history detours back to it for one commit, and the next commit returns
+to the present.
+
+- **Which file is a backup.** The folder is scanned with `fsscan`, so a
+  backup already hashed costs a `stat`. Each entry in it is one backup:
+  a folder with a catalog in it, or a catalog file on its own. Its
+  time comes from the start of its name (`YYYY-MM-DD HHMM`), so a note
+  added after it (`2019-12-14 0731 - Before restoring captions`) is
+  fine. When a folder has both the `.zip` and an unpacked `.lrcat`, the
+  zip is used: it is what Lightroom wrote, and the unpacked copy may
+  have been opened since. An entry with no catalog in it is ignored; a
+  folder holding two catalogs, or one whose name does not start with a
+  date, is reported as a problem on the Manage row.
+- **A backup is known by its bytes, not its name.** Renaming a backup's
+  folder by hand — adding a note — changes nothing: its hash is already
+  in the store. A backup whose file changed after it was committed is
+  new bytes, so it is replayed.
+- **Each commit names its file and is dated when its backup was taken.**
+  The message's first line is the backup's file, relative to the folder
+  (`download lightroom: backup 2026-09-27 1650/Lightroom Catalog-v13-3.zip`),
+  and the mirror's counts follow below it. The date is the folder's time
+  (`dolt_commit('--date', …)`) read in this machine's time zone, so
+  `dolt_history_<table>.commit_date` reads as the catalog's own history.
+  The catalog's commits, a backup mirrored again to go back on top, and
+  the store's own bookkeeping commits are dated when they were made.
+- **`lightroom_snapshots` lists the backups the store holds**: `snapshot`
+  (the entry's name), `taken_at` (from the name, local time), `file`
+  (relative to the folder) and `blake3` (the file's hash), each row
+  landing in the commit that mirrored it.
+- **A changed filter reaches HEAD without waiting for a backup.**
+  `include_tables`, `exclude_tables`, `exclude_columns`, `skip_xmp`,
+  `stable_key_columns` and `primary_keys` shape every mirror from then
+  on. With a catalog, its mirror carries the change to HEAD. Without
+  one, a sync that finds no new backup mirrors the newest backup again
+  under the new filters. The filters are recorded with `scope_config`
+  for the comparison; earlier commits keep the filters they were made
+  with.
+- **A folder with no backups fails the run**, as does one that cannot
+  be read (a backup drive that is not mounted).
+
+A zip is unpacked into a temporary directory for the length of its
+mirror, so a run needs free space for one catalog at a time; the
+unpacked copy is read without a snapshot, since nothing else has it
+open. `tests/backups_folder.rs` covers the order, the dates, the
+messages, the ledger, a late older backup, the filter change, the live
+catalog on top, the unchanged catalog left unread and backups known by
+their bytes, against zipped copies of the TNG catalog.
+
 ## Store size and `gc`
 
 An uncollected store grows every run, a no-op run included
@@ -426,7 +508,11 @@ function = "ingest"
 path = "~/Pictures/Lightroom/Lightroom Catalog-v14.lrcat"
 ```
 
-Or standalone:
+and, for a folder of backups beside it or instead of it,
+`[steps.params.backups]` with `path = "~/Pictures/Lightroom/Backups"`.
+
+Or standalone, with `--catalog` (a `.lrcat` or a `.zip`), `--backups`,
+or both:
 
 ```sh
 bazelisk build //datalib/backend/etl/providers/lightroom:lightroom_ingest

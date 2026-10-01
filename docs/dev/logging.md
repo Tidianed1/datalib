@@ -58,7 +58,11 @@ Retention is `[run_history]` in `config.toml`
 one, `process_log_days` / `process_log_lines` for the lines outside
 any run — the server's and the pages'. The store is not load-bearing:
 one that will not open is emptied and remade, and a schema bump does
-the same. A writer that cannot open it at all is refused at the start,
+the same. The old file is copied first to `runs.bak_<UTC stamp>.sqlite`
+beside it, so its lines can still be read with `sqlite3`; nothing
+deletes those copies, so remove them by hand when you are done with
+them. A copy that fails is an ERROR and costs the old lines, never the
+new store. A writer that cannot open it at all is refused at the start,
 with an ERROR saying why, and the caller says nothing will be recorded.
 
 ## Every line has an author
@@ -78,7 +82,10 @@ when something saw, and the commit it was built from — what a line's
 
 A line also keeps its **subject** — `run_id`, `step`, `attempt` — which
 is not the same thing: the runner's line "step X failed" is authored by
-the runner and about step X.
+the runner and about step X. A line about a step also carries the step's
+`group_id`, the `[[groups]]` entry it is filed under, as the runner's
+plan said, so a source's lines can be read together whatever step wrote
+them.
 
 The commit belongs to the process, not the store, because lines from
 different builds sit in one file — the server restarts between
@@ -143,8 +150,9 @@ on screen.
   travels with the data and reaches the Manage counts and the document
   banner. A `warn!` reaches nobody who is not reading the log.
 - **A number** — rows written, requests made, queue depth — is a
-  `metric` event, not a sentence with a number in it. The Activity
-  column and the rates come from `metric_samples`.
+  `metric` event, not a sentence with a number in it. The Manage
+  screen's Queue and ETA and the sync dashboard's charts come from
+  `metric_samples`.
 - **A secret.** The request log drops `?token=`; a line you write must
   not carry a credential either.
 
@@ -158,13 +166,13 @@ earlier ones, and the pages of the app); Manage opens it through
 on a Failed row. Selecting a line
 opens `logLineView(seq)` beside it: the whole message, the fields as a
 tree with copy and keep / exclude, the source link at the process's
-commit, both clocks. The grid shows Time, Step, Level, Stream, Source,
-Message and Fields; the columns that would say the same thing on line
+commit, both clocks. The grid shows Time, Group, Step, Level, Stream,
+Source, Message and Fields; the columns that would say the same thing on line
 after line of one process's log — run, process, commit, thread, target
 — start hidden, and the grid menu at the top right puts any of them
 back. The search bar takes the grammar every grid
-shares: the keys are the columns — `run`, `process`, `step`, `level`,
-`stream`, `target`, `thread`, `msg` — plus `process_id` and `attempt`,
+shares: the keys are the columns — `run`, `process`, `step`, `group`,
+`level`, `stream`, `target`, `thread`, `msg` — plus `process_id` and `attempt`,
 `min_level:warn` (this level and above) and `commit:0fc29cb` (prefix).
 The pickers above the grid are views of the query: picking a run, a
 launch or a step's attempt writes `run:`, `process_id:` or `step:` and
@@ -200,6 +208,46 @@ sqlite3 <root>/system/runs/runs.sqlite \
      FROM log l LEFT JOIN processes p USING (process_id)
     ORDER BY l.seq DESC LIMIT 50"
 ```
+
+### From outside the app
+
+`GET /metrics` serves the numbers in Prometheus's text exposition
+format, the one every metrics tool reads: Prometheus itself, Grafana's
+agent, an OpenTelemetry collector's Prometheus receiver. It is behind
+the API token like every route, so a scrape sends it as a bearer
+token:
+
+```yaml
+scrape_configs:
+  - job_name: datalib
+    static_configs: [{ targets: ["127.0.0.1:8731"] }]
+    authorization: { credentials_file: <root>/system/api-token }
+```
+
+What it serves (`http/src/prometheus.rs`):
+
+- **`datalib_step_<name>`**: every series a step the config declares
+  has reported, its newest value from the last run it reported in,
+  labelled `step`, `group` and the series' own labels. The type comes
+  from the name: one ending in `_total` is a counter, anything else a
+  gauge (`step_protocol.md` §"stdout: the event protocol" has the naming
+  rules). A step's counters start again from zero each run, which a
+  scraper reads as a counter reset.
+- **`datalib_step_state{state=…}`**: 1 for the state the sync loop last
+  put the step in, 0 for the others — `running`, `failed`, `off`, …
+- **`datalib_step_last_success_timestamp_seconds`**: for an alert on a
+  source that has not synced in a day.
+- **`datalib_tree_bytes{tree=…}`** and **`datalib_root_bytes`**: what
+  the usage sampler last measured.
+
+`//tests/fixtures:metrics_export_e2e_test` scrapes a real server and
+parses the answer with `prometheus_client`, the Prometheus project's
+own parser, so a line a scraper would refuse fails CI.
+
+Its history starts when something begins scraping; the app's own views
+read the run store, which has every run it keeps. Labels are step and
+group ids and what a step labels its series with (a table name, a
+producer), never a record's contents. Log lines do not go out this way.
 
 ## Rules
 

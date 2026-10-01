@@ -13,8 +13,12 @@ import { expect, type APIRequestContext, type Locator, type Page } from "@playwr
 /// The search grid's rows, wherever it is on the page.
 export const SEARCH_ROWS = ".grid-box .slick-row";
 
+/// The search grid on its default query, documents only. `/` opens on
+/// the Home card now, so a spec about the grid goes here.
+export const GRID = "/gridView()";
+
 /// The search grid with its query cleared: every row, the messages
-/// inside a document included. `/` opens on documents only.
+/// inside a document included. `GRID` opens on documents only.
 export const EVERY_ROW = "/gridView()::q%3D";
 
 /// The Manage header's sync button, whichever way it faces: Sync
@@ -374,8 +378,10 @@ export type RowReading = {
   lastSuccess: string | null;
   /// The Bytes label over the sparkline, as drawn. Null: nothing on disk.
   disk: string | null;
-  /// The Activity chips' title; "" when there are none.
-  activity: string;
+  /// The Queue and ETA cells as drawn — a figure, or a word such as
+  /// "stalled"; "" when blank.
+  queue: string;
+  eta: string;
 };
 
 /// The time beside the Last update glyph; absent on a row that never ran.
@@ -397,6 +403,10 @@ export async function sampleRow(page: Page, id: string): Promise<RowReading | nu
           .querySelector('[col-id="status"] [role="img"]')
           ?.getAttribute("aria-label");
         if (!status) return null;
+        const quantity = (el: Element, col: string) => {
+          const text = el.querySelector(`[col-id="${col}"] .tg-quantity`)?.textContent?.trim();
+          return !text || text === "—" ? "" : text;
+        };
         const stamp = (col: string) =>
           row.querySelector(`[col-id="${col}"] [title]`)?.getAttribute("title") ?? null;
         return {
@@ -404,7 +414,8 @@ export async function sampleRow(page: Page, id: string): Promise<RowReading | nu
           lastSynced: row.querySelector(at)?.getAttribute("title") ?? null,
           lastSuccess: stamp("last_success"),
           disk: row.querySelector('[col-id="disk"] .tg-plot-value')?.textContent?.trim() ?? null,
-          activity: row.querySelector('[col-id="activity"] .tg-chips')?.getAttribute("title") ?? "",
+          queue: quantity(row, "queue"),
+          eta: quantity(row, "eta"),
         };
       }),
     LAST_UPDATE_AT,

@@ -71,12 +71,14 @@ pub async fn run(
         "the index is built"
     );
 
+    // What this pass did, not a running total: the next pass reports
+    // its own, so each is a gauge, and its name says which pass.
     for (name, n) in [
-        ("markdowns_read", summary.markdowns_total),
-        ("markdowns_loaded", summary.markdowns_loaded),
-        ("markdowns_removed", summary.markdowns_removed),
-        ("rows_inserted", summary.rows_inserted),
-        ("problems_copied", summary.problems_copied),
+        ("last_pass_markdowns_read", summary.markdowns_total),
+        ("last_pass_markdowns_loaded", summary.markdowns_loaded),
+        ("last_pass_markdowns_removed", summary.markdowns_removed),
+        ("last_pass_rows_inserted", summary.rows_inserted),
+        ("last_pass_problems_copied", summary.problems_copied),
     ] {
         progress.metric(name, &[], n as i64);
     }

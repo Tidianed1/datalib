@@ -9,6 +9,7 @@ import { computed, onBeforeUnmount, reactive, ref, watch, watchEffect } from "vu
 import { useRoute, useRouter } from "vue-router";
 import ShadowCard from "@/components/ShadowCard.vue";
 import CardControls from "@/components/CardControls.vue";
+import CardIcon from "@/components/CardIcon.vue";
 import { growSourceBox, vAutoGrow } from "@/components/autoGrow";
 import { createBus } from "@/cards/bus";
 import { chainHref } from "@/cards/chainHref";
@@ -442,7 +443,6 @@ function resetSidebarWidth() {
 <template>
   <div class="tabs-root">
     <nav class="tabs-sidebar" aria-label="open cards" :style="{ flexBasis: sidebarWidth + 'px' }">
-      <button class="tabs-add" title="add card" @click="addCard">＋ new card</button>
       <ul class="tabs-list" role="tree">
         <li
           v-for="row in sidebarRows"
@@ -468,6 +468,7 @@ function resetSidebarWidth() {
             {{ row.tab.collapsed ? "▸" : "▾" }}
           </button>
           <span v-else class="tabs-twisty" />
+          <CardIcon class="tabs-icon" :source="row.tab.source" />
           <input
             v-if="renamingId === row.tab.id"
             v-focus-select
@@ -484,6 +485,9 @@ function resetSidebarWidth() {
           <span v-else class="tabs-label" @dblclick.stop="startRename(row.tab.id)">{{
             nameOf(row.tab)
           }}</span>
+          <span v-if="!devMode && row.tab.id === selectedId" class="tabs-card-controls" @click.stop>
+            <CardControls :source="row.tab.source" :ctx="ctxFor(row.tab)" sidebar />
+          </span>
           <button
             v-if="row.tab.parentId !== null"
             class="tabs-action"
@@ -509,6 +513,14 @@ function resetSidebarWidth() {
             ✕
           </button>
         </li>
+        <li class="tabs-add-row" role="none">
+          <button class="tabs-add" title="add card" @click="addCard">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
+            </svg>
+            New card
+          </button>
+        </li>
       </ul>
       <div
         class="tabs-sidebar-resize"
@@ -531,7 +543,10 @@ function resetSidebarWidth() {
       </ul>
     </nav>
     <section v-if="selected" class="tabs-main">
-      <div class="tabs-chrome" :class="{ 'tabs-chrome--title': !devMode }">
+      <!-- The sidebar already names the card, its opener, and pops out
+           or closes it, so the card runs to the top — except in dev
+           mode, whose source box is the point of the bar. -->
+      <div v-if="devMode" class="tabs-chrome">
         <button
           v-if="parentOfSelected"
           class="tabs-from"
@@ -541,7 +556,6 @@ function resetSidebarWidth() {
           ↰ {{ nameOf(parentOfSelected) }}
         </button>
         <textarea
-          v-if="devMode"
           :key="selected.id"
           v-auto-grow
           class="tabs-source"
@@ -551,7 +565,6 @@ function resetSidebarWidth() {
           @input="growSourceBox($event.target as HTMLTextAreaElement)"
           @keydown.enter.exact.prevent="commitSource(selected, $event)"
         />
-        <div v-else class="tabs-title">{{ nameOf(selected) }}</div>
         <CardControls :key="selected.id" :source="selected.source" :ctx="ctxFor(selected)" />
       </div>
       <template v-for="tab in tabs" :key="tab.id">
@@ -580,8 +593,8 @@ function resetSidebarWidth() {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border-right: 1px solid #888;
-  font-size: 13px;
+  background: var(--datalib-sidebar);
+  border-right: 1px solid var(--datalib-border);
 }
 /* Invisible grab strip centered on the sidebar's border, as on a
    miller column's edge. */
@@ -594,46 +607,65 @@ function resetSidebarWidth() {
   cursor: col-resize;
   z-index: 1;
 }
-.tabs-add {
-  flex: 0 0 auto;
-  margin: 0.4rem;
-  padding: 0.2rem 0.4rem;
-  cursor: pointer;
-  text-align: left;
-  color: color-mix(in srgb, var(--datalib-fg) 60%, transparent);
-  background: transparent;
-  border: 1px dashed color-mix(in srgb, var(--datalib-fg) 22%, transparent);
-  border-radius: 4px;
-}
-.tabs-add:hover {
-  color: var(--datalib-fg);
-  background: var(--datalib-hover);
-}
 .tabs-list {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   margin: 0;
-  padding: 0 0 0.5rem;
+  padding: var(--datalib-pad) 6px;
   list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
 }
 .tabs-row {
   display: flex;
   align-items: center;
-  gap: 0.2rem;
-  padding-right: 0.3rem;
-  line-height: 1.7;
+  gap: 6px;
+  height: var(--datalib-row-h);
+  padding-right: 4px;
   cursor: pointer;
-  border-radius: 3px;
-  margin: 0 0.3rem;
+  border-radius: var(--datalib-radius);
+  color: var(--datalib-fg);
 }
 .tabs-row:hover {
   background: var(--datalib-hover);
 }
 .tabs-row.is-selected {
-  background: color-mix(in srgb, var(--datalib-accent) 18%, transparent);
-  color: color-mix(in srgb, var(--datalib-accent) 70%, var(--datalib-fg));
+  background: var(--datalib-selected);
   font-weight: 600;
+}
+.tabs-icon {
+  color: var(--datalib-muted);
+}
+.tabs-row.is-selected .tabs-icon {
+  color: var(--datalib-accent);
+}
+/* "New card" sits right under the last tab, not at the foot of the
+   sidebar. */
+.tabs-add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: var(--datalib-row-h);
+  box-sizing: border-box;
+  padding: 0 6px;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  color: var(--datalib-muted);
+  background: transparent;
+  border: 1px dashed var(--datalib-border);
+  border-radius: var(--datalib-radius);
+}
+.tabs-add svg {
+  width: var(--datalib-icon-size);
+  height: var(--datalib-icon-size);
+}
+.tabs-add:hover {
+  color: var(--datalib-fg);
+  background: var(--datalib-hover);
 }
 .tabs-twisty {
   flex: 0 0 1rem;
@@ -641,7 +673,7 @@ function resetSidebarWidth() {
   padding: 0;
   border: none;
   background: transparent;
-  color: inherit;
+  color: var(--datalib-muted);
   cursor: pointer;
   font-size: 11px;
 }
@@ -652,25 +684,26 @@ function resetSidebarWidth() {
   padding: 0 0.2rem;
   border: 1px solid var(--datalib-accent);
   border-radius: 3px;
-  background: var(--datalib-bg);
+  background: var(--datalib-input-bg);
   color: var(--datalib-fg);
 }
 .tabs-menu {
   position: fixed;
   z-index: 10;
   margin: 0;
-  padding: 0.25rem 0;
+  padding: 4px;
   list-style: none;
   min-width: 11rem;
-  background: var(--datalib-bg);
+  background: var(--datalib-surface);
   color: var(--datalib-fg);
-  border: 1px solid color-mix(in srgb, var(--datalib-fg) 25%, transparent);
-  border-radius: 4px;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--datalib-border);
+  border-radius: calc(var(--datalib-radius) + 2px);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
   font-weight: normal;
 }
 .tabs-menu li {
-  padding: 0.2rem 0.8rem;
+  padding: 4px 8px;
+  border-radius: var(--datalib-radius);
   cursor: pointer;
 }
 .tabs-menu li:hover {
@@ -692,12 +725,11 @@ function resetSidebarWidth() {
   border: none;
   border-radius: 3px;
   background: transparent;
-  color: inherit;
+  color: var(--datalib-muted);
   cursor: pointer;
   font-size: 11px;
 }
 .tabs-popout {
-  color: inherit;
   text-decoration: none;
   font-size: 12px;
 }
@@ -707,30 +739,28 @@ function resetSidebarWidth() {
 }
 .tabs-action:hover {
   background: var(--datalib-hover);
+  color: var(--datalib-fg);
 }
+/* The one card fills the space beside the sidebar, edge to edge. */
 .tabs-main {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
   flex-direction: column;
+  background: var(--datalib-surface);
+  overflow: hidden;
 }
 .tabs-chrome {
   flex: 0 0 auto;
   display: flex;
   align-items: flex-start;
   gap: 0.4rem;
-  padding: 0.3rem 0.5rem;
-  border-bottom: 1px solid #888;
-  background: rgba(0, 0, 0, 0.08);
+  padding: 4px var(--datalib-pad);
+  border-bottom: 1px solid var(--datalib-border-soft);
+  background: var(--datalib-surface);
 }
 .tabs-chrome:focus-within {
-  background: rgba(99, 102, 241, 0.18);
-}
-/* The same accent-washed title bar as the miller columns. */
-.tabs-chrome--title {
-  background: color-mix(in srgb, var(--datalib-accent) 16%, transparent);
-  border-bottom-color: color-mix(in srgb, var(--datalib-accent) 55%, transparent);
-  color: color-mix(in srgb, var(--datalib-accent) 70%, var(--datalib-fg));
+  background: color-mix(in srgb, var(--datalib-accent) 8%, var(--datalib-surface));
 }
 .tabs-from {
   flex: 0 1 auto;
@@ -738,13 +768,14 @@ function resetSidebarWidth() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font: inherit;
+  font-size: var(--datalib-font-size-small);
   line-height: 18px;
   padding: 0.2rem 0.4rem;
-  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
-  border-radius: 3px;
+  border: 1px solid var(--datalib-border);
+  border-radius: var(--datalib-radius);
   background: transparent;
-  color: inherit;
+  color: var(--datalib-muted);
   cursor: pointer;
 }
 .tabs-from:hover {
@@ -752,10 +783,7 @@ function resetSidebarWidth() {
 }
 .tabs-source {
   flex: 1 1 auto;
-  font:
-    12px/1.5 ui-monospace,
-    Menlo,
-    monospace;
+  font: 12px/1.5 var(--datalib-mono);
   padding: 0.2rem 0.4rem;
   border: none;
   border-radius: 3px;
@@ -772,16 +800,11 @@ function resetSidebarWidth() {
 .tabs-source:focus {
   outline: none;
 }
-.tabs-title {
-  flex: 1 1 auto;
-  min-width: 0;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 18px;
-  padding: 0.2rem 0.4rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.tabs-card-controls {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 .tabs-card {
   flex: 1 1 auto;

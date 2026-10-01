@@ -396,6 +396,44 @@ mod read_only {
     }
 
     #[tokio::test]
+    async fn a_per_table_module_is_named_as_its_table_is() {
+        let s = Store::new();
+        let mut w = s.rw().await;
+        ok(&mut w, "CREATE TABLE Mixed_Case (id TEXT PRIMARY KEY)").await;
+        ok(
+            &mut w,
+            "CREATE TABLE \"odd \"\"name\"\"\" (id TEXT PRIMARY KEY)",
+        )
+        .await;
+        ok(&mut w, "INSERT INTO Mixed_Case VALUES ('x'), ('y')").await;
+        ok(&mut w, "INSERT INTO \"odd \"\"name\"\"\" VALUES ('x')").await;
+        commit(&mut w, "load").await;
+        w.close().await.unwrap();
+
+        let mut r = s.ro().await;
+        for sql in [
+            "SELECT COUNT(*) FROM dolt_at_Mixed_Case('HEAD')",
+            "SELECT COUNT(*) FROM dolt_at_mixed_case('HEAD')",
+            "SELECT COUNT(*) FROM \"dolt_at_Mixed_Case\"('HEAD')",
+        ] {
+            assert_eq!(int(&mut r, sql).await, 2, "{sql}");
+        }
+        assert_eq!(
+            int(
+                &mut r,
+                "SELECT COUNT(*) FROM \"dolt_at_odd \"\"name\"\"\"('HEAD')"
+            )
+            .await,
+            1,
+            "a quoted module name reaches a table no bare identifier can name"
+        );
+        err_contains(
+            exec(&mut r, "SELECT COUNT(*) FROM \"dolt_at_Absent\"('HEAD')").await,
+            "no such table: dolt_at_Absent",
+        );
+    }
+
+    #[tokio::test]
     async fn a_held_read_transaction_is_one_commit() {
         let (s, _) = store_with_rows().await;
         let mut r = s.ro().await;
@@ -475,6 +513,32 @@ mod revision_by_path {
             assert_eq!(text(&mut d, "SELECT active_branch()").await, None, "{rev}");
             assert_eq!(int(&mut d, "SELECT COUNT(*) FROM t").await, 2, "{rev}");
         }
+    }
+
+    /// Every reader opens this way, and reader queries lean on `IN (…)`,
+    /// `IN (SELECT value FROM json_each(?))` and `DISTINCT`. Through 0.50.13
+    /// a detached open refused all three as writes (dolthub/doltlite#3392).
+    #[tokio::test]
+    async fn a_detached_open_runs_queries_that_need_an_ephemeral_table() {
+        let (s, commit) = store_with_rows().await;
+        let mut d = connect(&s.at(&commit), true, Duration::from_secs(5)).await;
+        assert_eq!(
+            int(&mut d, "SELECT COUNT(*) FROM t WHERE id IN ('a', 'b')").await,
+            2
+        );
+        assert_eq!(
+            int(
+                &mut d,
+                "SELECT COUNT(*) FROM t WHERE id IN (SELECT value FROM json_each('[\"a\"]'))"
+            )
+            .await,
+            1
+        );
+        assert_eq!(
+            texts(&mut d, "SELECT DISTINCT CAST(v AS TEXT) FROM t").await,
+            vec!["1", "2"]
+        );
+        assert_eq!(int(&mut d, "SELECT COUNT(DISTINCT v) FROM t").await, 2);
     }
 
     #[tokio::test]

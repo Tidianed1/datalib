@@ -242,7 +242,7 @@ fn is_storage_row(map: &serde_json::Map<String, Value>) -> bool {
 }
 
 /// Per-TABLE volatile columns: `(table, keys)` redacted only in rows of that
-/// table. Applied in [`dump_doltlite_db`], which knows the table name for
+/// table. Applied in [`dump_store`], which knows the table name for
 /// certain — no shape-sniffing required.
 const TABLE_VOLATILE_KEYS: &[(&str, &[&str])] = &[
     ("sync_scope_config", &["updated_at_utc"]),
@@ -953,10 +953,15 @@ async fn open_readonly(path: &Path) -> sqlx::SqlitePool {
 
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
-    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
-        .expect("sqlite uri")
-        .create_if_missing(false)
-        .read_only(true);
+    // A plain SQLite file has to say so to the doltlite-linked engine,
+    // which would otherwise take it for a doltlite store.
+    let opts = if path.extension().is_some_and(|e| e == "sqlite") {
+        SqliteConnectOptions::new().filename(datalib_runtime::plain_sqlite::uri(path))
+    } else {
+        SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display())).expect("sqlite uri")
+    }
+    .create_if_missing(false)
+    .read_only(true);
     SqlitePoolOptions::new()
         .max_connections(1)
         .idle_timeout(None)
@@ -1009,7 +1014,7 @@ impl PipelineRun {
 fn run_pipeline(
     bin: &Path,
     cfg_path: &Path,
-    log_dir: &Path,
+    run_root: &Path,
     now: &str,
     extra_args: &[&str],
 ) -> PipelineRun {
@@ -1019,6 +1024,9 @@ fn run_pipeline(
         .arg("--now")
         .arg(now)
         .args(extra_args)
+        // The run's own fingerprint cache, so run 1 is cold on every host
+        // and the host cache never sees this test.
+        .env("DATALIB_CACHE_DIR", run_root.join("fingerprint_cache"))
         .stdin(std::process::Stdio::null())
         .output()
         .expect("spawn datalib-dag");
@@ -1030,7 +1038,7 @@ fn run_pipeline(
     // run and only the last 40 lines survive a failure — which is precisely
     // when you want to ask "why did that take 18 minutes?". It goes
     // beside the data root, not in it: the root is what the app serves.
-    let log = log_dir.join(format!("{}.ndjson", now.replace(':', "-")));
+    let log = run_root.join(format!("{}.ndjson", now.replace(':', "-")));
     if let Err(e) = std::fs::write(&log, &stderr) {
         eprintln!("[test] WARNING: could not write {}: {e}", log.display());
     } else {
@@ -1243,10 +1251,15 @@ async fn latest_sync_run(path: &Path) -> Value {
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use sqlx::Row;
 
-    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
-        .expect("sqlite uri")
-        .create_if_missing(false)
-        .read_only(true);
+    // A plain SQLite file has to say so to the doltlite-linked engine,
+    // which would otherwise take it for a doltlite store.
+    let opts = if path.extension().is_some_and(|e| e == "sqlite") {
+        SqliteConnectOptions::new().filename(datalib_runtime::plain_sqlite::uri(path))
+    } else {
+        SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display())).expect("sqlite uri")
+    }
+    .create_if_missing(false)
+    .read_only(true);
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .idle_timeout(None)
@@ -1280,7 +1293,7 @@ async fn latest_sync_run(path: &Path) -> Value {
 /// by `problem_uuid` like every dumped table.
 fn index_problems(data_root: &Path) -> Value {
     let db = data_root.join("unified_index/grid_index/db.doltlite_db");
-    let mut dump = dump_doltlite_db(&db);
+    let mut dump = dump_store(&db);
     let mut rows = match &mut dump {
         Value::Object(map) => map
             .remove("problems")
@@ -1442,13 +1455,14 @@ enum SnapValue {
 }
 
 /// File → snapshot payload. JSONL and JSON are parsed, sorted and stripped of
-/// volatile fields; markdown is text with frontmatter redactions;
-/// `.doltlite_db` files are dumped as `{table: [rows]}` so the goldens carry
-/// the actual raw payloads. Anything else becomes a size marker.
+/// volatile fields; markdown is text with frontmatter redactions; a store —
+/// `.doltlite_db`, or a plain `.sqlite` like the blob CAS — is dumped as
+/// `{table: [rows]}` so the goldens carry the actual raw payloads. Anything
+/// else becomes a size marker.
 fn summarize_file(path: &Path) -> SnapValue {
     let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-    if name.ends_with(".doltlite_db") {
-        let mut v = dump_doltlite_db(path);
+    if name.ends_with(".doltlite_db") || name.ends_with(".sqlite") {
+        let mut v = dump_store(path);
         strip_volatile(&mut v);
         return SnapValue::Json(v);
     }
@@ -1570,15 +1584,15 @@ fn canonicalize_path(rel: &Path) -> String {
     parts.join("/")
 }
 
-fn dump_doltlite_db(path: &Path) -> Value {
+fn dump_store(path: &Path) -> Value {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .expect("build tokio runtime for doltlite dump");
-    rt.block_on(dump_doltlite_db_async(path))
+        .expect("build tokio runtime for a store dump");
+    rt.block_on(dump_store_async(path))
 }
 
-async fn dump_doltlite_db_async(path: &Path) -> Value {
+async fn dump_store_async(path: &Path) -> Value {
     use std::str::FromStr;
 
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -1594,17 +1608,22 @@ async fn dump_doltlite_db_async(path: &Path) -> Value {
         "example_envelope_skeleton",
     ];
 
-    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
-        .expect("sqlite uri")
-        .create_if_missing(false)
-        .read_only(true);
+    // A plain SQLite file has to say so to the doltlite-linked engine,
+    // which would otherwise take it for a doltlite store.
+    let opts = if path.extension().is_some_and(|e| e == "sqlite") {
+        SqliteConnectOptions::new().filename(datalib_runtime::plain_sqlite::uri(path))
+    } else {
+        SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display())).expect("sqlite uri")
+    }
+    .create_if_missing(false)
+    .read_only(true);
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .idle_timeout(None)
         .max_lifetime(None)
         .connect_with(opts)
         .await
-        .expect("open doltlite db");
+        .unwrap_or_else(|e| panic!("open {}: {e}", path.display()));
 
     // Tables to walk, in alphabetical order so the snapshot is stable.
     let table_rows = sqlx::query(

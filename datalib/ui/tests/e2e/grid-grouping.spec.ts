@@ -4,7 +4,7 @@
 // page, so the counts cannot come from the rows the grid holds.
 
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
-import { gridSettled, SEARCH_ROWS, type GridApi } from "./grid-helpers";
+import { GRID, gridSettled, SEARCH_ROWS, type GridApi } from "./grid-helpers";
 
 type Group = { values: (string | null)[]; count: number };
 
@@ -36,7 +36,7 @@ test("every group is there with its true count before its rows are read", async 
 }) => {
   const byKind = await groupsOf(request, "kind");
   expect(byKind.length).toBeGreaterThan(1);
-  await page.goto("/");
+  await page.goto(GRID);
   await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 15_000 });
   // No group's rows arrive: every request for them is held.
   await page.route(/\/search\?.*within=/, () => {});
@@ -59,7 +59,7 @@ test("every group is there with its true count before its rows are read", async 
 /// share its value.
 test("opening a group reads its rows", async ({ page, request }) => {
   const [smallest] = (await groupsOf(request, "kind")).sort((a, b) => a.count - b.count);
-  await page.goto("/");
+  await page.goto(GRID);
   await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 15_000 });
   await groupBy(page, ["kind"]);
   await gridSettled(page);

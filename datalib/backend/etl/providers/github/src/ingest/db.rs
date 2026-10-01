@@ -26,7 +26,7 @@ impl RawDb {
     }
 
     pub async fn load_self_identity(&self) -> Result<Option<Value>> {
-        load_self_identity(self.pool(), self.reads()).await
+        load_self_identity(self.pool()).await
     }
 
     // ── pull_requests ───────────────────────────────────────────────
@@ -107,7 +107,7 @@ impl RawDb {
         let sql = format!(
             "SELECT id, repo_full_name, pr_number, json(payload) AS payload
              FROM {} WHERE payload IS NOT NULL ORDER BY id",
-            self.reads().table(table)
+            table
         );
         let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
             .fetch_all(self.pool())

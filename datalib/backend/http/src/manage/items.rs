@@ -10,7 +10,7 @@ use std::time::Duration;
 use datalib_columns::{Sample, Timeseries};
 use datalib_runs::{MetricRow, MetricSampleRow};
 
-use super::activity::grouped;
+use super::queue::grouped;
 
 /// How far back the sparkline reaches. Days rather than the Size
 /// column's minutes: items move once a sync, and the question is

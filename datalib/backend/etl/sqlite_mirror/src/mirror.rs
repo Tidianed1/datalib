@@ -40,11 +40,6 @@ pub struct MirrorOptions {
     pub exclude_columns: Vec<String>,
     pub stable_key_columns: Vec<String>,
     pub primary_keys: BTreeMap<String, Vec<String>>,
-    /// Key a table the source gave no `PRIMARY KEY` on its own UNIQUE
-    /// index, the first one whose columns are mirrored and non-NULL in
-    /// every row. None holding leaves it keyless, with a warning: unlike
-    /// `primary_keys`, this can never cost the run.
-    pub key_from_unique_index: bool,
     /// Run `dolt_gc()` at the start of the run. See [`run`].
     pub gc: bool,
     /// Tables the provider keeps in the same store beside the mirror
@@ -68,7 +63,6 @@ impl MirrorOptions {
             exclude_columns: Vec::new(),
             stable_key_columns: Vec::new(),
             primary_keys: BTreeMap::new(),
-            key_from_unique_index: false,
             gc: false,
             sidecar_tables: Vec::new(),
         }
@@ -433,10 +427,11 @@ async fn verified_stable_columns(
     Ok(out)
 }
 
-/// The first UNIQUE index of a table the source gave no key that this
-/// run finds non-NULL in every row (a unique index lets NULLs repeat, a
-/// key does not). `None` when the table has a key by another route, the
-/// option is off, or no index holds.
+/// The first UNIQUE index of a table the source gave no `PRIMARY KEY`
+/// that this run finds non-NULL in every row (a unique index lets NULLs
+/// repeat, a key does not). `None` when the table has a key by another
+/// route or no index holds, in which case it stays keyless with a
+/// warning: unlike `primary_keys`, this can never cost the run.
 async fn verified_unique_index_key(
     conn: &mut SqliteConnection,
     opts: &MirrorOptions,
@@ -450,59 +445,65 @@ async fn verified_unique_index_key(
         .stable_key_columns
         .iter()
         .any(|c| unique_cols.contains(c) || verified_cols.contains(c));
-    if !opts.key_from_unique_index
-        || has_declared
-        || has_stable
-        || opts.primary_keys.contains_key(table)
-    {
+    if has_declared || has_stable || opts.primary_keys.contains_key(table) {
         return Ok(None);
     }
-    let candidates = plan::unique_index_keys(&mut *conn, SRC_SCHEMA, table).await?;
-    for key in &candidates {
-        let mirrored = |c: &String| {
-            source_cols.iter().any(|s| {
-                &s.spec.name == c
-                    && !s.generated
-                    && !opts
-                        .exclude_columns
-                        .iter()
-                        .any(|p| glob_match(p, &format!("{table}.{c}")))
-            })
-        };
-        if key.is_empty() || !key.iter().all(mirrored) {
-            continue;
+    let indexes = plan::unique_indexes(&mut *conn, SRC_SCHEMA, table).await?;
+    let Some(index) = plan::key_index(&indexes) else {
+        if indexes.len() > 1 {
+            tracing::warn!(
+                table,
+                indexes = %indexes.iter().map(|i| i.name.as_str()).collect::<Vec<_>>().join(", "),
+                "sqlite_mirror: several UNIQUE indexes and none is named as the key; \
+                 mirroring the table keyless (pin one with primary_keys)"
+            );
         }
-        let cols: Vec<String> = key.iter().map(|c| plan::quote_ident(c)).collect();
-        let any_null = cols
-            .iter()
-            .map(|c| format!("{c} IS NULL"))
-            .collect::<Vec<_>>()
-            .join(" OR ");
-        // Audited: names come out of the source's own schema through
-        // `plan::quote_ident`; the schema alias is a const.
-        let sql = format!(
-            "SELECT COUNT(*) AS n, COALESCE(SUM({any_null}), 0) AS nulls FROM {s}.{t}",
-            s = plan::quote_ident(SRC_SCHEMA),
-            t = plan::quote_ident(table),
-        );
-        let row = sqlx::query(sqlx::AssertSqlSafe(sql))
-            .fetch_one(&mut *conn)
-            .await
-            .with_context(|| format!("check unique index key {table}({})", key.join(", ")))?;
-        let n: i64 = row.get("n");
-        let nulls: i64 = row.get("nulls");
-        if nulls == 0 {
-            return Ok(Some(key.clone()));
-        }
-        tracing::warn!(
-            table,
-            key = %key.join(", "),
-            rows = n,
-            nulls,
-            "sqlite_mirror: a UNIQUE index has NULLs in some rows, so it cannot be the key; \
-             trying the next, else mirroring the table keyless"
-        );
+        return Ok(None);
+    };
+    let key = &index.columns;
+    let mirrored = |c: &String| {
+        source_cols.iter().any(|s| {
+            &s.spec.name == c
+                && !s.generated
+                && !opts
+                    .exclude_columns
+                    .iter()
+                    .any(|p| glob_match(p, &format!("{table}.{c}")))
+        })
+    };
+    if !key.iter().all(mirrored) {
+        return Ok(None);
     }
+    let cols: Vec<String> = key.iter().map(|c| plan::quote_ident(c)).collect();
+    let any_null = cols
+        .iter()
+        .map(|c| format!("{c} IS NULL"))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    // Audited: names come out of the source's own schema through
+    // `plan::quote_ident`; the schema alias is a const.
+    let sql = format!(
+        "SELECT COUNT(*) AS n, COALESCE(SUM({any_null}), 0) AS nulls FROM {s}.{t}",
+        s = plan::quote_ident(SRC_SCHEMA),
+        t = plan::quote_ident(table),
+    );
+    let row = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .fetch_one(&mut *conn)
+        .await
+        .with_context(|| format!("check unique index key {table}({})", key.join(", ")))?;
+    let n: i64 = row.get("n");
+    let nulls: i64 = row.get("nulls");
+    if nulls == 0 {
+        return Ok(Some(key.clone()));
+    }
+    tracing::warn!(
+        table,
+        index = %index.name,
+        rows = n,
+        nulls,
+        "sqlite_mirror: the UNIQUE index has NULLs in some rows, so it cannot be the key; \
+         mirroring the table keyless"
+    );
     Ok(None)
 }
 

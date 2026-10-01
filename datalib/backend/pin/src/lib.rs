@@ -2,13 +2,13 @@
 //!
 //! A plain `SELECT` on a branch reads that branch's working set, rows the
 //! writer has not committed to doltlite included. Anything reading a store
-//! some other process writes reads one commit instead, here
-//! `dolt_at_<table>('<hash>')` for a hash it resolved once
+//! some other process writes reads one commit instead: it resolves a hash
+//! once and opens `<store>@<hash>` read-only ([`open_at`]), a detached
+//! connection on which every plain table name reads that commit
 //! (docs/dev/doltlite.md#three-ways-to-read-one-commit).
 //!
 //! This crate is the part of that discipline with no dependencies: the
-//! hash as a type, HEAD, and the read-only open. `datalib_etl::pin` builds
-//! the per-connection `pinned_<table>` views on top of it.
+//! hash as a type, HEAD, and the two read-only opens.
 
 use std::path::Path;
 use std::str::FromStr;
@@ -53,10 +53,12 @@ impl Pin {
     }
 
     /// The table expression that reads `table` at this commit. Safe to
-    /// splice into SQL for a `table` that is a literal in the caller: the
-    /// hash was checked by [`Pin::at`].
+    /// splice into SQL for any table name: the module name is a quoted
+    /// identifier, which doltlite resolves case and all, and the hash was
+    /// checked by [`Pin::at`].
     pub fn table(&self, table: &str) -> String {
-        format!("dolt_at_{table}('{}')", self.0)
+        let module = format!("dolt_at_{table}").replace('"', "\"\"");
+        format!("\"{module}\"('{}')", self.0)
     }
 }
 
@@ -99,14 +101,6 @@ pub fn is_missing_table(e: &sqlx::Error, table: &str) -> bool {
     }
 }
 
-/// A reader's handle on a store some other process writes.
-///
-/// Read-only, so "a reader must not write" is the engine's rule rather
-/// than an intention; never creates the file, because a root that has
-/// not synced has none and the reader must not be what makes it. One
-/// connection, never recycled: doltlite's session state is per
-/// connection, and a replacement starts on the default branch. The
-/// acquire timeout is [`acquire_timeout`].
 /// How long a pool waits for its one connection before giving up. Far past
 /// sqlx's 30s default because a cold open of a multi-GB store legitimately
 /// takes seconds inside `sqlite3_open_v2`; five minutes is "something else
@@ -126,10 +120,53 @@ pub fn acquire_timeout() -> Duration {
     Duration::from_secs(secs)
 }
 
+/// A read-only handle on the file's default branch, `main`: what has been
+/// published, and nothing a writer still has in flight on its own branch.
+/// It follows `main` as it moves; to read one commit, [`open_at`].
+///
+/// Read-only, so "a reader must not write" is the engine's rule rather
+/// than an intention; never creates the file, because a root that has
+/// not synced has none and the reader must not be what makes it. One
+/// connection, never recycled: doltlite's session state is per
+/// connection. The acquire timeout is [`acquire_timeout`].
 pub async fn open_reader(db_path: &Path) -> Result<SqlitePool, sqlx::Error> {
     let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?
         .read_only(true)
         .create_if_missing(false);
+    reader_pool(opts).await
+}
+
+/// A read-only handle on `db_path` at `pin`: doltlite opens `<file>@<hash>`
+/// detached, so every plain table name on it reads that commit, the file's
+/// working set is out of reach, indexes work, and no peer moving a branch
+/// moves it (docs/dev/doltlite.md#opening-a-revision-by-path).
+///
+/// Its `sqlite_master` is the commit's schema: a table that commit does
+/// not have is `no such table`, the same as one never created.
+pub async fn open_at(db_path: &Path, pin: &Pin) -> Result<SqlitePool, sqlx::Error> {
+    // `filename`, not a `sqlite://` URL: the `@` would parse as userinfo.
+    let opts = SqliteConnectOptions::new()
+        .filename(format!("{}@{}", db_path.display(), pin.commit()))
+        .read_only(true)
+        .create_if_missing(false);
+    reader_pool(opts).await
+}
+
+/// Whether the commit a pool reads holds any table of its own. On an
+/// [`open_at`] pool that is the question "is this store readable at this
+/// commit": a doltlite file is born with a commit that holds nothing, and
+/// a reader that took it for an empty store would report a source that
+/// lost every row.
+pub async fn holds_a_table(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
+    let n: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(n > 0)
+}
+
+async fn reader_pool(opts: SqliteConnectOptions) -> Result<SqlitePool, sqlx::Error> {
     SqlitePoolOptions::new()
         .max_connections(1)
         .idle_timeout(None)
@@ -163,7 +200,11 @@ mod tests {
         }
         assert_eq!(
             Pin::at(HASH).unwrap().table("grid_rows"),
-            format!("dolt_at_grid_rows('{HASH}')")
+            format!("\"dolt_at_grid_rows\"('{HASH}')")
+        );
+        assert_eq!(
+            Pin::at(HASH).unwrap().table("Adobe \"x\""),
+            format!("\"dolt_at_Adobe \"\"x\"\"\"('{HASH}')")
         );
     }
 

@@ -258,9 +258,8 @@ pub fn lock_path_for(db_path: &Path) -> PathBuf {
 /// directly: it works here, and fast-forwards `main` at each seal
 /// ([`commit_run`]). Everything between two seals is invisible to a
 /// reader until that moment — the rows, and the schema reconcile that
-/// creates the tables, which a pinned read could not protect itself
-/// from: `pin.rs` lists tables from its branch's `sqlite_master`, not
-/// the pin's.
+/// creates the tables — because a reader resolves `main`'s tip before it
+/// opens that commit.
 ///
 /// The name is also the signal. `fsindex` keeps one branch per scan root
 /// and publishes none of them, so [`publish_to_main`] fires only for a
@@ -657,45 +656,50 @@ impl std::error::Error for SchemaBreak {}
 /// not own, and under streaming the damage is specific: the reader's own open
 /// throws away the producer's half-written batch.
 ///
-/// So this does none of it: connect read-only, and hand back the pool. The
-/// connection is opened `read_only`, so "a reader must not write" is enforced
-/// by the engine (`attempt to write a readonly database`) rather than left as
-/// an intention — and creating the `pinned_<table>` views still works, since
-/// they live in the per-connection temp schema rather than in the file.
-///
-/// And it pins at open: the handle it hands back names one commit — the
-/// one the caller was given, or HEAD — and has the `pinned_<table>` views
-/// installed, so every content read through [`Reads::At`] names that
-/// commit however long the pass runs. A store with nothing committed
-/// yields `None` rather than a reader onto its working set; the caller
-/// decides what that means (a consumer does nothing that pass).
+/// So this does none of it. It resolves the commit to read — the one the
+/// caller was given, or HEAD — and opens `<store>@<hash>` read-only: a
+/// detached connection whose plain table names read that commit, whose
+/// schema is that commit's, and which the engine refuses to write
+/// (`attempt to write a readonly database`). A store with nothing readable
+/// committed — no commit, or none holding a table — yields `None` rather
+/// than a reader onto its working set; the caller decides what that means
+/// (a consumer does nothing that pass).
 ///
 /// A schema this store has not got yet is the owner's to add on its next run,
-/// and a read naming a column it lacks fails at prepare time saying so. Probe
-/// with [`column_exists`] and fall back where that is a real possibility;
-/// slack's `load_channels` is the worked example.
-///
-/// [`Reads::At`]: crate::pin::Reads::At
+/// and a read naming a table or column that commit lacks fails at prepare time
+/// saying so. Probe with [`column_exists`] and fall back where that is a real
+/// possibility; slack's `load_channels` is the worked example.
 pub async fn open_reader(db_path: &Path, commit: Option<&str>) -> Result<Option<Reader>> {
-    let pool = connect_pool(db_path, Access::ReadOnly, false).await?;
     let pin = match commit {
-        Some(commit) => Some(crate::pin::Pin::at(commit)?),
-        None => crate::pin::head(&pool).await?,
+        Some(commit) => crate::pin::Pin::at(commit)?,
+        None => {
+            let main = connect_pool(db_path, Access::ReadOnly, false).await?;
+            let head = datalib_pin::head(&main).await;
+            main.close().await;
+            match head? {
+                Some(pin) => pin,
+                None => return Ok(None),
+            }
+        }
     };
-    let Some(pin) = pin else {
+    let pool = datalib_pin::open_at(db_path, &pin)
+        .await
+        .with_context(|| format!("open {} at {}", db_path.display(), pin.commit()))?;
+    if !datalib_pin::holds_a_table(&pool).await? {
+        tracing::warn!(
+            store = %db_path.display(),
+            commit = pin.commit(),
+            "no table at this commit: unreadable, not empty",
+        );
         pool.close().await;
         return Ok(None);
-    };
-    crate::pin::install_views(&pool, &pin)
-        .await
-        .with_context(|| format!("pin {} for reading", db_path.display()))?;
+    }
     Ok(Some(Reader { pool, pin }))
 }
 
-/// A store somebody else writes, read at one commit. Derefs to its pool,
-/// so queries run against `&*reader` or [`Reader::pool`]; content reads
-/// name tables through [`Reads::At`](crate::pin::Reads::At) with
-/// [`Reader::pin`].
+/// A store somebody else writes, read at one commit ([`Reader::pin`]).
+/// Derefs to its pool, so queries run against `&*reader` or
+/// [`Reader::pool`] with the tables' own names.
 pub struct Reader {
     pool: SqlitePool,
     pin: crate::pin::Pin,
@@ -1556,18 +1560,35 @@ fn stamp_run_with(msg: &str, run_id: Option<&str>) -> String {
 }
 
 pub async fn commit_run(pool: &SqlitePool, msg: &str) -> Result<Option<String>> {
+    commit_run_dated(pool, msg, None).await
+}
+
+/// [`commit_run`], with the commit's date pinned to `date`
+/// (`YYYY-MM-DDTHH:MM:SS` plus `Z` or `±HH:MM`) rather than the wall
+/// clock: for a source whose input is a series of past states, each
+/// committed as of when it was taken.
+pub async fn commit_run_dated(
+    pool: &SqlitePool,
+    msg: &str,
+    date: Option<&str>,
+) -> Result<Option<String>> {
     if !has_dolt_extensions(pool).await {
         return Ok(None);
     }
     let started = std::time::Instant::now();
     let store = store_label(pool);
+    let query = match date {
+        None => sqlx::query_scalar::<_, Option<String>>("SELECT dolt_commit('-Am', ?)")
+            .bind(stamp_run(msg)),
+        Some(date) => {
+            sqlx::query_scalar::<_, Option<String>>("SELECT dolt_commit('-Am', ?, '--date', ?)")
+                .bind(stamp_run(msg))
+                .bind(date)
+        }
+    };
     // "nothing to commit" is a legitimate outcome: a pass that fetched
     // nothing new leaves the working set clean.
-    let hash = match sqlx::query_scalar::<_, Option<String>>("SELECT dolt_commit('-Am', ?)")
-        .bind(stamp_run(msg))
-        .fetch_optional(pool)
-        .await
-    {
+    let hash = match query.fetch_optional(pool).await {
         Ok(opt) => opt.flatten(),
         Err(e) if e.to_string().contains("nothing to commit") => None,
         Err(e) => return Err(anyhow::Error::new(e).context("dolt_commit")),
@@ -2114,7 +2135,7 @@ pub async fn bulk_upsert_with_tape_split<T: crate::bulk::BulkUpsertable>(
     Ok(())
 }
 
-async fn set_volatile_payloads_in_tx(
+pub async fn set_volatile_payloads_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     table: &str,
     volatile: &[(&str, &serde_json::Value)],
@@ -2215,11 +2236,9 @@ pub async fn scan_buckets(
     pin: &crate::pin::Pin,
     spec: &DiffScanSpec<'_>,
 ) -> Result<DiffScan> {
-    // The caller pinned first and hands us the commit, rather than us sampling
-    // HEAD here. That ordering is load-bearing twice over: the diff and the
-    // content reads that follow it name one commit by construction, and the
-    // `pinned_<table>` views already exist by the time `bucket_query` runs —
-    // which it needs, because those queries join live tables against the diff.
+    // The caller opened its reader at a commit and hands us that commit,
+    // rather than us sampling HEAD here, so the diff and the content reads
+    // that follow it name one commit by construction.
     let to_ref = pin.commit().to_string();
     let new_head = Some(to_ref.clone());
 
@@ -2394,14 +2413,9 @@ pub async fn failed_ids(pool: &SqlitePool, table: &str) -> Result<Vec<String>> {
         .collect())
 }
 
-pub async fn load_payloads(
-    pool: &SqlitePool,
-    reads: crate::pin::Reads<'_>,
-    table: &str,
-) -> Result<Vec<Value>> {
+pub async fn load_payloads(pool: &SqlitePool, table: &str) -> Result<Vec<Value>> {
     // `json(payload)` so we get text back whether the column holds a JSONB
     // blob or a JSON text literal.
-    let table = reads.table(table);
     let sql = format!(
         "SELECT json(payload) AS payload FROM {table} WHERE payload IS NOT NULL ORDER BY id"
     );
@@ -2422,12 +2436,7 @@ pub async fn load_payloads(
     Ok(out)
 }
 
-pub async fn load_payloads_with_id(
-    pool: &SqlitePool,
-    reads: crate::pin::Reads<'_>,
-    table: &str,
-) -> Result<Vec<(String, Value)>> {
-    let table = reads.table(table);
+pub async fn load_payloads_with_id(pool: &SqlitePool, table: &str) -> Result<Vec<(String, Value)>> {
     let sql = format!(
         "SELECT id, json(payload) AS payload FROM {table} WHERE payload IS NOT NULL ORDER BY id"
     );
@@ -4077,7 +4086,7 @@ mod tests {
 
         // The views were installed at open, on a read-only connection.
         assert_eq!(reader.pin().commit(), commit);
-        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pinned_t")
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM t")
             .fetch_one(reader.pool())
             .await
             .unwrap();
@@ -4278,7 +4287,7 @@ mod tests {
 
         // At HEAD, through a pinned reader: the rows rode the schema commit.
         let reader = open_reader(&path, None).await.unwrap().expect("committed");
-        let pinned: i64 = sqlx::query_scalar("SELECT count(*) FROM pinned__datalib_meta")
+        let pinned: i64 = sqlx::query_scalar("SELECT count(*) FROM _datalib_meta")
             .fetch_one(reader.pool())
             .await
             .unwrap();
@@ -4352,7 +4361,7 @@ mod tests {
 
         // Untouched: the row and the column are still there.
         let reader = open_reader(&path, None).await.unwrap().unwrap();
-        let v: String = sqlx::query_scalar("SELECT v FROM pinned_t WHERE id = 1")
+        let v: String = sqlx::query_scalar("SELECT v FROM t WHERE id = 1")
             .fetch_one(reader.pool())
             .await
             .unwrap();

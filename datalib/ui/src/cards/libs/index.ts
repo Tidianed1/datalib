@@ -15,9 +15,14 @@ import { logView } from "./logView";
 import { logLineView } from "./logLineView";
 import { historyView } from "./historyView";
 import { umapView } from "./umapView";
+import { syncDashboardView } from "./syncDashboardView";
+import { homeView } from "./homeView";
+import { searchView } from "./searchView";
 
 // The names in scope when card source is evaluated (cardSource.ts).
 export const viewLibs: ViewLibs = {
+  homeView,
+  searchView,
   gridView,
   documentView,
   documentPickerView,
@@ -34,4 +39,5 @@ export const viewLibs: ViewLibs = {
   logLineView,
   historyView,
   umapView,
+  syncDashboardView,
 };

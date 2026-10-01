@@ -182,6 +182,35 @@ pub fn vcard_members(vcard: &str) -> Vec<String> {
         .collect()
 }
 
+/// `CATEGORIES`: the groups a card says it is in, as Google's export
+/// writes them (`myContacts`, `starred`, and every label the person made).
+/// A text list (RFC 6350 §6.7.1): unescaped commas separate, `\,` is a
+/// comma in a name, and the property may repeat. In card order, each
+/// name once.
+pub fn vcard_categories(vcard: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for prop in vcard_all(vcard, "CATEGORIES") {
+        let mut current = String::new();
+        let mut chars = prop.value.chars();
+        let mut names: Vec<String> = Vec::new();
+        while let Some(c) = chars.next() {
+            match c {
+                '\\' => current.extend(chars.next()),
+                ',' => names.push(std::mem::take(&mut current)),
+                _ => current.push(c),
+            }
+        }
+        names.push(current);
+        for name in names {
+            let name = name.trim();
+            if !name.is_empty() && !out.iter().any(|n| n == name) {
+                out.push(name.to_string());
+            }
+        }
+    }
+    out
+}
+
 /// Pull the structured `N:` (name) line as `(family, given)`. RFC 6350
 /// §6.2.2 orders the semicolon-separated components
 /// `Family;Given;Additional;Prefixes;Suffixes`; we keep the first two
@@ -558,6 +587,17 @@ END:VCARD&#13;
             labels("TEL"),
             vec![Some("Subspace relay".into()), Some("mobile".into())]
         );
+    }
+
+    #[test]
+    fn categories_split_on_unescaped_commas_and_repeat() {
+        let card = "BEGIN:VCARD\nCATEGORIES:myContacts,starred,Away Team\\, Delta\n\
+                    CATEGORIES:starred,Bridge\nEND:VCARD\n";
+        assert_eq!(
+            vcard_categories(card),
+            vec!["myContacts", "starred", "Away Team, Delta", "Bridge"]
+        );
+        assert!(vcard_categories("BEGIN:VCARD\nFN:Q\nEND:VCARD\n").is_empty());
     }
 
     #[test]

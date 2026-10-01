@@ -69,20 +69,12 @@ pub fn render_posts(
             let pin = db.pin().expect("a reader is pinned at open").clone();
             // A feed the user didn't export has no table; treat a load
             // error as "absent" rather than failing the render.
-            let shares = datalib_etl::doltlite_raw::load_payloads_with_id(
-                db.pool(),
-                datalib_etl::pin::Reads::At(&pin),
-                "shares",
-            )
-            .await
-            .unwrap_or_default();
-            let comments = datalib_etl::doltlite_raw::load_payloads_with_id(
-                db.pool(),
-                datalib_etl::pin::Reads::At(&pin),
-                "comments",
-            )
-            .await
-            .unwrap_or_default();
+            let shares = datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), "shares")
+                .await
+                .unwrap_or_default();
+            let comments = datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), "comments")
+                .await
+                .unwrap_or_default();
             let changed = changed_rows(db.pool(), range, &pin, &["shares", "comments"]).await?;
             // Closed, not dropped: the next open of this store is a
             // second connection until this one is actually gone.

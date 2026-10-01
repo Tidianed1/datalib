@@ -85,7 +85,7 @@ pub async fn run(
         removed = report.removed,
         "docs (re)rendered"
     );
-    progress.metric("documents_removed", &[], report.removed as i64);
+    progress.metric("documents_removed_total", &[], report.removed as i64);
     // The last word on what the source holds, after the sweep: a run
     // that deleted more than it wrote leaves the checkpoints' last
     // number too high, and this is the one that stands between runs.
@@ -292,7 +292,7 @@ pub fn render_source(
             .with_context(|| format!("store document {}", md.markdown_uuid))?;
         emitted.insert(md.markdown_uuid);
         docs += 1;
-        progress.metric("documents_rendered", &[], docs as i64);
+        progress.metric("documents_rendered_total", &[], docs as i64);
         // What a consumer reading a checkpoint may see is a document
         // this run is about to sweep. That is stale, not torn: the
         // sweep's deletions reach the consumer through the same diff
@@ -729,13 +729,13 @@ fn fetch_problems_of(
     };
     let pool = reader.pool().clone();
     let result = blocking(async {
-        let rows = match sqlx::query("SELECT * FROM pinned_problems WHERE stage = ?")
+        let rows = match sqlx::query("SELECT * FROM problems WHERE stage = ?")
             .bind(Stage::Fetch.as_str())
             .fetch_all(&pool)
             .await
         {
             Ok(rows) => rows,
-            Err(e) if datalib_etl::pin::is_missing_table(&e, "pinned_problems") => Vec::new(),
+            Err(e) if datalib_etl::pin::is_missing_table(&e, "problems") => Vec::new(),
             Err(e) => return Err(e).context("read the raw store's problems"),
         };
         rows.iter()

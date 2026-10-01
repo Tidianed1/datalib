@@ -7,7 +7,7 @@
   ],
   "apple_messages": [
     {
-      "path": "database",
+      "path": "messages",
       "reach": "local"
     }
   ],
@@ -136,6 +136,10 @@
   "lightroom": [
     {
       "path": "catalog",
+      "reach": "local"
+    },
+    {
+      "path": "backups",
       "reach": "local"
     }
   ],

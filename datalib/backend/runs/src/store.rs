@@ -20,11 +20,10 @@ use app_schema::runs::{
 /// the write (~0.3ms per row on a plain-SQLite file, measured).
 const FLUSH_EVERY: Duration = Duration::from_millis(200);
 
-/// How far back a snapshot looks for samples. A rate is a live
-/// question, and the snapshot is read on every `manage.rows` frame —
-/// several times a second during a run — so the window query must not
-/// scan a day-long run's every sample each time.
-const RATE_WINDOW: Duration = Duration::from_secs(10 * 60);
+/// How far back a snapshot reads the `queued` gauge, for an estimate of
+/// when a step's queue empties. Long enough that one slow page does not
+/// swing it, short enough that it follows a step that changes pace.
+pub const QUEUE_WINDOW: Duration = Duration::from_secs(2 * 60);
 
 /// The floor between two samples of one metric series. A series that
 /// changes every flush would otherwise write five rows a second for as
@@ -128,10 +127,10 @@ async fn hold_open_lock(path: &Path) -> Option<FileLock> {
 }
 
 /// Open the store and make sure its schema is there, emptying a file
-/// that will not read or was written by another schema version.
-/// `synchronous=Off` means an OS crash can leave an unreadable file
-/// behind, and losing old logs is a better outcome than a run that
-/// refuses to start.
+/// that will not read or was written by another schema version, after
+/// keeping a copy of it. `synchronous=Off` means an OS crash can leave
+/// an unreadable file behind, and losing old logs is a better outcome
+/// than a run that refuses to start.
 async fn open_or_recreate(path: &Path) -> Result<SqlitePool, sqlx::Error> {
     let _deciding = hold_open_lock(path).await;
     let why = match open_or_create(path).await {
@@ -152,7 +151,9 @@ async fn open_or_recreate(path: &Path) -> Result<SqlitePool, sqlx::Error> {
         Err(e) => e.to_string(),
     };
     tracing::warn!(path = %path.display(), why, "run store: emptying the file");
-    empty_in_place(path).await?;
+    let emptying = emptying_of(path)?;
+    keep_a_copy(path, &emptying).await;
+    empty_in_place(path, &emptying).await?;
     let pool = open_or_create(path).await?;
     install_schema(&pool).await?;
     write_meta(&pool).await?;
@@ -185,15 +186,68 @@ fn emptying_for(head: &[u8]) -> Emptying {
     }
 }
 
-async fn empty_in_place(path: &Path) -> Result<(), sqlx::Error> {
+fn emptying_of(path: &Path) -> Result<Emptying, sqlx::Error> {
+    use std::io::Read;
     let mut head = Vec::with_capacity(16);
-    {
-        use std::io::Read;
-        std::fs::File::open(path)
-            .and_then(|f| f.take(16).read_to_end(&mut head))
-            .map_err(sqlx::Error::Io)?;
+    std::fs::File::open(path)
+        .and_then(|f| f.take(16).read_to_end(&mut head))
+        .map_err(sqlx::Error::Io)?;
+    Ok(emptying_for(&head))
+}
+
+/// Where a file about to be emptied is kept: beside it, named for the
+/// moment it was set aside, in UTC. Not `runs.sqlite…`, which the app's
+/// file watcher reads as a write to the store.
+fn backup_path(path: &Path, now: &datalib_time::IsoOffsetTimestamp) -> PathBuf {
+    path.with_file_name(format!(
+        "runs.bak_{}.sqlite",
+        now.inner().naive_utc().format("%Y%m%dT%H%M%SZ")
+    ))
+}
+
+/// Copied, never renamed: a reader that opened the file keeps it under
+/// its new name but looks for its journal by the old one, which is the
+/// trap [`Emptying`] describes. A copy that fails costs the old lines
+/// and nothing else.
+async fn keep_a_copy(path: &Path, emptying: &Emptying) {
+    let to = backup_path(path, &datalib_time::IsoOffsetTimestamp::now_local());
+    let kept = match emptying {
+        Emptying::Reset => vacuum_into(path, &to).await.map_err(|e| e.to_string()),
+        Emptying::Truncate => std::fs::copy(path, &to)
+            .map(|_| ())
+            .map_err(|e| e.to_string()),
+    };
+    match kept {
+        Ok(()) => tracing::warn!(copy = %to.display(), "run store: kept a copy of the old file"),
+        Err(why) => tracing::error!(
+            copy = %to.display(),
+            why,
+            "run store: could not keep a copy of the old file; its lines are gone"
+        ),
     }
-    match emptying_for(&head) {
+}
+
+/// `VACUUM INTO` reads under the file's lock, so a writer of the old
+/// build still attached cannot tear the copy. The target names the
+/// plain-SQLite engine the way every open of this store does, so the
+/// copy is one a stock `sqlite3` reads.
+async fn vacuum_into(from: &Path, to: &Path) -> Result<(), sqlx::Error> {
+    use sqlx::Connection;
+
+    let bare = SqliteConnectOptions::new()
+        .filename(datalib_runtime::plain_sqlite::uri(from))
+        .busy_timeout(BUSY_TIMEOUT);
+    let mut conn = sqlx::sqlite::SqliteConnection::connect_with(&bare).await?;
+    let copied = sqlx::query("VACUUM INTO ?")
+        .bind(datalib_runtime::plain_sqlite::uri(to))
+        .execute(&mut conn)
+        .await;
+    conn.close().await?;
+    copied.map(|_| ())
+}
+
+async fn empty_in_place(path: &Path, emptying: &Emptying) -> Result<(), sqlx::Error> {
+    match emptying {
         Emptying::Reset => reset(path).await,
         Emptying::Truncate => {
             let mut journal = path.as_os_str().to_os_string();
@@ -353,9 +407,12 @@ pub struct Snapshot {
     /// When each step last logged anything (UTC), for telling a step
     /// that is busy but not advancing from one that has gone silent.
     pub last_log_at: BTreeMap<String, String>,
-    /// The two newest samples of every series — enough for a rate.
-    /// Oldest first within a series.
-    pub recent_samples: Vec<MetricSampleRow>,
+    /// Every sample of a queue's series — `datalib_metrics::QUEUED`, and
+    /// the running totals of what came off it, `DONE` and `DEQUEUED` — from the last
+    /// [`QUEUE_WINDOW`], plus the newest one before it, per series: where
+    /// each stood when the window opened and how it moved since. Oldest
+    /// first within a series.
+    pub queue_history: Vec<MetricSampleRow>,
 }
 
 pub async fn snapshot(data_root: &Path) -> Snapshot {
@@ -473,6 +530,16 @@ pub async fn runs(data_root: &Path, step: Option<&str>, limit: i64) -> Vec<RunRo
 /// step that has never reported the series is absent — the reader
 /// draws "not counted", never a false zero.
 pub async fn latest_metric(data_root: &Path, name: &str) -> Vec<MetricRow> {
+    newest_per_series(data_root, Some(name)).await
+}
+
+/// The newest sample of every series every step has reported, across
+/// every run the store keeps: what `GET /metrics` serves.
+pub async fn latest_metrics(data_root: &Path) -> Vec<MetricRow> {
+    newest_per_series(data_root, None).await
+}
+
+async fn newest_per_series(data_root: &Path, name: Option<&str>) -> Vec<MetricRow> {
     let path = runs_path(data_root);
     if !path.exists() {
         return Vec::new();
@@ -480,16 +547,16 @@ pub async fn latest_metric(data_root: &Path, name: &str) -> Vec<MetricRow> {
     let Ok(pool) = open_existing(&path).await else {
         return Vec::new();
     };
-    // Every sample of the series, newest run first within a (step,
-    // labels) pair; the first of each pair is the answer. Two runs
+    // Every sample, newest run first within a (step, name, labels)
+    // series; the first of each is the answer. Two runs
     // started in the same instant — a test, or two ticks of a wall
     // clock at second resolution — fall back to the order the store
     // recorded them in.
     let rows = sqlx::query(
         "SELECT m.run_id, m.step, m.name, m.labels, m.value, m.updated_at_utc, m.tz_offset \
          FROM metrics m JOIN runs r ON r.run_id = m.run_id \
-         WHERE m.name = ? \
-         ORDER BY m.step, m.labels, r.started_at_utc DESC, r.rowid DESC",
+         WHERE ?1 IS NULL OR m.name = ?1 \
+         ORDER BY m.step, m.name, m.labels, r.started_at_utc DESC, r.rowid DESC",
     )
     .bind(name)
     .fetch_all(&pool)
@@ -499,17 +566,18 @@ pub async fn latest_metric(data_root: &Path, name: &str) -> Vec<MetricRow> {
     let mut out: Vec<MetricRow> = Vec::new();
     for r in &rows {
         let step: String = r.get("step");
+        let name: String = r.get("name");
         let labels: String = r.get("labels");
         if out
             .last()
-            .is_some_and(|m| m.step == step && m.labels == labels)
+            .is_some_and(|m| m.step == step && m.name == name && m.labels == labels)
         {
             continue;
         }
         out.push(MetricRow {
             run_id: r.get("run_id"),
             step,
-            name: r.get("name"),
+            name,
             labels,
             value: r.get("value"),
             updated_at_utc: r.get("updated_at_utc"),
@@ -632,21 +700,28 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
     .iter()
     .map(|r| (r.get::<String, _>("step"), r.get::<String, _>("ts_utc")))
     .collect();
-    // The two newest per series, by a window over the run's recent
-    // samples only. Text order is instant order, so `ts` sorts and the
-    // cutoff is a plain comparison.
-    let (cutoff, _) = datalib_time::IsoOffsetTimestamp::now_local()
-        .bump_micros(-(RATE_WINDOW.as_micros() as i64))
+    let (queue_cutoff, _) = datalib_time::IsoOffsetTimestamp::now_local()
+        .bump_micros(-(QUEUE_WINDOW.as_micros() as i64))
         .to_utc_and_offset();
-    let recent_samples = sqlx::query(
+    // The names are bound from `datalib_metrics`, the one spelling the
+    // runner writes and the ETA reads: a series this query missed would
+    // not fail, it would make the estimate count a whole run as taken
+    // off inside the window.
+    let queue_history = sqlx::query(
         "SELECT step, name, labels, ts_utc, tz_offset, value FROM ( \
-           SELECT *, ROW_NUMBER() OVER \
-             (PARTITION BY step, name, labels ORDER BY ts_utc DESC) AS rn \
-           FROM metric_samples WHERE run_id = ? AND ts_utc > ?) \
-         WHERE rn <= 2 ORDER BY step, name, labels, ts_utc",
+           SELECT *, ROW_NUMBER() OVER (PARTITION BY step, name, labels ORDER BY ts_utc DESC) AS rn \
+           FROM metric_samples WHERE run_id = ?1 AND name IN (?3, ?4, ?5) AND ts_utc <= ?2) \
+         WHERE rn = 1 \
+         UNION ALL \
+         SELECT step, name, labels, ts_utc, tz_offset, value FROM metric_samples \
+           WHERE run_id = ?1 AND name IN (?3, ?4, ?5) AND ts_utc > ?2 \
+         ORDER BY step, name, labels, ts_utc",
     )
     .bind(&run_id)
-    .bind(&cutoff)
+    .bind(&queue_cutoff)
+    .bind(datalib_metrics::QUEUED)
+    .bind(datalib_metrics::DONE)
+    .bind(datalib_metrics::DEQUEUED)
     .fetch_all(pool)
     .await?
     .iter()
@@ -669,8 +744,86 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
         metrics,
         errors,
         last_log_at,
-        recent_samples,
+        queue_history,
     })
+}
+
+/// Recent runs that any of `steps` took part in, newest first: the runs
+/// a group's dashboard can show.
+pub async fn runs_of_steps(data_root: &Path, steps: &[String], limit: i64) -> Vec<RunRow> {
+    let mut out: Vec<RunRow> = Vec::new();
+    for step in steps {
+        for r in runs(data_root, Some(step), limit).await {
+            if !out.iter().any(|x| x.run_id == r.run_id) {
+                out.push(r);
+            }
+        }
+    }
+    out.sort_by(|a, b| b.started_at_utc.cmp(&a.started_at_utc));
+    out.truncate(limit.max(0) as usize);
+    out
+}
+
+/// Every sample of every series one step reported in one run, oldest
+/// first within a series.
+pub async fn step_samples(data_root: &Path, run_id: &str, step: &str) -> Vec<MetricSampleRow> {
+    let path = runs_path(data_root);
+    if !path.exists() {
+        return Vec::new();
+    }
+    let Ok(pool) = open_existing(&path).await else {
+        return Vec::new();
+    };
+    let rows = sqlx::query(
+        "SELECT name, labels, ts_utc, tz_offset, value FROM metric_samples \
+         WHERE run_id = ? AND step = ? ORDER BY name, labels, ts_utc",
+    )
+    .bind(run_id)
+    .bind(step)
+    .fetch_all(&pool)
+    .await
+    .unwrap_or_default();
+    pool.close().await;
+    rows.iter()
+        .map(|r| MetricSampleRow {
+            run_id: run_id.to_string(),
+            step: step.to_string(),
+            name: r.get("name"),
+            labels: r.get("labels"),
+            ts_utc: r.get("ts_utc"),
+            tz_offset: r.get("tz_offset"),
+            value: r.get("value"),
+        })
+        .collect()
+}
+
+/// When each `warn` and `error` line one step wrote in one run was
+/// written, oldest first, as `(level, ts_utc)`.
+pub async fn step_problem_lines(
+    data_root: &Path,
+    run_id: &str,
+    step: &str,
+) -> Vec<(String, String)> {
+    let path = runs_path(data_root);
+    if !path.exists() {
+        return Vec::new();
+    }
+    let Ok(pool) = open_existing(&path).await else {
+        return Vec::new();
+    };
+    let rows = sqlx::query(
+        "SELECT level, ts_utc FROM log \
+         WHERE run_id = ? AND step = ? AND level IN ('warn', 'error') ORDER BY ts_utc",
+    )
+    .bind(run_id)
+    .bind(step)
+    .fetch_all(&pool)
+    .await
+    .unwrap_or_default();
+    pool.close().await;
+    rows.iter()
+        .map(|r| (r.get::<String, _>("level"), r.get::<String, _>("ts_utc")))
+        .collect()
 }
 
 /// One line by its `seq`, with what its process says about it.
@@ -841,8 +994,8 @@ impl std::ops::Deref for LogLine {
 
 /// The columns [`log_line_from`] reads, for a query that selects them
 /// itself: `log` as `l`, joined to `processes` as `p`.
-pub(crate) const LOG_LINE_COLUMNS: &str = "l.seq, l.run_id, l.process_id, l.step, l.attempt, \
-     l.ts_utc, l.tz_offset, l.stream, l.level, l.target, l.thread, l.msg, l.fields, \
+pub(crate) const LOG_LINE_COLUMNS: &str = "l.seq, l.run_id, l.process_id, l.step, l.group_id, \
+     l.attempt, l.ts_utc, l.tz_offset, l.stream, l.level, l.target, l.thread, l.msg, l.fields, \
      p.process, p.git_hash";
 
 pub(crate) fn log_line_from(r: &sqlx::sqlite::SqliteRow) -> LogLine {
@@ -852,6 +1005,7 @@ pub(crate) fn log_line_from(r: &sqlx::sqlite::SqliteRow) -> LogLine {
             run_id: r.get("run_id"),
             process_id: r.get("process_id"),
             step: r.get("step"),
+            group_id: r.get("group_id"),
             attempt: r.get("attempt"),
             ts_utc: r.get("ts_utc"),
             tz_offset: r.get("tz_offset"),
@@ -1626,7 +1780,9 @@ async fn flush(
         && batch.processes.is_empty()
         && batch.logs.is_empty()
         && batch.metrics.is_empty();
-    if empty && !last {
+    let now = Instant::now();
+    let plan = plan_series(series, &batch.metrics, now, last);
+    if empty && !last && plan.samples.is_empty() {
         return Ok(());
     }
     let run_id = scope.run_id();
@@ -1688,13 +1844,14 @@ async fn flush(
             l.process_id.as_str()
         };
         sqlx::query(
-            "INSERT INTO log (run_id, process_id, step, attempt, ts_utc, tz_offset, stream, level, \
-                              target, thread, msg, fields) \
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO log (run_id, process_id, step, group_id, attempt, ts_utc, tz_offset, \
+                              stream, level, target, thread, msg, fields) \
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         )
         .bind(run_id)
         .bind(process_id)
         .bind(&l.step)
+        .bind(&l.group_id)
         .bind(l.attempt)
         .bind(&l.ts_utc)
         .bind(&l.tz_offset)
@@ -1707,8 +1864,6 @@ async fn flush(
         .execute(&mut *tx)
         .await?;
     }
-    let now = Instant::now();
-    let plan = plan_series(series, &batch.metrics, now, last);
     for m in batch.metrics.values() {
         sqlx::query(
             "INSERT INTO metrics (run_id, step, name, labels, value, updated_at_utc, tz_offset) \
@@ -1744,9 +1899,13 @@ struct SeriesPlan {
 }
 
 /// A sample is due when a series has moved and the floor between
-/// samples has passed — and, on the last flush of a run, once more for
-/// whatever each series ended at, however recent its previous sample:
-/// a rate drawn to the end of the run needs that point.
+/// samples has passed. A move the floor held back is written once the
+/// floor has passed, even if the series has not moved again — at the
+/// stamp it moved at: a queue that fills and then empties in one pass
+/// would otherwise keep its peak in the history until its next move. On
+/// the last flush of a run, whatever each series ended at is written
+/// however recent its previous sample: a rate drawn to the end of the
+/// run needs that point.
 fn plan_series(
     series: &HashMap<SeriesKey, SeriesState>,
     batch: &BTreeMap<SeriesKey, MetricRow>,
@@ -1784,21 +1943,20 @@ fn plan_series(
             },
         ));
     }
-    if last {
-        for (key, s) in series {
-            if batch.contains_key(key) || s.current.value == s.last_sample_value {
-                continue;
-            }
-            plan.samples.push(s.current.clone());
-            plan.next.push((
-                key.clone(),
-                SeriesState {
-                    last_sample_at: s.last_sample_at,
-                    last_sample_value: s.current.value,
-                    current: s.current.clone(),
-                },
-            ));
+    for (key, s) in series {
+        let held_back = !batch.contains_key(key) && s.current.value != s.last_sample_value;
+        if !held_back || !(last || now - s.last_sample_at >= SAMPLE_EVERY) {
+            continue;
         }
+        plan.samples.push(s.current.clone());
+        plan.next.push((
+            key.clone(),
+            SeriesState {
+                last_sample_at: now,
+                last_sample_value: s.current.value,
+                current: s.current.clone(),
+            },
+        ));
     }
     plan
 }
@@ -1831,6 +1989,55 @@ async fn insert_sample(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A queue that fills and then empties within the sample floor: the
+    /// drop is held back, then written once the floor has passed — with
+    /// nothing new in the batch, and at the stamp it happened — rather
+    /// than leaving the peak in the history until the queue next moves.
+    #[test]
+    fn a_move_the_floor_held_back_is_written_once_it_passes() {
+        let key: SeriesKey = ("s".into(), "queued".into(), String::new());
+        let row = |value: i64, at: &str| MetricRow {
+            step: "s".into(),
+            name: "queued".into(),
+            value,
+            updated_at_utc: at.into(),
+            ..Default::default()
+        };
+        let t0 = Instant::now();
+        let mut series = HashMap::new();
+        let apply = |series: &mut HashMap<SeriesKey, SeriesState>, plan: SeriesPlan| {
+            for (k, st) in plan.next {
+                series.insert(k, st);
+            }
+            plan.samples
+                .iter()
+                .map(|m| (m.value, m.updated_at_utc.clone()))
+                .collect::<Vec<_>>()
+        };
+        let batch = |m: MetricRow| BTreeMap::from([(key.clone(), m)]);
+
+        let first = plan_series(&series, &batch(row(50, "t1")), t0, false);
+        assert_eq!(apply(&mut series, first), [(50, "t1".to_string())]);
+        let inside = plan_series(
+            &series,
+            &batch(row(0, "t2")),
+            t0 + Duration::from_secs(1),
+            false,
+        );
+        assert_eq!(apply(&mut series, inside), [], "inside the floor");
+        let quiet = plan_series(
+            &series,
+            &BTreeMap::new(),
+            t0 + Duration::from_secs(3),
+            false,
+        );
+        assert_eq!(apply(&mut series, quiet), [], "still inside the floor");
+        let after = plan_series(&series, &BTreeMap::new(), t0 + SAMPLE_EVERY, false);
+        assert_eq!(apply(&mut series, after), [(0, "t2".to_string())]);
+        let again = plan_series(&series, &BTreeMap::new(), t0 + SAMPLE_EVERY * 3, false);
+        assert_eq!(apply(&mut series, again), [], "written once");
+    }
 
     /// A store from another schema version, with a reader that opened
     /// it before a writer remade it — `datalib-http`'s reads take no
@@ -1883,13 +2090,32 @@ mod tests {
         writer.close().await;
     }
 
+    /// The bytes of a file that is not a database are kept as they
+    /// were, beside the file emptied for the new store.
     #[tokio::test]
     async fn a_file_that_is_not_a_database_is_emptied_and_opens() {
         let td = tempfile::tempdir().unwrap();
         let path = td.path().join("runs.sqlite");
-        std::fs::write(&path, b"this is not a database, sqlite or otherwise").unwrap();
+        let junk = b"this is not a database, sqlite or otherwise";
+        std::fs::write(&path, junk).unwrap();
         let pool = open_or_recreate(&path).await.expect("open the store");
         assert!(schema_matches(&pool).await.unwrap());
         pool.close().await;
+        let kept: Vec<_> = std::fs::read_dir(td.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .filter(|n| n.starts_with("runs.bak_"))
+            .collect();
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert_eq!(std::fs::read(td.path().join(&kept[0])).unwrap(), junk);
+    }
+
+    #[test]
+    fn the_copy_is_named_for_the_moment_in_utc() {
+        let at = datalib_time::parse_strict("2026-09-30T10:15:02-04:00").unwrap();
+        assert_eq!(
+            backup_path(Path::new("/r/system/runs/runs.sqlite"), &at),
+            Path::new("/r/system/runs/runs.bak_20260930T141502Z.sqlite")
+        );
     }
 }

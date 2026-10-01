@@ -6,9 +6,8 @@
 //! putting a message in its chat. Identity comes from the guids beside
 //! the rowids: a chat is its `chat.guid`, a message its `message.guid`,
 //! both Apple-issued and the same in every copy of one account's
-//! database. Attachments are named, not copied: the files sit under
-//! `~/Library/Messages/Attachments/`, which a picked `chat.db` grants no
-//! access to, so each renders as a placeholder carrying its path.
+//! database. Attachments are named, not copied (INGEST.md says why), so
+//! each renders as a placeholder carrying its path.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -157,7 +156,7 @@ async fn load(
     range: RawRange<'_>,
     pin: &datalib_etl::pin::Pin,
 ) -> Result<Loaded> {
-    let handles: HashMap<i64, String> = sqlx::query("SELECT ROWID, id FROM pinned_handle")
+    let handles: HashMap<i64, String> = sqlx::query("SELECT ROWID, id FROM handle")
         .fetch_all(pool)
         .await
         .context("select handle")?
@@ -167,12 +166,11 @@ async fn load(
 
     let mut chats: Vec<ChatBuild> = Vec::new();
     let mut chat_idx: HashMap<i64, usize> = HashMap::new();
-    let chat_rows = sqlx::query(
-        "SELECT ROWID, guid, chat_identifier, display_name FROM pinned_chat ORDER BY ROWID",
-    )
-    .fetch_all(pool)
-    .await
-    .context("select chat")?;
+    let chat_rows =
+        sqlx::query("SELECT ROWID, guid, chat_identifier, display_name FROM chat ORDER BY ROWID")
+            .fetch_all(pool)
+            .await
+            .context("select chat")?;
     for r in &chat_rows {
         let rowid: i64 = r.get("ROWID");
         let inputs = Inputs::default();
@@ -189,7 +187,7 @@ async fn load(
         });
     }
 
-    let members = sqlx::query("SELECT chat_id, handle_id FROM pinned_chat_handle_join")
+    let members = sqlx::query("SELECT chat_id, handle_id FROM chat_handle_join")
         .fetch_all(pool)
         .await
         .context("select chat_handle_join")?;
@@ -207,7 +205,7 @@ async fn load(
     }
 
     let mut chat_of_message: HashMap<i64, usize> = HashMap::new();
-    let joins = sqlx::query("SELECT chat_id, message_id FROM pinned_chat_message_join")
+    let joins = sqlx::query("SELECT chat_id, message_id FROM chat_message_join")
         .fetch_all(pool)
         .await
         .context("select chat_message_join")?;
@@ -225,8 +223,8 @@ async fn load(
     let files = sqlx::query(
         "SELECT j.message_id, a.ROWID AS attachment_id, a.filename, a.mime_type, \
                 a.transfer_name, a.total_bytes \
-           FROM pinned_message_attachment_join j \
-           JOIN pinned_attachment a ON a.ROWID = j.attachment_id",
+           FROM message_attachment_join j \
+           JOIN attachment a ON a.ROWID = j.attachment_id",
     )
     .fetch_all(pool)
     .await
@@ -265,7 +263,7 @@ async fn load(
         "SELECT ROWID, guid, text, attributedBody, date, is_from_me, is_read, handle_id, item_type, \
                 group_action_type, group_title, associated_message_guid, \
                 associated_message_type, associated_message_emoji \
-           FROM pinned_message ORDER BY date, ROWID",
+           FROM message ORDER BY date, ROWID",
     )
     .fetch_all(pool)
     .await

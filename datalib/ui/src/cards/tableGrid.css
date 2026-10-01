@@ -104,11 +104,12 @@
   background: color-mix(in srgb, currentColor 10%, transparent);
   color: var(--datalib-muted);
 }
-.tg-chip-info { color: var(--datalib-log-warn); }
-.tg-chip-idle { color: var(--datalib-log-ok); }
 .tg-chip-warning { color: var(--datalib-log-warn); }
 .tg-chip-error { color: var(--datalib-log-error); }
-.tg-chip-ok { color: var(--datalib-log-ok); }
+
+.tg-quantity { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tg-quantity-note { color: var(--datalib-muted); font-style: italic; }
+.tg-quantity-stalled { color: var(--datalib-log-warn); font-style: normal; }
 
 .tg-series {
   display: flex;

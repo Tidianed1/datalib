@@ -13,6 +13,7 @@ import { nextTick, onBeforeUnmount, ref, useTemplateRef, watch, watchEffect } fr
 import { useRoute, useRouter } from "vue-router";
 import ShadowCard from "@/components/ShadowCard.vue";
 import CardControls from "@/components/CardControls.vue";
+import CardIcon from "@/components/CardIcon.vue";
 import { growSourceBox, vAutoGrow } from "@/components/autoGrow";
 import { createBus } from "@/cards/bus";
 import { decodeColumns, type ColumnSpec } from "@/router/columns";
@@ -352,7 +353,7 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
         :data-slot-id="slot.id"
         :style="{ width: (slot.width ?? DEFAULT_WIDTH) + 'px' }"
       >
-        <div class="miller-col-chrome card-chrome" :class="{ 'card-chrome--title': !devMode }">
+        <div class="miller-col-chrome card-chrome">
           <textarea
             v-if="devMode"
             v-auto-grow
@@ -364,7 +365,8 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
             @keydown.enter.exact.prevent="commitSource(slot, $event)"
           />
           <div v-else class="miller-col-title card-title">
-            {{ displayTitle(slot.source, slot.title) }}
+            <CardIcon class="card-title-icon" :source="slot.source" />
+            <span class="card-title-text">{{ displayTitle(slot.source, slot.title) }}</span>
           </div>
           <CardControls :source="slot.source" :ctx="ctxFor(slot)" />
         </div>
@@ -408,7 +410,8 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
      column to its chrome bar (~36px); stretch sizes it definitively in
      all engines. */
   align-self: stretch;
-  border-right: 1px solid #888;
+  background: var(--datalib-bg);
+  border-right: 1px solid var(--datalib-border);
   min-width: 0;
   display: flex;
   flex-direction: column;

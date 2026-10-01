@@ -296,7 +296,7 @@ next one.
 
 You normally don't write this by hand. The app's first-run screen
 writes the index steps and the applet for an empty folder, and the
-**Data sources** card's **+ Data Source** button fills in a source (next
+**Data sources** card's **Add source** button fills in a source (next
 step).
 If you'd rather hand-edit, copy
 [**configs/dag_example.toml**](https://github.com/imbue-ai/datalib/blob/main/configs/dag_example.toml),

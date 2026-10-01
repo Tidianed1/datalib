@@ -149,3 +149,25 @@ export function formatRelative(iso: string | null, now: number): string {
   }
   return "seconds ago";
 }
+
+const CLOCK_FMT = new Intl.DateTimeFormat(undefined, {
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+});
+
+/// The time of day to the second, `09:38:33`, for an axis over one run:
+/// a run is minutes long far more often than it crosses a midnight.
+export function formatClock(ms: number): string {
+  const d = new Date(ms);
+  return Number.isNaN(d.getTime()) ? "" : CLOCK_FMT.format(d);
+}
+
+/// A span of seconds the way an estimate reads: `52 sec`, `25 min`,
+/// `1.4 h`. The same words the server's hovers use (`manage::queue`).
+export function formatDuration(secs: number): string {
+  if (secs < 60) return `${Math.round(secs)} sec`;
+  if (secs < 3600) return `${Math.round(secs / 60)} min`;
+  return `${(secs / 3600).toFixed(1)} h`;
+}

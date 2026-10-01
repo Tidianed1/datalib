@@ -78,6 +78,13 @@ pub struct ScanOptions {
     pub ignore: Vec<String>,
     /// Skip files larger than this rather than hashing them.
     pub max_bytes: Option<u64>,
+    /// How deep to walk. `Some(1)` is the root's own files, and no
+    /// folder beneath it is opened.
+    pub max_depth: Option<usize>,
+    /// Where to say which file is being hashed and how much is left.
+    /// Only ever a message, never a bar: a step has one bar, and the
+    /// caller's rows are not bytes (`dag/README.md` § "One bar per step").
+    pub progress: crate::progress::Progress,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -373,17 +380,17 @@ where
 
     // A single file is a legitimate root. Every provider that takes
     // "a file or a directory" from its config used to special-case
-    // this itself; the utility owns it now. Walking the parent and
-    // accepting only that one name keeps the rest of the function —
-    // and the cache keys — identical for both shapes.
-    let (root, only) = if resolved.is_file() {
+    // this itself; the utility owns it now. Walking the parent's own
+    // entries and accepting only that one name keeps the rest of the
+    // function — and the cache keys — identical for both shapes.
+    let (root, only, max_depth) = if resolved.is_file() {
         let name = resolved.file_name().map(|n| n.to_os_string());
         match (resolved.parent().map(Path::to_path_buf), name) {
-            (Some(parent), Some(name)) => (parent, Some(name)),
-            _ => (resolved.clone(), None),
+            (Some(parent), Some(name)) => (parent, Some(name), Some(1)),
+            _ => (resolved.clone(), None, opts.max_depth),
         }
     } else {
-        (resolved.clone(), None)
+        (resolved.clone(), None, opts.max_depth)
     };
 
     let cached = cache.load_under(&root).await?;
@@ -392,15 +399,19 @@ where
         ..ScanStats::default()
     };
 
-    let (walked, mut errors) = fswalk::walk_files(&root, &opts.ignore, |p| {
+    let (walked, mut errors) = fswalk::walk_files(&root, &opts.ignore, max_depth, |p| {
         only.as_ref()
             .is_none_or(|name| p.file_name() == Some(name.as_os_str()))
             && accept(p)
     })
     .with_context(|| format!("walk {}", root.display()))?;
 
-    let mut files = Vec::with_capacity(walked.len());
-    let mut fresh_prints = Vec::with_capacity(walked.len());
+    struct Candidate {
+        entry: fswalk::WalkedFile,
+        fresh: fswalk::FreshStat,
+        reusable: Option<Blake3>,
+    }
+    let mut candidates = Vec::with_capacity(walked.len());
     for entry in walked {
         if !admit(&entry.path, &entry.meta) {
             continue;
@@ -412,21 +423,49 @@ where
                 continue;
             }
         }
-
         let decision = fswalk::decide(cached.cursor(&entry.rel), &fresh);
         // A cursor that matches is only useful with the digest that
         // went with it; without one there is nothing to reuse.
         let reusable = matches!(decision, StampDecision::ReuseHash)
             .then(|| cached.blake3(&entry.rel))
             .flatten();
+        candidates.push(Candidate {
+            entry,
+            fresh,
+            reusable,
+        });
+    }
 
+    let mut hashing = HashProgress::new(
+        &opts.progress,
+        candidates.iter().filter(|c| c.reusable.is_none()).count(),
+        candidates
+            .iter()
+            .filter(|c| c.reusable.is_none())
+            .map(|c| c.fresh.size as u64)
+            .sum(),
+    );
+
+    let mut files = Vec::with_capacity(candidates.len());
+    let mut fresh_prints = Vec::with_capacity(candidates.len());
+    // Hashed but not yet in the cache. Flushed every `FLUSH_BYTES` so a
+    // scan that is stopped halfway resumes instead of starting over.
+    let mut unflushed: Vec<Fingerprint> = Vec::new();
+    let mut unflushed_bytes = 0u64;
+    for Candidate {
+        entry,
+        fresh,
+        reusable,
+    } in candidates
+    {
+        let is_new = reusable.is_none();
         let blake3 = match reusable {
             Some(hash) => {
                 stats.reused += 1;
                 stats.bytes_reused += fresh.size as u64;
                 hash
             }
-            None => match fswalk::hash_file(&entry.path, fresh.size as u64) {
+            None => match hashing.file(&entry.path, fresh.size as u64) {
                 Ok(hash) => {
                     stats.hashed += 1;
                     stats.bytes_hashed += fresh.size as u64;
@@ -446,7 +485,7 @@ where
             },
         };
 
-        fresh_prints.push(Fingerprint {
+        let print = Fingerprint {
             abs_path: abs_key(&root, &entry.rel),
             kind: EntryKind::File,
             blake3,
@@ -457,7 +496,17 @@ where
                 inode: fresh.inode,
                 dev: fresh.dev,
             },
-        });
+        };
+        if is_new {
+            unflushed.push(print.clone());
+            unflushed_bytes += fresh.size as u64;
+            if unflushed_bytes >= FLUSH_BYTES {
+                cache.store(&unflushed).await?;
+                unflushed.clear();
+                unflushed_bytes = 0;
+            }
+        }
+        fresh_prints.push(print);
         files.push(ScannedFile {
             path: entry.path,
             rel: entry.rel,
@@ -465,6 +514,7 @@ where
             blake3,
         });
     }
+    hashing.finish();
 
     stats.cache_written = fresh_prints.len() as u64;
     cache.store(&fresh_prints).await?;
@@ -477,6 +527,102 @@ where
         errors,
         stats,
     })
+}
+
+/// Hashed bytes between writes of the fingerprint cache.
+const FLUSH_BYTES: u64 = 512 * 1024 * 1024;
+/// A file this big gets a line in the log when its hash starts and ends.
+const LOUD_BYTES: u64 = 64 * 1024 * 1024;
+const MESSAGE_EVERY: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Says, through `Progress::set_message` and the log, what the hashing
+/// pass is on. Silent when there is nothing to hash.
+struct HashProgress<'a> {
+    progress: &'a crate::progress::Progress,
+    files_total: usize,
+    bytes_total: u64,
+    files_done: usize,
+    bytes_done: u64,
+    last_message: std::time::Instant,
+}
+
+impl<'a> HashProgress<'a> {
+    fn new(progress: &'a crate::progress::Progress, files_total: usize, bytes_total: u64) -> Self {
+        if files_total > 0 {
+            tracing::info!(
+                files = files_total,
+                bytes = bytes_total,
+                "fsscan_hashing: {files_total} files, {} to read",
+                human_bytes(bytes_total)
+            );
+        }
+        Self {
+            progress,
+            files_total,
+            bytes_total,
+            files_done: 0,
+            bytes_done: 0,
+            last_message: std::time::Instant::now() - MESSAGE_EVERY,
+        }
+    }
+
+    fn file(&mut self, path: &Path, size: u64) -> Result<Blake3> {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let started = std::time::Instant::now();
+        if size >= LOUD_BYTES {
+            tracing::info!(path = %path.display(), "fsscan_hashing_file: {name}, {}", human_bytes(size));
+        }
+        let (before, total, files) = (self.bytes_done, self.bytes_total, self.files_done + 1);
+        let of = self.files_total;
+        let hash = fswalk::hash_file_reporting(path, size, |in_file| {
+            if self.last_message.elapsed() >= MESSAGE_EVERY {
+                self.last_message = std::time::Instant::now();
+                self.progress.set_message(&format!(
+                    "hashing {name} (file {files} of {of}): {} of {}",
+                    human_bytes(before + in_file),
+                    human_bytes(total)
+                ));
+            }
+        })?;
+        self.files_done += 1;
+        self.bytes_done += size;
+        if size >= LOUD_BYTES {
+            tracing::info!(
+                path = %path.display(),
+                "fsscan_hashed_file: {name} in {:.1}s",
+                started.elapsed().as_secs_f64()
+            );
+        }
+        Ok(hash)
+    }
+
+    fn finish(&self) {
+        if self.files_total > 0 {
+            tracing::info!(
+                "fsscan_hashed: {} files, {}",
+                self.files_done,
+                human_bytes(self.bytes_done)
+            );
+        }
+    }
+}
+
+fn human_bytes(n: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut v = n as f64;
+    let mut u = 0;
+    while v >= 1000.0 && u < UNITS.len() - 1 {
+        v /= 1000.0;
+        u += 1;
+    }
+    if u == 0 {
+        format!("{n} B")
+    } else {
+        format!("{v:.1} {}", UNITS[u])
+    }
 }
 
 #[cfg(test)]
@@ -505,6 +651,23 @@ mod tests {
             .unwrap()
     }
 
+    /// A file past the parallel threshold must hash to exactly what
+    /// `blake3::hash` says, and report a rising byte count on the way.
+    #[test]
+    fn a_big_file_hashes_in_chunks_to_the_same_digest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let body: Vec<u8> = (0..20_000_000u32).map(|i| (i % 251) as u8).collect();
+        let path = tmp.path().join("big.bin");
+        std::fs::write(&path, &body).unwrap();
+
+        let mut seen = Vec::new();
+        let got = fswalk::hash_file_reporting(&path, body.len() as u64, |n| seen.push(n)).unwrap();
+
+        assert_eq!(got, *blake3::hash(&body).as_bytes());
+        assert!(seen.len() > 1 && seen.windows(2).all(|w| w[0] < w[1]));
+        assert_eq!(seen.last(), Some(&(body.len() as u64)));
+    }
+
     #[tokio::test]
     async fn a_cold_scan_hashes_everything_and_a_warm_one_hashes_nothing() {
         let tmp = tempfile::tempdir().unwrap();
@@ -523,6 +686,40 @@ mod tests {
         assert_eq!(warm.stats.hashed, 0);
         assert_eq!(warm.stats.reused, 2);
         assert_eq!(warm.stats.bytes_reused, 7);
+    }
+
+    /// A file as the root is that file: not a same-named file in a
+    /// folder beside it, and no walk of the folders beside it at all. A
+    /// catalog next to its `Previews.lrdata`, or a download in
+    /// `~/Downloads`, used to cost a walk of everything under the parent.
+    #[tokio::test]
+    async fn a_file_root_is_that_file_and_nothing_under_its_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("tree");
+        write(&root, "Catalog.lrcat", b"the catalog");
+        write(&root, "Catalog Previews.lrdata/Catalog.lrcat", b"not it");
+        let cache = fresh_cache(tmp.path()).await;
+
+        let scan = scan_all(&cache, &root.join("Catalog.lrcat")).await;
+        let rels: Vec<&str> = scan.files.iter().map(|f| f.rel.as_str()).collect();
+        assert_eq!(rels, ["Catalog.lrcat"]);
+    }
+
+    /// `max_depth: Some(1)` is the root's own files and none beneath it.
+    #[tokio::test]
+    async fn max_depth_one_stays_in_the_root_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("tree");
+        write(&root, "top.txt", b"top");
+        write(&root, "sub/deep.txt", b"deep");
+        let cache = fresh_cache(tmp.path()).await;
+        let opts = ScanOptions {
+            max_depth: Some(1),
+            ..ScanOptions::default()
+        };
+        let scan = scan(&cache, &root, &opts, all).await.unwrap();
+        let rels: Vec<&str> = scan.files.iter().map(|f| f.rel.as_str()).collect();
+        assert_eq!(rels, ["top.txt"]);
     }
 
     /// The payoff of a shared cache: a second consumer with a narrower

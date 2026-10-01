@@ -88,12 +88,14 @@ pub async fn run(data_root: &Path, now: &str, emitter: &Emitter) -> Result<Vec<O
     let bytes = map_file::write(data_root, &map)?;
     datalib_core::layout::mark_derived_cache(&datalib_core::layout::unified_index_dir(data_root));
 
+    // The map as it now stands, then how this pass seeded it: gauges
+    // both, and the second three name the pass they describe.
     for (name, n) in [
         ("documents", map.points.len()),
         ("unembedded", map.unembedded),
-        ("kept", map.seed.kept),
-        ("near_neighbours", map.seed.near_neighbours),
-        ("fresh", map.seed.fresh),
+        ("last_pass_kept", map.seed.kept),
+        ("last_pass_near_neighbours", map.seed.near_neighbours),
+        ("last_pass_fresh", map.seed.fresh),
     ] {
         progress.metric(name, &[], n as i64);
     }

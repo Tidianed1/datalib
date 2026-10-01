@@ -117,6 +117,12 @@ export type EdgeHoverPayload = {
 // CardRender. These are the names in scope when card source is
 // evaluated; `gridView()` in a card's source calls ViewLibs.gridView.
 export type ViewLibs = {
+  // Where a person starts: what needs them, the library, the sources
+  // and the newest documents. The card a new window opens on.
+  homeView: () => CardRender;
+  // The Search card: results as a list, the picked one read in place.
+  // The same search as gridView, which shows it as a table.
+  searchView: (opts?: { q?: string }) => CardRender;
   gridView: (opts?: { q?: string; columns?: string[]; name?: string }) => CardRender;
   documentView: (markdownUuid?: string | null, sectionUuid?: string | null) => CardRender;
   // Parameter-less gallery stand-in for documentView: lists every
@@ -183,4 +189,8 @@ export type ViewLibs = {
   // step so like sits near like; filter with the grid's grammar, colour
   // by a field, hover to preview, click to open. See cards/UmapCard.ce.vue.
   umapView: (opts?: { q?: string; by?: string }) => CardRender;
+  // One group's sync as a dashboard: its row and each step's, laid out
+  // vertically with their actions, charts over the run and the group's
+  // log. See cards/SyncDashboardCard.ce.vue.
+  syncDashboardView: (opts: { group: string; step?: string }) => CardRender;
 };

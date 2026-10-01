@@ -40,6 +40,7 @@ test("a row's menu offers the actions for its kind, grouped, wherever the pointe
     "Rename…",
     "Show commit history",
     "Show step log",
+    "Show sync dashboard",
     "Copy path",
     "Copy id",
     "Remove from config, with everything under it",
@@ -50,8 +51,28 @@ test("a row's menu offers the actions for its kind, grouped, wherever the pointe
 
   // The Name cell offers the same menu as any other.
   await nameCell(page, "group:unified_index").click({ button: "right" });
-  await expect(menuEntries(page)).toHaveCount(10);
+  await expect(menuEntries(page)).toHaveCount(11);
   await page.keyboard.press("Escape");
+});
+
+/// The dashboard is the row laid out vertically: the group's section
+/// first, one per step under it, each with its row's actions — less the
+/// ones that need the config's text, which stay on the Sources card.
+test("Show sync dashboard opens the group step by step, each with its row's actions", async ({
+  page,
+}) => {
+  await openManager(page);
+  const row = groupRow(page, "unified_index");
+  await expect(row).toBeVisible({ timeout: 10_000 });
+  await row.locator('[col-id="status"]').click({ button: "right" });
+  await menuEntry(page, "Show sync dashboard").click();
+
+  const section = (id: string) => page.locator(`.sd-section[data-step="${id}"]`);
+  await expect(section("unified_index")).toBeVisible();
+  const grid = section("unified_index/grid_index");
+  await expect(grid.locator(".sd-btn", { hasText: "Show step log" })).toBeVisible();
+  await expect(grid.locator(".sd-btn", { hasText: "Sync now" })).toBeVisible();
+  await expect(page.locator(".sd-btn", { hasText: "Edit settings…" })).toHaveCount(0);
 });
 
 test("right-clicking inside a selection targets all of it; outside it, the one row", async ({

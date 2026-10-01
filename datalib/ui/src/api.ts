@@ -739,7 +739,7 @@ export type DagStep = {
 };
 
 // A step's live numbers and words. `metrics` is the current value per
-// series, keyed `name` or `name{labels}`; `done` and `queued` are the
+// series, keyed `name` or `name{labels}`; `done_total` and `queued` are the
 // two the runner derives for a step reporting a plain count, and the
 // pair a bar can be drawn from. Empty means the step has only spoken.
 export type DagStepProgress = {
@@ -747,9 +747,6 @@ export type DagStepProgress = {
   metrics: Record<string, number>;
   // `warn` and `error` log lines so far this run.
   errors: number;
-  // Per series, the change per second between its two newest samples;
-  // absent for a series with fewer than two.
-  rates: Record<string, number>;
   // For a running step: seconds since any metric moved (since it
   // started, if none did), and since it last logged. A long progress
   // age with a short log age is "busy but not advancing".
@@ -926,6 +923,7 @@ export type ColumnType =
   | "timestamp"
   | "datetime"
   | "timeseries"
+  | "quantity"
   | "identity"
   | "status"
   | "chips"
@@ -972,6 +970,17 @@ export type Timeseries = {
   detail?: string | null;
 };
 
+/// One figure with the reasoning behind it. Mirrors
+/// `datalib_columns::Quantity`.
+export type Quantity = {
+  /// Null when there is no figure; `note` then says why in a word.
+  value: number | null;
+  /// `count` or `seconds`.
+  unit: string;
+  note?: string | null;
+  detail?: string | null;
+};
+
 /// One row's status, reduced to a vocabulary the Status column can
 /// draw. Mirrors `datalib_columns::Status`.
 export type StatusView = {
@@ -987,7 +996,7 @@ export type StatusView = {
   detail: string | null;
 };
 
-export type ChipKind = "info" | "idle" | "metric" | "warning" | "error" | "ok";
+export type ChipKind = "metric" | "warning" | "error";
 export type Chip = { kind: ChipKind; text: string; title: string };
 
 /// A button on a row. Data decides whether it appears and what it says;
@@ -1023,10 +1032,14 @@ export type ManageRow = {
   dropped: Diagnostic | null;
   status: StatusView;
   status_from: string | null;
-  activity: Chip[];
+  /// Work the step says is ahead of it; a group's is the sum.
+  queue: Quantity;
+  /// When that queue empties at its recent pace; a group's is its
+  /// slowest step's, or a stall anywhere.
+  eta: Quantity;
   /// Errors and warnings the step's store holds, as of its last run:
-  /// red and yellow chips, a green zero, or nothing when it has never
-  /// counted. A group shows its last counting step's.
+  /// a red and a yellow chip, each only when above zero. A group shows
+  /// its last counting step's.
   problems: Chip[];
   /// The items the step's store holds, as of the run it last counted
   /// in, with the series behind them. No value — drawn blank — for
@@ -1072,6 +1085,51 @@ export type ManageResponse = {
 export function fetchManageRows(refresh = false, signal?: AbortSignal): Promise<ManageResponse> {
   const q = refresh ? "?refresh=1" : "";
   return getJson<ManageResponse>(`/api/manage/rows${q}`, signal);
+}
+
+/// One metric series of one step over one run: a running total, or the
+/// `queued` gauge. Mirrors `datalib_http::manage::dashboard`.
+export type DashboardSeries = { name: string; labels: string; points: Sample[] };
+
+export type DashboardStep = {
+  id: string;
+  /// Took part in the run shown; nothing below is set when it did not.
+  in_run: boolean;
+  state: string | null;
+  attempt: number | null;
+  started_at_utc: string | null;
+  finished_at_utc: string | null;
+  error: string | null;
+  msg: string | null;
+  series: DashboardSeries[];
+  /// `warn` and `error` lines, counted up over the run.
+  warnings: Sample[];
+  errors: Sample[];
+  disk: Sample[];
+};
+
+export type Dashboard = {
+  group: string;
+  run: RunInfo | null;
+  live: boolean;
+  /// The group's recent runs, newest first.
+  runs: RunInfo[];
+  steps: DashboardStep[];
+  disk: Sample[];
+};
+
+/// One group's sync as time series: the newest run its steps took part
+/// in, or `run`.
+export function fetchGroupDashboard(
+  group: string,
+  run: string | null = null,
+  signal?: AbortSignal,
+): Promise<Dashboard> {
+  const q = run ? `?run=${encodeURIComponent(run)}` : "";
+  return getJson<Dashboard>(
+    `/api/manage/groups/${encodeURIComponent(group)}/dashboard${q}`,
+    signal,
+  );
 }
 
 /// What any endpoint that serves a typed table answers with, as far as
@@ -1268,6 +1326,9 @@ export type RunLogLine = {
   process: LogProcess | string | null;
   // Null for a line about the run, or the server, rather than one step.
   step: string | null;
+  // The config's `[[groups]]` entry the step is filed under; null for a
+  // line with no step, or a step outside any group.
+  group_id: string | null;
   attempt: number;
   // The line's own clock when it carried one, else when the runner read
   // it. UTC; `tz_offset` is the offset that clock was in.
@@ -1364,6 +1425,8 @@ export type Meta =
       description: string;
       component_hash: string;
       component_args: unknown[];
+      // A glyph name (cards/icons.ts) or a mark in src/assets/.
+      icon?: string;
     }
   | { renamed_to: string };
 

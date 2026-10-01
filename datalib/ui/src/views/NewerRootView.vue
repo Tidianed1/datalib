@@ -65,6 +65,6 @@ const needed = () =>
 .wrote {
   color: var(--datalib-muted);
   margin-left: 0.5rem;
-  font-size: 0.9rem;
+  font-size: var(--datalib-font-size-small);
 }
 </style>

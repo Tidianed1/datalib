@@ -448,6 +448,9 @@ pub(crate) struct QueueLedger {
     /// consumer has run (a checkpoint arriving mid-pass is dropped by
     /// design), and the repeat must not count its rows twice.
     last_seen: Vec<BTreeMap<usize, String>>,
+    /// Per consumer, per producer: the rows taken off the queue so far —
+    /// the `dequeued_total{from=<producer>}` running total.
+    taken: Vec<BTreeMap<usize, u64>>,
 }
 
 /// One seal as the ledger keeps it: the qualified version, and the rows
@@ -459,6 +462,7 @@ impl QueueLedger {
         Self {
             pending: vec![BTreeMap::new(); n],
             last_seen: vec![BTreeMap::new(); n],
+            taken: vec![BTreeMap::new(); n],
         }
     }
 
@@ -504,13 +508,13 @@ impl QueueLedger {
                 continue;
             };
             let seals = self.pending[consumer].entry(p).or_default();
-            match seals.iter().position(|(v, _)| v == read) {
-                Some(idx) => {
-                    seals.drain(..=idx);
-                }
-                None if producer_done(p) => seals.clear(),
-                None => {}
-            }
+            let read_up_to = match seals.iter().position(|(v, _)| v == read) {
+                Some(idx) => idx + 1,
+                None if producer_done(p) => seals.len(),
+                None => 0,
+            };
+            let rows = rows_of(seals.drain(..read_up_to));
+            *self.taken[consumer].entry(p).or_default() += rows;
             self.publish(graph, consumer, p, sink);
         }
     }
@@ -519,7 +523,9 @@ impl QueueLedger {
     pub(crate) fn cleared(&mut self, graph: &Graph, consumer: usize, sink: &dyn EventSink) {
         let producers: Vec<usize> = self.pending[consumer].keys().copied().collect();
         for p in producers {
-            self.pending[consumer].insert(p, Vec::new());
+            let rows =
+                rows_of(std::mem::take(self.pending[consumer].entry(p).or_default()).into_iter());
+            *self.taken[consumer].entry(p).or_default() += rows;
             self.publish(graph, consumer, p, sink);
         }
     }
@@ -535,20 +541,35 @@ impl QueueLedger {
             .collect();
         self.pending = remap_by_step(&mut self.pending, from_old, &to_new);
         self.last_seen = remap_by_step(&mut self.last_seen, from_old, &to_new);
+        self.taken = remap_by_step(&mut self.taken, from_old, &to_new);
     }
 
+    /// Both halves of a queue: what is on it, and what has come off.
     fn publish(&self, graph: &Graph, consumer: usize, producer: usize, sink: &dyn EventSink) {
-        let value: u64 = self.pending[consumer]
+        let queued: u64 = self.pending[consumer]
             .get(&producer)
-            .map(|seals| seals.iter().map(|(_, n)| n.unwrap_or(0)).sum())
+            .map(|seals| rows_of(seals.iter().cloned()))
             .unwrap_or(0);
-        sink.emit(&Event::Metric {
-            step: graph.steps[consumer].id.clone(),
-            name: "queued".to_string(),
-            labels: BTreeMap::from([("from".to_string(), graph.steps[producer].id.clone())]),
-            value: value as i64,
-        });
+        let taken = self.taken[consumer].get(&producer).copied().unwrap_or(0);
+        let labels = BTreeMap::from([("from".to_string(), graph.steps[producer].id.clone())]);
+        for (name, value) in [
+            (datalib_metrics::QUEUED, queued),
+            (datalib_metrics::DEQUEUED, taken),
+        ] {
+            sink.emit(&Event::Metric {
+                step: graph.steps[consumer].id.clone(),
+                name: name.to_string(),
+                labels: labels.clone(),
+                value: value as i64,
+            });
+        }
     }
+}
+
+/// The rows some seals added, counting a seal whose producer did not
+/// say as none.
+fn rows_of(seals: impl Iterator<Item = Seal>) -> u64 {
+    seals.map(|(_, n)| n.unwrap_or(0)).sum()
 }
 
 fn remap_by_step<T>(
@@ -1698,6 +1719,41 @@ mod tests {
             assert!(
                 n >= 2 && queued[n - 1] == 0 && queued[n - 2] >= mid_pass,
                 "{producer}: one pass must drain the whole queue in one step, not one seal of it: {queued:?}"
+            );
+
+            // Its running total of what came off: it only grows, and once
+            // the queue is empty it has taken off everything put on.
+            let dequeued: Vec<i64> = events
+                .iter()
+                .filter_map(|e| match e {
+                    Event::Metric {
+                        step,
+                        name,
+                        labels,
+                        value,
+                    } if step == "unified_index/grid"
+                        && name == datalib_metrics::DEQUEUED
+                        && labels.get("from").map(String::as_str) == Some(producer) =>
+                    {
+                        Some(*value)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                dequeued.windows(2).all(|w| w[0] <= w[1]),
+                "{producer}: the dequeued total fell: {dequeued:?}"
+            );
+            let put_on: i64 = std::iter::once(0)
+                .chain(queued.iter().copied())
+                .collect::<Vec<_>>()
+                .windows(2)
+                .map(|w| (w[1] - w[0]).max(0))
+                .sum();
+            assert_eq!(
+                dequeued.last().copied(),
+                Some(put_on),
+                "{producer}: what came off is not what went on (queue {queued:?})"
             );
         }
     }

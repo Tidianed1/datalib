@@ -60,7 +60,7 @@ const REPORT = {
 async function openTile(page: Page, service: object, name: string, blurb: string) {
   await page.route(`**/api/latchkey/${name}`, (route) => route.fulfill({ json: service }));
   await page.goto("/data_sources");
-  await page.getByRole("button", { name: "+ Data Source" }).click();
+  await page.getByRole("button", { name: "Add source" }).click();
   await wizard(page).locator(".wiz-tile", { hasText: blurb }).click();
 }
 

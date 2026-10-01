@@ -38,8 +38,8 @@ test("an error toast over the wizard does not eat clicks on its buttons", async 
   const toast = page.locator(".datalib-toast--error", { hasText: "/api/accounts" });
   await expect(toast).toContainText("→ 502: accounts are unavailable");
 
-  await page.getByRole("button", { name: "+ Data Source" }).click();
-  await page.getByRole("searchbox").fill("whatsapp");
+  await page.getByRole("button", { name: "Add source" }).click();
+  await page.locator(".wiz-filter").fill("whatsapp");
   await page.getByRole("button", { name: /WhatsApp/ }).click();
   const wizard = page.getByRole("dialog");
   await wizard.locator("input.wiz-path").fill("/Users/x/backups/WhatsApp");

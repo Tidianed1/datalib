@@ -100,10 +100,10 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     let base_url = format!("http://{}", listener.local_addr()?);
-    // The app opens on the sources card (`/data_sources`, see
-    // `ui/src/router`): what a person does first is add a source or
-    // sync one, not search.
-    let url = format!("{base_url}/data_sources?token={}", api_token.value());
+    // The app opens on Home (`/`, `homeView()`): what needs the person,
+    // their library and their sources. A root with no config gets the
+    // first-run screen there instead.
+    let url = format!("{base_url}/?token={}", api_token.value());
     // Record where we ended up, so a later would-be owner's refusal can
     // point at this server instead of just saying "taken".
     root_lock.announce(&base_url);

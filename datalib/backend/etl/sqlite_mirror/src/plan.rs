@@ -227,15 +227,20 @@ pub async fn table_columns(
     Ok(out)
 }
 
-/// The column lists of every complete UNIQUE index on `table`, best key
-/// first: an index named `…primaryKey` (Lightroom's convention for the key
-/// it did not declare), then fewer columns, then name. Partial and
-/// expression indexes are left out.
-pub async fn unique_index_keys(
+/// A complete UNIQUE index of a source table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UniqueIndex {
+    pub name: String,
+    pub columns: Vec<String>,
+}
+
+/// Every complete UNIQUE index on `table`. Partial and expression
+/// indexes are left out: neither constrains every row by plain columns.
+pub async fn unique_indexes(
     conn: &mut SqliteConnection,
     schema: &str,
     table: &str,
-) -> Result<Vec<Vec<String>>> {
+) -> Result<Vec<UniqueIndex>> {
     let sql = format!(
         "PRAGMA {}.index_list({})",
         quote_ident(schema),
@@ -245,40 +250,51 @@ pub async fn unique_index_keys(
         .fetch_all(&mut *conn)
         .await
         .with_context(|| format!("index_list({schema}.{table})"))?;
-    let mut found: Vec<(String, Vec<String>)> = Vec::new();
+    let mut found = Vec::new();
     for r in &idx_rows {
         let unique: i64 = r.try_get("unique").unwrap_or(0);
         let partial: i64 = r.try_get("partial").unwrap_or(0);
-        let idx_name: String = r.try_get("name").unwrap_or_default();
-        if unique == 0 || partial != 0 || idx_name.is_empty() {
+        let name: String = r.try_get("name").unwrap_or_default();
+        if unique == 0 || partial != 0 || name.is_empty() {
             continue;
         }
         let info_sql = format!(
             "PRAGMA {}.index_info({})",
             quote_ident(schema),
-            quote_ident(&idx_name)
+            quote_ident(&name)
         );
         let cols = sqlx::query(sqlx::AssertSqlSafe(info_sql))
             .fetch_all(&mut *conn)
             .await
-            .with_context(|| format!("index_info({schema}.{idx_name})"))?;
-        // A NULL name means an expression index — nothing to key on.
-        let names: Vec<String> = cols
+            .with_context(|| format!("index_info({schema}.{name})"))?;
+        // A NULL name means an expression index.
+        let columns: Vec<String> = cols
             .iter()
             .filter_map(|c| c.try_get::<Option<String>, _>("name").ok().flatten())
             .collect();
-        if !names.is_empty() && names.len() == cols.len() {
-            found.push((idx_name, names));
+        if !columns.is_empty() && columns.len() == cols.len() {
+            found.push(UniqueIndex { name, columns });
         }
     }
-    found.sort_by_key(|(name, cols)| {
-        (
-            !name.to_ascii_lowercase().contains("primarykey"),
-            cols.len(),
-            name.clone(),
-        )
-    });
-    Ok(found.into_iter().map(|(_, cols)| cols).collect())
+    Ok(found)
+}
+
+/// The UNIQUE index that is the table's key, when the source leaves no
+/// doubt: the only one, or the one named `…primaryKey` (Lightroom's name
+/// for the key it did not declare). A UNIQUE index is a constraint, not
+/// an identity, so with several and no such name this is `None` rather
+/// than a guess.
+pub fn key_index(indexes: &[UniqueIndex]) -> Option<&UniqueIndex> {
+    if let [only] = indexes {
+        return Some(only);
+    }
+    let mut named = indexes
+        .iter()
+        .filter(|i| i.name.to_ascii_lowercase().contains("primarykey"));
+    match (named.next(), named.next()) {
+        (Some(one), None) => Some(one),
+        _ => None,
+    }
 }
 
 /// Columns covered by a single-column UNIQUE index on `table` — the
@@ -405,5 +421,44 @@ mod tests {
     fn a_declared_type_with_a_quote_in_it_is_escaped_too() {
         let s = spec(vec![col("id", r#"IN"TEGER"#)], vec![]);
         assert_eq!(s.create_ddl(), r#"CREATE TABLE "t" ("id" "IN""TEGER")"#);
+    }
+
+    fn idx(name: &str, cols: &[&str]) -> UniqueIndex {
+        UniqueIndex {
+            name: name.to_string(),
+            columns: cols.iter().map(|c| c.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn the_only_unique_index_is_the_key() {
+        let all = [idx("sqlite_autoindex_T_1", &["a", "b"])];
+        assert_eq!(key_index(&all), Some(&all[0]));
+    }
+
+    #[test]
+    fn several_unique_indexes_with_no_primary_key_name_are_ambiguous() {
+        let all = [idx("by_name", &["name"]), idx("by_guid", &["guid"])];
+        assert_eq!(key_index(&all), None);
+    }
+
+    #[test]
+    fn the_one_named_primary_key_wins_among_several() {
+        let all = [
+            idx("by_name", &["name"]),
+            idx("index_T_primaryKey", &["image", "payloadKey"]),
+        ];
+        assert_eq!(key_index(&all), Some(&all[1]));
+    }
+
+    #[test]
+    fn two_indexes_named_primary_key_are_ambiguous() {
+        let all = [idx("a_primaryKey", &["a"]), idx("b_primaryKey", &["b"])];
+        assert_eq!(key_index(&all), None);
+    }
+
+    #[test]
+    fn no_unique_index_is_no_key() {
+        assert_eq!(key_index(&[]), None);
     }
 }

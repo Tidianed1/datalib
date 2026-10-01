@@ -33,7 +33,7 @@ import type {
   SlickDraggableGrouping,
   SlickEventData,
 } from "@slickgrid-universal/common";
-import { typedColumns, groupTitle } from "./typedColumns";
+import { copyText, typedColumns, groupTitle } from "./typedColumns";
 import {
   SEARCH,
   type AccountsMap,
@@ -57,6 +57,7 @@ import { followFrame, isDarkTheme } from "@/grid/gridFrame";
 import { keepExcludeEntries, withToken, type FilterEntry } from "@/grid/query";
 import { onAfterMenuShowFit, perOpening } from "@/grid/menu";
 import { newlyPicked } from "@/grid/selection";
+import { copySelectedRowsOnKey } from "@/grid/copyRows";
 import { markdownsToAsk, widen } from "@/grid/qmdAsk";
 import { searchCoverage, type SearchCoverage } from "@/grid/searchCoverage";
 import { keepActiveOnRecord } from "@/grid/activeCell";
@@ -540,6 +541,15 @@ function formatSlugUuid(slug: string, uuid: string): string {
   if (!UUID_RE.test(uuid)) return uuid;
   const s = slugify(slug);
   return s.length === 0 ? uuid : `${s}-${uuid}`;
+}
+
+/// What a cell copies as when its row is copied: by its declared type,
+/// and the card's own two columns as the flag's word.
+function copyCell(column: Column<Row>, row: Row): string {
+  if (column.id === "qmd_indexed") return indexFlag(qmdDocState(row)?.indexed);
+  if (column.id === "qmd_embedded") return indexFlag(qmdDocState(row)?.embedded);
+  const spec = columns.value.find((c) => c.field === column.id);
+  return spec ? copyText(spec.type, row[spec.field]) : "";
 }
 
 /// Put one id per target on the clipboard, comma-separated.
@@ -1324,6 +1334,8 @@ type MenuScope = {
   /// what the user saw — an author's name, not their uuid — than the
   /// row's field), and its element, for the feedback breadcrumb.
   cell: { column: string; cellValue: string; el: HTMLElement | null } | null;
+  /// The cell under the click as its row's copy has it; null when empty.
+  copy: { header: string; text: string } | null;
   targets: Row[];
   filter: FilterEntry[];
   notion: FilterEntry[];
@@ -1344,6 +1356,8 @@ function menuScope(args: MenuFromCellCallbackArgs): MenuScope {
       ? (args.grid.getCellNode(args.row, args.cell) ?? null)
       : null;
   const cell = colId ? { column: colId, cellValue: el?.textContent?.trim() ?? "", el } : null;
+  const copied = anchor && column ? copyCell(column, anchor) : "";
+  const copy = copied ? { header: String(column!.name ?? colId), text: copied } : null;
   const targets = resolveTargetRows(anchor);
   const filterCtx = anchor ? buildFilterCtx(colId, anchor) : null;
   // Optional "Filter by Notion Page" entries, populated when the right-
@@ -1371,6 +1385,7 @@ function menuScope(args: MenuFromCellCallbackArgs): MenuScope {
   return {
     anchor,
     cell,
+    copy,
     targets,
     filter: filterCtx ? keepExcludeEntries(filterCtx) : [],
     notion: notionCtx ? keepExcludeEntries(notionCtx) : [],
@@ -1415,8 +1430,8 @@ function openFeedback(surface: "grid_cell" | "grid_row", m: MenuScope) {
   feedbackOpen.value = true;
 }
 
-// The right-click menu, ahead of the grid's own entries (copy the cell,
-// the grouping commands). Each entry decides for itself whether the
+// The right-click menu, ahead of the grid's own entries (the grouping
+// commands). Each entry decides for itself whether the
 // cell under the click gives it anything to do.
 const menuItems: (MenuCommandItem | "divider")[] = [
   entry(
@@ -1441,6 +1456,11 @@ const menuItems: (MenuCommandItem | "divider")[] = [
     (m) => appendFilterToQuery(m.notion[1].token),
   ),
   dividerAfter((m) => m.notion.length > 0),
+  entry(
+    "copy-cell",
+    (m) => (m.copy ? `Copy ${m.copy.header}` : null),
+    (m) => void copyToClipboard(m.copy!.text),
+  ),
   entry(
     "copy-uuids",
     (m) => (m.targets.length ? `Copy UUID${plural(m)}` : null),
@@ -1571,6 +1591,9 @@ function gridOptions(): GridOption {
     enableContextMenu: true,
     contextMenu: {
       commandItems: menuItems,
+      // Ours copies the cell as its row's copy does; the grid's copies
+      // the raw field, an object as "[object Object]".
+      hideCopyCellValueCommand: true,
       onBeforeMenuShow: scopes.onBeforeMenuShow,
       onAfterMenuShow: onAfterMenuShowFit,
       // The grid scrolls itself — a page landing above the viewport holds
@@ -1651,6 +1674,7 @@ function createGrid() {
   grid.onClick.subscribe(onClick);
   grid.onDblClick.subscribe(onDblClick);
   grid.onViewportChanged.subscribe(onViewportChanged);
+  copySelectedRowsOnKey(grid, rowData, copyCell);
   bundle.instances?.eventPubSubService?.subscribe<GridStateChange>(
     "onGridStateChanged",
     onGridStateChanged,
@@ -2005,9 +2029,9 @@ onBeforeUnmount(() => {
      so the percentage resolves after all. The assertion guards the
      surface (it fails the moment that stops being true); the rule stays
      because it is correct independent of what an ancestor happens to
-     do. The same pattern under `.m2-grid` in cards/sourcesCard.css —
-     flex-sized, no positioned ancestor — did collapse, to 2px, and its
-     spec does fail without the fix. */
+     do. The Sources card's grid box (`.sx-grid` in
+     cards/sourcesCard.css) is the same pattern — flex-sized — and
+     without a positioned box it collapsed, to 2px. */
   position: absolute;
   inset: 0;
   transition: filter 120ms ease-out;

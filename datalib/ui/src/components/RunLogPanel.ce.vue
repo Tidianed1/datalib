@@ -33,6 +33,9 @@ import { KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
 import { menuSlots, type MenuEntry } from "@/grid/menu";
 import { keepActiveOnRecord } from "@/grid/activeCell";
 import { redrawChanged } from "@/grid/redrawChanged";
+import { newlyPicked } from "@/grid/selection";
+import { copySelectedRowsOnKey } from "@/grid/copyRows";
+import { copyToClipboard } from "@/clipboard";
 import {
   asking,
   firstWindow,
@@ -661,6 +664,18 @@ const source: Formatter<RunLogLine> = (_r, _c, _value, _col, line) => {
   return { html: a, toolTip: `${shown} at ${at}`, addClasses: levelClass(line) };
 };
 
+/// What a cell copies as when its line is copied: the whole value where
+/// the cell shortens it, the stamp as stored.
+function copyCell(column: Column<RunLogLine>, line: RunLogLine): string {
+  if (column.id === "source") {
+    const src = sourceOf(line.fields);
+    return src ? sourceLabel(src) : "";
+  }
+  if (column.id === "fields") return fieldsWithoutSource(line.fields);
+  const value = line[column.field as keyof RunLogLine];
+  return value == null ? "" : String(value);
+}
+
 /// What a group row says: the column, its value and how many lines
 /// share it. An element rather than a string for the reason `plain`
 /// gives.
@@ -745,6 +760,15 @@ function columnSet(): Column<RunLogLine>[] {
       formatter: commitShort,
       sortable: true,
       ...groupable("Commit", "git_hash"),
+    },
+    {
+      id: "group_id",
+      name: "Group",
+      field: "group_id",
+      width: 90,
+      formatter: plain,
+      sortable: true,
+      ...groupable("Group", "group_id"),
     },
     {
       id: "step",
@@ -832,6 +856,7 @@ const QUERY_KEYS: Partial<Record<keyof RunLogLine, string>> = {
   run_id: "run",
   process: "process",
   git_hash: "commit",
+  group_id: "group",
   step: "step",
   level: "level",
   stream: "stream",
@@ -839,6 +864,17 @@ const QUERY_KEYS: Partial<Record<keyof RunLogLine, string>> = {
   thread: "thread",
   msg: "msg",
 };
+
+/// The column and the line under the right-click. `onBeforeMenuShow` is
+/// handed the cell's coordinates and nothing else; the command callbacks
+/// get the column and the row as well.
+function underMenu(args: MenuFromCellCallbackArgs) {
+  const column = (args.column ?? args.grid.getColumns()[args.cell ?? -1]) as
+    Column<RunLogLine> | undefined;
+  const line = (args.dataContext ?? args.grid.getDataItem(args.row ?? -1)) as
+    RunLogLine | undefined;
+  return { column, line };
+}
 
 /// The cell under the right-click, as the menu needs it: the query key
 /// for its column, the raw value and the value as shown. Null when the
@@ -849,12 +885,7 @@ function cellUnderMenu(args: MenuFromCellCallbackArgs): {
   value: string;
   shown: string;
 } | null {
-  // `onBeforeMenuShow` is handed the cell's coordinates and nothing
-  // else; the command callbacks get the column and the row as well.
-  const column = (args.column ?? args.grid.getColumns()[args.cell ?? -1]) as
-    Column<RunLogLine> | undefined;
-  const line = (args.dataContext ?? args.grid.getDataItem(args.row ?? -1)) as
-    RunLogLine | undefined;
+  const { column, line } = underMenu(args);
   const field = column?.field as keyof RunLogLine | undefined;
   const key = field && QUERY_KEYS[field];
   if (!column || !line || !field || !key) return null;
@@ -882,6 +913,15 @@ function menuEntries(args: MenuFromCellCallbackArgs): MenuEntry[] {
       },
     );
   }
+  const { column, line } = underMenu(args);
+  const text = column && line && typeof line.seq === "number" ? copyCell(column, line) : "";
+  if (text) {
+    if (entries.length) entries.push({ name: "", separator: true });
+    entries.push({
+      name: `Copy ${String(column!.name ?? column!.id)}`,
+      action: () => void copyToClipboard(text),
+    });
+  }
   if (query.value.trim()) {
     if (entries.length) entries.push({ name: "", separator: true });
     entries.push({ name: "Clear the query", action: () => setQuery("") });
@@ -899,10 +939,11 @@ function gridOptions(): GridOption {
     // Cells and group rows are text (see `plain`), never markup.
     enableHtmlRendering: false,
     // A row selects on click and the arrow keys move the selection;
-    // the line opens in full beside the card either way.
+    // the line opens in full beside the card either way. Several select
+    // with a modifier, for ⌘C to copy as TSV.
     enableCellNavigation: true,
     enableSelection: true,
-    multiSelect: false,
+    multiSelect: true,
     selectionOptions: { selectActiveRow: true },
     enableTextSelectionOnCells: true,
     enableAutoTooltip: false,
@@ -936,7 +977,8 @@ function gridOptions(): GridOption {
     showPreHeaderPanel: true,
     preHeaderPanelHeight: 30,
     draggableGrouping: {
-      dropPlaceHolderText: "Drag a column here to group the lines by it — Step, Level, Stream",
+      dropPlaceHolderText:
+        "Drag a column here to group the lines by it — Group, Step, Level, Stream",
       hideToggleAllButton: false,
       toggleAllButtonText: "Expand / collapse all",
       // The theme ships these icons but draws nothing for the plugin's
@@ -957,7 +999,10 @@ function gridOptions(): GridOption {
       // Following the tail scrolls, and a menu open on a line stays
       // open until the reader is done with it.
       hideMenuOnScroll: false,
-      ...menuSlots(4, menuEntries),
+      // Ours copies the cell as a copied line has it; the grid's copies
+      // the raw field, the whole of `fields` for Source.
+      hideCopyCellValueCommand: true,
+      ...menuSlots(6, menuEntries),
     },
   };
 }
@@ -981,17 +1026,21 @@ function createGrid(first: RunLogLine[]) {
   bundle = b;
   b.slickGrid.onScroll.subscribe(onScroll);
   // A new line keeps the selection on its line, and the grid reports
-  // that as a change of index: only a different line is announced.
-  let selectedSeq: number | null = null;
-  b.slickGrid.onSelectedRowsChanged.subscribe((_e, args) => {
-    const row = args.rows[args.rows.length - 1];
-    if (row == null) return;
+  // that as a change of index: only a line newly picked is announced.
+  const lineAt = (row: number): RunLogLine | null => {
     const line = b.dataView.getItem(row) as RunLogLine | undefined;
-    // A group row selects nothing.
-    if (!line || typeof line.seq !== "number" || line.seq === selectedSeq) return;
-    selectedSeq = line.seq;
-    emit("line-selected", line.seq);
+    // A group row is no line.
+    return line && typeof line.seq === "number" ? line : null;
+  };
+  let selectedSeqs = new Set<string>();
+  b.slickGrid.onSelectedRowsChanged.subscribe((_e, args) => {
+    const now = args.rows.map(lineAt).filter((l): l is RunLogLine => l != null);
+    const { picked, selected } = newlyPicked(selectedSeqs, now, (l) => String(l.seq));
+    selectedSeqs = selected;
+    const line = picked[picked.length - 1];
+    if (line) emit("line-selected", line.seq);
   });
+  copySelectedRowsOnKey(b.slickGrid, lineAt, copyCell);
   // What the bar's drop does, without the mouse, for the e2e tests:
   // a drag dispatched by hand dies inside SortableJS under load, and
   // the grid card exposes the same thing as `__fwGridApi.groupBy`.
@@ -1152,40 +1201,46 @@ onUnmounted(() => {
   min-width: 180px;
   padding: 4px 8px;
   border: 1px solid var(--datalib-border);
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
   background: var(--datalib-bg);
   color: inherit;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--datalib-font-size);
+}
+.rl-search:focus,
+.rl-run:focus {
+  outline: none;
+  border-color: var(--datalib-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--datalib-accent) 18%, transparent);
 }
 .rl-run {
   max-width: 28vw;
   text-overflow: ellipsis;
   padding: 4px 8px;
   border: 1px solid var(--datalib-border);
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
   background: var(--datalib-bg);
   color: inherit;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--datalib-font-size);
 }
 .rl-level {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--datalib-font-size-small);
   color: var(--datalib-muted);
   white-space: nowrap;
 }
 .rl-count {
-  font-size: 12px;
+  font-size: var(--datalib-font-size-small);
   color: var(--datalib-muted);
   white-space: nowrap;
 }
 .rl-note {
   margin: 0;
   padding: 16px;
-  font-size: 13px;
+  font-size: var(--datalib-font-size);
   color: var(--datalib-muted);
 }
 .rl-note.bad {
@@ -1238,7 +1293,7 @@ onUnmounted(() => {
   text-decoration: underline dotted;
 }
 .rl-grid .slick-cell {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
+  font-family: var(--datalib-mono);
+  font-size: var(--datalib-font-size-small);
 }
 </style>

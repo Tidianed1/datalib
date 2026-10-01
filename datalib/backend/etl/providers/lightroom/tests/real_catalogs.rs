@@ -51,7 +51,6 @@ impl Store {
             pool: Some(pool.clone()),
             options: MirrorOptions {
                 stable_key_columns: vec!["id_global".to_string()],
-                key_from_unique_index: true,
                 ..MirrorOptions::new(catalog)
             },
             progress: Progress::noop(),

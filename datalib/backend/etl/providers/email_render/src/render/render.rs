@@ -35,7 +35,9 @@ use mail_parser::{Address, MessageParser, MimeHeaders, PartType};
 ///     every row carries its backpointer, and an email's id carries its
 ///     `received_at` in its leading bits (`datalib_id`'s v8 layout).
 ///     Every uuid moved, `chat_uuid` among them.
-pub const RENDER_VERSION: u32 = 9;
+/// v10: the label line leads with Starred and Important, and leaves out
+///     Gmail's All Mail.
+pub const RENDER_VERSION: u32 = 10;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
 /// `datalib_core::config::EmailOutlink`; the orchestrator maps the
@@ -157,18 +159,13 @@ pub fn render_all(
         "[render] email dolt_diff scan"
     );
 
-    // mailbox id → display name (for the per-email label chips).
+    // mailbox id → the name its label chip shows, empty for none.
     let mailbox_name: HashMap<String, String> = parsed
         .mailboxes
         .iter()
         .filter_map(|m| {
             let id = m.get("id")?.as_str()?.to_string();
-            let name = m
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            Some((id, name))
+            Some((id, chip_name(m)))
         })
         .collect();
 
@@ -368,9 +365,13 @@ fn build_chat(
             .unwrap_or_default();
         let (fresh, quoted) = split_quoted(&body);
 
-        // Which mailboxes this email is filed under: drawn above the body,
-        // and kept out of the row's Contents.
-        let labels = labels_for_email(em, bucket, mailbox_name);
+        // Its flags and the mailboxes it is filed under: drawn above the
+        // body, and kept out of the row's Contents.
+        let mailboxes = mailboxes_for_email(em, bucket, mailbox_name);
+        let labels: Vec<String> = flag_labels(bucket.joins.keywords.get(&em.id))
+            .into_iter()
+            .chain(mailboxes.iter().cloned())
+            .collect();
         let mut text = fresh.trim_end().to_string();
         if let Some(q) = quoted {
             text.push_str("\n\n");
@@ -448,7 +449,7 @@ fn build_chat(
             labels: labels.clone(),
             system_note: None,
             // Per-email `↗` outlink into the source webmail.
-            source_url: email_outlink(outlink, em, &labels),
+            source_url: email_outlink(outlink, em, &mailboxes),
             kind_label: None,
             source_ref: Some(UpstreamRef::new(email_id.entity_kind, email_id.natural_key)),
             is_aside: false,
@@ -492,7 +493,29 @@ fn build_chat(
     (chat, render_bundle)
 }
 
-fn labels_for_email(
+/// The name a mailbox's label chip shows; empty for one that says
+/// nothing on a single email. Gmail's All Mail (a Takeout label) holds
+/// every message; Fastmail's Archive, the same role, is a real folder.
+fn chip_name(mailbox: &serde_json::Value) -> String {
+    let field = |k: &str| mailbox.get(k).and_then(|v| v.as_str());
+    match (field("name"), field("role")) {
+        (Some("All Mail"), Some("archive")) => String::new(),
+        (name, _) => name.unwrap_or("").to_string(),
+    }
+}
+
+/// The JMAP keywords a person reads as labels, in a fixed order: Gmail's
+/// Starred and Important arrive as `$flagged` and `$important`.
+fn flag_labels(keywords: Option<&Vec<String>>) -> Vec<String> {
+    let has = |k: &str| keywords.is_some_and(|kws| kws.iter().any(|x| x == k));
+    [("$flagged", "Starred"), ("$important", "Important")]
+        .into_iter()
+        .filter(|(k, _)| has(k))
+        .map(|(_, label)| label.to_string())
+        .collect()
+}
+
+fn mailboxes_for_email(
     em: &LoadedEmail,
     bucket: &super::parse::EmailThreadBucket,
     mailbox_name: Lookup<'_, HashMap<String, String>>,
@@ -861,6 +884,32 @@ mod tests {
 mod render_params_tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn starred_and_important_lead_in_a_fixed_order() {
+        let kws = vec!["$seen".into(), "$important".into(), "$flagged".into()];
+        assert_eq!(flag_labels(Some(&kws)), vec!["Starred", "Important"]);
+        assert!(flag_labels(Some(&vec!["$seen".into()])).is_empty());
+        assert!(flag_labels(None).is_empty());
+    }
+
+    /// Gmail's All Mail says nothing about one email; Fastmail's Archive
+    /// carries the same role and is a folder a person filed it in.
+    #[test]
+    fn all_mail_has_no_chip_and_archive_keeps_its_own() {
+        assert_eq!(
+            chip_name(&json!({"name": "All Mail", "role": "archive"})),
+            ""
+        );
+        assert_eq!(
+            chip_name(&json!({"name": "Archive", "role": "archive"})),
+            "Archive"
+        );
+        assert_eq!(
+            chip_name(&json!({"name": "Work/Projects"})),
+            "Work/Projects"
+        );
+    }
 
     #[test]
     fn label_order_is_not_a_change() {

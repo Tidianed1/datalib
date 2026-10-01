@@ -361,15 +361,16 @@ The common-use subset:
 
 ## How doltlite behaves
 
-The facts our rules rest on, checked on doltlite 0.50.13 unless a line
-says otherwise. A fact in one process is a test in
+The facts our rules rest on, checked on the pinned doltlite (0.50.14)
+by the tests below; a number measured on an older release names it. A fact in one process is a test in
 `doltlite_facts_test`, in the module named for its section. Anything
 about a writer and a reader in two processes is measured with
 `doltlite_two_process_test`, whose writer seals through the real
 `commit_run`: the shell's writer is not `commit_run`, and a shell probe
 has been wrong about contention before. "Shell probe" below marks a
-fact seen only in the `doltlite` shell on a scratch store. Upstream's own contract for 0.50.13 is `doc/doltlite/concurrency.md`
-and `doc/doltlite/refs.md` in the doltlite repo at `v0.50.13`.
+fact seen only in the `doltlite` shell on a scratch store. Upstream's
+own contract is `doc/doltlite/concurrency.md` and `doc/doltlite/refs.md`
+in the doltlite repo, at the pinned tag.
 
 ### Branches, HEAD and the working set
 
@@ -472,6 +473,12 @@ and `doc/doltlite/refs.md` in the doltlite repo at `v0.50.13`.
   names them** (0.50.12 and later). So `pragma_module_list` is no census
   of what a commit holds, and a table another process commits after this
   connection opened reads through `dolt_at_<table>` without a reopen.
+- **A per-table module is named as its table is**: case-insensitively,
+  and as a quoted identifier when the table's name needs quoting
+  (`"dolt_at_odd ""name"""('HEAD')`). A missing one is `no such table:
+  dolt_at_<table>` either way. `datalib_pin::Pin::table` always quotes,
+  so upstream names a mirror keeps, such as Lightroom's
+  `Adobe_AdditionalMetadata`, read like any other.
 - **A `BEGIN` on a read-only connection holds one commit** for the whole
   transaction: plain tables read that commit, use their indexes, and the
   writer seals underneath untouched.
@@ -486,11 +493,13 @@ and `doc/doltlite/refs.md` in the doltlite repo at `v0.50.13`.
 | indexes | primary-key equality only; no secondary index, no `ORDER BY` | all | all |
 | writes to the file | none | none | none |
 | a table committed later | readable by name | at the next transaction | open the newer commit |
-| what holds it | `pin.rs` tests | `a_held_read_transaction_is_a_snapshot_while_the_writer_seals` | `detached_readers_are_snapshots_while_the_writer_seals` |
+| what holds it | `datalib_pin` tests | `a_held_read_transaction_is_a_snapshot_while_the_writer_seals` | `detached_readers_are_snapshots_while_the_writer_seals` |
 
-The tree reads through the first (`pin.rs`'s `pinned_<table>` views)
-and, in the search applet, the second. The third works on our
-`.doltlite_db` names from 0.50.13: three detached readers beside 500
+Every reader in the tree uses the third (`doltlite_raw::open_reader`),
+except the search applet, which holds a transaction; `dolt_at_` is for
+reading one table at another commit on a connection already open (the
+history reader). The detached open works on our `.doltlite_db` names
+from 0.50.13 and runs every query from 0.50.14: three detached readers beside 500
 flat-out seals saw 0 errors, each open read one sealed commit, opens
 took ~1–10 ms even while the writer held a transaction, and the file
 came out byte-identical to the writer's alone.
@@ -507,6 +516,10 @@ came out byte-identical to the writer's alone.
   pinned even if a peer moves or deletes the ref. `dolt_diff_<table>`,
   `dolt_log()` and `dolt_hashof('HEAD')` work there.
 - **A missing revision fails the open**: `branch or revision "x" not found`.
+- **Every query runs on a detached open**, including those that need a
+  temporary table (`IN (…)`, `DISTINCT`); through 0.50.13 those were
+  refused as writes (dolthub/doltlite#3392).
+  `revision_by_path::a_detached_open_runs_queries_that_need_an_ephemeral_table`.
 
 Doltlite decides where the file name ends by looking for the longest
 prefix that is a doltlite store. Before 0.50.13 it looked only at
@@ -693,6 +706,7 @@ What each pin was taken for, newest first:
 
 | version | what it brought us |
 |---|---|
+| 0.50.14 | a detached open runs `IN` and `DISTINCT` (dolthub/doltlite#3392), so readers open `<store>@<commit>` directly |
 | 0.50.13 | a revision opened by path works on any file name (dolthub/doltlite#3231); an unindexed filter plans as scan + sort |
 | 0.50.12 | per-table modules registered on first use; `dolt_at_` and `dolt_history_` seek a text primary key; a ref-moving reader no longer refuses the writer's seals |
 | 0.50.10 | a read-only `dolt_status` no longer fails a writer's commit (dolthub/doltlite#2832, our #400) |

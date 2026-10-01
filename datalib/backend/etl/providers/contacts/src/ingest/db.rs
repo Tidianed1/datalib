@@ -10,13 +10,13 @@ use anyhow::{Context, Result};
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-use datalib_etl::bulk::bulk_upsert_in_tx;
+use datalib_etl::bulk::{bulk_upsert_entity_in_tx, bulk_upsert_in_tx};
 use datalib_etl::doltlite_raw::{self as dr};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
-use super::schema_raw::full_ddl;
 pub use super::schema_raw::{addressbook_pk, contact_pk, AccountRow, AddressbookRow, ContactRow};
+use super::schema_raw::{full_ddl, ContactCategoryRow, GroupMemberRow, LADDER};
 
 #[derive(Clone, Debug, RawStoreHandle)]
 pub struct RawDb {
@@ -27,10 +27,8 @@ pub struct RawDb {
     /// handle rather than from a path at the call site, so there is one
     /// opener per store and `close_all` reaches it.
     cas: Option<BlobCas>,
-    /// The commit every content read resolves against, or `None` for the
-    /// download step reading back what it just wrote. Set once, at open:
-    /// a pin belongs to a connection, not to a call, because the
-    /// `pinned_<table>` views it installs live on that connection.
+    /// The commit a reader's connection reads, or `None` for the download
+    /// step reading back what it just wrote. Set once, at open.
     pin: Option<datalib_etl::pin::Pin>,
 }
 
@@ -90,19 +88,10 @@ impl RawDb {
         self.pin.as_ref()
     }
 
-    /// How this handle reads content. Every content query goes through
-    /// it, so a reader cannot accidentally read the working set.
-    fn reads(&self) -> datalib_etl::pin::Reads<'_> {
-        match self.pin.as_ref() {
-            Some(p) => datalib_etl::pin::Reads::At(p),
-            None => datalib_etl::pin::Reads::Own,
-        }
-    }
-
     pub async fn open(db_path: &Path) -> Result<Self> {
         let owned = full_ddl();
         let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
-        let pool = dr::open(db_path, &slices).await?;
+        let pool = dr::open_migrating(db_path, &slices, LADDER).await?;
         // `db_path` is the entity db file, never the per-source directory:
         // `cas_path_for` derives the sibling via `.parent()`, so a directory
         // here would leak the CAS into the shared `raw/` root.
@@ -255,6 +244,31 @@ impl RawDb {
         let now = datalib_time::IsoOffsetTimestamp::now_local();
         let mut tx = self.pool.begin().await.context("begin contacts batch tx")?;
         bulk_upsert_in_tx(&mut tx, rows, &now).await?;
+        // Delete-then-insert: the members and categories are whatever the
+        // card names now.
+        let mut members: Vec<GroupMemberRow> = Vec::new();
+        let mut categories: Vec<ContactCategoryRow> = Vec::new();
+        for row in rows {
+            let id = &row.id_and_payload.id;
+            for sql in [
+                "DELETE FROM contact_group_members WHERE group_id = ?",
+                "DELETE FROM contact_categories WHERE contact_id = ?",
+            ] {
+                sqlx::query(sql)
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await
+                    .context("clear what a card derives")?;
+            }
+            members.extend(GroupMemberRow::for_contact(row));
+            categories.extend(ContactCategoryRow::for_contact(row));
+        }
+        bulk_upsert_entity_in_tx(&mut tx, &members)
+            .await
+            .context("insert group members")?;
+        bulk_upsert_entity_in_tx(&mut tx, &categories)
+            .await
+            .context("insert categories")?;
         tx.commit().await.context("commit contacts batch tx")?;
         Ok(())
     }
@@ -284,6 +298,16 @@ impl RawDb {
                 .execute(&mut *tx)
                 .await
                 .context("delete contact bookkeeping")?;
+            for sql in [
+                "DELETE FROM contact_group_members WHERE group_id = ?",
+                "DELETE FROM contact_categories WHERE contact_id = ?",
+            ] {
+                sqlx::query(sql)
+                    .bind(&id)
+                    .execute(&mut *tx)
+                    .await
+                    .context("delete what a card derives")?;
+            }
             sqlx::query("DELETE FROM contact_photos WHERE owner_id = ?")
                 .bind(&id)
                 .execute(&mut *tx)
@@ -322,6 +346,16 @@ impl RawDb {
                 .execute(&mut *tx)
                 .await
                 .context("delete contact bookkeeping")?;
+            for sql in [
+                "DELETE FROM contact_group_members WHERE group_id = ?",
+                "DELETE FROM contact_categories WHERE contact_id = ?",
+            ] {
+                sqlx::query(sql)
+                    .bind(&id)
+                    .execute(&mut *tx)
+                    .await
+                    .context("delete what a card derives")?;
+            }
             sqlx::query("DELETE FROM contact_photos WHERE owner_id = ?")
                 .bind(&id)
                 .execute(&mut *tx)
@@ -348,6 +382,8 @@ impl RawDb {
             .await
             .context("begin delete addressbook tx")?;
         for sql in [
+            "DELETE FROM contact_group_members WHERE addressbook_id = ?",
+            "DELETE FROM contact_categories WHERE addressbook_id = ?",
             "DELETE FROM contact_photos WHERE owner_id IN \
              (SELECT id FROM contacts WHERE addressbook_id = ?)",
             "DELETE FROM contacts_bookkeeping WHERE id IN \
@@ -386,23 +422,17 @@ impl RawDb {
     /// whether the row landed via CardDAV sync-collection or
     /// [`super::vcf_dir::fetch`].
     pub async fn load_all_for_render_and_index_md(&self) -> Result<Vec<LoadedRawContact>> {
-        // Audited: the only interpolations are table names this handle
-        // chose -- literals, or those literals behind `pinned_`. The
-        // aliases keep the qualified column references working, since a
-        // pinned read renames the table out from under them.
-        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+        let rows = sqlx::query(
             "SELECT c.id AS id,
                     c.addressbook_id AS addressbook_id,
                     c.uid AS uid,
                     c.href AS href,
                     json_extract(c.payload, '$.vcard') AS vcard,
                     COALESCE(a.display_name, a.href) AS addressbook_label
-             FROM {} c
-             LEFT JOIN {} a ON a.id = c.addressbook_id
+             FROM contacts c
+             LEFT JOIN addressbooks a ON a.id = c.addressbook_id
              ORDER BY c.addressbook_id, c.id",
-            self.reads().table("contacts"),
-            self.reads().table("addressbooks")
-        )))
+        )
         .fetch_all(&self.pool)
         .await
         .context("select contacts for render")?;
@@ -562,5 +592,150 @@ mod tests {
         let path = dir.path().join("contacts.doltlite_db");
         let db = RawDb::open(&path).await.unwrap();
         db.delete_contact("ab1", "/cards/X.vcf").await.unwrap();
+    }
+
+    fn group_row(members: &[&str]) -> ContactRow {
+        let lines: String = members
+            .iter()
+            .map(|m| format!("X-ADDRESSBOOKSERVER-MEMBER:urn:uuid:{m}\n"))
+            .collect();
+        ContactRow::new(
+            "ab".into(),
+            "bridge".into(),
+            "/cards/bridge.vcf".into(),
+            None,
+            Some("Bridge".into()),
+            None,
+            &format!(
+                "BEGIN:VCARD\nVERSION:3.0\nUID:bridge\nFN:Bridge\n\
+                 X-ADDRESSBOOKSERVER-KIND:group\n{lines}END:VCARD\n"
+            ),
+        )
+    }
+
+    async fn members(db: &RawDb) -> Vec<(String, Option<String>)> {
+        sqlx::query_as(
+            "SELECT group_id, member_id FROM contact_group_members ORDER BY group_id, member_id",
+        )
+        .fetch_all(db.pool())
+        .await
+        .unwrap()
+    }
+
+    /// The membership table follows the group card: a member dropped from
+    /// the card is a row gone, and a deleted group takes its rows with it.
+    #[tokio::test]
+    async fn group_members_follow_the_group_card() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&dir.path().join("contacts.doltlite_db"))
+            .await
+            .unwrap();
+        db.upsert_contact(&group_row(&["tng-picard", "tng-riker"]))
+            .await
+            .unwrap();
+        assert_eq!(
+            members(&db).await,
+            vec![
+                ("ab#bridge".to_string(), Some("ab#tng-picard".to_string())),
+                ("ab#bridge".to_string(), Some("ab#tng-riker".to_string())),
+            ]
+        );
+
+        db.upsert_contact(&group_row(&["tng-picard"]))
+            .await
+            .unwrap();
+        assert_eq!(
+            members(&db).await,
+            vec![("ab#bridge".to_string(), Some("ab#tng-picard".to_string()))]
+        );
+
+        db.delete_contact("ab", "/cards/bridge.vcf").await.unwrap();
+        assert!(members(&db).await.is_empty());
+        db.close().await;
+    }
+
+    async fn categories(db: &RawDb) -> Vec<String> {
+        sqlx::query_scalar("SELECT category FROM contact_categories ORDER BY category")
+            .fetch_all(db.pool())
+            .await
+            .unwrap()
+    }
+
+    fn labelled(categories: &str) -> ContactRow {
+        ContactRow::new(
+            "ab".into(),
+            "tng-picard".into(),
+            "/cards/picard.vcf".into(),
+            None,
+            Some("Picard".into()),
+            None,
+            &format!("BEGIN:VCARD\nVERSION:3.0\nUID:tng-picard\nFN:Picard\nCATEGORIES:{categories}\nEND:VCARD\n"),
+        )
+    }
+
+    /// The categories table follows the card: a label taken off is a row
+    /// gone, and a deleted card takes its rows with it.
+    #[tokio::test]
+    async fn categories_follow_the_card() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&dir.path().join("contacts.doltlite_db"))
+            .await
+            .unwrap();
+        db.upsert_contact(&labelled("myContacts,starred,Bridge"))
+            .await
+            .unwrap();
+        assert_eq!(
+            categories(&db).await,
+            vec!["Bridge", "myContacts", "starred"]
+        );
+
+        db.upsert_contact(&labelled("myContacts")).await.unwrap();
+        assert_eq!(categories(&db).await, vec!["myContacts"]);
+
+        db.delete_contact("ab", "/cards/picard.vcf").await.unwrap();
+        assert!(categories(&db).await.is_empty());
+        db.close().await;
+    }
+
+    /// A store an older build wrote has cards and neither derived table;
+    /// its first open under this build fills both from the cards already
+    /// there, because an address book's sync-token says
+    /// nothing changed and the download would never fill it.
+    #[tokio::test]
+    async fn the_rungs_fill_the_derived_tables_from_the_cards_already_stored() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("contacts.doltlite_db");
+        {
+            let ddl: Vec<String> = full_ddl()
+                .into_iter()
+                .filter(|d| {
+                    !d.contains("contact_group_members") && !d.contains("contact_categories")
+                })
+                .collect();
+            let ddl: Vec<&str> = ddl.iter().map(String::as_str).collect();
+            let pool = dr::open(&path, &ddl).await.unwrap();
+            let now = datalib_time::IsoOffsetTimestamp::now_local();
+            let mut tx = pool.begin().await.unwrap();
+            bulk_upsert_in_tx(
+                &mut tx,
+                &[group_row(&["tng-picard"]), labelled("myContacts,Away Team")],
+                &now,
+            )
+            .await
+            .unwrap();
+            tx.commit().await.unwrap();
+            dr::commit_run(&pool, "an older build's rows")
+                .await
+                .unwrap();
+            pool.close().await;
+        }
+
+        let db = RawDb::open(&path).await.expect("the rungs carry it");
+        assert_eq!(
+            members(&db).await,
+            vec![("ab#bridge".to_string(), Some("ab#tng-picard".to_string()))]
+        );
+        assert_eq!(categories(&db).await, vec!["Away Team", "myContacts"]);
+        db.close().await;
     }
 }

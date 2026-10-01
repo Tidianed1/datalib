@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// The "+ Data Source" / "Edit" dialog: pick a type, fill one form,
+// The "Add source" / "Edit" dialog: pick a type, fill one form,
 // review the TOML that will be written. One form writes one source —
 // the `[[groups]]` entry, its `ingest` step and its `render_markdown`
 // step — and editing a source reopens the same form over all three.
@@ -62,7 +62,8 @@ import {
   type ByteUnit,
 } from "@/config/byteSize";
 import ProbeItemPicker from "@/components/ProbeItemPicker.vue";
-import { STATUS_GLYPHS } from "@/config/glyphs";
+import { PATH_GLYPHS, STATUS_GLYPHS } from "@/config/glyphs";
+import { copyToClipboard } from "@/clipboard";
 
 const {
   latchkeyService,
@@ -354,12 +355,17 @@ const idError = computed(() => {
 /// `PathBuf` rather than an `Option<PathBuf>` — so a config missing one
 /// fails at deserialize time rather than at sync time. Caught here so
 /// the message lands under the field instead of in a job log.
-const missingRequired = computed(() =>
-  [...downloadFields.value, ...renderFields.value]
+const missingRequired = computed(() => {
+  const fields = [...downloadFields.value, ...renderFields.value];
+  const blank = (f: Field) => String(values.value[f.target] ?? "").trim() === "";
+  const missing = fields
     .filter((f) => "required" in f && f.required)
-    .filter((f) => String(values.value[f.target] ?? "").trim() === "")
-    .map((f) => f.label),
-);
+    .filter(blank)
+    .map((f) => f.label);
+  const oneOf = fields.filter((f) => chosen.value?.requiresOneOf?.includes(f.target));
+  if (oneOf.length && oneOf.every(blank)) missing.push(oneOf.map((f) => f.label).join(" or "));
+  return missing;
+});
 
 const canSubmit = computed(() => !idError.value && missingRequired.value.length === 0);
 
@@ -426,6 +432,7 @@ async function browse(f: Field) {
     title: f.pickTitle ?? f.label,
     // Re-editing a source reopens near its current value.
     startAt: String(values.value[f.target] ?? ""),
+    startIn: f.startIn,
     extensions: f.extensions,
   });
   if (result.outcome === "picked") {
@@ -435,6 +442,43 @@ async function browse(f: Field) {
     pickFailed.value[f.target] = result.reason;
   }
   // Canceled: leave the field exactly as it was, and say nothing.
+}
+
+/// A path field's help split around its `startIn`, so the path can
+/// carry a copy button: Cmd-Shift-G in the picker, or a terminal, is
+/// where it gets pasted.
+function helpAroundStart(f: Field): { before: string; path: string; after: string } | null {
+  if (f.kind !== "path" || !f.startIn || !f.help) return null;
+  const at = f.help.indexOf(f.startIn);
+  if (at < 0) return null;
+  return {
+    before: f.help.slice(0, at),
+    path: f.startIn,
+    after: f.help.slice(at + f.startIn.length),
+  };
+}
+
+const copiedStart = ref<string | null>(null);
+
+async function copyStart(f: Field) {
+  if (f.kind !== "path" || !f.startIn) return;
+  if (await copyToClipboard(f.startIn)) {
+    copiedStart.value = f.target;
+    setTimeout(() => {
+      if (copiedStart.value === f.target) copiedStart.value = null;
+    }, 1500);
+  }
+}
+
+/// Every field is a <label>, so a click anywhere in one activates its
+/// control — including the click that ends a drag across the help text,
+/// which moves focus to the input and drops the selection. Help text is
+/// there to be read and copied from.
+function keepHelpSelectable(e: MouseEvent) {
+  const t = e.target instanceof Element ? e.target : null;
+  if (t?.closest("label .wiz-help") && !t.closest("a, button, input, select, textarea")) {
+    e.preventDefault();
+  }
 }
 
 // Connection: which latchkey account, and what it can reach
@@ -927,6 +971,7 @@ function submit() {
       role="dialog"
       aria-modal="true"
       :aria-label="isEdit ? 'Edit source' : 'Add data source'"
+      @click="keepHelpSelectable"
     >
       <header class="wiz-head dialog-head">
         <h2>{{ isEdit ? `Edit ${name || id}` : "Add a data source" }}</h2>
@@ -1456,7 +1501,26 @@ function submit() {
               @input="values[f.target] = ($event.target as HTMLInputElement).value"
             />
 
-            <small v-if="f.help" class="wiz-help">{{ f.help }}</small>
+            <small v-if="helpAroundStart(f)" class="wiz-help"
+              >{{ helpAroundStart(f)!.before
+              }}<span class="wiz-startin"
+                ><code>{{ helpAroundStart(f)!.path }}</code
+                ><button
+                  type="button"
+                  class="wiz-copy"
+                  :title="copiedStart === f.target ? 'Copied' : 'Copy this path'"
+                  :aria-label="`Copy ${helpAroundStart(f)!.path}`"
+                  @click="copyStart(f)"
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path
+                      :d="copiedStart === f.target ? STATUS_GLYPHS.succeeded : PATH_GLYPHS.copy"
+                      fill="currentColor"
+                    />
+                  </svg></button></span
+              >{{ helpAroundStart(f)!.after }}</small
+            >
+            <small v-else-if="f.help" class="wiz-help">{{ f.help }}</small>
             <small v-if="pickFailed[f.target]" class="wiz-error">
               Couldn’t open the file picker ({{ pickFailed[f.target] }}). Type or paste the path
               instead.
@@ -1510,7 +1574,7 @@ function submit() {
   box-sizing: border-box;
   padding: 8px 10px;
   border: 1px solid var(--datalib-border);
-  border-radius: 5px;
+  border-radius: var(--datalib-radius);
   background: var(--datalib-input-bg);
   color: var(--datalib-fg);
   font: inherit;
@@ -1536,7 +1600,7 @@ function submit() {
    two overlapping ones. */
 .wiz-bytes {
   display: inline-flex;
-  border-radius: 5px;
+  border-radius: var(--datalib-radius);
 }
 .wiz-bytes:focus-within {
   outline: 2px solid var(--datalib-accent);
@@ -1546,11 +1610,11 @@ function submit() {
   outline: none;
 }
 .wiz-bytes .wiz-num {
-  border-radius: 5px 0 0 5px;
+  border-radius: var(--datalib-radius) 0 0 var(--datalib-radius);
 }
 .wiz-unit {
   width: auto;
-  border-radius: 0 5px 5px 0;
+  border-radius: 0 var(--datalib-radius) var(--datalib-radius) 0;
   border-left: none;
 }
 /* Shares `.wiz-input`'s box; keeps the platform disclosure arrow so it
@@ -1560,7 +1624,7 @@ function submit() {
 }
 
 .wiz-group h3 {
-  font-size: 11px;
+  font-size: var(--datalib-font-size-small);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--datalib-muted);
@@ -1578,8 +1642,8 @@ function submit() {
   text-align: left;
   padding: 10px;
   border: 1px solid var(--datalib-border);
-  border-radius: 6px;
-  background: var(--datalib-card-bg);
+  border-radius: var(--datalib-radius);
+  background: var(--datalib-bg);
   color: inherit;
   cursor: pointer;
   font: inherit;
@@ -1602,11 +1666,11 @@ function submit() {
   flex: 1;
 }
 .wiz-tile-text b {
-  font-size: 14px;
+  font-size: var(--datalib-title-size);
 }
 .wiz-tile-text small {
   color: var(--datalib-muted);
-  font-size: 11.5px;
+  font-size: var(--datalib-font-size-small);
 }
 .wiz-soon {
   font-size: 10px;
@@ -1633,8 +1697,8 @@ function submit() {
   gap: 10px;
   padding: 10px;
   border: 1px solid var(--datalib-border);
-  border-radius: 6px;
-  background: var(--datalib-card-bg);
+  border-radius: var(--datalib-radius);
+  background: var(--datalib-surface-2);
   margin-bottom: 14px;
 }
 .wiz-chosen div {
@@ -1644,11 +1708,11 @@ function submit() {
 }
 .wiz-chosen small {
   color: var(--datalib-muted);
-  font-size: 11.5px;
+  font-size: var(--datalib-font-size-small);
 }
 
 .wiz-cred {
-  font-size: 12.5px;
+  font-size: var(--datalib-font-size);
   color: var(--datalib-muted);
   border-left: 3px solid var(--datalib-border);
   padding-left: 10px;
@@ -1678,7 +1742,7 @@ function submit() {
   order: -1;
 }
 .wiz-label {
-  font-size: 12.5px;
+  font-size: var(--datalib-font-size);
   font-weight: 600;
 }
 .wiz-nofields {
@@ -1691,15 +1755,15 @@ function submit() {
 }
 .wiz-help {
   color: var(--datalib-muted);
-  font-size: 11.5px;
+  font-size: var(--datalib-font-size-small);
   line-height: 1.45;
 }
 .wiz-error {
-  color: #b8481a;
-  font-size: 11.5px;
+  color: var(--datalib-error-fg);
+  font-size: var(--datalib-font-size-small);
 }
 .wiz-permanent {
-  color: #b8481a;
+  color: var(--datalib-error-fg);
 }
 .wiz-probe-headline {
   margin: 0 0 4px;
@@ -1730,8 +1794,8 @@ function submit() {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   background: var(--datalib-code-bg);
-  border-radius: 5px;
-  font-size: 11px;
+  border-radius: var(--datalib-radius);
+  font-size: var(--datalib-font-size-small);
   line-height: 1.5;
 }
 .wiz-probe-note details > summary {
@@ -1765,8 +1829,8 @@ function submit() {
   margin-left: 6px;
 }
 .wiz-path {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12.5px;
+  font-family: var(--datalib-mono);
+  font-size: var(--datalib-font-size);
 }
 /* The input takes the slack so the button keeps its label on one line. */
 .wiz-pathrow {
@@ -1781,9 +1845,33 @@ function submit() {
 .wiz-browse {
   white-space: nowrap;
 }
+.wiz-startin {
+  white-space: nowrap;
+}
+.wiz-startin code {
+  font-size: 11px;
+  user-select: all;
+}
+.wiz-copy {
+  display: inline-flex;
+  vertical-align: -3px;
+  margin-left: 2px;
+  padding: 1px;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.wiz-copy:hover {
+  color: var(--datalib-fg);
+}
+.wiz-copy svg {
+  width: 13px;
+  height: 13px;
+}
 .wiz-foot-note {
   margin-right: auto;
-  font-size: 12px;
+  font-size: var(--datalib-font-size-small);
   color: var(--datalib-muted);
 }
 
@@ -1798,7 +1886,7 @@ function submit() {
 .wiz-section-head,
 .wiz-conn-head {
   margin: 0 0 6px;
-  font-size: 11px;
+  font-size: var(--datalib-font-size-small);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--datalib-muted);
@@ -1814,7 +1902,7 @@ function submit() {
    that talks to something outside. */
 .wiz-conn {
   border: 1px solid var(--datalib-border);
-  border-radius: 6px;
+  border-radius: var(--datalib-radius);
   padding: 12px 14px 4px;
   margin-bottom: 16px;
 }
@@ -1851,40 +1939,15 @@ function submit() {
 }
 .wiz-review summary {
   cursor: pointer;
-  font-size: 12.5px;
+  font-size: var(--datalib-font-size);
   color: var(--datalib-muted);
 }
 .wiz-review pre {
   margin: 8px 0 0;
   padding: 10px;
   background: var(--datalib-code-bg);
-  border-radius: 5px;
+  border-radius: var(--datalib-radius);
   overflow-x: auto;
-  font-size: 12px;
-}
-
-.btn {
-  padding: 7px 14px;
-  border: 1px solid var(--datalib-border);
-  border-radius: 5px;
-  background: var(--datalib-card-bg);
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-}
-.btn:hover:not(:disabled) {
-  background: var(--datalib-hover);
-}
-.btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.btn.primary {
-  background: var(--datalib-accent);
-  border-color: var(--datalib-accent);
-  color: #fff;
-}
-.btn.ghost {
-  background: none;
+  font-size: var(--datalib-font-size-small);
 }
 </style>

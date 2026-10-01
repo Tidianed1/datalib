@@ -15,6 +15,7 @@ const target = (over: Partial<MenuTarget> = {}): MenuTarget => ({
   stopRequestIds: [],
   turnedOffBy: null,
   statusFrom: "slack/render_markdown",
+  dashboardGroup: "slack",
   revealPath: "/data/slack",
   ...over,
 });
@@ -45,6 +46,7 @@ describe("rowMenu", () => {
       "history",
       "compare",
       "log",
+      "dashboard",
       "—",
       "reveal",
       "copy_path",
@@ -60,6 +62,9 @@ describe("rowMenu", () => {
     const applet = rowMenu([target({ kind: "applet", func: null, statusFrom: null })], opts);
     expect(has(applet, "history")).toBe(false);
     expect(has(applet, "log")).toBe(false);
+    expect(
+      has(rowMenu([target({ kind: "applet", dashboardGroup: null })], opts), "dashboard"),
+    ).toBe(false);
     expect(has(rowMenu([target({ kind: "step", func: "qmd_aggregator" })], opts), "history")).toBe(
       false,
     );
@@ -76,7 +81,16 @@ describe("rowMenu", () => {
   it("draws no separator first, last, or twice in a row", () => {
     const shapes = [
       [target({ kind: "applet", func: null, statusFrom: null })],
-      [target({ id: "system", name: "System", kind: "system", type: null, statusFrom: null })],
+      [
+        target({
+          id: "system",
+          name: "System",
+          kind: "system",
+          type: null,
+          statusFrom: null,
+          dashboardGroup: null,
+        }),
+      ],
       [target(), target({ id: "b" })],
     ];
     for (const targets of shapes) {
@@ -119,7 +133,16 @@ describe("rowMenu", () => {
 
   it("offers the system row its log and its path, and nothing that edits the config", () => {
     const menu = rowMenu(
-      [target({ id: "system", name: "System", kind: "system", type: null, statusFrom: null })],
+      [
+        target({
+          id: "system",
+          name: "System",
+          kind: "system",
+          type: null,
+          statusFrom: null,
+          dashboardGroup: null,
+        }),
+      ],
       opts,
     );
     expect(menu.map((m) => (m.separator ? "—" : m.action))).toEqual([
@@ -148,7 +171,7 @@ describe("rowMenu", () => {
 
   it("leaves out the one-row actions when several rows are targeted, and names the row a reason came from", () => {
     const menu = rowMenu([target(), target({ id: "mail", name: "Mail", editBlocked: "x" })], opts);
-    for (const action of ["browse", "edit", "rename", "compare", "log"]) {
+    for (const action of ["browse", "edit", "rename", "compare", "log", "dashboard"]) {
       expect(has(menu, action)).toBe(false);
     }
     expect(entry(menu, "history").disabled).toBeNull();

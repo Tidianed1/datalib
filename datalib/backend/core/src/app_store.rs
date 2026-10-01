@@ -284,6 +284,44 @@ impl AppRepo for AppStore {
             .collect())
     }
 
+    async fn disk_usage_between(
+        &self,
+        path: &str,
+        since_utc: &str,
+        until_utc: &str,
+    ) -> Result<Vec<DiskUsageRow>, RepoError> {
+        let before = sqlx::query(
+            "SELECT path, measured_at_utc, tz_offset, bytes FROM disk_usage \
+             WHERE path = ? AND measured_at_utc < ? ORDER BY measured_at_utc DESC LIMIT 1",
+        )
+        .bind(path)
+        .bind(since_utc)
+        .fetch_all(&self.usage_pool)
+        .await
+        .map_err(|e| RepoError::Internal(e.to_string()))?;
+        let during = sqlx::query(
+            "SELECT path, measured_at_utc, tz_offset, bytes FROM disk_usage \
+             WHERE path = ? AND measured_at_utc >= ? AND measured_at_utc <= ? \
+             ORDER BY measured_at_utc",
+        )
+        .bind(path)
+        .bind(since_utc)
+        .bind(until_utc)
+        .fetch_all(&self.usage_pool)
+        .await
+        .map_err(|e| RepoError::Internal(e.to_string()))?;
+        Ok(before
+            .iter()
+            .chain(&during)
+            .map(|r| DiskUsageRow {
+                path: r.try_get("path").unwrap_or_default(),
+                measured_at_utc: r.try_get("measured_at_utc").unwrap_or_default(),
+                tz_offset: r.try_get("tz_offset").ok(),
+                bytes: r.try_get("bytes").unwrap_or_default(),
+            })
+            .collect())
+    }
+
     async fn list_remote_allows(&self) -> Result<Vec<RemoteMediaAllowRow>, RepoError> {
         let rows = sqlx::query(
             "SELECT allow_uuid, scope, key, created_at_utc, tz_offset FROM remote_media_allow \

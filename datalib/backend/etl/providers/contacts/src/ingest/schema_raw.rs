@@ -1,12 +1,14 @@
 //! Raw-store schema for the CardDAV (contacts) provider.
 
 use datalib_etl::bulk::BulkUpsertable;
-use datalib_etl::doltlite_raw::{self as dr, WirePayload, WirePayloadRow};
-use datalib_etl_macros::WirePayloadRow;
+use datalib_etl::doltlite_raw::{self as dr, Migration, WirePayload, WirePayloadRow};
+use datalib_etl_macros::{RawTable, WirePayloadRow};
 use sqlx::query::Query;
 use sqlx::sqlite::SqliteArguments;
 use sqlx::Sqlite;
 use uuid::Uuid;
+
+use super::api::{split_vcards, vcard_categories, vcard_is_group, vcard_members};
 
 pub const DATA_TABLES: &[&str] = &["accounts", "addressbooks", "contacts"];
 
@@ -158,6 +160,203 @@ pub fn contact_pk(addressbook_id: &str, uid: &str) -> String {
     format!("{addressbook_id}#{uid}")
 }
 
+impl ContactRow {
+    /// The vCard text the row holds: one card, or for a row a `.vcf`
+    /// file made, possibly several.
+    pub fn vcard(&self) -> String {
+        serde_json::from_str::<serde_json::Value>(&self.id_and_payload.payload)
+            .ok()
+            .and_then(|v| v.get("vcard")?.as_str().map(str::to_string))
+            .unwrap_or_default()
+    }
+}
+
+// contact_group_members
+
+/// `contact_group_members` — one row per member a group card names.
+/// Derived from the group's `contacts` row on every write of it, so a
+/// member added or dropped is a row added or dropped in
+/// `dolt_diff_contact_group_members` rather than an edit inside a vCard.
+/// Synthesized `id` PK (`"{group_id}#{member}"`), like email's join
+/// tables.
+#[derive(Debug, Clone, PartialEq, Eq, RawTable)]
+#[raw_table(
+    table = "contact_group_members",
+    index = "contact_group_members_by_group:group_id",
+    index = "contact_group_members_by_member:member_id"
+)]
+pub struct GroupMemberRow {
+    pub id: String,
+    /// The `contacts` row that holds the group card.
+    pub group_id: String,
+    pub addressbook_id: String,
+    /// The member as the card writes it: `urn:uuid:<UID>` from Apple and
+    /// Fastmail, sometimes a `mailto:` in vCard 4.
+    pub member: String,
+    /// The `contacts` row a member naming a UID refers to, whether or not
+    /// that row is here. `None` for a member named any other way.
+    pub member_id: Option<String>,
+}
+
+impl GroupMemberRow {
+    /// Every membership the group cards in `row` name.
+    pub fn for_contact(row: &ContactRow) -> Vec<Self> {
+        Self::from_vcard(&row.id_and_payload.id, &row.addressbook_id, &row.vcard())
+    }
+
+    pub fn from_vcard(group_id: &str, addressbook_id: &str, vcard: &str) -> Vec<Self> {
+        let mut blocks = split_vcards(vcard);
+        if blocks.is_empty() {
+            blocks.push(vcard.to_string());
+        }
+        let mut out: Vec<Self> = blocks
+            .iter()
+            .filter(|b| vcard_is_group(b))
+            .flat_map(|b| vcard_members(b))
+            .map(|member| Self {
+                id: format!("{group_id}#{member}"),
+                group_id: group_id.to_string(),
+                addressbook_id: addressbook_id.to_string(),
+                member_id: member_uid(&member).map(|uid| contact_pk(addressbook_id, uid)),
+                member,
+            })
+            .collect();
+        out.sort_by(|a, b| a.id.cmp(&b.id));
+        out.dedup_by(|a, b| a.id == b.id);
+        out
+    }
+}
+
+// contact_categories
+
+/// `contact_categories` — one row per name in a card's `CATEGORIES`, the
+/// way Google's export files a contact under its labels (`myContacts`,
+/// `starred`, and the ones a person made). Stored as written; derived
+/// from the card on every write of it, like [`GroupMemberRow`].
+#[derive(Debug, Clone, PartialEq, Eq, RawTable)]
+#[raw_table(
+    table = "contact_categories",
+    index = "contact_categories_by_contact:contact_id",
+    index = "contact_categories_by_category:category"
+)]
+pub struct ContactCategoryRow {
+    pub id: String,
+    pub contact_id: String,
+    pub addressbook_id: String,
+    pub category: String,
+}
+
+impl ContactCategoryRow {
+    pub fn for_contact(row: &ContactRow) -> Vec<Self> {
+        Self::from_vcard(&row.id_and_payload.id, &row.addressbook_id, &row.vcard())
+    }
+
+    pub fn from_vcard(contact_id: &str, addressbook_id: &str, vcard: &str) -> Vec<Self> {
+        let mut out: Vec<Self> = vcard_categories(vcard)
+            .into_iter()
+            .map(|category| Self {
+                id: format!("{contact_id}#{category}"),
+                contact_id: contact_id.to_string(),
+                addressbook_id: addressbook_id.to_string(),
+                category,
+            })
+            .collect();
+        out.sort_by(|a, b| a.id.cmp(&b.id));
+        out.dedup_by(|a, b| a.id == b.id);
+        out
+    }
+}
+
+/// The UID a group member names: `urn:uuid:<UID>`, or a bare UID. `None`
+/// for any other URI (`mailto:`), which names no card.
+pub fn member_uid(member: &str) -> Option<&str> {
+    let bare = member
+        .get(..9)
+        .filter(|p| p.eq_ignore_ascii_case("urn:uuid:"))
+        .map_or(member, |_| &member[9..]);
+    (!bare.is_empty() && !bare.contains(':')).then_some(bare)
+}
+
+/// The raw store's migration ladder (etl/README.md §"The migration
+/// ladder"). Each rung adds a table derived from the cards, and fills it
+/// from the cards already stored.
+pub const LADDER: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "contact_group_members from the group cards",
+        apply: |conn| {
+            Box::pin(async move {
+                create(conn, GroupMemberRow::all_ddl()).await?;
+                for (id, book, vcard) in stored_cards(conn).await? {
+                    for m in GroupMemberRow::from_vcard(&id, &book, &vcard) {
+                        sqlx::query(
+                            "INSERT INTO contact_group_members \
+                             (id, group_id, addressbook_id, member, member_id) \
+                             VALUES (?, ?, ?, ?, ?)",
+                        )
+                        .bind(&m.id)
+                        .bind(&m.group_id)
+                        .bind(&m.addressbook_id)
+                        .bind(&m.member)
+                        .bind(&m.member_id)
+                        .execute(&mut *conn)
+                        .await?;
+                    }
+                }
+                Ok(())
+            })
+        },
+    },
+    Migration {
+        version: 2,
+        name: "contact_categories from the cards",
+        apply: |conn| {
+            Box::pin(async move {
+                create(conn, ContactCategoryRow::all_ddl()).await?;
+                for (id, book, vcard) in stored_cards(conn).await? {
+                    for c in ContactCategoryRow::from_vcard(&id, &book, &vcard) {
+                        sqlx::query(
+                            "INSERT INTO contact_categories \
+                             (id, contact_id, addressbook_id, category) VALUES (?, ?, ?, ?)",
+                        )
+                        .bind(&c.id)
+                        .bind(&c.contact_id)
+                        .bind(&c.addressbook_id)
+                        .bind(&c.category)
+                        .execute(&mut *conn)
+                        .await?;
+                    }
+                }
+                Ok(())
+            })
+        },
+    },
+];
+
+/// A rung creates its table rather than leaving it to the DDL, so the
+/// open does not see a new table and clear the cursors: an address book's
+/// sync-token would still say "caught up", and nothing would ever fill it.
+async fn create(conn: &mut sqlx::SqliteConnection, ddl: Vec<String>) -> anyhow::Result<()> {
+    for stmt in ddl {
+        // Audited: the derive's own DDL; nothing from upstream.
+        sqlx::query(sqlx::AssertSqlSafe(stmt))
+            .execute(&mut *conn)
+            .await?;
+    }
+    Ok(())
+}
+
+/// Every stored card: its row id, address book and vCard text.
+async fn stored_cards(
+    conn: &mut sqlx::SqliteConnection,
+) -> anyhow::Result<Vec<(String, String, String)>> {
+    Ok(
+        sqlx::query_as("SELECT id, addressbook_id, json_extract(payload, '$.vcard') FROM contacts")
+            .fetch_all(&mut *conn)
+            .await?,
+    )
+}
+
 /// Frozen UUIDv5 namespace for synthesized contacts identity. Changing
 /// these bytes re-keys every UID-less contact we have ever ingested, so
 /// the sequence is effectively immutable.
@@ -222,6 +421,8 @@ pub fn full_ddl() -> Vec<String> {
         // touches this table. See [`vcf_dir`].
         datalib_etl::file_checkpoint::INGESTED_FILES_DDL.to_string(),
     ];
+    out.extend(GroupMemberRow::all_ddl());
+    out.extend(ContactCategoryRow::all_ddl());
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));
     }
@@ -231,6 +432,32 @@ pub fn full_ddl() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A group card names its members; a person card names none; a
+    /// `mailto:` member is kept but names no row.
+    #[test]
+    fn a_group_card_yields_one_row_per_member() {
+        let group = "BEGIN:VCARD\nX-ADDRESSBOOKSERVER-KIND:GROUP\nUID:bridge\n\
+                     X-ADDRESSBOOKSERVER-MEMBER:urn:uuid:tng-picard\n\
+                     X-ADDRESSBOOKSERVER-MEMBER:urn:uuid:tng-riker\n\
+                     MEMBER:mailto:q@continuum.test\nEND:VCARD\n";
+        let rows = GroupMemberRow::from_vcard("ab#bridge", "ab", group);
+        let got: Vec<(&str, Option<&str>)> = rows
+            .iter()
+            .map(|r| (r.member.as_str(), r.member_id.as_deref()))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("mailto:q@continuum.test", None),
+                ("urn:uuid:tng-picard", Some("ab#tng-picard")),
+                ("urn:uuid:tng-riker", Some("ab#tng-riker")),
+            ]
+        );
+        assert!(rows.iter().all(|r| r.group_id == "ab#bridge"));
+        let person = "BEGIN:VCARD\nUID:tng-picard\nFN:Picard\nEND:VCARD\n";
+        assert!(GroupMemberRow::from_vcard("ab#tng-picard", "ab", person).is_empty());
+    }
 
     #[test]
     fn synthesized_name_uid_is_stable_and_normalized() {

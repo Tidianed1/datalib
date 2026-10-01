@@ -233,6 +233,13 @@ def prepare(argv: list[str]) -> Prepared:
     raw_root = data_root / "raw"
     raw_root.mkdir(exist_ok=True)
     playback = workspace / "playback"
+    # The host's fingerprint cache is keyed by absolute path, and every
+    # path here is a sandbox that is gone by the next run: in the real
+    # cache each would stay as a dead row. The root holds its own.
+    own_cache_env = {
+        **os.environ,
+        "DATALIB_CACHE_DIR": str(workspace / "fingerprint_cache"),
+    }
 
     # Contacts are ingested twice: once from the checked-in address
     # books, once after `carddav_tng_v2/` is copied over them, so the
@@ -371,7 +378,7 @@ def prepare(argv: list[str]) -> Prepared:
     # skip and write nothing — invoked anyway for symmetry, exactly
     # like the old whole-config synth pass.
     print(f"[run_sync_pipeline] synth → {playback}", flush=True)
-    step_env = {**os.environ, "DATALIB_DAG_DATA_ROOT": str(workspace)}
+    step_env = {**own_cache_env, "DATALIB_DAG_DATA_ROOT": str(workspace)}
     for name, (type_str, synth_input, _extract_input) in sources.items():
         source: dict = {"fixture_path": str(synth_input)}
         if type_str == "linkedin":
@@ -598,7 +605,7 @@ inputs = [{qmd_list}]"""
     playback_live = workspace / "playback_live"
     point_playback(playback_live, playback)
     pipeline_env = {
-        **os.environ,
+        **own_cache_env,
         "DATALIB_HTTP_PLAYBACK": str(playback_live),
         "SIGNAL_BACKUP_PASSPHRASE": FIXTURE_SIGNAL_AEP,
         "WHATSAPP_BACKUP_DECRYPTION_KEY": FIXTURE_WHATSAPP_KEY,

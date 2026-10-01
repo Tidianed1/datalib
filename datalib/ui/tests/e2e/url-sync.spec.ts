@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-import { firstRowUuid, selectRowByUuid, type GridApi } from "./grid-helpers";
+import { GRID, firstRowUuid, selectRowByUuid, type GridApi } from "./grid-helpers";
 
 // The URL path encodes the whole column stack: a /-separated list of
 // `code:state` segments (see src/router/columns.ts), where `code` is
@@ -26,7 +26,7 @@ async function pinFirstRowId(page: import("@playwright/test").Page) {
 
 test.describe("URL reflects app state", () => {
   test("selecting a row updates the URL and opens a document column", async ({ page }) => {
-    await page.goto("/");
+    await page.goto(GRID);
     const rowId = await pinFirstRowId(page);
 
     const beforePath = await page.evaluate(() => location.pathname);
@@ -45,7 +45,7 @@ test.describe("URL reflects app state", () => {
   });
 
   test("URL survives reload — selection and document column restored", async ({ page }) => {
-    await page.goto("/");
+    await page.goto(GRID);
     const rowId = await pinFirstRowId(page);
     await selectRowByUuid(page, rowId);
     await expect(page.locator(".chat-preview")).toBeVisible();
@@ -79,7 +79,7 @@ test.describe("URL reflects app state", () => {
     // The editable source box only exists in dev mode; default chrome
     // shows titles.
     await page.addInitScript(() => localStorage.setItem("datalib-dev-mode", "1"));
-    await page.goto("/");
+    await page.goto(GRID);
     await pinFirstRowId(page);
     // "+" appends a gallery column (both modes); in dev mode its
     // source box is editable — overwrite it with new card source and

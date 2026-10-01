@@ -680,10 +680,7 @@ onBeforeUnmount(() => {
   inset: 0;
   display: flex;
   flex-direction: column;
-  font:
-    13px/1.4 system-ui,
-    -apple-system,
-    sans-serif;
+  font: var(--datalib-font-size) / 1.4 var(--datalib-font, system-ui, sans-serif);
   color: var(--datalib-fg, inherit);
   background: var(--datalib-bg, transparent);
 }
@@ -702,7 +699,15 @@ onBeforeUnmount(() => {
   color: inherit;
   background: var(--datalib-input-bg, transparent);
   border: 1px solid var(--datalib-border, #8884);
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
+}
+.map-search:focus {
+  outline: none;
+  border-color: var(--datalib-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--datalib-accent) 18%, transparent);
+}
+.map-card button:hover:not(:disabled):not(.map-link) {
+  background: var(--datalib-hover);
 }
 .map-by {
   display: flex;
@@ -716,7 +721,7 @@ onBeforeUnmount(() => {
   color: inherit;
   background: var(--datalib-input-bg, transparent);
   border: 1px solid var(--datalib-border, #8884);
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
   padding: 3px 8px;
   cursor: pointer;
 }
@@ -735,7 +740,7 @@ onBeforeUnmount(() => {
   gap: 10px;
   align-items: baseline;
   padding: 0 10px 6px;
-  font-size: 12px;
+  font-size: var(--datalib-font-size-small);
   font-variant-numeric: tabular-nums;
   border-bottom: 1px solid var(--datalib-border, #8884);
 }
@@ -769,9 +774,9 @@ onBeforeUnmount(() => {
   width: 320px;
   pointer-events: none;
   padding: 8px 10px;
-  background: var(--datalib-card-bg, #fafafa);
+  background: var(--datalib-bg, #fff);
   border: 1px solid var(--datalib-border, #8884);
-  border-radius: 6px;
+  border-radius: var(--datalib-radius);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
 }
 .map-tip-title {
@@ -782,11 +787,11 @@ onBeforeUnmount(() => {
 }
 .map-tip-meta {
   color: var(--datalib-muted, inherit);
-  font-size: 12px;
+  font-size: var(--datalib-font-size-small);
   margin-bottom: 4px;
 }
 .map-tip-body {
-  font-size: 12px;
+  font-size: var(--datalib-font-size-small);
   display: -webkit-box;
   -webkit-line-clamp: 6;
   -webkit-box-orient: vertical;
@@ -809,10 +814,10 @@ onBeforeUnmount(() => {
 }
 .map-empty pre {
   text-align: left;
-  font-size: 12px;
+  font-size: var(--datalib-font-size-small);
   padding: 8px 10px;
   background: var(--datalib-code-bg, #8881);
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
 }
 .map-error {
   color: var(--datalib-log-error, inherit);
@@ -831,7 +836,7 @@ onBeforeUnmount(() => {
   gap: 6px;
   align-items: center;
   padding: 3px 4px;
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
   cursor: pointer;
 }
 .map-legend li:hover {
@@ -855,7 +860,7 @@ onBeforeUnmount(() => {
 }
 .map-count {
   color: var(--datalib-muted, inherit);
-  font-size: 12px;
+  font-size: var(--datalib-font-size-small);
   font-variant-numeric: tabular-nums;
 }
 @media (max-width: 520px) {

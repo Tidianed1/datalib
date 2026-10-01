@@ -102,8 +102,9 @@ before the version bump.
 - The `runtime` legs on the real runners, with their own bash and
   their own filesystem — the tests make the same calls, not the same
   machine.
-- `cargo-about` for real: the release runner installs a pinned binary
-  and generates `licenses/rust-crates.md` from the crate sources;
-  locally, `scripts/third_party_notices.sh <dir>` with cargo-about on
-  PATH is the same call, and is what the tauri bundle runs.
+- `cargo-about` for real: `scripts/third_party_notices.sh <dir>` builds
+  the pinned binary (`//third-party/cargo-about`) and generates
+  `licenses/rust-crates.md` from the crate sources, so it needs `cargo`
+  and the network. The release runner and the tauri bundle both make
+  this same call.
 - Signing, notarization, and the asset uploads.

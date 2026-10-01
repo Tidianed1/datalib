@@ -19,7 +19,7 @@ use datalib_etl_claude::ingest::schema_raw::ConversationAttachmentRow;
 const ATTACHMENTS_PROJECTION_SQL: &str = "
     SELECT file_uuid AS ref_id, blake3,
            NULL AS content_type, NULL AS upstream_name
-      FROM pinned_claude_attachments claude_attachments
+      FROM claude_attachments
      WHERE file_uuid IN ({placeholders}) AND blake3 IS NOT NULL";
 
 #[derive(Debug, Clone)]
@@ -247,10 +247,9 @@ async fn parse_doltlite_async(
     source_id: &str,
     range: RawRange<'_>,
 ) -> Result<ParsedExport> {
-    // Pinned at open — at the driver's commit, else HEAD — with the views
-    // installed before anything reads. No commit means nothing has been
-    // committed here to render: emptiness, not a reason to read the
-    // working set.
+    // Opened at the driver's commit, else HEAD. No commit means nothing
+    // has been committed here to render: emptiness, not a reason to read
+    // the working set.
     let Some(reader) = datalib_etl::doltlite_raw::open_reader(db_path, range.pin)
         .await
         .with_context(|| format!("open claude doltlite for render {}", db_path.display()))?
@@ -271,9 +270,8 @@ async fn parse_doltlite_async(
         None
     };
 
-    // Pin before anything reads this store. The diff below and the rows
-    // behind it have to name one commit, and the `pinned_<table>` views must
-    // already exist when the diff runs — its bucket query joins live tables.
+    // Open at one commit before anything reads this store: the diff below
+    // and the rows behind it have to name that commit.
     //
     // No commit means the store cannot be read, which is *not* the same as
     // the source holding nothing; reading the working set instead would be
@@ -284,14 +282,11 @@ async fn parse_doltlite_async(
     // single copy of each lives in `ingest::db` (users/orgs go
     // through the shared `doltlite_raw` helper). See "One reader per
     // table" there.
-    let users =
-        datalib_etl::doltlite_raw::load_payloads(&pool, datalib_etl::pin::Reads::At(&pin), "users")
-            .await?;
-    let first_user_uuid =
-        db::first_user_uuid_from(&pool, datalib_etl::pin::Reads::At(&pin)).await?;
-    let all_convs = db::load_conversations_from(&pool, datalib_etl::pin::Reads::At(&pin)).await?;
+    let users = datalib_etl::doltlite_raw::load_payloads(&pool, "users").await?;
+    let first_user_uuid = db::first_user_uuid_from(&pool).await?;
+    let all_convs = db::load_conversations_from(&pool).await?;
     let total = all_convs.len();
-    let all_projects = load_project_rows(&pool, datalib_etl::pin::Reads::At(&pin)).await?;
+    let all_projects = load_project_rows(&pool).await?;
 
     let scan = scan_diff(&pool, source_id, range, &pin, &all_convs, &all_projects).await?;
 
@@ -396,17 +391,14 @@ fn collect_attachment_ref_ids(payload: &Value) -> Vec<String> {
 
 /// Load every project out of the raw store and hang its knowledge
 /// documents off it. Two queries total, not one per project.
-async fn load_project_rows(
-    pool: &SqlitePool,
-    reads: datalib_etl::pin::Reads<'_>,
-) -> Result<Vec<ProjectRow>> {
-    let projects = db::load_projects_from(pool, reads).await?;
+async fn load_project_rows(pool: &SqlitePool) -> Result<Vec<ProjectRow>> {
+    let projects = db::load_projects_from(pool).await?;
     if projects.is_empty() {
         return Ok(Vec::new());
     }
     let mut docs_by_project: std::collections::HashMap<String, Vec<ProjectDocRow>> =
         std::collections::HashMap::new();
-    for d in db::load_project_docs_from(pool, reads).await? {
+    for d in db::load_project_docs_from(pool).await? {
         docs_by_project
             .entry(d.project_uuid.clone())
             .or_default()

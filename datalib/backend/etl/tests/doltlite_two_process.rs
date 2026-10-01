@@ -168,7 +168,7 @@ fn a_writer_opens_and_commits_under_a_reader_that_is_already_open() {
 /// as a writer commits as fast as it can. Every reader step is a read, so the
 /// writer must never see `commit conflict`.
 ///
-/// It did (#400): `install_views` used to ask `dolt_status` whether the store
+/// It did (#400): a reader's open once asked `dolt_status` whether the store
 /// was dirty, and that one statement, issued from a read-only connection,
 /// failed about one in a hundred of the writer's overlapping commits here.
 /// The writer is the bounded side, because every commit grows the file and a

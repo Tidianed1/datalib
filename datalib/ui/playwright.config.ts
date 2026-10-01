@@ -317,7 +317,7 @@ function spawnBackend(name: string, root: string, env: Record<string, string> = 
   return { name, child, urlFile, log };
 }
 
-// The announced URL is `<origin>/data_sources?token=<DATALIB_TOKEN>`; the specs want
+// The announced URL is `<origin>/?token=<DATALIB_TOKEN>`; the specs want
 // the origin. Absent, empty and short of the whole token all read the
 // same way here — as "not yet", so a torn read is one more turn of the
 // poll rather than a truncated port number that parses.
@@ -527,6 +527,8 @@ export default defineConfig({
         /data-sources-history\.spec\.ts/,
         // The run-log panel's grid, menu and drag-to-group bar.
         /run-log\.spec\.ts/,
+        // WebKit alone activates a <label> after a drag-select in it.
+        /wizard-help-select\.spec\.ts/,
       ],
     },
   ],

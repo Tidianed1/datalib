@@ -567,13 +567,6 @@ const SYNCED: &str =
 const SYNCED_KEY: &str =
     "CREATE UNIQUE INDEX synced_primaryKey ON SyncedPayload(image, payloadKey)";
 
-fn from_unique_index(f: &Fixture) -> MirrorOptions {
-    MirrorOptions {
-        key_from_unique_index: true,
-        ..f.options()
-    }
-}
-
 #[tokio::test]
 async fn a_unique_index_makes_a_deletion_one_removal_not_a_run_of_modifications() -> Result<()> {
     // A table the source leaves keyless is diffed by position, so one row
@@ -585,11 +578,11 @@ async fn a_unique_index_makes_a_deletion_one_removal_not_a_run_of_modifications(
         "INSERT INTO SyncedPayload VALUES (1,'a','x'),(2,'a','y'),(3,'a','z'),(4,'a','w')",
     ])
     .await?;
-    f.ingest_with(from_unique_index(&f)).await?;
+    f.ingest().await?;
 
     f.edit_catalog(&["DELETE FROM SyncedPayload WHERE image = 2"])
         .await?;
-    let (_, commit) = f.ingest_with(from_unique_index(&f)).await?;
+    let (_, commit) = f.ingest().await?;
     let commit = commit.expect("a removed row changes stored bytes");
 
     let pool = f.mirror_pool().await?;
@@ -606,23 +599,6 @@ async fn a_unique_index_makes_a_deletion_one_removal_not_a_run_of_modifications(
 }
 
 #[tokio::test]
-async fn a_unique_index_is_not_used_unless_asked_for() -> Result<()> {
-    let f = Fixture::new();
-    f.edit_catalog(&[
-        SYNCED,
-        SYNCED_KEY,
-        "INSERT INTO SyncedPayload VALUES (1,'a','x')",
-    ])
-    .await?;
-    f.ingest().await?;
-
-    let pool = f.mirror_pool().await?;
-    assert!(mirror_pk(&pool, "SyncedPayload").await.is_empty());
-    pool.close().await;
-    Ok(())
-}
-
-#[tokio::test]
 async fn a_unique_index_with_a_null_is_not_a_key() -> Result<()> {
     // A UNIQUE index lets NULLs repeat; a primary key does not, and a
     // table that cannot be keyed must be mirrored, not fail the run.
@@ -633,7 +609,7 @@ async fn a_unique_index_with_a_null_is_not_a_key() -> Result<()> {
         "INSERT INTO SyncedPayload VALUES (1,'a','x'),(2,NULL,'y'),(3,NULL,'z')",
     ])
     .await?;
-    f.ingest_with(from_unique_index(&f)).await?;
+    f.ingest().await?;
 
     let pool = f.mirror_pool().await?;
     assert!(mirror_pk(&pool, "SyncedPayload").await.is_empty());
@@ -641,6 +617,26 @@ async fn a_unique_index_with_a_null_is_not_a_key() -> Result<()> {
         scalar_i64(&pool, "SELECT COUNT(*) FROM SyncedPayload").await,
         3
     );
+    pool.close().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn several_unique_indexes_with_no_key_name_leave_the_table_keyless() -> Result<()> {
+    // A UNIQUE index is a constraint, not an identity: with two and no
+    // way to tell which one is the row's key, the mirror does not choose.
+    let f = Fixture::new();
+    f.edit_catalog(&[
+        SYNCED,
+        "CREATE UNIQUE INDEX by_data ON SyncedPayload(payloadData)",
+        "CREATE UNIQUE INDEX by_pair ON SyncedPayload(image, payloadKey)",
+        "INSERT INTO SyncedPayload VALUES (1,'a','x'),(2,'a','y')",
+    ])
+    .await?;
+    f.ingest().await?;
+
+    let pool = f.mirror_pool().await?;
+    assert!(mirror_pk(&pool, "SyncedPayload").await.is_empty());
     pool.close().await;
     Ok(())
 }
@@ -654,7 +650,7 @@ async fn a_partial_unique_index_is_not_a_key() -> Result<()> {
         "INSERT INTO SyncedPayload VALUES (1,'a','x'),(1,'b','y')",
     ])
     .await?;
-    f.ingest_with(from_unique_index(&f)).await?;
+    f.ingest().await?;
 
     let pool = f.mirror_pool().await?;
     assert!(mirror_pk(&pool, "SyncedPayload").await.is_empty());

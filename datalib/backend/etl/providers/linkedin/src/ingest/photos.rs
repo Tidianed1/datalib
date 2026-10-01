@@ -73,10 +73,7 @@ pub async fn fetch_connection_photos(
     // The connections table may be absent (user excluded it) — nothing
     // to do. load_payloads errors on a missing table, so treat that as
     // empty.
-    let connections = db
-        .load_payloads(datalib_etl::pin::Reads::Own, "connections")
-        .await
-        .unwrap_or_default();
+    let connections = db.load_payloads("connections").await.unwrap_or_default();
     if connections.is_empty() {
         return Ok(PhotoSummary::default());
     }
@@ -177,10 +174,7 @@ pub struct PhotoBlob {
     pub content_type: Option<String>,
 }
 
-pub async fn load_photo_blobs(
-    db: &RawDb,
-    reads: datalib_etl::pin::Reads<'_>,
-) -> Result<std::collections::HashMap<String, PhotoBlob>> {
+pub async fn load_photo_blobs(db: &RawDb) -> Result<std::collections::HashMap<String, PhotoBlob>> {
     let pool = db.pool();
     let table_exists: Option<String> =
         sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
@@ -195,10 +189,10 @@ pub async fn load_photo_blobs(
 
     // owner_id → blake3 for the rows that actually have bytes.
     // Audited: the only interpolation is a table name the caller chose --
-    // a literal, or that literal behind `pinned_`.
+    // a literal.
     let edges = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT id, owner_id, blake3 FROM {} WHERE blake3 IS NOT NULL",
-        reads.table(CONTACT_PHOTOS_TABLE)
+        CONTACT_PHOTOS_TABLE
     )))
     .fetch_all(pool)
     .await

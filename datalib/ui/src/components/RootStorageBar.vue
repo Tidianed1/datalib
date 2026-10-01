@@ -141,6 +141,8 @@ onBeforeUnmount(() => unsubscribe?.());
   gap: 2px;
 }
 .root-bar-path {
+  font-family: var(--datalib-mono);
+  font-size: var(--datalib-font-size-small);
   margin-right: 4px;
   flex: 0 1 auto;
   min-width: 0;
@@ -158,7 +160,7 @@ onBeforeUnmount(() => unsubscribe?.());
   display: inline-flex;
   padding: 2px;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
   background: none;
   color: inherit;
   cursor: pointer;

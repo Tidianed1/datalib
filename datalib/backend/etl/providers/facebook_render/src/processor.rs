@@ -102,7 +102,7 @@ pub struct Outcome {
 /// The bundle key `render_all` looks a chat's blobs up under.
 const MEDIA_PROJECTION: &str = "SELECT DISTINCT uri AS ref_id, blake3, \
             NULL AS content_type, uri AS upstream_name \
-     FROM pinned_media_blobs \
+     FROM media_blobs \
      WHERE uri IN ({placeholders}) AND blake3 IS NOT NULL";
 
 const ALL_TABLES: &[&str] = &[
@@ -154,13 +154,9 @@ pub fn render_source(
             // "no rows", not a failed render.
             let mut tables: HashMap<&str, Vec<(String, Value)>> = HashMap::new();
             for table in ALL_TABLES {
-                let rows = datalib_etl::doltlite_raw::load_payloads_with_id(
-                    db.pool(),
-                    datalib_etl::pin::Reads::At(&pin),
-                    table,
-                )
-                .await
-                .unwrap_or_default();
+                let rows = datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), table)
+                    .await
+                    .unwrap_or_default();
                 tables.insert(table, rows);
             }
             let changed = changed_rows(db.pool(), range, &pin, ALL_TABLES).await?;

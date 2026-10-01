@@ -10,6 +10,9 @@ import { installTelemetry } from "./telemetry";
 // root, and for the menus the grid appends to <body> from those that
 // are — a card imports it a second time, inline, for its own root.
 import "@slickgrid-universal/common/dist/styles/css/slickgrid-theme-default.css";
+import "./theme.css";
+// Sets <html data-density> before the first paint.
+import "./density";
 
 function applyThemeMode(mode: "light" | "dark") {
   document.documentElement.dataset.theme = mode;

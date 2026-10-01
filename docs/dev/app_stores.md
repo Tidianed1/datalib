@@ -22,7 +22,10 @@
                                                   row in `processes`
                                                   (plain SQLite; any sqlite3 opens it).
                                                   Its own directory, so the journal beside
-                                                  it counts with it on the Manage screen
+                                                  it counts with it on the Manage screen,
+                                                  as does each `runs.bak_<stamp>.sqlite`: the
+                                                  old file, copied aside when a new build
+                                                  or a torn file made it start over
 <data_root>/system/supervisor.sqlite              requests (every sync anyone asked for,
                                                   and how it ended) and steps turned off: the
                                                   mailbox the loop reads; and the loop's

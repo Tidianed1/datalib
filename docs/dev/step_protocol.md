@@ -131,21 +131,45 @@ lost. Parseable lines let you drive live progress in the runner and
 the Manage screen:
 
 ```json
-{"event":"metric","step":"me","name":"rows_upserted","labels":{"table":"messages"},"value":1234}
+{"event":"metric","step":"me","name":"rows_upserted_total","labels":{"table":"messages"},"value":1234}
 {"event":"metric","step":"me","name":"queued","value":17}
 {"event":"progress_message","step":"me","msg":"fetching page 3"}
 {"event":"log","step":"me","level":"info","msg":"hello","target":"me::fetch","fields":{"page":3}}
 ```
 
 **`metric` is a current value, never a delta.** Name the thing counted
-(`rows_upserted`, `api_requests`, `bytes_fetched`) and send the total so
-far each time it moves; `labels` is optional and splits one name into
-series (`table=messages`). A value that goes down is simply a gauge, and
-the one gauge the UI looks for is **`queued`** — how much work is ahead
+and send the total so far each time it moves; `labels` is optional and
+splits one name into series (`table=messages`).
+
+**Name a series the way Prometheus would**, because `GET /metrics`
+serves it under that name (`docs/dev/logging.md` §"From outside the
+app") and reads its type off it:
+
+- A running total that only grows ends in **`_total`** and is served as
+  a counter: `rows_upserted_total`, `api_requests_total`. It may start
+  again from zero next run; a reader of a counter expects that. One
+  that goes down within a run is a gauge under a counter's name, and
+  the runner says so with a warning in your log.
+- A count of what the last pass did, which the next pass replaces, is
+  a gauge named for it: `last_pass_rows_inserted`.
+- Anything that can go down does not, and is served as a gauge:
+  `queued`, `items`.
+- A unit goes before that suffix, in base units: `fetched_bytes_total`,
+  `wait_seconds_total`.
+- Lower case, `_` between words, and a label for what varies
+  (`{table=…}`) rather than a name per value.
+
+The one gauge the UI looks for is **`queued`** — how much work is ahead
 of you right now, which you usually know even when you cannot know the
-total. Absolute values are what make the runner's coalescing lossless:
-it keeps the newest value per series, and a dropped position costs
-nothing where a dropped increment would be lost work.
+total. The Manage screen's Queue column shows it. Its ETA is the queue
+over the pace work has come off it lately: read off `done_total` when you
+use the `progress_*` form below, otherwise off the falls in your
+`queued`. Every series you report is charted over the run on the
+group's sync dashboard. You need not send a last `queued` of zero: when you end, however
+you end, the runner sets it to zero for you. Absolute values are what
+make the runner's coalescing lossless: it keeps the newest value per
+series, and a dropped position costs nothing where a dropped increment
+would be lost work.
 
 Three names are read by name rather than just drawn. **`items`** is
 how many things your output store holds — messages, readings, events;
@@ -163,7 +187,7 @@ tree; nothing else makes the reporter and the screen agree on the
 spelling.
 
 A step that counts one thing and knows its total may use the shorter
-form instead, which the runner translates into the `done` and `queued`
+form instead, which the runner translates into the `done_total` and `queued`
 metrics for it:
 
 ```json

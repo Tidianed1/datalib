@@ -171,7 +171,7 @@ async fn read(args: &Args) -> Result<Value> {
     let mut samples: Vec<Value> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
     for _ in 0..args.num("samples", 12) {
-        match sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM pinned_entities")
+        match sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM entities")
             .fetch_one(pool)
             .await
         {
@@ -193,8 +193,7 @@ async fn read(args: &Args) -> Result<Value> {
 }
 
 /// What `grid_index` does to a render store on every streaming pass, in a
-/// loop: open read-only, pin HEAD, install the views, diff, read through the
-/// views, close. Every step is a read, so none of it should cost a writer
+/// loop: open read-only at HEAD, diff, read, close. Every step is a read, so none of it should cost a writer
 /// anything -- this is the role that finds out. `--dolt-status` adds a
 /// `SELECT * FROM dolt_status` to every round.
 async fn churn(args: &Args) -> Result<Value> {
@@ -289,7 +288,7 @@ async fn history(args: &Args) -> Result<Value> {
 async fn one_pinned_pass(reader: &doltlite_raw::Reader, cursor: Option<&str>) -> Result<String> {
     let pool = reader.pool();
     let pin = reader.pin();
-    let _rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pinned_entities")
+    let _rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM entities")
         .fetch_one(pool)
         .await?;
     let _changed: i64 = sqlx::query_scalar(

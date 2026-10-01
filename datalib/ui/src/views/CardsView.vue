@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // Routed view for the card surface. Owns the chrome the layouts
 // share — the status bar along the bottom: the data root and its
-// size, the log, then the dev and layout toggles flush right — and
+// size, the log, then the density, layout and dev toggles flush
+// right — and
 // keeps each layout host alive across toggles (v-show, not v-if) so
 // switching back doesn't lose its cards. A grid card carries its own
 // row count. Which layout is showing is remembered in this browser.
@@ -12,6 +13,7 @@ import TilingView from "@/views/TilingView.vue";
 import TabsView from "@/views/TabsView.vue";
 import RootStorageBar from "@/components/RootStorageBar.vue";
 import { devMode } from "@/devMode";
+import { density, DENSITIES } from "@/density";
 import { LOG_CARD, surface, type SurfaceCommands } from "@/surface";
 
 const LAYOUTS = ["columns", "tabs", "tree", "tiling"] as const;
@@ -105,6 +107,48 @@ onBeforeUnmount(() => {
       >
         Logs
       </button>
+      <div class="cards-toggle cards-density-toggle" role="group" aria-label="density">
+        <button
+          v-for="d in DENSITIES"
+          :key="d"
+          :class="{ 'is-active': density === d }"
+          :aria-pressed="density === d"
+          :title="d === 'compact' ? 'fit more on screen' : 'larger text and more room'"
+          @click="density = d"
+        >
+          {{ d === "compact" ? "Compact" : "Comfortable" }}
+        </button>
+      </div>
+      <div class="cards-toggle" role="group" aria-label="card layout">
+        <button
+          :class="{ 'is-active': layout === 'columns' }"
+          title="miller columns (synced to the URL)"
+          @click="setLayout('columns')"
+        >
+          Columns
+        </button>
+        <button
+          :class="{ 'is-active': layout === 'tabs' }"
+          title="one card at a time, with a tree of every open card beside it, each under the card that opened it (kept in this browser)"
+          @click="setLayout('tabs')"
+        >
+          Tabs
+        </button>
+        <button
+          :class="{ 'is-active': layout === 'tree' }"
+          title="2D tree (in-memory only, not in the URL)"
+          @click="setLayout('tree')"
+        >
+          Tree
+        </button>
+        <button
+          :class="{ 'is-active': layout === 'tiling' }"
+          title="tiling window manager (in-memory only, not in the URL)"
+          @click="setLayout('tiling')"
+        >
+          Tiling
+        </button>
+      </div>
       <button
         class="cards-dev-toggle"
         :class="{ 'is-active': devMode }"
@@ -112,38 +156,8 @@ onBeforeUnmount(() => {
         title="dev mode: show and edit each card's source"
         @click="devMode = !devMode"
       >
-        dev
+        Dev
       </button>
-      <div class="cards-layout-toggle" role="group" aria-label="card layout">
-        <button
-          :class="{ 'is-active': layout === 'columns' }"
-          title="miller columns (synced to the URL)"
-          @click="setLayout('columns')"
-        >
-          columns
-        </button>
-        <button
-          :class="{ 'is-active': layout === 'tabs' }"
-          title="one card at a time, with a tree of every open card beside it, each under the card that opened it (kept in this browser)"
-          @click="setLayout('tabs')"
-        >
-          tabs
-        </button>
-        <button
-          :class="{ 'is-active': layout === 'tree' }"
-          title="2D tree (in-memory only, not in the URL)"
-          @click="setLayout('tree')"
-        >
-          tree
-        </button>
-        <button
-          :class="{ 'is-active': layout === 'tiling' }"
-          title="tiling window manager (in-memory only, not in the URL)"
-          @click="setLayout('tiling')"
-        >
-          tiling
-        </button>
-      </div>
     </div>
   </div>
 </template>
@@ -154,85 +168,74 @@ onBeforeUnmount(() => {
   flex-direction: column;
   /* Fill whatever the shell's flex layout gives us (everything below
      the header); basis 0 + min-height 0 so intrinsic content height
-     can't stretch the page. Negative margins bleed over the shell's
-     1rem padding on the right and bottom so the status bar sits
-     flush with the viewport bottom; the shell's left padding stays
-     as a gutter. */
+     can't stretch the page. */
   flex: 1 1 0;
   min-height: 0;
-  margin: 0 -1rem -1rem 0;
 }
 .cards-statusbar {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  /* Bleed over the shell's left padding: the cards keep their gutter,
-     but the status bar spans the full viewport width. */
-  margin-left: -1rem;
-  padding: 0.25rem 1rem;
+  gap: 10px;
+  height: var(--datalib-statusbar-h);
+  box-sizing: border-box;
+  padding: 0 10px;
   border-top: 1px solid var(--datalib-border);
-  background: var(--datalib-card-bg);
-  font-size: 12px;
-  min-height: 1.5rem;
+  background: var(--datalib-sidebar);
+  color: var(--datalib-muted);
+  font-size: var(--datalib-font-size-small);
 }
-.cards-logs {
-  flex: 0 0 auto;
-  border: 1px solid var(--datalib-border);
-  border-radius: 4px;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  font-size: 12px;
-  padding: 0.1rem 0.5rem;
-}
-.cards-logs:hover {
-  background: var(--datalib-hover);
-}
-/* The dev + layout toggles sit flush right as a cluster — the dev
-   button carries the auto margin. */
+.cards-logs,
 .cards-dev-toggle {
   flex: 0 0 auto;
-  margin-left: auto;
+  height: calc(var(--datalib-control-h) - 6px);
   border: 1px solid var(--datalib-border);
-  border-radius: 4px;
-  background: transparent;
-  color: inherit;
+  border-radius: var(--datalib-radius);
+  background: var(--datalib-surface);
+  color: var(--datalib-fg);
   cursor: pointer;
-  font-size: 12px;
-  padding: 0.1rem 0.5rem;
+  font: inherit;
+  padding: 0 8px;
 }
+.cards-logs:hover,
 .cards-dev-toggle:hover {
   background: var(--datalib-hover);
 }
 .cards-dev-toggle.is-active {
   background: var(--datalib-accent);
-  color: var(--datalib-bg);
+  border-color: var(--datalib-accent);
+  color: var(--datalib-on-accent);
 }
-.cards-layout-toggle {
+/* The toggles sit flush right as a cluster — the first one carries the
+   auto margin. */
+.cards-density-toggle {
+  margin-left: auto;
+}
+.cards-toggle {
   /* Always claim full intrinsic width (never shrink). */
   flex: 0 0 auto;
   display: flex;
   border: 1px solid var(--datalib-border);
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
   overflow: hidden;
 }
-.cards-layout-toggle button {
+.cards-toggle button {
+  height: calc(var(--datalib-control-h) - 8px);
   border: none;
-  background: transparent;
-  color: inherit;
+  background: var(--datalib-surface);
+  color: var(--datalib-fg);
   cursor: pointer;
-  font-size: 12px;
-  padding: 0.1rem 0.5rem;
+  font: inherit;
+  padding: 0 8px;
 }
-.cards-layout-toggle button + button {
+.cards-toggle button + button {
   border-left: 1px solid var(--datalib-border);
 }
-.cards-layout-toggle button:hover {
+.cards-toggle button:hover {
   background: var(--datalib-hover);
 }
-.cards-layout-toggle button.is-active {
-  background: var(--datalib-accent);
-  color: var(--datalib-bg);
+.cards-toggle button.is-active {
+  background: var(--datalib-fg);
+  color: var(--datalib-surface);
 }
 </style>
