@@ -71,8 +71,7 @@ pub enum KeyOrigin {
     /// An explicit `primary_keys` config override.
     Override,
     /// The table's only UNIQUE index, for a table that declares no key,
-    /// which this run checked holds no NULLs. This is the Lightroom
-    /// `index_<Table>_primaryKey` case.
+    /// which this run checked holds no NULLs.
     UniqueIndex,
     /// No key: the source had none and no stable candidate matched.
     Keyless,

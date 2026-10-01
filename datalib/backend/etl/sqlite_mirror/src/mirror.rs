@@ -390,9 +390,8 @@ pub struct KeyCandidates {
 
 /// The table's only UNIQUE index, for a table that declares no key, when
 /// no row holds a NULL in it: a UNIQUE index lets NULLs repeat and a key
-/// does not. Lightroom's cloud-sync tables and Messages' join tables
-/// declare their keys this way. With several UNIQUE indexes none of them
-/// is more the key than another, so the table stays keyless.
+/// does not. With several UNIQUE indexes none of them is more the key
+/// than another, so the table stays keyless.
 async fn sole_index_key(
     conn: &mut SqliteConnection,
     table: &str,
