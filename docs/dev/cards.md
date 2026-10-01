@@ -297,20 +297,22 @@ Each container lays out its own children: tabs, a stack, a row, or
 miller columns. The outermost container is always tabs, drawn as the
 sidebar tree.
 
-A container can be **solidified**. When a card opens another card
-(`openCards`), the new card lands in the nearest container above the
-opener that is not solidified, and that container's layout decides
-where: columns drop what was right of the opener, tabs add a tab under
-the opener's, a stack or row inserts beside it. **Solidify all** on a
-container counts it and everything inside it as solidified, whatever
-their own flags say. The outermost container is never solidified, so an
-open always lands somewhere.
+A container can be **solidified**, which holds for everything inside
+it too. When a card opens another card (`openCards`), the new card
+lands in the nearest container above the opener that is not
+solidified, and that container's layout decides where: columns drop
+what was right of the opener, tabs add a tab under the opener's, a stack
+or row inserts beside it. The outermost container is never solidified,
+so an open always lands somewhere.
 
-Solidifying decides only where opens land. Outside dev mode, a subtree
-under "solidify all" also hides its card and container headers, so a
-composite such as the Dashboard (a stack of four `dashboardView({part})`
-cards) reads as one page. Dev mode shows every container's controls,
-solidified ones included.
+Outside dev mode a solidified subtree shows no card or container chrome,
+so a composite such as the Dashboard (a stack of four
+`dashboardView({part})` cards) reads as one page. Elsewhere, and
+everywhere in dev mode, each container is a frame coloured by its
+layout, with a folder tab on its top edge that opens its menu (layout,
+Solidified, add, rename, save as composite, move, close). The frame's
+edge is dashed while cards open into it, and a thick solid line once it
+is solidified.
 
 A **composite** is a container subtree kept under a name
 (`composites.ts`): the built-in Dashboard, or one a person saved. Both

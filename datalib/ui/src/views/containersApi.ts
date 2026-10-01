@@ -3,7 +3,7 @@
 // keep the host and the recursive component from importing each other.
 import type { InjectionKey } from "vue";
 import type { CardCtx } from "@/cards/types";
-import type { BoxNode, CardNode, Layout, TreeNode } from "./containerTree";
+import type { BoxNode, CardNode, TreeNode } from "./containerTree";
 
 export type MenuItem = { label: string; run: () => void; checked?: boolean } | "separator";
 
@@ -15,15 +15,12 @@ export type ContainersApi = {
   // rearranging containers moves a card without remounting it.
   setSlot(id: string, el: Element | null): void;
   // Whether a card or container shows its chrome: always in dev mode,
-  // and otherwise only outside a "solidify all" subtree.
+  // and otherwise only outside a solidified subtree.
   chromeShown(id: string): boolean;
   isSolidified(id: string): boolean;
   select(id: string): void;
   close(id: string): void;
   commitSource(card: CardNode, e: Event): void;
-  setLayout(id: string, layout: Layout): void;
-  toggleFlag(box: BoxNode, flag: "solidified" | "solidifyAll"): void;
-  addCard(boxId: string): void;
   openMenu(ev: MouseEvent, items: MenuItem[]): void;
   boxMenu(box: BoxNode): MenuItem[];
   cardMenu(card: CardNode): MenuItem[];

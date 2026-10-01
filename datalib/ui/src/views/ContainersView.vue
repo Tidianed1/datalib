@@ -54,11 +54,10 @@ import {
   reveal,
   setBasis,
   setCard,
-  setFlag,
   setLayout as setBoxLayout,
+  setSolidified,
   setTemplate,
   tabRows,
-  underSolidifyAll,
   unwrap,
   wrap,
   type BoxNode,
@@ -93,7 +92,7 @@ function dashboard(): TreeNode {
 // The outermost container is always tabs, never solidified, and never
 // empty: a tree left with no tabs gets the Dashboard back.
 function settle(box: BoxNode): BoxNode {
-  const fixed: BoxNode = { ...box, layout: "tabs", solidified: false, solidifyAll: false };
+  const fixed: BoxNode = { ...box, layout: "tabs", solidified: false };
   if (fixed.children.length === 0) {
     const fresh = dashboard();
     return { ...fixed, children: [fresh], selected: fresh.id };
@@ -289,8 +288,8 @@ function setLayout(id: string, layout: Layout) {
   update(setBoxLayout(root.value, id, layout));
 }
 
-function toggleFlag(box: BoxNode, flag: "solidified" | "solidifyAll") {
-  update(setFlag(root.value, box.id, flag, !box[flag]));
+function toggleSolidified(box: BoxNode) {
+  update(setSolidified(root.value, box.id, !box.solidified));
 }
 
 function addCard(boxId: string) {
@@ -406,12 +405,12 @@ function boxMenu(box: BoxNode): MenuItem[] {
   if (box.id === root.value.id) return items;
   items.push(
     "separator",
-    { label: "Solidified", checked: box.solidified, run: () => toggleFlag(box, "solidified") },
-    {
-      label: "Solidify all",
-      checked: box.solidifyAll,
-      run: () => toggleFlag(box, "solidifyAll"),
-    },
+    ...LAYOUTS.map((layout) => ({
+      label: `Layout: ${LAYOUT_LABELS[layout]}`,
+      checked: box.layout === layout,
+      run: () => setLayout(box.id, layout),
+    })),
+    { label: "Solidified", checked: box.solidified, run: () => toggleSolidified(box) },
     "separator",
     { label: "Rename…", run: () => void renameNode(box) },
     { label: "Save as composite…", run: () => void saveAsComposite(box) },
@@ -509,14 +508,11 @@ const api: ContainersApi = {
   ctxFor,
   titleOf,
   setSlot,
-  chromeShown: (id) => devMode.value || !underSolidifyAll(root.value, id),
+  chromeShown: (id) => devMode.value || !isSolidified(root.value, id),
   isSolidified: (id) => isSolidified(root.value, id),
   select,
   close,
   commitSource,
-  setLayout,
-  toggleFlag,
-  addCard,
   openMenu,
   boxMenu,
   cardMenu,
@@ -548,7 +544,7 @@ provide(CONTAINERS_API, api);
             <path
               fill="currentColor"
               d="M4 4h7v7H4zm9 0h7v7h-7zM4 13h7v7H4zm9 0h7v7h-7z"
-              :opacity="row.node.solidifyAll ? 1 : 0.55"
+              :opacity="row.node.solidified ? 1 : 0.55"
             />
           </svg>
           <span class="ct-tab-label">{{ titleOf(row.node) }}</span>

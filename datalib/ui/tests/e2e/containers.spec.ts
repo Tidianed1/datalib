@@ -1,9 +1,9 @@
 import { test, expect, type Page } from "@playwright/test";
 
 // The containers layout: tabs down the side, each holding cards or
-// containers. The Dashboard is a composite of four cards with "solidify
-// all" on, so it looks like one page and a card opened from it gets a
-// tab of its own; with that off, the card lands inside it instead. The
+// containers. The Dashboard is a solidified composite of four cards, so
+// it looks like one page and a card opened from it gets a tab of its
+// own; unsolidified, the card lands inside it instead. The
 // tree is kept in the library, so these share one saved layout and run
 // in order, each starting from a cleared one.
 
@@ -59,16 +59,16 @@ test("a card opened from the Dashboard gets a tab of its own", async ({ page }) 
   await expect(mainCards(page)).toHaveCount(4);
 });
 
-test("in dev mode, turning off solidify all opens the card inside the Dashboard", async ({
-  page,
-}) => {
+test("in dev mode, unsolidifying the Dashboard opens the card inside it", async ({ page }) => {
   await page.goto("/");
   await expect(mainCards(page)).toHaveCount(4);
+  await expect(page.locator(".ct-foldertab")).toHaveCount(0);
   await page.getByRole("button", { name: "Dev", exact: true }).click();
-  // Dev mode shows the solidified container's controls.
-  const solidifyAll = page.locator(".ct-box-head").getByLabel("Solidify all");
-  await expect(solidifyAll).toBeChecked();
-  await solidifyAll.uncheck();
+  // Dev mode shows the solidified container, and its menu turns that off.
+  await page.locator(".ct-foldertab").click();
+  const solidified = page.getByRole("menuitemcheckbox", { name: "Solidified" });
+  await expect(solidified).toHaveAttribute("aria-checked", "true");
+  await solidified.click();
 
   await page.getByRole("button", { name: "Open Sources" }).click();
   await expect(mainCards(page)).toHaveCount(5);

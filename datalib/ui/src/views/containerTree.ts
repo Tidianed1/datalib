@@ -1,10 +1,11 @@
 // The containers layout as a value: a tree of containers whose leaves
 // are cards. Every container lays out its own children (tabs, a stack,
 // a row, miller columns), and any container but the outermost can be
-// solidified. A card opened from a card lands in the nearest container
-// above the opener that is not solidified, so a solidified subtree keeps its
-// shape and an unsolidified one grows. The decisions are pure functions
-// here; ContainersView applies them.
+// solidified, which holds for everything inside it too. A card opened
+// from a card lands in the nearest container above the opener that is
+// not solidified, so a solidified subtree keeps its shape and an
+// unsolidified one grows. The decisions are pure functions here;
+// ContainersView applies them.
 
 export const LAYOUTS = ["tabs", "stack", "row", "columns"] as const;
 export type Layout = (typeof LAYOUTS)[number];
@@ -41,11 +42,11 @@ export type CardNode = Common & {
 export type BoxNode = Common & {
   kind: "box";
   layout: Layout;
-  // Opens from inside skip this container.
+  // This container and everything inside it keep their shape: a card
+  // opened from inside lands further out, and outside dev mode none of
+  // it shows chrome. A flag set further in counts again once this one
+  // is turned off.
   solidified: boolean;
-  // This container and everything inside it count as solidified, whatever
-  // their own flags say; turning it off brings those flags back.
-  solidifyAll: boolean;
   children: TreeNode[];
   // The child a tabs container shows.
   selected: string | null;
@@ -76,7 +77,7 @@ export function makeBox(
   id: string,
   layout: Layout,
   children: TreeNode[],
-  opts: Partial<Pick<BoxNode, "solidified" | "solidifyAll" | "name" | "template" | "basis">> = {},
+  opts: Partial<Pick<BoxNode, "solidified" | "name" | "template" | "basis">> = {},
 ): BoxNode {
   return {
     kind: "box",
@@ -84,7 +85,6 @@ export function makeBox(
     layout,
     children,
     solidified: opts.solidified ?? false,
-    solidifyAll: opts.solidifyAll ?? false,
     selected: layout === "tabs" ? (children[0]?.id ?? null) : null,
     name: opts.name ?? null,
     template: opts.template ?? null,
@@ -122,24 +122,17 @@ export function cards(root: TreeNode): CardNode[] {
   return root.kind === "card" ? [root] : root.children.flatMap(cards);
 }
 
-// Whether the box at path[k] counts as solidified. The outermost container
-// never does, so an open always has somewhere to land.
+// Whether path[k] counts as solidified: it or a container above it is.
+// The outermost container never is, so an open always has somewhere to
+// land.
 function solidifiedAt(path: TreeNode[], k: number): boolean {
-  if (k === 0) return false;
-  const box = path[k] as BoxNode;
-  return box.solidified || path.slice(0, k + 1).some((n) => n.kind === "box" && n.solidifyAll);
+  return path.slice(1, k + 1).some((n) => n.kind === "box" && n.solidified);
 }
 
+// Whether node `id`, a card or a container, sits in a solidified subtree.
 export function isSolidified(root: TreeNode, id: string): boolean {
   const path = pathTo(root, id);
-  const k = path.length - 1;
-  return k >= 0 && path[k].kind === "box" && solidifiedAt(path, k);
-}
-
-// Whether `id` or a container above it has "solidify all" set: such a
-// node looks finished, with no card or container chrome, outside dev mode.
-export function underSolidifyAll(root: TreeNode, id: string): boolean {
-  return pathTo(root, id).some((n) => n.kind === "box" && n.solidifyAll);
+  return path.length > 0 && solidifiedAt(path, path.length - 1);
 }
 
 // Where a card opened from `fromId` goes: the nearest container above
@@ -299,15 +292,10 @@ export function setLayout(root: TreeNode, id: string, layout: Layout): TreeNode 
   }));
 }
 
-// Set `solidified` or `solidifyAll`. The outermost container is never solidified.
-export function setFlag(
-  root: TreeNode,
-  id: string,
-  flag: "solidified" | "solidifyAll",
-  value: boolean,
-): TreeNode {
+// The outermost container is never solidified.
+export function setSolidified(root: TreeNode, id: string, solidified: boolean): TreeNode {
   if (id === root.id) return root;
-  return mapBox(root, id, (b) => ({ ...b, [flag]: value }));
+  return mapBox(root, id, (b) => ({ ...b, solidified }));
 }
 
 export function rename(root: TreeNode, id: string, name: string | null): TreeNode {
@@ -435,7 +423,6 @@ function readNode(v: unknown): TreeNode | null {
     layout,
     children: kids,
     solidified: n.solidified === true,
-    solidifyAll: n.solidifyAll === true,
     selected: kids.some((c) => c.id === selected) ? selected : (kids[0]?.id ?? null),
     name: str(n.name),
     template: str(n.template),

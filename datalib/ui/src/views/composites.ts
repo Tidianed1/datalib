@@ -16,8 +16,8 @@ const PART_BASIS: Record<string, number | null> = {
   activity: null,
 };
 
-// The Dashboard as four stacked cards, solidified all the way down: a
-// card opened from it gets a tab of its own.
+// The Dashboard as four stacked cards, solidified: a card opened from
+// it gets a tab of its own.
 const DASHBOARD: BoxNode = makeBox(
   "dashboard",
   "stack",
@@ -25,7 +25,7 @@ const DASHBOARD: BoxNode = makeBox(
     ...makeCard(`dashboard-${part}`, `dashboardView(${JSON.stringify({ part })})`),
     basis: PART_BASIS[part],
   })),
-  { solidifyAll: true, name: "Dashboard", template: "Dashboard" },
+  { solidified: true, name: "Dashboard", template: "Dashboard" },
 );
 
 export const BUILTIN_COMPOSITES: Record<string, BoxNode> = { Dashboard: DASHBOARD };

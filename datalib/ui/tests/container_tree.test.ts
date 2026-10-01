@@ -11,20 +11,19 @@ import {
   remove,
   rename,
   setCard,
-  setFlag,
+  setSolidified,
   tabRows,
-  underSolidifyAll,
   unwrap,
   wrap,
   type BoxNode,
   type TreeNode,
 } from "@/views/containerTree";
 
-// The tabs root, holding a Dashboard-like composite (solidify all) and
-// a sandbox of columns that itself holds a solidified composite.
+// The tabs root, holding a Dashboard-like solidified composite and a
+// sandbox of columns that itself holds a solidified stack.
 function fixture(): BoxNode {
   const dash = makeBox("dash", "stack", [makeCard("d1", "a()"), makeCard("d2", "b()")], {
-    solidifyAll: true,
+    solidified: true,
   });
   const inner = makeBox("inner", "stack", [makeCard("i1", "c()")], { solidified: true });
   const sandbox = makeBox("sandbox", "columns", [
@@ -63,21 +62,21 @@ describe("where an opened card lands", () => {
 });
 
 describe("solidifying", () => {
-  it("solidify all covers the container and everything in it, and gives the flags back when off", () => {
+  it("covers the container and everything in it, and a flag further in counts again once it is off", () => {
     let root: TreeNode = fixture();
     expect(isSolidified(root, "sandbox")).toBe(false);
-    root = setFlag(root, "sandbox", "solidifyAll", true);
-    expect(isSolidified(root, "sandbox")).toBe(true);
-    expect(underSolidifyAll(root, "s1")).toBe(true);
+    expect(isSolidified(root, "i1")).toBe(true);
+    root = setSolidified(root, "sandbox", true);
+    expect(isSolidified(root, "s1")).toBe(true);
     // Nothing inside takes an open now: it goes out to the root's tabs.
     expect(landing(root, "s1")).toEqual({ boxId: "root", branchId: "sandbox" });
-    root = setFlag(root, "sandbox", "solidifyAll", false);
+    root = setSolidified(root, "sandbox", false);
     expect(isSolidified(root, "inner")).toBe(true);
-    expect(isSolidified(root, "sandbox")).toBe(false);
+    expect(isSolidified(root, "s1")).toBe(false);
   });
 
   it("never solidifies the outermost container, so an open always lands", () => {
-    const root = setFlag(fixture(), "root", "solidifyAll", true);
+    const root = setSolidified(fixture(), "root", true);
     expect(isSolidified(root, "root")).toBe(false);
     expect(landing(root, "d1")?.boxId).toBe("root");
   });

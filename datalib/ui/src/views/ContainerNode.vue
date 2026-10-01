@@ -7,17 +7,19 @@ import { computed, inject } from "vue";
 import CardControls from "@/components/CardControls.vue";
 import { growSourceBox, vAutoGrow } from "@/components/autoGrow";
 import { devMode } from "@/devMode";
-import {
-  DEFAULT_COLUMN,
-  LAYOUTS,
-  LAYOUT_LABELS,
-  type Layout,
-  type TreeNode,
-} from "@/views/containerTree";
+import { DEFAULT_COLUMN, LAYOUT_LABELS, type Layout, type TreeNode } from "@/views/containerTree";
 import { CONTAINERS_API } from "@/views/containersApi";
 
 // `height`: the fixed height a stack gives this node. It sizes the
 // node's body, not its header, so showing chrome never squeezes a card.
+// Each layout's glyph, drawn as strokes on a 24px grid.
+const LAYOUT_ICONS: Record<Layout, string> = {
+  tabs: "M3 9h18v11H3zM3 9V5h8v4",
+  stack: "M4 3h16v7H4zM4 14h16v7H4z",
+  row: "M3 4h7v16H3zM14 4h7v16h-7z",
+  columns: "M3 4h18v16H3zM9 4v16M15 4v16",
+};
+
 const props = defineProps<{ node: TreeNode; parentLayout: Layout; height?: number | null }>();
 const api = inject(CONTAINERS_API)!;
 
@@ -29,6 +31,8 @@ const cardHead = computed(
     props.node.kind === "card" &&
     (devMode.value || (chrome.value && props.parentLayout !== "tabs")),
 );
+// A container's edge is dashed while cards open into it, and a thick
+// solid line once it is solidified (itself or from further out).
 const solid = computed(() => props.node.kind === "box" && api.isSolidified(props.node.id));
 const axis = computed(() =>
   props.node.kind === "box" && props.node.layout === "stack" ? "y" : "x",
@@ -85,48 +89,22 @@ const slotRef = (el: unknown) => api.setSlot(props.node.id, (el as Element | nul
   <div
     v-else
     class="ct-box"
-    :class="[`ct-box--${node.layout}`, { 'is-solid': solid, 'is-dev': devMode }]"
+    :class="chrome ? ['ct-frame', `ct-frame--${node.layout}`, { 'is-solid': solid }] : []"
     :data-box-id="node.id"
   >
-    <div v-if="chrome" class="ct-box-head">
-      <span class="ct-box-name">{{ api.titleOf(node) }}</span>
-      <div class="ct-seg" role="group" aria-label="container layout">
-        <button
-          v-for="l in LAYOUTS"
-          :key="l"
-          :class="{ 'is-active': node.layout === l }"
-          :aria-pressed="node.layout === l"
-          @click="api.setLayout(node.id, l)"
-        >
-          {{ LAYOUT_LABELS[l] }}
-        </button>
-      </div>
-      <label class="ct-flag" title="cards opened from inside land in the next container out">
-        <input
-          type="checkbox"
-          :checked="node.solidified"
-          @change="api.toggleFlag(node, 'solidified')"
-        />
-        Solidified
-      </label>
-      <label
-        class="ct-flag"
-        title="this container and everything inside it count as solidified, and look finished outside dev mode"
-      >
-        <input
-          type="checkbox"
-          :checked="node.solidifyAll"
-          @change="api.toggleFlag(node, 'solidifyAll')"
-        />
-        Solidify all
-      </label>
-      <span class="ct-spacer" />
-      <span v-if="solid" class="ct-badge">solidified</span>
-      <button class="ct-icon-btn" title="add a card" @click="api.addCard(node.id)">＋</button>
-      <button class="ct-icon-btn" title="more" @click="api.openMenu($event, api.boxMenu(node))">
-        ⋯
-      </button>
-    </div>
+    <button
+      v-if="chrome"
+      class="ct-foldertab"
+      :title="`${LAYOUT_LABELS[node.layout]} container: layout, solidifying and more`"
+      @click="api.openMenu($event, api.boxMenu(node))"
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path :d="LAYOUT_ICONS[node.layout]" />
+      </svg>
+      {{ LAYOUT_LABELS[node.layout] }}<template v-if="node.name"> · {{ node.name }}</template>
+      <span v-if="solid" class="ct-foldertab-state">solidified</span>
+      ▾
+    </button>
 
     <div v-if="node.layout === 'tabs'" class="ct-tabs-body" data-body :style="bodyStyle">
       <div class="ct-strip" role="tablist">
@@ -203,8 +181,7 @@ const slotRef = (el: unknown) => api.setSlot(props.node.id, (el as Element | nul
   display: flex;
   flex-direction: column;
 }
-.ct-card-head,
-.ct-box-head {
+.ct-card-head {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
@@ -214,23 +191,13 @@ const slotRef = (el: unknown) => api.setSlot(props.node.id, (el as Element | nul
   background: var(--datalib-bg);
   font-size: var(--datalib-font-size-small);
 }
-.ct-box-head {
-  background: var(--datalib-sidebar);
-}
-.ct-card-title,
-.ct-box-name {
+.ct-card-title {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 600;
-}
-.ct-box-name {
-  flex: 0 1 auto;
-}
-.ct-spacer {
-  flex: 1 1 auto;
 }
 .ct-source {
   flex: 1 1 auto;
@@ -248,53 +215,73 @@ const slotRef = (el: unknown) => api.setSlot(props.node.id, (el as Element | nul
 .ct-source:focus {
   outline: 1px solid var(--datalib-accent);
 }
+/* A container with chrome is a frame coloured by its layout, with a
+   folder tab on its top edge that opens its menu. */
+.ct-frame {
+  --ct-color: #4f5d7a;
+  --ct-edge: 2px;
+  position: relative;
+  margin: 22px 3px 3px;
+  padding: 5px;
+  border: var(--ct-edge) dashed var(--ct-color);
+  border-radius: 0 7px 7px 7px;
+}
+.ct-frame.is-solid {
+  --ct-edge: 3px;
+  border-style: solid;
+}
+.ct-frame--tabs {
+  --ct-color: #a8601c;
+}
+.ct-frame--stack {
+  --ct-color: #1d7a72;
+}
+.ct-frame--row {
+  --ct-color: #7a4fb0;
+}
+.ct-frame--columns {
+  --ct-color: #4f5d7a;
+}
+.ct-foldertab {
+  position: absolute;
+  left: calc(-1 * var(--ct-edge));
+  top: -22px;
+  max-width: calc(100% + 2 * var(--ct-edge));
+  height: 21px;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  border: none;
+  border-radius: 6px 6px 0 0;
+  background: var(--ct-color);
+  color: #fff;
+  font: inherit;
+  font-size: var(--datalib-font-size-small);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+}
+.ct-foldertab svg {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linejoin: round;
+}
+.ct-foldertab-state {
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.22);
+}
 .ct-slot {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
-}
-.ct-box {
-  border: 1px solid transparent;
-}
-/* In dev mode every container shows its edge, and a solidified one says so. */
-.ct-box.is-dev {
-  border-color: var(--datalib-border);
-}
-.ct-box.is-dev.is-solid {
-  border-style: dashed;
-  border-color: var(--datalib-accent);
-}
-.ct-badge {
-  color: var(--datalib-accent);
-  font-weight: 600;
-}
-.ct-seg {
-  display: flex;
-  border: 1px solid var(--datalib-border);
-  border-radius: var(--datalib-radius);
-  overflow: hidden;
-}
-.ct-seg button {
-  border: none;
-  background: var(--datalib-surface);
-  color: var(--datalib-fg);
-  font: inherit;
-  padding: 1px 7px;
-  cursor: pointer;
-}
-.ct-seg button + button {
-  border-left: 1px solid var(--datalib-border);
-}
-.ct-seg button.is-active {
-  background: var(--datalib-fg);
-  color: var(--datalib-surface);
-}
-.ct-flag {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  white-space: nowrap;
-  cursor: pointer;
 }
 .ct-icon-btn {
   flex: 0 0 auto;
