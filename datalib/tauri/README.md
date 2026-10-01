@@ -85,8 +85,10 @@ It lists the recent libraries (`~/.datalib/recent-roots.json`), then
 any other library in `~/Documents/Datalib`. Each shows the source
 count, size and last sync that `datalib-http` last wrote to its
 `system/library-summary.json`; one whose folder is gone stays listed as
-not found. A library outside the Datalib folder, or one whose folder
-is gone, can be forgotten: it leaves the recent list and its folder is
+not found. A folder icon at the end of each row opens the library's
+folder in Finder (`launcher_open_folder`, for a library only). A
+library outside the Datalib folder, or one whose folder is gone, can be
+forgotten, with a Forget button left of the icon: it leaves the recent list and its folder is
 left as it is. One in the Datalib folder is always listed while it is
 there, so it has no Forget.
 

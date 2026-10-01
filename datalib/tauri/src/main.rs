@@ -201,6 +201,20 @@ fn launcher_forget(app: AppHandle, path: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Open a library's folder in Finder (or the platform's file manager):
+/// the folder itself, not its parent with it selected. Only a library:
+/// the page names the path, and this must not open whatever it names.
+#[tauri::command]
+fn launcher_open_folder(app: AppHandle, path: String) -> Result<(), String> {
+    let root = PathBuf::from(&path);
+    if !launcher::is_data_root(&root) {
+        return Err(format!("{} is not a library.", root.display()));
+    }
+    app.opener()
+        .open_path(path, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
 // --- The library menu, from the app's top bar -------------------------------
 
 /// The open library and the others the menu offers.
@@ -407,6 +421,7 @@ fn main() {
             launcher_open,
             launcher_pick,
             launcher_forget,
+            launcher_open_folder,
             launcher_move_legacy,
             library_menu,
             library_switch,
