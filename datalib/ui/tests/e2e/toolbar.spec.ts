@@ -74,6 +74,31 @@ test.describe("toolbar", () => {
     expect(await copied()).toBe(await path.textContent());
   });
 
+  // The window's minimum width in the desktop shell (MIN_WINDOW_WIDTH)
+  // assumes the search box shrinks to no less than 180px, and that the
+  // crumb keeps its width rather than sliding under it.
+  test("the search box sits at the right end and shrinks with the window", async ({ page }) => {
+    await page.goto("/");
+    const box = page.locator(".command-box");
+    const crumb = page.locator(".crumb");
+    await expect(box).toBeVisible();
+    const wide = (await box.boundingBox())!;
+    expect(wide.width).toBe(440);
+    expect(1280 - (wide.x + wide.width)).toBeLessThan(16);
+
+    for (const density of ["Compact", "Comfortable"]) {
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await page.getByRole("button", { name: density }).click();
+      await page.setViewportSize({ width: 600, height: 800 });
+      const narrow = (await box.boundingBox())!;
+      const c = (await crumb.boundingBox())!;
+      expect(narrow.width).toBeLessThan(440);
+      expect(narrow.width).toBeGreaterThanOrEqual(180);
+      expect(narrow.x + narrow.width).toBeLessThanOrEqual(600);
+      expect(narrow.x).toBeGreaterThanOrEqual(c.x + c.width);
+    }
+  });
+
   test("the syncing pill is absent when nothing runs", async ({ page }) => {
     await page.goto("/");
     await expect(page.locator(".datalib-toolbar")).toBeVisible();

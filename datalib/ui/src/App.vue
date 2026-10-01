@@ -114,10 +114,8 @@ onUnmounted(() => stop?.());
         </template>
         <LibraryCrumb :config-path="config?.path ?? null" />
       </div>
-      <div class="datalib-toolbar-center"><CommandBox /></div>
-      <!-- Lightweight sync indicator in the toolbar's flexible space —
-           appearing/disappearing never shifts the page layout. -->
-      <div class="datalib-toolbar-end" data-tauri-drag-region><SyncProgressChrome /></div>
+      <div class="datalib-toolbar-sync" data-tauri-drag-region><SyncProgressChrome /></div>
+      <div class="datalib-toolbar-search"><CommandBox /></div>
     </nav>
 
     <!-- The gates had the shell's padding before the cards went
@@ -187,24 +185,25 @@ onUnmounted(() => stop?.());
   -webkit-user-select: none;
   user-select: none;
 }
-/* The search box centred on the window, whatever sits either side:
-   the two ends share the leftover width equally. */
+/* The search box at the right end. As the window narrows it is what
+   shrinks, from 440px to its min-width; the start keeps its content
+   width (the crumb caps the library name). The desktop shell's minimum
+   window width (MIN_WINDOW_WIDTH in datalib/tauri/src/main.rs) is the
+   sum, so the search box stays in view. */
 .datalib-toolbar-start {
-  flex: 1 1 0;
+  flex: 1 0 auto;
   display: flex;
   align-items: center;
   gap: 4px;
-  min-width: 0;
 }
-.datalib-toolbar-center {
+.datalib-toolbar-sync {
+  flex: 0 0 auto;
+  display: flex;
+}
+.datalib-toolbar-search {
   flex: 0 1 440px;
+  min-width: 180px;
   display: flex;
-  justify-content: center;
-}
-.datalib-toolbar-end {
-  flex: 1 1 0;
-  display: flex;
-  justify-content: flex-end;
 }
 .datalib-tool {
   display: flex;

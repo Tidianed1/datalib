@@ -1,7 +1,6 @@
 <script setup lang="ts">
 // Lightweight sync indicator for the toolbar: a pulsing dot +
-// "syncing" while any request is open, sitting in the toolbar's flexible
-// space so it never shifts the page layout. Per-row progress lives on
+// "syncing" while any request is open, just left of the search box. Per-row progress lives on
 // the sources card; this only answers "is something running?". Click
 // reveals that card; the tooltip lists the open requests and who opened
 // each.

@@ -548,11 +548,19 @@ fn launcher_page_url() -> Url {
 /// `invoke` fails with nothing on screen to say why.
 const MAIN_WINDOW: &str = "main";
 
+/// Narrow enough to tile, wide enough that the toolbar's search box keeps
+/// its min-width beside the window buttons, back/forward, the library
+/// crumb at its capped width and the sync pill, at comfortable density
+/// (`.datalib-toolbar-search` in `datalib/ui/src/App.vue`).
+const MIN_WINDOW_WIDTH: f64 = 840.0;
+const MIN_WINDOW_HEIGHT: f64 = 480.0;
+
 fn main_window(app: &AppHandle, url: WebviewUrl) -> WebviewWindowBuilder<'_, Wry, AppHandle> {
     app_window(
         WebviewWindowBuilder::new(app, MAIN_WINDOW, url)
             .title("Data Liberation")
-            .inner_size(1280.0, 800.0),
+            .inner_size(1280.0, 800.0)
+            .min_inner_size(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT),
         app,
     )
 }
@@ -700,6 +708,7 @@ fn app_window<'a>(
                 WebviewWindowBuilder::new(&new_app, &label, WebviewUrl::External(blank))
                     .title("Data Liberation")
                     .inner_size(1100.0, 760.0)
+                    .min_inner_size(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
                     .window_features(features),
                 &new_app,
             )

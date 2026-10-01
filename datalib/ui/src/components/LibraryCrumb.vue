@@ -85,12 +85,14 @@ onBeforeUnmount(() => (open.value = false));
         :aria-expanded="open"
         @click="toggle"
       >
-        {{ name }}
+        <span class="crumb-name">{{ name }}</span>
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path fill="currentColor" d="M7.41 8.59 12 13.17l4.59-4.58L18 10l-6 6-6-6z" />
         </svg>
       </button>
-      <span v-else class="crumb-lib" data-tauri-drag-region>{{ name }}</span>
+      <span v-else class="crumb-lib" data-tauri-drag-region
+        ><span class="crumb-name">{{ name }}</span></span
+      >
     </template>
     <div v-if="open" class="crumb-menu" role="menu">
       <div class="crumb-item is-current" role="menuitem" aria-disabled="true">
@@ -153,6 +155,9 @@ button.crumb-lib:hover,
   background: var(--datalib-hover);
 }
 .crumb-lib {
+  max-width: 200px;
+}
+.crumb-name {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
