@@ -14,6 +14,7 @@ use tauri::webview::{NewWindowFeatures, NewWindowResponse};
 use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindowBuilder, Wry};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri_plugin_opener::OpenerExt;
+use tauri_plugin_window_state::StateFlags;
 
 /// The spawned `datalib-http` child, managed in tauri state so the
 /// exit handler can kill it. `None` until boot succeeds.
@@ -410,6 +411,16 @@ fn main() {
         .plugin(
             tauri_plugin_opener::Builder::new()
                 .open_js_links_on_click(false)
+                .build(),
+        )
+        // The main window reopens at the size it was closed at, kept in
+        // `.window-state.json` in the app's config directory. Card
+        // windows are numbered per run, so a saved size would never
+        // match one again.
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(StateFlags::SIZE | StateFlags::MAXIMIZED)
+                .with_filter(|label| label == MAIN_WINDOW)
                 .build(),
         )
         .invoke_handler(tauri::generate_handler![
