@@ -9,7 +9,7 @@ use sqlx::Row;
 
 use datalib_etl::doltlite_raw as dr;
 use datalib_etl::progress::Progress;
-use datalib_etl_sqlite_mirror::{mirror, read_schema, MirrorOptions, MirrorStats, Snapshot};
+use datalib_etl_sqlite_mirror::{mirror, MirrorOptions, MirrorStats, UniqueIndex};
 
 /// What `lightroom`'s `skip_xmp` expands to; spelled out here so the
 /// engine's tests do not depend on a provider's config crate.
@@ -562,48 +562,92 @@ async fn stable_key_is_used_where_available_and_declared_key_elsewhere() -> Resu
     Ok(())
 }
 
+/// The table's only complete UNIQUE index, as a provider's
+/// `key_index` rule might pick it.
+fn the_only_index(indexes: &[UniqueIndex]) -> Option<&UniqueIndex> {
+    match indexes {
+        [only] => Some(only),
+        _ => None,
+    }
+}
+
+async fn mirror_key(pool: &SqlitePool, table: &str) -> Vec<String> {
+    sqlx::query_scalar("SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk")
+        .bind(table)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_else(|e| panic!("pragma_table_info({table}): {e}"))
+}
+
+/// Guards the reason `key_index` exists: keyed on its UNIQUE index, a
+/// keyless source table diffs by key, so deleting its first row is one
+/// removed row rather than every later row read as modified.
 #[tokio::test]
-async fn the_schema_reports_declared_keys_and_complete_unique_indexes() -> Result<()> {
+async fn a_keyless_table_keys_on_the_unique_index_the_rule_picks() -> Result<()> {
     let f = Fixture::new();
     f.edit_catalog(&[
-        "CREATE TABLE Synced (image INTEGER, payloadKey TEXT)",
+        "CREATE TABLE Synced (image INTEGER, payloadKey TEXT, payload TEXT)",
         "CREATE UNIQUE INDEX index_Synced_primaryKey ON Synced(image, payloadKey)",
+        // Partial: constrains some rows only, so the rule never sees it.
         "CREATE UNIQUE INDEX partial_only ON Synced(image) WHERE payloadKey = 'a'",
-        "INSERT INTO Synced VALUES (1,'a'),(2,NULL)",
-        "CREATE TABLE Clean (a INTEGER, b TEXT)",
-        "CREATE UNIQUE INDEX clean_unique ON Clean(a)",
-        "INSERT INTO Clean VALUES (1,'x')",
-        "CREATE TABLE Keyed (id INTEGER PRIMARY KEY, a INTEGER)",
-        "CREATE UNIQUE INDEX keyed_unique ON Keyed(a)",
+        "INSERT INTO Synced VALUES (1,'a','x'),(2,'a','y'),(3,'b','z')",
     ])
     .await?;
-    let snap = Snapshot::in_place(&f.catalog)?;
-    let schema = read_schema(&snap).await?;
-    let table = |name: &str| schema.tables.iter().find(|t| t.name == name).unwrap();
+    let opts = MirrorOptions {
+        key_index: Some(the_only_index),
+        ..f.options()
+    };
+    f.ingest_with(opts.clone()).await?;
+    f.edit_catalog(&["DELETE FROM Synced WHERE image = 1"])
+        .await?;
+    let (_, commit) = f.ingest_with(opts).await?;
 
-    let synced = table("Synced");
-    assert!(synced.declared_key.is_empty());
-    assert_eq!(
-        synced.unique_indexes.len(),
-        1,
-        "the partial index is left out"
-    );
-    assert_eq!(synced.unique_indexes[0].columns, ["image", "payloadKey"]);
-    assert!(synced.unique_indexes[0].has_nulls);
-
-    assert!(!table("Clean").unique_indexes[0].has_nulls);
-
-    let keyed = table("Keyed");
-    assert_eq!(keyed.declared_key, ["id"]);
-    assert!(
-        keyed.unique_indexes.is_empty(),
-        "read only where an index could key"
-    );
+    let pool = f.mirror_pool().await?;
+    assert_eq!(mirror_key(&pool, "Synced").await, ["image", "payloadKey"]);
+    let commit = commit.expect("the delete is a change");
+    assert_eq!(diff_types(&pool, "Synced", &commit).await, ["removed"]);
+    pool.close().await;
     Ok(())
 }
 
 #[tokio::test]
-async fn a_run_over_a_snapshot_reports_both_sizes() -> Result<()> {
+async fn a_unique_index_with_nulls_or_no_rule_leaves_the_table_keyless() -> Result<()> {
+    let f = Fixture::new();
+    f.edit_catalog(&[
+        "CREATE TABLE Clean (a INTEGER, b TEXT)",
+        "CREATE UNIQUE INDEX clean_key ON Clean(a, b)",
+        "INSERT INTO Clean VALUES (1,'x')",
+        "CREATE TABLE Holey (a INTEGER, b TEXT)",
+        "CREATE UNIQUE INDEX holey_key ON Holey(a, b)",
+        "INSERT INTO Holey VALUES (1,'x'),(2,NULL)",
+    ])
+    .await?;
+
+    f.ingest().await?;
+    let pool = f.mirror_pool().await?;
+    assert!(
+        mirror_key(&pool, "Clean").await.is_empty(),
+        "no rule, no key"
+    );
+    pool.close().await;
+
+    f.ingest_with(MirrorOptions {
+        key_index: Some(the_only_index),
+        ..f.options()
+    })
+    .await?;
+    let pool = f.mirror_pool().await?;
+    assert_eq!(mirror_key(&pool, "Clean").await, ["a", "b"]);
+    assert!(
+        mirror_key(&pool, "Holey").await.is_empty(),
+        "a key holds no NULLs"
+    );
+    pool.close().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_run_reports_the_source_and_snapshot_sizes() -> Result<()> {
     let f = Fixture::new();
     // Free pages are in the source file but not in a `VACUUM INTO` copy,
     // so the two sizes differ.
@@ -614,35 +658,17 @@ async fn a_run_over_a_snapshot_reports_both_sizes() -> Result<()> {
         "DROP TABLE Bloat",
     ])
     .await?;
-    let pool = mirror::open_mirror(&f.mirror).await?;
-    let snap = mirror::snapshot(&f.catalog).await?;
     let original = std::fs::metadata(&f.catalog)?.len();
-    assert_eq!(snap.source_bytes(), original);
-    assert!(snap.is_copy());
-
-    let stats = mirror::run_snapshot(&pool, &snap, &f.options(), &Progress::noop()).await?;
+    let (stats, _) = f.ingest().await?;
     assert_eq!(stats.source_bytes, original);
-    assert_eq!(stats.snapshot_bytes, snap.snapshot_bytes());
     assert!(
-        stats.snapshot_bytes < stats.source_bytes,
-        "{} vs {}",
-        stats.snapshot_bytes,
-        stats.source_bytes
+        stats.snapshot_bytes < original,
+        "{} vs {original}",
+        stats.snapshot_bytes
     );
     assert!(stats
         .summary()
-        .contains(&format!("source_bytes={original}")));
-    pool.close().await;
-    Ok(())
-}
-
-#[tokio::test]
-async fn an_in_place_snapshot_is_the_file_itself() -> Result<()> {
-    let f = Fixture::new();
-    let snap = Snapshot::in_place(&f.catalog)?;
-    assert!(!snap.is_copy());
-    assert_eq!(snap.path(), f.catalog);
-    assert_eq!(snap.source_bytes(), snap.snapshot_bytes());
+        .contains(&format!("snapshot_bytes={}", stats.snapshot_bytes)));
     Ok(())
 }
 

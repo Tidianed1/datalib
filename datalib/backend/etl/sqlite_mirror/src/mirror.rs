@@ -12,7 +12,7 @@ use sqlx::{Connection, Row};
 use datalib_etl::progress::Progress;
 use datalib_source_common::glob_match;
 
-use crate::plan::{self, ColumnSpec, KeyOrigin, SourceColumn, TableKind, TableSpec};
+use crate::plan::{self, ColumnSpec, KeyOrigin, SourceColumn, TableKind, TableSpec, UniqueIndex};
 
 /// Schema alias the source catalog is ATTACHed under. Deliberately
 /// unlikely to collide with anything a user would name a database.
@@ -47,7 +47,18 @@ pub struct MirrorOptions {
     /// rebuild, and a source table with one of these names is an error,
     /// the same as [`RESERVED_TABLES`].
     pub sidecar_tables: Vec<String>,
+    /// The provider's rule for keying a table that would otherwise be
+    /// keyless on one of its UNIQUE indexes. See [`KeyIndexRule`].
+    pub key_index: Option<KeyIndexRule>,
 }
+
+/// Picks the UNIQUE index to key a table on, or `None` to leave it
+/// keyless. Asked only for a table with no override, stable key or
+/// declared key; the index it picks is used only when every column of it
+/// is mirrored and holds no NULL. A UNIQUE index is a constraint rather
+/// than an identity, so which one names a table's rows is the source's
+/// convention, not the engine's.
+pub type KeyIndexRule = fn(&[UniqueIndex]) -> Option<&UniqueIndex>;
 
 impl MirrorOptions {
     /// Mirror every table and column of `source_path` from a snapshot,
@@ -65,6 +76,7 @@ impl MirrorOptions {
             primary_keys: BTreeMap::new(),
             gc: false,
             sidecar_tables: Vec::new(),
+            key_index: None,
         }
     }
 
@@ -93,49 +105,24 @@ pub struct MirrorStats {
     /// Virtual tables whose module this build lacks, so their rows
     /// could not be read. Each one is also a warning in the log.
     pub virtual_tables_skipped: usize,
-    /// The source file as it stood on disk.
     pub source_bytes: u64,
-    /// The snapshot the run read. `VACUUM INTO` rewrites the file, so
-    /// this differs from `source_bytes` whenever the source has free pages
-    /// or WAL content; it is what the mirror actually copied from.
+    /// The file the run read. `VACUUM INTO` rewrites the source, so this
+    /// differs from `source_bytes` whenever the source has free pages.
     pub snapshot_bytes: u64,
 }
 
-/// A frozen copy of a source database to inspect and then mirror, so both
-/// see the same bytes. A `VACUUM INTO` snapshot deletes itself when
-/// dropped; [`Snapshot::in_place`] wraps a file that is already private.
+/// A `VACUUM INTO` snapshot that deletes itself when dropped.
 pub struct Snapshot {
     dir: Option<tempfile::TempDir>,
     path: PathBuf,
-    source_bytes: u64,
-    snapshot_bytes: u64,
 }
 
 impl Snapshot {
-    /// Wrap a file nobody else writes (a backup unzipped for this run, a
-    /// decrypted temporary): no copy, and both sizes are the file's.
-    pub fn in_place(path: &Path) -> Result<Self> {
-        let bytes = file_len(path)?;
-        Ok(Self {
-            dir: None,
-            path: path.to_path_buf(),
-            source_bytes: bytes,
-            snapshot_bytes: bytes,
-        })
-    }
-
     pub fn path(&self) -> &Path {
         &self.path
     }
     pub fn is_copy(&self) -> bool {
         self.dir.is_some()
-    }
-    /// The source file's size when the snapshot was taken.
-    pub fn source_bytes(&self) -> u64 {
-        self.source_bytes
-    }
-    pub fn snapshot_bytes(&self) -> u64 {
-        self.snapshot_bytes
     }
 }
 
@@ -148,14 +135,11 @@ fn file_len(path: &Path) -> Result<u64> {
 pub async fn snapshot(source: &Path) -> Result<Snapshot> {
     let dir = tempfile::tempdir().context("create snapshot tempdir")?;
     let dest = dir.path().join("snapshot.sqlite");
-    let source_bytes = file_len(source)?;
 
     match vacuum_into(source, &dest).await {
         Ok(()) => Ok(Snapshot {
-            snapshot_bytes: file_len(&dest)?,
             path: dest,
             dir: Some(dir),
-            source_bytes,
         }),
         Err(e) => {
             tracing::warn!(
@@ -189,10 +173,8 @@ pub async fn snapshot(source: &Path) -> Result<Snapshot> {
                 }
             }
             Ok(Snapshot {
-                snapshot_bytes: file_len(&dest)?,
                 path: dest,
                 dir: Some(dir),
-                source_bytes,
             })
         }
     }
@@ -241,32 +223,13 @@ pub async fn open_sqlite(path: &Path, create: bool) -> Result<SqlitePool> {
         .with_context(|| format!("open sqlite pool at {}", path.display()))
 }
 
-/// Mirror `opts.source_path` into `pool`: snapshot it first when
-/// `opts.snapshot` says to, then [`run_snapshot`]. A provider that wants
-/// to look at the source before mirroring it takes the [`Snapshot`]
-/// itself, inspects it with [`crate::read_schema`], and calls
-/// [`run_snapshot`] with what it decided.
 pub async fn run(
     pool: &SqlitePool,
     opts: &MirrorOptions,
     progress: &Progress,
 ) -> Result<MirrorStats> {
-    let snap = if opts.snapshot {
-        snapshot(&opts.source_path).await?
-    } else {
-        Snapshot::in_place(&opts.source_path)?
-    };
-    run_snapshot(pool, &snap, opts, progress).await
-}
+    let source_bytes = file_len(&opts.source_path)?;
 
-/// Mirror a snapshot into `pool`. `opts.source_path` and `opts.snapshot`
-/// are not used here: the snapshot is the source.
-pub async fn run_snapshot(
-    pool: &SqlitePool,
-    snap: &Snapshot,
-    opts: &MirrorOptions,
-    progress: &Progress,
-) -> Result<MirrorStats> {
     if opts.gc {
         // Best-effort: a failed collection costs disk, not correctness,
         // and must not fail the backup.
@@ -279,12 +242,23 @@ pub async fn run_snapshot(
         }
     }
 
+    let snap = if opts.snapshot {
+        Some(snapshot(&opts.source_path).await?)
+    } else {
+        None
+    };
+    let src_path = snap
+        .as_ref()
+        .map(|s| s.path().to_path_buf())
+        .unwrap_or_else(|| opts.source_path.clone());
+    let snapshot_bytes = file_len(&src_path)?;
+
     // One connection for the whole run: ATTACH is connection-scoped, and
     // the pool is `max_connections(1)` anyway (doltlite's HEAD pointer is
     // per-connection — see `doltlite_raw`'s notes).
     let mut conn = pool.acquire().await.context("acquire mirror connection")?;
 
-    let literal = snap.path().display().to_string().replace('\'', "''");
+    let literal = src_path.display().to_string().replace('\'', "''");
     // Audited: `literal` is the source path, `'`-escaped; the schema alias is
     // a const through `quote_ident`.
     sqlx::query(sqlx::AssertSqlSafe(format!(
@@ -293,7 +267,7 @@ pub async fn run_snapshot(
     )))
     .execute(&mut *conn)
     .await
-    .with_context(|| format!("attach source {}", snap.path().display()))?;
+    .with_context(|| format!("attach source {}", src_path.display()))?;
 
     let result = mirror_attached(&mut conn, opts, progress).await;
 
@@ -306,10 +280,11 @@ pub async fn run_snapshot(
     .execute(&mut *conn)
     .await;
     drop(conn);
+    drop(snap);
 
     let mut stats = result?;
-    stats.source_bytes = snap.source_bytes();
-    stats.snapshot_bytes = snap.snapshot_bytes();
+    stats.source_bytes = source_bytes;
+    stats.snapshot_bytes = snapshot_bytes;
     Ok(stats)
 }
 
@@ -397,18 +372,67 @@ async fn build_specs(
             }
             Err(e) => return Err(e),
         };
-        let unique_cols = plan::unique_single_columns(&mut *conn, SRC_SCHEMA, &name).await?;
+        let unique = plan::unique_indexes(&mut *conn, SRC_SCHEMA, &name).await?;
+        let unique_cols = plan::single_columns(&unique);
         let verified_cols =
             verified_stable_columns(&mut *conn, opts, &name, &source_cols, &unique_cols).await?;
-        specs.push(build_spec(
+        let key_index = opts.key_index.and_then(|rule| rule(&unique));
+        let mut spec = build_spec(
             opts,
             &name,
             &source_cols,
             &unique_cols,
             &verified_cols,
-        )?);
+            key_index,
+        )?;
+        if spec.key_origin == KeyOrigin::UniqueIndex
+            && has_nulls(&mut *conn, &name, &spec.pk).await?
+        {
+            tracing::warn!(
+                table = %name,
+                key = %spec.pk.join(", "),
+                "sqlite_mirror: the UNIQUE index chosen as the key has NULLs, which a key \
+                 cannot; mirroring the table keyless"
+            );
+            spec.pk.clear();
+            spec.key_origin = KeyOrigin::Keyless;
+        } else if spec.key_origin == KeyOrigin::Keyless
+            && opts.key_index.is_some()
+            && !unique.is_empty()
+            && !opts.primary_keys.contains_key(&name)
+        {
+            tracing::warn!(
+                table = %name,
+                indexes = %unique.iter().map(|ix| ix.name.as_str()).collect::<Vec<_>>().join(", "),
+                "sqlite_mirror: none of the table's UNIQUE indexes became its key; \
+                 mirroring it keyless (name one in primary_keys)"
+            );
+        }
+        specs.push(spec);
     }
     Ok(specs)
+}
+
+/// Whether any row of `table` has a NULL in one of `columns`. A UNIQUE
+/// index lets NULLs repeat; a key does not.
+async fn has_nulls(conn: &mut SqliteConnection, table: &str, columns: &[String]) -> Result<bool> {
+    let any_null = columns
+        .iter()
+        .map(|c| format!("{} IS NULL", plan::quote_ident(c)))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    // Audited: table and column names come out of the source's own schema
+    // and go through `plan::quote_ident`; the schema alias is a const.
+    let sql = format!(
+        "SELECT EXISTS (SELECT 1 FROM {}.{} WHERE {any_null})",
+        plan::quote_ident(SRC_SCHEMA),
+        plan::quote_ident(table),
+    );
+    let found: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+        .fetch_one(&mut *conn)
+        .await
+        .with_context(|| format!("check {table}({}) for NULLs", columns.join(", ")))?;
+    Ok(found != 0)
 }
 
 /// The stable-key candidates the source did not declare UNIQUE but
@@ -472,6 +496,7 @@ pub fn build_spec(
     source_cols: &[SourceColumn],
     unique_cols: &[String],
     verified_cols: &[String],
+    key_index: Option<&UniqueIndex>,
 ) -> Result<TableSpec> {
     let mut columns: Vec<ColumnSpec> = Vec::new();
     let mut dropped: Vec<String> = Vec::new();
@@ -530,6 +555,8 @@ pub fn build_spec(
         (vec![stable.clone()], origin)
     } else if !declared.is_empty() && declared.iter().all(present) {
         (declared, KeyOrigin::Declared)
+    } else if let Some(index) = key_index.filter(|ix| ix.columns.iter().all(present)) {
+        (index.columns.clone(), KeyOrigin::UniqueIndex)
     } else {
         // Either the source table is keyless, or its key was filtered
         // out. Keyless is a legitimate mirror shape: doltlite still
@@ -670,6 +697,7 @@ mod tests {
             &lightroom_cols(),
             &["id_global".to_string()],
             &[],
+            None,
         )
         .unwrap();
         assert_eq!(s.pk, vec!["id_global".to_string()]);
@@ -689,11 +717,11 @@ mod tests {
         ];
         let mut o = opts();
         o.stable_key_columns = vec!["ZUUID".into()];
-        let s = build_spec(&o, "ZASSET", &cols, &[], &["ZUUID".to_string()]).unwrap();
+        let s = build_spec(&o, "ZASSET", &cols, &[], &["ZUUID".to_string()], None).unwrap();
         assert_eq!(s.pk, vec!["ZUUID".to_string()]);
         assert_eq!(s.key_origin, KeyOrigin::StableVerified);
         // Unverified and undeclared, the same column is not a key.
-        let s = build_spec(&o, "ZASSET", &cols, &[], &[]).unwrap();
+        let s = build_spec(&o, "ZASSET", &cols, &[], &[], None).unwrap();
         assert_eq!(s.pk, vec!["Z_PK".to_string()]);
         assert_eq!(s.key_origin, KeyOrigin::Declared);
     }
@@ -701,7 +729,7 @@ mod tests {
     #[test]
     fn declared_key_is_used_when_no_stable_candidate_exists() {
         let cols = vec![scol("id_local", "INTEGER", 1), scol("v", "", 0)];
-        let s = build_spec(&opts(), "AgHarvestedExifMetadata", &cols, &[], &[]).unwrap();
+        let s = build_spec(&opts(), "AgHarvestedExifMetadata", &cols, &[], &[], None).unwrap();
         assert_eq!(s.pk, vec!["id_local".to_string()]);
         assert_eq!(s.key_origin, KeyOrigin::Declared);
     }
@@ -716,6 +744,7 @@ mod tests {
             &lightroom_cols(),
             &["id_global".to_string()],
             &[],
+            None,
         )
         .unwrap();
         assert_eq!(s.pk, vec!["id_local".to_string()]);
@@ -740,7 +769,7 @@ mod tests {
             pk_seq: 1,
             generated: false,
         }];
-        let s = build_spec(&opts(), "MigrationSchemaVersion", &cols, &[], &[]).unwrap();
+        let s = build_spec(&opts(), "MigrationSchemaVersion", &cols, &[], &[], None).unwrap();
         assert_eq!(s.pk, vec!["version".to_string()]);
         assert_eq!(s.key_origin, KeyOrigin::Declared);
         assert!(s.create_ddl().contains(r#"PRIMARY KEY ("version")"#));
@@ -749,7 +778,43 @@ mod tests {
     #[test]
     fn a_source_table_with_no_key_mirrors_keyless() {
         let cols = vec![scol("a", "", 0), scol("b", "", 0)];
-        let s = build_spec(&opts(), "AgOzSpaceIds", &cols, &[], &[]).unwrap();
+        let s = build_spec(&opts(), "AgOzSpaceIds", &cols, &[], &[], None).unwrap();
+        assert!(s.pk.is_empty());
+        assert_eq!(s.key_origin, KeyOrigin::Keyless);
+    }
+
+    fn index(columns: &[&str]) -> UniqueIndex {
+        UniqueIndex {
+            name: "index_T_primaryKey".into(),
+            columns: columns.iter().map(|c| c.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn a_keyless_table_keys_on_the_index_the_rule_chose() {
+        let cols = vec![scol("image", "INTEGER", 0), scol("payloadKey", "", 0)];
+        let ix = index(&["image", "payloadKey"]);
+        let s = build_spec(&opts(), "T", &cols, &[], &[], Some(&ix)).unwrap();
+        assert_eq!(s.pk, ix.columns);
+        assert_eq!(s.key_origin, KeyOrigin::UniqueIndex);
+    }
+
+    #[test]
+    fn a_declared_key_beats_the_chosen_index() {
+        let ix = index(&["xmp"]);
+        let s = build_spec(&opts(), "T", &lightroom_cols(), &[], &[], Some(&ix)).unwrap();
+        assert_eq!(s.pk, vec!["id_local".to_string()]);
+        assert_eq!(s.key_origin, KeyOrigin::Declared);
+    }
+
+    /// The rule's index is not an override: a column the filters drop
+    /// leaves the table keyless instead of failing the run.
+    #[test]
+    fn a_chosen_index_over_an_excluded_column_leaves_the_table_keyless() {
+        let mut o = opts();
+        o.exclude_columns = vec!["T.b".into()];
+        let cols = vec![scol("a", "", 0), scol("b", "", 0)];
+        let s = build_spec(&o, "T", &cols, &[], &[], Some(&index(&["a", "b"]))).unwrap();
         assert!(s.pk.is_empty());
         assert_eq!(s.key_origin, KeyOrigin::Keyless);
     }
@@ -759,7 +824,7 @@ mod tests {
         let mut o = opts();
         o.exclude_columns = vec!["T.id_local".into()];
         o.stable_key_columns.clear();
-        let s = build_spec(&o, "T", &lightroom_cols(), &[], &[]).unwrap();
+        let s = build_spec(&o, "T", &lightroom_cols(), &[], &[], None).unwrap();
         assert!(s.pk.is_empty());
         assert_eq!(s.key_origin, KeyOrigin::Keyless);
         assert_eq!(s.dropped_columns, vec!["id_local".to_string()]);
@@ -769,7 +834,15 @@ mod tests {
     fn excluded_columns_are_absent_not_blanked() {
         let mut o = opts();
         o.exclude_columns = vec!["Adobe_AdditionalMetadata.xmp".into()];
-        let s = build_spec(&o, "Adobe_AdditionalMetadata", &lightroom_cols(), &[], &[]).unwrap();
+        let s = build_spec(
+            &o,
+            "Adobe_AdditionalMetadata",
+            &lightroom_cols(),
+            &[],
+            &[],
+            None,
+        )
+        .unwrap();
         assert!(!s.columns.iter().any(|c| c.name == "xmp"));
         assert_eq!(s.dropped_columns, vec!["xmp".to_string()]);
         assert!(!s.create_ddl().contains("xmp"));
@@ -781,7 +854,15 @@ mod tests {
         let mut o = opts();
         o.primary_keys
             .insert("T".into(), vec!["id_local".into(), "id_global".into()]);
-        let s = build_spec(&o, "T", &lightroom_cols(), &["id_global".to_string()], &[]).unwrap();
+        let s = build_spec(
+            &o,
+            "T",
+            &lightroom_cols(),
+            &["id_global".to_string()],
+            &[],
+            None,
+        )
+        .unwrap();
         assert_eq!(s.pk, vec!["id_local".to_string(), "id_global".to_string()]);
         assert_eq!(s.key_origin, KeyOrigin::Override);
         assert!(s
@@ -793,7 +874,15 @@ mod tests {
     fn an_empty_override_forces_keyless() {
         let mut o = opts();
         o.primary_keys.insert("T".into(), Vec::new());
-        let s = build_spec(&o, "T", &lightroom_cols(), &["id_global".to_string()], &[]).unwrap();
+        let s = build_spec(
+            &o,
+            "T",
+            &lightroom_cols(),
+            &["id_global".to_string()],
+            &[],
+            None,
+        )
+        .unwrap();
         assert!(s.pk.is_empty());
         assert_eq!(s.key_origin, KeyOrigin::Keyless);
     }
@@ -803,7 +892,7 @@ mod tests {
         let mut o = opts();
         o.exclude_columns = vec!["T.xmp".into()];
         o.primary_keys.insert("T".into(), vec!["xmp".into()]);
-        assert!(build_spec(&o, "T", &lightroom_cols(), &[], &[]).is_err());
+        assert!(build_spec(&o, "T", &lightroom_cols(), &[], &[], None).is_err());
     }
 
     #[test]
@@ -818,7 +907,7 @@ mod tests {
             pk_seq: 0,
             generated: true,
         });
-        let s = build_spec(&opts(), "T", &cols, &[], &[]).unwrap();
+        let s = build_spec(&opts(), "T", &cols, &[], &[], None).unwrap();
         assert!(!s.columns.iter().any(|c| c.name == "computed"));
         assert!(s.dropped_columns.contains(&"computed".to_string()));
     }
@@ -827,7 +916,7 @@ mod tests {
     fn excluding_every_column_is_an_error_not_an_empty_table() {
         let mut o = opts();
         o.exclude_columns = vec!["T.*".into()];
-        assert!(build_spec(&o, "T", &lightroom_cols(), &[], &[]).is_err());
+        assert!(build_spec(&o, "T", &lightroom_cols(), &[], &[], None).is_err());
     }
 
     #[test]

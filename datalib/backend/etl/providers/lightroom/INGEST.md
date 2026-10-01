@@ -163,7 +163,8 @@ the rule, not the numbers.
 | `id_global` | 26 | the source has a single-column UNIQUE index on it, so the rewrite fires |
 | `id_local` | 53 | the table has no `id_global` column, and `id_local` is its declared key |
 | another declared column | 12 | `image`, `collection`, `fileId`, `version`… — whatever the source declared |
-| **keyless** | 22 | the source declares no `PRIMARY KEY`; most have a UNIQUE index the mirror keys on (below) |
+| a UNIQUE index | 20 | the source declares no `PRIMARY KEY`, but a UNIQUE index says what the key is (below) |
+| **keyless** | 2 | no `PRIMARY KEY` and no UNIQUE index: `AgLibraryCollectionStackData`, `AgLibraryFolderStackData` |
 
 The middle two rows are the declared-key fallback, and it is *complete*
 rather than best-effort: **79 tables carry an `id_local` column, and in
@@ -172,12 +173,11 @@ KEY`.** So there is no table where a stable-looking column sits unused —
 26 of those 79 also have `id_global` and prefer it, the other 53 keep
 `id_local`, and the fallback reaches all of them without a special case.
 
-The keyless tables are mostly the Adobe cloud-sync bookkeeping
-(`AgOzSpaceIds`, `AgPendingOzAssets`, `Migrated*`, …), plus a few stack
-and payload tables (`AgLibraryImageSyncedAssetData`,
-`AgLibraryCollectionStackData`). Some have no `id_local` either; their
-columns are things like `(ozCatalogId, ozSpaceId)`. Without a key, a
-table diffs by position, not content
+The 22 tables with no `PRIMARY KEY` are mostly the Adobe cloud-sync
+bookkeeping (`AgOzSpaceIds`, `AgPendingOzAssets`, `Migrated*`, …), plus
+two stack tables and `AgLibraryImageSyncedAssetData`. Most have no
+`id_local` either; their columns are things like `(ozCatalogId,
+ozSpaceId)`. Without a key, a table diffs by position, not content
 ([doltlite.md § Diffs](/docs/dev/doltlite.md#diffs)): the mirror copies
 it in the source's scan order, so an unchanged table is no change, but
 a row added or deleted in the middle reads as a run of `modified` rows.
@@ -186,30 +186,24 @@ On a real set of weekly backups, `AgLibraryImageSyncedAssetData` showed
 payload column differed in fewer than 20,000.
 
 But Lightroom does declare those tables' keys, not as a `PRIMARY KEY`
-but as a composite UNIQUE index, named `index_<Table>_primaryKey`:
-`(image, payloadKey)` for `AgLibraryImageSyncedAssetData`,
-`(ozCatalogId, ozSpaceId)` for `AgOzSpaceIds`, `(localId, ozCatalogId)`
-for `MigratedImages`. So the provider takes one snapshot of the catalog, reads its schema with
-the engine's `read_schema`, and decides the keys from that
-(`src/keys.rs`, a pure function of the schema), then mirrors the same
-snapshot, passing the key columns per table as `primary_keys`. It does so
-for a table with no declared key and no `id_global`, and only when the
-source leaves no doubt: the table's only UNIQUE index, or the one named
-`…primaryKey`. A UNIQUE index is a constraint, not an identity, so with
-several and no such name the table stays keyless and the run warns. A
-unique index also lets NULLs repeat and a key does not, so a key with
-NULLs in any row is left keyless with a warning too. Neither case fails
-the run, and a `primary_keys` entry you set yourself wins. The engine
-knows nothing of the naming. A sync that last ran before this rule
-existed re-mirrors its newest backup once.
-
-All the keyless tables are `Ag*`- or `Migrated*`-prefixed, which reads at
-a glance as "the Ag* tables have no primary keys". Most of them do.
+but as a composite UNIQUE index: `index_<Table>_primaryKey` on
+`(image, payloadKey)` for `AgLibraryImageSyncedAssetData`, on
+`(ozCatalogId, ozSpaceId)` for `AgOzSpaceIds`, and a `UNIQUE (localId,
+ozCatalogId)` constraint on `MigratedImages`. So the provider gives the
+engine a rule (`src/keys.rs`): key a table on its only UNIQUE index, or
+on the one named `…primaryKey` among several. The engine asks it only
+about a table no other step keys (no `primary_keys` entry, no
+`id_global`, no declared key), and uses the index only when every
+column of it is mirrored and no row holds a NULL in it, since a UNIQUE
+index lets NULLs repeat and a key does not. Otherwise the table stays
+keyless and the run warns; neither case fails the run. A store synced
+before this rule re-mirrors its newest backup once (the `key_rule`
+entry in its scope).
 
 Set `stable_key_columns = []` to mirror declared keys verbatim, or use
 `primary_keys = { Table = ["a", "b"] }` to pin one explicitly (an empty
 list forces keyless). The override is also the way to give a table a
-key the source declares nowhere — but unlike a unique index it is not
+key the source declares nowhere — but unlike a UNIQUE index it is not
 checked: a wrong entry fails the whole run rather than that one table,
 because `rebuild_table` creates the table with the key and then does
 `INSERT … SELECT`, so a duplicate aborts the ingest.

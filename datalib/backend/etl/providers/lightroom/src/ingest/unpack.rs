@@ -8,7 +8,7 @@ use anyhow::{bail, Context, Result};
 use sqlx::sqlite::SqlitePool;
 
 use datalib_etl::progress::Progress;
-use datalib_etl_sqlite_mirror::{mirror, read_schema, MirrorOptions, MirrorStats};
+use datalib_etl_sqlite_mirror::{mirror, MirrorOptions, MirrorStats};
 
 pub struct Unpacked {
     /// Holds the unpacked copy; deleting it on drop is the cleanup.
@@ -69,14 +69,13 @@ pub async fn mirror_file(
     progress: &Progress,
 ) -> Result<MirrorStats> {
     let catalog = unpack(file).await?;
-    let snapshot = if options.snapshot && !catalog.is_copy() {
-        mirror::snapshot(catalog.path()).await?
-    } else {
-        mirror::Snapshot::in_place(catalog.path())?
+    let options = MirrorOptions {
+        source_path: catalog.path().to_path_buf(),
+        snapshot: options.snapshot && !catalog.is_copy(),
+        key_index: Some(crate::keys::key_index),
+        ..options.clone()
     };
-    let schema = read_schema(&snapshot).await?;
-    let options = crate::keys::keyed_options(options, &schema);
-    mirror::run_snapshot(pool, &snapshot, &options, progress).await
+    mirror::run(pool, &options, progress).await
 }
 
 fn extract_catalog(zip_path: &Path, dest: &Path) -> Result<PathBuf> {
