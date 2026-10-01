@@ -95,12 +95,13 @@ is no pace to go by: <i>stalled</i> (nothing has moved for a minute),
 step reads in passes climbs as work arrives and falls to nothing when a pass ends,
 so its ETA holds steady through the climb rather than reading it as growth. A group sums its steps' queues and
 waits on its slowest step; a stall anywhere under it shows. Hover either for how it
-was reached. <b>Double-click a Queue or ETA</b>, or pick <b>Show sync dashboard</b>
-from a row's menu, for the group's <b>sync dashboard</b>: its row and each step's,
+was reached. The <b>chart button</b> in a row's Actions — or a double-click on its
+Queue or ETA, or <b>Show sync dashboard</b> on its menu — opens the group's
+<b>sync dashboard</b>: its row and each step's,
 laid out one under another with the same actions, charts over the run — what was
 queued and done, rows written, requests made, checkpoints, warnings and errors
 logged, size on disk — and the group's log.</p>
-<p><b>Browse</b>, <b>Sync</b> and the switch are on the row: they are what a row
+<p><b>Browse</b>, <b>Sync</b>, the dashboard and the switch are on the row: they are what a row
 does often. <b>Right-click a row</b> for everything it can do — sync, edit, rename,
 the log, reveal, <b>Reset</b>, remove — and its <b>commit history</b>: every store
 under it is versioned, and the history opens beside this card with each commit — when,
