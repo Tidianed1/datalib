@@ -87,7 +87,10 @@ watch(
       { start: row.scrollLeft, width: row.clientWidth },
       { start, width: el.offsetWidth },
     );
-    row.scrollTo({ left, behavior: "smooth" });
+    // At once, not smoothly: the next click, a person's or a test's, can
+    // come before an animation ends, and the row under the pointer would
+    // still be sliding.
+    row.scrollTo({ left });
   },
 );
 

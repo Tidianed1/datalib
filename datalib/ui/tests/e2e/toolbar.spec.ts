@@ -86,7 +86,9 @@ test.describe("toolbar", () => {
     for (const density of ["Compact", "Comfortable"]) {
       await page.setViewportSize({ width: 1280, height: 800 });
       await page.getByRole("button", { name: density }).click();
-      for (const width of [600, 420]) {
+      // 700px leaves the name room whatever its random suffix measures;
+      // 600px was within a few letters of it in Comfortable.
+      for (const width of [700, 420]) {
         await page.setViewportSize({ width, height: 800 });
         const b = (await box.boundingBox())!;
         const l = (await lib.boundingBox())!;
@@ -94,7 +96,7 @@ test.describe("toolbar", () => {
         expect(b.width).toBeGreaterThanOrEqual(180);
         expect(b.x + b.width).toBeLessThanOrEqual(width);
         expect(b.x).toBeGreaterThanOrEqual(l.x + l.width);
-        // At 600px the search box has room to give; at 420px it is at
+        // At 700px the search box has room to give; at 420px it is at
         // its floor and the name gives way.
         expect(await truncated()).toBe(width === 420);
       }
