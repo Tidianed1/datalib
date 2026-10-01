@@ -255,6 +255,20 @@
       .lib.missing .facts {
         color: var(--warn-fg);
       }
+      .legacy {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 14px 16px;
+        border-radius: 10px;
+        border: 1px solid var(--accent);
+        background: var(--accent-soft);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      .legacy .what {
+        flex: 1 1 auto;
+      }
       .empty {
         height: 120px;
         border: 1.5px dashed var(--border);
@@ -351,6 +365,11 @@
           </div>
         </div>
         <p class="error" id="error" role="alert" hidden></p>
+        <!-- TODO(after 2026-11-01): remove with launcher::move_legacy. -->
+        <div class="legacy" id="legacy" hidden>
+          <span class="what" id="legacy-what"></span>
+          <button class="btn primary small" id="legacy-move">Move it</button>
+        </div>
         <div class="list" id="list" hidden></div>
         <div class="empty" id="empty" hidden>Your libraries will be listed here.</div>
       </div>
@@ -510,6 +529,9 @@
           open.addEventListener("click", () => run("launcher_open", { path: r.path }));
           what.append(open);
           where.classList.add("bad");
+        } else if (r.target === "inside_legacy") {
+          what.append("Move your library into Default first.");
+          where.classList.add("bad");
         } else if (r.target === "occupied") {
           what.append(code(r.shown_path), " has other files in it.");
           where.classList.add("bad");
@@ -555,6 +577,19 @@
         if (!$("pop").contains(e.target) && e.target !== $("new")) setPopover(false);
       });
       $("pick").addEventListener("click", () => run("launcher_pick"));
+      $("legacy-move").addEventListener("click", async () => {
+        setBusy(true);
+        $("error").hidden = true;
+        try {
+          await invoke("launcher_move_legacy");
+          $("name").value = "";
+          await render();
+        } catch (e) {
+          fail(e);
+          return;
+        }
+        setBusy(false);
+      });
 
       async function render() {
         const state = await invoke("launcher_state");
@@ -564,6 +599,22 @@
         list.hidden = none;
         $("empty").hidden = !none;
         if (!$("name").value) $("name").value = state.suggested_name;
+        const legacy = state.legacy;
+        $("legacy").hidden = !legacy;
+        if (legacy) {
+          const code = (t) => {
+            const c = document.createElement("code");
+            c.textContent = t;
+            return c;
+          };
+          $("legacy-what").replaceChildren(
+            "Libraries now each have their own folder. Move yours from ",
+            code(legacy.shown_path),
+            " to ",
+            code(legacy.target),
+            "? Close anything else using it first.",
+          );
+        }
         // The first time, the one thing to do is make a library.
         if (none) setPopover(true);
       }

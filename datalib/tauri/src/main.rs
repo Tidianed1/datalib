@@ -57,11 +57,39 @@ fn launcher_state(app: AppHandle) -> serde_json::Value {
                 })
             })
             .collect();
+    // TODO(after 2026-11-01): drop `legacy` with `launcher::move_legacy`.
+    let legacy = launcher::legacy_root(&dir).map(|root| {
+        serde_json::json!({
+            "shown_path": launcher::tilde(&root, &home),
+            "target": launcher::tilde(&root.join(launcher::DEFAULT_NAME), &home),
+        })
+    });
     serde_json::json!({
         "libraries": libraries,
         "libraries_dir": launcher::tilde(&dir, &home),
         "suggested_name": launcher::suggested_name(&dir),
+        "legacy": legacy,
     })
+}
+
+/// Move the library at the Datalib folder into `Datalib/Default`. Only
+/// from the libraries screen, where no library is open.
+// TODO(after 2026-11-01): remove, with `launcher::move_legacy`.
+#[tauri::command]
+fn launcher_move_legacy(app: AppHandle) -> Result<(), String> {
+    if app
+        .state::<DataRoot>()
+        .0
+        .lock()
+        .expect("data root lock")
+        .is_some()
+    {
+        return Err("Close the open library first.".into());
+    }
+    let home = home_dir(&app).ok_or("No home directory.")?;
+    launcher::move_legacy(&launcher::recents_file(&home), &libraries_dir(&app))
+        .map(|_| ())
+        .map_err(|e| format!("Could not move the library: {e}"))
 }
 
 /// What the new-library field names: the folder, as the popover shows
@@ -73,7 +101,7 @@ fn launcher_resolve(app: AppHandle, input: String) -> serde_json::Value {
         Some(root) => serde_json::json!({
             "shown_path": launcher::tilde(&root, &home),
             "path": root.to_string_lossy(),
-            "target": launcher::classify(&root).as_str(),
+            "target": launcher::classify(&root, &libraries_dir(&app)).as_str(),
         }),
         None => serde_json::Value::Null,
     }
@@ -85,10 +113,11 @@ fn launcher_resolve(app: AppHandle, input: String) -> serde_json::Value {
 #[tauri::command]
 fn launcher_create(app: AppHandle, input: String) -> Result<(), String> {
     let home = home_dir(&app).unwrap_or_default();
-    let root = launcher::resolve_new(&input, &home, &libraries_dir(&app))
+    let dir = libraries_dir(&app);
+    let root = launcher::resolve_new(&input, &home, &dir)
         .ok_or("Type a name for the library, or a folder.")?;
     let shown = launcher::tilde(&root, &home);
-    match launcher::classify(&root) {
+    match launcher::classify(&root, &dir) {
         launcher::Target::Library => {
             tauri::async_runtime::spawn(boot(app, root, false));
         }
@@ -102,6 +131,9 @@ fn launcher_create(app: AppHandle, input: String) -> Result<(), String> {
             ))
         }
         launcher::Target::NotAFolder => return Err(format!("{shown} is a file, not a folder.")),
+        launcher::Target::InsideLegacy => {
+            return Err("Move your library into Default first (above the list).".into())
+        }
     }
     Ok(())
 }
@@ -375,6 +407,7 @@ fn main() {
             launcher_open,
             launcher_pick,
             launcher_forget,
+            launcher_move_legacy,
             library_menu,
             library_switch,
             libraries_show,

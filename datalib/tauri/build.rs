@@ -91,6 +91,7 @@ fn main() {
             "launcher_open",
             "launcher_pick",
             "launcher_forget",
+            "launcher_move_legacy",
             "library_menu",
             "library_switch",
             "libraries_show",

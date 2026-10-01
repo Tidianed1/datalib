@@ -88,7 +88,16 @@ count, size and last sync that `datalib-http` last wrote to its
 not found. A library outside the Datalib folder, or one whose folder
 is gone, can be forgotten: it leaves the recent list and its folder is
 left as it is. One in the Datalib folder is always listed while it is
-there, so it has no Forget. "New library" takes a name or a folder: a
+there, so it has no Forget.
+
+Before libraries each got a folder, the one library was
+`~/Documents/Datalib` itself. When the screen finds a library there it
+offers to move it into `~/Documents/Datalib/Default` (`move_legacy`:
+every entry renamed into a staging folder, which is then renamed to
+`Default`; it refuses if `Default` exists). Until it is moved, the
+folder's subfolders are its own and are not listed as libraries, and
+no new library goes inside it. This is temporary: a TODO in
+`src/launcher.rs` says when to remove it. "New library" takes a name or a folder: a
 name is a library in `~/Documents/Datalib`, the first one called
 `Default`; `/…` and `~/…` are taken as they are, and "Create elsewhere…"
 fills one in. A folder that is already a library is opened instead,
