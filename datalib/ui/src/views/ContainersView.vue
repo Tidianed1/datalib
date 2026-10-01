@@ -21,7 +21,7 @@ import { chainHref } from "@/cards/chainHref";
 import { setCardHelp } from "@/cards/help";
 import { cardType, newCardId } from "@/cards/cardId";
 import { displayTitle } from "@/cards/title";
-import { devMode } from "@/devMode";
+import { editMode } from "@/editMode";
 import { decodeColumns } from "@/router/columns";
 import { pushToast } from "@/toasts";
 import { isMainWindow } from "@/views/mainWindow";
@@ -85,6 +85,9 @@ const STATE_NAME = "layout";
 // The e2e suite sets it, so specs running side by side against one
 // library do not trade tabs.
 const UNSAVED_KEY = "datalib-layout-unsaved";
+// Where a window that does not keep the library's layout keeps its own,
+// so a reload finds its tabs: this window's session storage.
+const SESSION_KEY = "datalib-layout";
 // How long the tree sits unchanged before it is written: a resize drag
 // or a burst of card state is one write, not dozens.
 const SAVE_DELAY_MS = 400;
@@ -105,8 +108,8 @@ function withATab(box: BoxNode): BoxNode {
 // only to be thrown away.
 const root = ref<BoxNode>(makeBox(newCardId(), "tabs", []));
 const ready = ref(false);
-let mainWindow = false;
-// Whether this window reads and writes the library's layout.
+// Whether this window reads and writes the library's layout; the
+// others keep theirs in their session storage.
 let keeps = false;
 
 function update(next: TreeNode) {
@@ -118,10 +121,17 @@ function update(next: TreeNode) {
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let saveFailed = false;
 
-// Only the main window keeps its tree (mainWindow.ts).
 async function save(keepalive = false) {
   saveTimer = null;
-  if (!keeps || !ready.value) return;
+  if (!ready.value) return;
+  if (!keeps) {
+    try {
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify(root.value));
+    } catch {
+      // Blocked storage: the tabs last as long as the page.
+    }
+    return;
+  }
   try {
     await putUiState(STATE_NAME, root.value, { keepalive });
     saveFailed = false;
@@ -175,27 +185,37 @@ watch(
   },
 );
 
-function localStorageItem(key: string): string | null {
+function storedItem(storage: () => Storage, key: string): string | null {
   try {
-    return localStorage.getItem(key);
+    return storage().getItem(key);
   } catch {
     return null;
   }
 }
 
-async function start() {
-  mainWindow = await isMainWindow();
-  keeps = mainWindow && localStorageItem(UNSAVED_KEY) !== "1";
-  void loadComposites();
-  let kept: BoxNode | null = null;
-  if (keeps) {
+async function readKept(): Promise<BoxNode | null> {
+  if (!keeps) {
+    const text = storedItem(() => sessionStorage, SESSION_KEY);
     try {
-      kept = parseTree(await fetchUiState(STATE_NAME));
-    } catch (e) {
-      console.warn("could not read the kept layout", e);
-      pushToast("Could not read the saved layout from the library; starting afresh.");
+      return text === null ? null : parseTree(JSON.parse(text) as unknown);
+    } catch {
+      return null;
     }
   }
+  try {
+    return parseTree(await fetchUiState(STATE_NAME));
+  } catch (e) {
+    console.warn("could not read the kept layout", e);
+    pushToast("Could not read the saved layout from the library; starting afresh.");
+    return null;
+  }
+}
+
+async function start() {
+  const mainWindow = await isMainWindow();
+  keeps = mainWindow && storedItem(() => localStorage, UNSAVED_KEY) !== "1";
+  void loadComposites();
+  const kept = await readKept();
   // A second window starts with nothing but the cards its URL names.
   const fromUrl = routeNode();
   let tree = kept ?? makeBox(newCardId(), "tabs", mainWindow ? [dashboard()] : []);
@@ -215,6 +235,19 @@ const allCards = computed(() => cards(root.value));
 const mounted = reactive(new Set<string>());
 const slots = reactive(new Map<string, Element>());
 const pool = computed(() => allCards.value.filter((c) => mounted.has(c.id)));
+// The cards a Page container holds, which are as tall as their content.
+const naturalCards = computed(() => {
+  const out = new Set<string>();
+  const walk = (n: TreeNode) => {
+    if (n.kind === "card") return;
+    for (const c of n.children) {
+      if (n.layout === "page" && c.kind === "card") out.add(c.id);
+      walk(c);
+    }
+  };
+  walk(root.value);
+  return out;
+});
 watch(allCards, (list) => {
   const live = new Set(list.map((c) => c.id));
   for (const id of [...mounted]) if (!live.has(id)) mounted.delete(id);
@@ -243,7 +276,7 @@ function ctxFor(card: CardNode): CardCtx {
     const host: HostCommands = {
       openCards: (...sources) => {
         const nodes = sources.map((s) => makeCard(newCardId(), s));
-        update(openFrom(root.value, cardId, nodes));
+        update(openFrom(root.value, cardId, nodes, newCardId()));
         return nodes.map((n) => n.id);
       },
       hrefFor: (...sources) => chainHref(sources),
@@ -325,10 +358,16 @@ function addComposite(boxId: string, name: string) {
 function newTab() {
   addCard(root.value.id);
 }
+// A card opened from the chrome gets a tab holding a Columns container,
+// as a link does (routeNode), so what it opens lands beside it.
 function showCard(source: string) {
   const have = allCards.value.find((c) => c.source === source);
-  if (have) select(have.id);
-  else update(addChild(root.value, root.value.id, makeCard(newCardId(), source)));
+  if (have) {
+    select(have.id);
+    return;
+  }
+  const tab = makeBox(newCardId(), "columns", [makeCard(newCardId(), source)]);
+  update(addChild(root.value, root.value.id, tab));
 }
 defineExpose({ addCard: newTab, showCard });
 
@@ -410,15 +449,14 @@ function moveActions(node: TreeNode): PanelAction[] {
   ];
 }
 
-function wrapSection(node: TreeNode): PanelSection {
+// What a new container starts as; its tab changes the layout after.
+const NEW_LAYOUT: Layout = "columns";
+
+function wrapAction(node: TreeNode): PanelAction {
   return {
-    kind: "tiles",
-    title: "Put in a new container",
-    actions: LAYOUTS.map((layout) => ({
-      label: LAYOUT_LABELS[layout],
-      icon: LAYOUT_ICONS[layout],
-      run: () => update(wrap(root.value, node.id, layout, newCardId())),
-    })),
+    label: "Put in a new container",
+    icon: PANEL_ICONS.wrap,
+    run: () => update(wrap(root.value, node.id, NEW_LAYOUT, newCardId())),
   };
 }
 
@@ -429,11 +467,11 @@ function addSections(boxId: string): PanelSection[] {
       title: "Add",
       actions: [
         { label: "Card", icon: PANEL_ICONS.card, run: () => addCard(boxId) },
-        ...LAYOUTS.filter((l) => boxId !== root.value.id || l !== "tabs").map((layout) => ({
-          label: LAYOUT_LABELS[layout],
-          icon: LAYOUT_ICONS[layout],
-          run: () => addBox(boxId, layout),
-        })),
+        {
+          label: "Container",
+          icon: LAYOUT_ICONS[NEW_LAYOUT],
+          run: () => addBox(boxId, NEW_LAYOUT),
+        },
       ],
     },
   ];
@@ -475,7 +513,7 @@ function boxPanel(box: BoxNode): Panel {
       {
         kind: "toggle",
         label: "Solidified",
-        hint: "Keeps its shape: cards opened inside go to the next container out, and outside dev mode it shows no frames.",
+        hint: "Keeps its shape: cards opened inside go to the next container out, and outside edit mode it shows no frames.",
         icon: PANEL_ICONS.solidified,
         on: box.solidified,
         run: () => toggleSolidified(box),
@@ -486,6 +524,7 @@ function boxPanel(box: BoxNode): Panel {
         title: "Arrange",
         actions: [
           ...moveActions(box),
+          wrapAction(box),
           {
             label: "Take the cards out",
             icon: PANEL_ICONS.takeOut,
@@ -493,7 +532,6 @@ function boxPanel(box: BoxNode): Panel {
           },
         ],
       },
-      wrapSection(box),
       {
         kind: "rows",
         actions: [
@@ -525,8 +563,7 @@ function cardPanel(card: CardNode): Panel {
     title: titleOf(card),
     icon: PANEL_ICONS.card,
     sections: [
-      ...(moves.length ? [{ kind: "rows" as const, title: "Arrange", actions: moves }] : []),
-      wrapSection(card),
+      { kind: "rows", title: "Arrange", actions: [...moves, wrapAction(card)] },
       {
         kind: "rows",
         actions: [
@@ -592,12 +629,13 @@ const api: ContainersApi = {
   ctxFor,
   titleOf,
   setSlot,
-  chromeShown: (id) => devMode.value || !isSolidified(root.value, id),
+  chromeShown: (id) => editMode.value || !isSolidified(root.value, id),
   isSolidified: (id) => isSolidified(root.value, id),
   select,
   close,
   commitSource,
   openPanel: (ev, build) => openPanel(ev, build),
+  addCard,
   panelFor,
   startResize,
 };
@@ -626,7 +664,9 @@ provide(CONTAINERS_API, api);
           <svg v-else class="ct-tab-icon ct-tab-glyph" viewBox="0 0 24 24" aria-hidden="true">
             <path :d="LAYOUT_ICONS[row.node.layout]" />
           </svg>
-          <span class="ct-tab-label">{{ titleOf(row.node) }}</span>
+          <span class="ct-tab-label" @dblclick.stop="renameNode(row.node)">{{
+            titleOf(row.node)
+          }}</span>
           <button
             class="ct-tab-action"
             title="more"
@@ -659,7 +699,12 @@ provide(CONTAINERS_API, api);
         :to="slots.get(card.id)"
         :disabled="!slots.get(card.id)"
       >
-        <ShadowCard class="ct-mounted-card" :source="card.source" :ctx="ctxFor(card)" />
+        <ShadowCard
+          class="ct-mounted-card"
+          :source="card.source"
+          :ctx="ctxFor(card)"
+          :natural="naturalCards.has(card.id)"
+        />
       </Teleport>
     </div>
 
@@ -793,6 +838,11 @@ provide(CONTAINERS_API, api);
 }
 .ct-mounted-card {
   flex: 1 1 auto;
+}
+.ct-mounted-card[data-natural] {
+  flex: 0 0 auto;
+}
+.ct-mounted-card {
   min-width: 0;
   min-height: 0;
 }

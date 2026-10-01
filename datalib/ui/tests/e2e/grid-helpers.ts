@@ -11,6 +11,17 @@
 import { expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 
 /// The search grid's rows, wherever it is on the page.
+// The containers layout: the tabs down the side, and the cards the
+// selected tab shows (every card in it, however deep).
+export const SHOWN_CARDS = ".ct-main .ct-card";
+export const shownCards = (page: Page) => page.locator(SHOWN_CARDS);
+export const tabLabels = (page: Page) => page.locator(".ct-tab .ct-tab-label");
+// The shown card whose source contains `source`.
+export const cardOf = (page: Page, source: string) =>
+  page.locator(`${SHOWN_CARDS}[data-card-source*=${JSON.stringify(source)}]`);
+// A card's title, in the header it has outside a solidified container.
+export const cardTitle = (card: Locator) => card.locator(".ct-card-title");
+
 export const SEARCH_ROWS = ".grid-box .slick-row";
 
 /// The search grid on its default query, documents only. `/` opens on

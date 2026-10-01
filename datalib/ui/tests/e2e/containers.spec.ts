@@ -12,7 +12,7 @@ test.describe.configure({ mode: "serial" });
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.removeItem("datalib-layout-unsaved");
-    localStorage.setItem("datalib-dev-mode", "0");
+    localStorage.setItem("datalib-edit-mode", "0");
   });
   const cleared = await page.request.put("/api/ui/state/layout", {
     data: "null",
@@ -59,12 +59,12 @@ test("a card opened from the Dashboard gets a tab of its own", async ({ page }) 
   await expect(mainCards(page)).toHaveCount(4);
 });
 
-test("in dev mode, unsolidifying the Dashboard opens the card inside it", async ({ page }) => {
+test("in edit mode, unsolidifying the Dashboard opens the card inside it", async ({ page }) => {
   await page.goto("/");
   await expect(mainCards(page)).toHaveCount(4);
   await expect(page.locator(".ct-foldertab")).toHaveCount(0);
-  await page.getByRole("button", { name: "Dev", exact: true }).click();
-  // Dev mode shows the solidified container, and its menu turns that off.
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  // Edit mode shows the solidified container, and its menu turns that off.
   await page.locator(".ct-foldertab").click();
   const solidified = page.getByRole("menuitemcheckbox", { name: "Solidified" });
   await expect(solidified).toHaveAttribute("aria-checked", "true");

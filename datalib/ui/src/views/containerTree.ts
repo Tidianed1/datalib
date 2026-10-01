@@ -7,11 +7,12 @@
 // unsolidified one grows. The decisions are pure functions here;
 // ContainersView applies them.
 
-export const LAYOUTS = ["tabs", "stack", "row", "columns"] as const;
+export const LAYOUTS = ["tabs", "page", "stack", "row", "columns"] as const;
 export type Layout = (typeof LAYOUTS)[number];
 
 export const LAYOUT_LABELS: Record<Layout, string> = {
   tabs: "Tabs",
+  page: "Page",
   stack: "Stack",
   row: "Row",
   columns: "Columns",
@@ -20,6 +21,7 @@ export const LAYOUT_LABELS: Record<Layout, string> = {
 // Each layout's glyph, as stroked paths on a 24px grid.
 export const LAYOUT_ICONS: Record<Layout, string> = {
   tabs: "M3 9h18v11H3zM3 9V5h8v4",
+  page: "M4 3h16v4H4zM4 10h16v7H4zM4 20h16",
   stack: "M4 3h16v7H4zM4 14h16v7H4z",
   row: "M3 4h7v16H3zM14 4h7v16h-7z",
   columns: "M3 4h18v16H3zM9 4v16M15 4v16",
@@ -29,7 +31,8 @@ type Common = {
   id: string;
   // The node's size along its container's axis, in px: its height in a
   // stack, its width in a row or columns. null shares what is left
-  // (a column without one is DEFAULT_COLUMN px wide).
+  // (a column without one is DEFAULT_COLUMN px wide). A page ignores
+  // it: each child there is as tall as its content.
   basis: number | null;
   // The sibling this one was opened from, so a tabs container can list
   // its children as a tree, and closing a tab closes what it opened.
@@ -51,7 +54,7 @@ export type BoxNode = Common & {
   kind: "box";
   layout: Layout;
   // This container and everything inside it keep their shape: a card
-  // opened from inside lands further out, and outside dev mode none of
+  // opened from inside lands further out, and outside edit mode none of
   // it shows chrome. A flag set further in counts again once this one
   // is turned off.
   solidified: boolean;
@@ -211,9 +214,16 @@ export function reveal(root: TreeNode, id: string): TreeNode {
 // Open `nodes` from `fromId` as a chain: the first opened by the
 // opener's branch, each next one by the one before. Where they go
 // within the landing container is the container's layout's call:
-// columns drop what was right of the opener, the others insert beside
-// it. Returns the tree unchanged when nothing is unsolidified above.
-export function openFrom(root: TreeNode, fromId: string, nodes: TreeNode[]): TreeNode {
+// columns drop what was right of the opener, tabs take the chain as one
+// new tab — a Columns container `tabId`, so what it opens lands beside
+// it — and the others insert beside it. Returns the tree unchanged
+// when nothing is unsolidified above.
+export function openFrom(
+  root: TreeNode,
+  fromId: string,
+  nodes: TreeNode[],
+  tabId: string,
+): TreeNode {
   const land = landing(root, fromId);
   if (!land || nodes.length === 0) return root;
   const chained = nodes.map((n, i) => ({
@@ -223,9 +233,15 @@ export function openFrom(root: TreeNode, fromId: string, nodes: TreeNode[]): Tre
   const next = mapBox(root, land.boxId, (box) => {
     const i = box.children.findIndex((c) => c.id === land.branchId);
     let children: TreeNode[];
-    if (box.layout === "columns") children = [...box.children.slice(0, i + 1), ...chained];
-    else if (box.layout === "tabs") children = [...box.children, ...chained];
-    else children = [...box.children.slice(0, i + 1), ...chained, ...box.children.slice(i + 1)];
+    if (box.layout === "columns") {
+      children = [...box.children.slice(0, i + 1), ...chained];
+    } else if (box.layout === "tabs") {
+      const inner = chained.map((n, k) => ({ ...n, openedBy: k === 0 ? null : n.openedBy }));
+      const tab = { ...makeBox(tabId, "columns", inner), openedBy: land.branchId };
+      children = [...box.children, tab];
+    } else {
+      children = [...box.children.slice(0, i + 1), ...chained, ...box.children.slice(i + 1)];
+    }
     return { ...box, children };
   });
   return reveal(next, nodes[nodes.length - 1].id);

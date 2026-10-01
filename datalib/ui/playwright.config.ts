@@ -517,7 +517,7 @@ export default defineConfig({
         /score-sort-order\.spec\.ts/,
         /selected-message-outline\.spec\.ts/,
         /qmd-index-columns\.spec\.ts/,
-        /miller-reveal\.spec\.ts/,
+        /column-reveal\.spec\.ts/,
         /yolink-plots\.spec\.ts/,
         /gallery\.spec\.ts/,
         // The sandboxed DACTAL iframe: an opaque origin loading module

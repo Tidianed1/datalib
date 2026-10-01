@@ -8,6 +8,7 @@ export const PANEL_ICONS = {
   right: "M5 12h14M13 6l6 6-6 6",
   up: "M12 19V5M6 11l6-6 6 6",
   down: "M12 5v14M6 13l6 6 6-6",
+  wrap: "M3 3h18v18H3zM8 8h8v8H8z",
   takeOut: "M8 8h8v8H8zM3 3l4 4M21 3l-4 4M3 21l4-4M21 21l-4-4",
   rename: "M4 20h4L19 9l-4-4L4 16z",
   save: "M6 3h12v18l-6-4-6 4z",

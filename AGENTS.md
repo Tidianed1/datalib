@@ -50,7 +50,7 @@ merge conflict waiting to happen.
 
 **UI**
 
-- [`docs/dev/cards.md`](docs/dev/cards.md), [`docs/dev/dactal.md`](docs/dev/dactal.md) — the card system, the miller layout and the browser's history; the dactal view bridge.
+- [`docs/dev/cards.md`](docs/dev/cards.md), [`docs/dev/dactal.md`](docs/dev/dactal.md) — the card system and the containers layout that hosts every card; the dactal view bridge.
 - [`datalib/backend/etl/chat-common/README.md`](datalib/backend/etl/chat-common/README.md) — the one chat layout and the sanitizer allowlist. Read before changing how a message looks.
 - [`docs/dev/wizard_file_pickers.md`](docs/dev/wizard_file_pickers.md) — a path field in the source wizard offers a native picker.
 - [`docs/dev/applets.md`](docs/dev/applets.md) — how to write an applet, and the secret every applet requires.

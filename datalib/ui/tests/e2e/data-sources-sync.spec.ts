@@ -22,27 +22,28 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { rmSync, writeFileSync } from "node:fs";
 import {
-  savedConfig,
   expandGroup,
   groupRow,
-  pickRowMenu,
-  lastSuccessOf,
   LAST_UPDATE_AT,
+  lastSuccessOf,
+  MANAGE_WITH_CONFIG,
+  pickRowMenu,
   pipelineRow as row,
-  showColumn,
   recordStatuses,
+  savedConfig,
   settle,
   settleRow,
   settleRunner,
+  showColumn,
+  shownCards,
   stampOf as lastSyncedOf,
-  untilTheSecondTurns,
   stampsBefore,
   statusLog,
-  statusWord,
   statusOf,
-  TERMINAL,
+  statusWord,
   TABLE_ROWS,
-  MANAGE_WITH_CONFIG,
+  TERMINAL,
+  untilTheSecondTurns,
 } from "./grid-helpers";
 import { expectSanePaints, watchPaints } from "./paint-watch";
 
@@ -647,9 +648,9 @@ command = "/bin/sh -c 'echo walking page 1 >&2; echo listing failed: 429 too man
 
     await cell.dblclick();
     // The log is the column after the Manage card.
-    const dialog = page.locator(".miller-col").filter({ has: page.locator(".rl-panel") });
+    const dialog = shownCards(page).filter({ has: page.locator(".rl-panel") });
     await expect(dialog).toBeVisible();
-    await expect(dialog.locator(".miller-col-title")).toHaveText("Log · flaky/ingest");
+    await expect(dialog.locator(".ct-card-title")).toHaveText("Log · flaky/ingest");
     // Opened on the step's attempt — a process of the run, with how it
     // ended in its name — and on the whole of it: the step's own words
     // and the runner's about it.

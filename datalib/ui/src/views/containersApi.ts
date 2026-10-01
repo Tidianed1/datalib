@@ -32,7 +32,7 @@ export type ContainersApi = {
   // into; the cards live in one pool in the host and are teleported, so
   // rearranging containers moves a card without remounting it.
   setSlot(id: string, el: Element | null): void;
-  // Whether a card or container shows its chrome: always in dev mode,
+  // Whether a card or container shows its chrome: always in edit mode,
   // and otherwise only outside a solidified subtree.
   chromeShown(id: string): boolean;
   isSolidified(id: string): boolean;
@@ -42,6 +42,8 @@ export type ContainersApi = {
   // Open the panel `build` describes at the pointer. It is rebuilt as
   // the tree changes, so an action that keeps it open shows its effect.
   openPanel(ev: MouseEvent, build: () => Panel): void;
+  // A gallery card at the end of container `boxId`.
+  addCard(boxId: string): void;
   // The panel of node `id`, as a builder for openPanel.
   panelFor(id: string): () => Panel;
   // Drag the edge after child `id` to resize it along `axis`.

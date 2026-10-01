@@ -1,5 +1,5 @@
 // Builtin view: the new-card gallery — the way every new card starts,
-// in both dev and non-dev mode. It lists every parameter-less
+// in both dev and non-edit mode. It lists every parameter-less
 // component with a short description and its icon: the builtins
 // cards/catalog.ts offers first (Dashboard leading, since it's the app's
 // front door, then Sources), then every
@@ -13,7 +13,7 @@ import { watch } from "vue";
 import type { CardRender } from "../types";
 import { ensureFrontend, frontendManifest, gallerySource } from "../frontendRegistry";
 import { createComponentWithAgent } from "@/handoff";
-import { devMode } from "@/devMode";
+import { editMode } from "@/editMode";
 import { galleryBuiltins, type CardMeta } from "../catalog";
 import { resolveIcon } from "../icons";
 
@@ -122,7 +122,7 @@ export function galleryView(): CardRender {
         titleEl.className = "gv-title";
         titleEl.textContent = title;
         headLine.appendChild(titleEl);
-        // Dev mode: show what the pick expands to, teaching the
+        // Edit mode: show what the pick expands to, teaching the
         // source-expression model row by row. Same line as the title
         // while it fits (see .gv-head-line).
         if (dev && src !== null) {
@@ -145,7 +145,7 @@ export function galleryView(): CardRender {
         );
       }
       // Last, after even the user's own components: the escape hatch
-      // for when nothing above fits. No source line in dev mode — the
+      // for when nothing above fits. No source line in edit mode — the
       // component name is minted on pick.
       addRow(
         "New component, built by an agent",
@@ -159,14 +159,14 @@ export function galleryView(): CardRender {
         const foot = document.createElement("div");
         foot.className = "gv-foot";
         foot.textContent =
-          "dev mode: every card is a JS expression — you can also type " +
+          "edit mode: every card is a JS expression — you can also type " +
           "source directly into the box above and press Enter.";
         wrap.appendChild(foot);
       }
     }
 
     void ensureFrontend();
-    const stop = watch([frontendManifest, devMode], paint, { immediate: true });
+    const stop = watch([frontendManifest, editMode], paint, { immediate: true });
     return () => stop();
   };
 }

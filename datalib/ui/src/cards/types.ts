@@ -2,7 +2,7 @@
 //
 // A card is defined by a piece of JS source — an expression like
 // `gridView()` or `documentView("abcd…")` — that the host shows in
-// the card's header in dev mode and evaluates with the view factories
+// the card's header in edit mode and evaluates with the view factories
 // in scope (see cardSource.ts). The expression must produce a
 // CardRender: a function that takes a ShadowRoot and a CardCtx and
 // returns a Teardown. The host (ContainersView) mounts each card
@@ -65,7 +65,7 @@ export type CardCtx = {
   // last passed to host.setState.
   initialState: string;
   // Replace the card's human-readable title, shown in the chrome bar
-  // instead of the source when dev mode is off (see devMode.ts). This
+  // instead of the source when edit mode is off (see editMode.ts). This
   // is the ONLY title channel: a card typically calls it first thing
   // in its render (computing the title from its arguments — e.g.
   // `gridView({ q: "kraken" })` titles itself "Search: kraken") and

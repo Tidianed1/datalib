@@ -5,7 +5,7 @@
 import { onBeforeUnmount, onMounted, useTemplateRef } from "vue";
 import ContainersView from "@/views/ContainersView.vue";
 import RootStorageBar from "@/components/RootStorageBar.vue";
-import { devMode } from "@/devMode";
+import { editMode } from "@/editMode";
 import { density, DENSITIES } from "@/density";
 import { LOG_CARD, surface, type SurfaceCommands } from "@/surface";
 
@@ -50,13 +50,13 @@ onBeforeUnmount(() => {
         </button>
       </div>
       <button
-        class="cards-dev-toggle"
-        :class="{ 'is-active': devMode }"
-        :aria-pressed="devMode"
-        title="dev mode: show and edit each card's source, and every container, solidified ones included"
-        @click="devMode = !devMode"
+        class="cards-edit-toggle"
+        :class="{ 'is-active': editMode }"
+        :aria-pressed="editMode"
+        title="edit mode: show and edit each card's source, and every container, solidified ones included"
+        @click="editMode = !editMode"
       >
-        Dev
+        Edit
       </button>
     </div>
   </div>
@@ -86,7 +86,7 @@ onBeforeUnmount(() => {
   font-size: var(--datalib-font-size-small);
 }
 .cards-logs,
-.cards-dev-toggle {
+.cards-edit-toggle {
   flex: 0 0 auto;
   height: calc(var(--datalib-control-h) - 6px);
   border: 1px solid var(--datalib-border);
@@ -98,10 +98,10 @@ onBeforeUnmount(() => {
   padding: 0 8px;
 }
 .cards-logs:hover,
-.cards-dev-toggle:hover {
+.cards-edit-toggle:hover {
   background: var(--datalib-hover);
 }
-.cards-dev-toggle.is-active {
+.cards-edit-toggle.is-active {
   background: var(--datalib-accent);
   border-color: var(--datalib-accent);
   color: var(--datalib-on-accent);

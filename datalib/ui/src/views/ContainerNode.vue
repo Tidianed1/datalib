@@ -3,10 +3,10 @@
 // (a slot its DOM is teleported into, under a header when chrome shows)
 // or a container laying out its children. Recursive; everything that
 // changes the tree goes through the host (containersApi.ts).
-import { computed, inject } from "vue";
+import { computed, inject, nextTick, useTemplateRef, watch } from "vue";
 import CardControls from "@/components/CardControls.vue";
 import { growSourceBox, vAutoGrow } from "@/components/autoGrow";
-import { devMode } from "@/devMode";
+import { editMode } from "@/editMode";
 import {
   DEFAULT_COLUMN,
   LAYOUT_ICONS,
@@ -21,13 +21,16 @@ import { CONTAINERS_API } from "@/views/containersApi";
 const props = defineProps<{ node: TreeNode; parentLayout: Layout; height?: number | null }>();
 const api = inject(CONTAINERS_API)!;
 
+// Card headers and a tab strip's close buttons show outside a solidified
+// subtree, and everywhere in edit mode. Container frames, with their
+// folder tabs, are for arranging, and show in edit mode only.
 const chrome = computed(() => api.chromeShown(props.node.id));
 // A tab's name is on its tab, so a card directly in a tabs container
-// shows a header only in dev mode, for its source.
+// shows a header only in edit mode, for its source.
 const cardHead = computed(
   () =>
     props.node.kind === "card" &&
-    (devMode.value || (chrome.value && props.parentLayout !== "tabs")),
+    (editMode.value || (chrome.value && props.parentLayout !== "tabs")),
 );
 // A container's edge is dashed while cards open into it, and a thick
 // solid line once it is solidified (itself or from further out).
@@ -40,6 +43,7 @@ const bodyStyle = computed(() => (props.height != null ? { flex: `0 0 ${props.he
 
 function childStyle(child: TreeNode) {
   if (props.node.kind !== "box") return {};
+  if (props.node.layout === "page") return { flex: "0 0 auto" };
   if (props.node.layout === "columns") {
     return { flex: `0 0 ${child.basis ?? DEFAULT_COLUMN}px` };
   }
@@ -49,19 +53,43 @@ function childStyle(child: TreeNode) {
 }
 
 function hasHandle(i: number): boolean {
-  if (props.node.kind !== "box") return false;
+  if (props.node.kind !== "box" || props.node.layout === "page") return false;
   if (props.node.layout === "columns") return true;
   return i < props.node.children.length - 1;
 }
+
+// A column that appears in a Columns container is scrolled into view: a
+// row wider than the window would otherwise open it off the right edge,
+// with nothing moving to show the click did anything.
+const childrenEl = useTemplateRef<HTMLElement>("childrenEl");
+watch(
+  () => (props.node.kind === "box" ? props.node.children.map((c) => c.id) : []),
+  async (now, before) => {
+    if (props.node.kind !== "box" || props.node.layout !== "columns") return;
+    const added = now.filter((id) => !before.includes(id));
+    if (added.length === 0) return;
+    await nextTick();
+    const last = added[added.length - 1];
+    childrenEl.value
+      ?.querySelector(`:scope > [data-child-id="${CSS.escape(last)}"]`)
+      ?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+  },
+);
 
 const slotRef = (el: unknown) => api.setSlot(props.node.id, (el as Element | null) ?? null);
 </script>
 
 <template>
-  <div v-if="node.kind === 'card'" class="ct-card" :data-card-id="node.id">
+  <div
+    v-if="node.kind === 'card'"
+    class="ct-card"
+    :class="{ 'is-natural': parentLayout === 'page', 'is-edit': editMode }"
+    :data-card-id="node.id"
+    :data-card-source="node.source"
+  >
     <div v-if="cardHead" class="ct-card-head">
       <textarea
-        v-if="devMode"
+        v-if="editMode"
         v-auto-grow
         class="ct-source"
         rows="1"
@@ -87,11 +115,11 @@ const slotRef = (el: unknown) => api.setSlot(props.node.id, (el as Element | nul
   <div
     v-else
     class="ct-box"
-    :class="chrome ? ['ct-frame', `ct-frame--${node.layout}`, { 'is-solid': solid }] : []"
+    :class="editMode ? ['ct-frame', `ct-frame--${node.layout}`, { 'is-solid': solid }] : []"
     :data-box-id="node.id"
   >
     <button
-      v-if="chrome"
+      v-if="editMode"
       class="ct-foldertab"
       :title="`${LAYOUT_LABELS[node.layout]} container: layout, solidifying and more`"
       @click="api.openPanel($event, api.panelFor(node.id))"
@@ -141,13 +169,14 @@ const slotRef = (el: unknown) => api.setSlot(props.node.id, (el as Element | nul
     </div>
     <div
       v-else
+      ref="childrenEl"
       class="ct-children"
       :class="`ct-children--${node.layout}`"
       data-body
       :style="bodyStyle"
     >
       <template v-for="(child, i) in node.children" :key="child.id">
-        <div class="ct-child" :style="childStyle(child)">
+        <div class="ct-child" :data-child-id="child.id" :style="childStyle(child)">
           <ContainerNode
             :node="child"
             :parent-layout="node.layout"
@@ -164,6 +193,16 @@ const slotRef = (el: unknown) => api.setSlot(props.node.id, (el as Element | nul
           @pointerdown="api.startResize(child.id, axis, $event)"
         />
       </template>
+      <!-- Columns that cards open into end in a strip that adds one. -->
+      <button
+        v-if="node.layout === 'columns' && chrome"
+        class="ct-add"
+        title="add a card"
+        aria-label="add a card"
+        @click="api.addCard(node.id)"
+      >
+        ＋
+      </button>
     </div>
   </div>
 </template>
@@ -213,7 +252,7 @@ const slotRef = (el: unknown) => api.setSlot(props.node.id, (el as Element | nul
 .ct-source:focus {
   outline: 1px solid var(--datalib-accent);
 }
-/* A container with chrome is a frame coloured by its layout, with a
+/* In edit mode a container is a frame coloured by its layout, with a
    folder tab on its top edge that opens its menu. */
 .ct-frame {
   --ct-color: #4f5d7a;
@@ -350,6 +389,22 @@ const slotRef = (el: unknown) => api.setSlot(props.node.id, (el as Element | nul
 .ct-children--stack {
   flex-direction: column;
 }
+/* A page: children one after another at their natural height, and
+   the page scrolls when they do not fit. */
+.ct-children--page {
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+}
+/* In edit mode every card shows its own edge, inside its container's. */
+.ct-card.is-edit {
+  border: 1px solid var(--datalib-border);
+  border-radius: 4px;
+}
+.ct-card.is-natural,
+.ct-card.is-natural .ct-slot {
+  flex: 0 0 auto;
+}
 .ct-children--columns {
   overflow-x: auto;
 }
@@ -358,6 +413,20 @@ const slotRef = (el: unknown) => api.setSlot(props.node.id, (el as Element | nul
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+.ct-add {
+  flex: 0 0 28px;
+  border: 1px dashed var(--datalib-border);
+  border-radius: var(--datalib-radius);
+  margin: 4px;
+  background: transparent;
+  color: var(--datalib-muted);
+  font-size: 16px;
+  cursor: pointer;
+}
+.ct-add:hover {
+  background: var(--datalib-hover);
+  color: var(--datalib-fg);
 }
 .ct-handle {
   flex: 0 0 5px;

@@ -41,23 +41,26 @@ function ids(n: TreeNode): string[] {
 
 describe("where an opened card lands", () => {
   it("leaves a solidified composite for a new tab beside it, and shows that tab", () => {
-    const root = openFrom(fixture(), "d2", [makeCard("new", "x()")]) as BoxNode;
-    expect(ids(root)).toEqual(["dash", "sandbox", "new"]);
-    expect(find(root, "new")?.openedBy).toBe("dash");
-    expect(root.selected).toBe("new");
+    const root = openFrom(fixture(), "d2", [makeCard("new", "x()")], "tab") as BoxNode;
+    // A tab of its own: a Columns container holding the card, so what
+    // the card opens lands beside it.
+    expect(ids(root)).toEqual(["dash", "sandbox", "tab"]);
+    expect(find(root, "tab")?.openedBy).toBe("dash");
+    expect(ids(find(root, "tab")!)).toEqual(["new"]);
+    expect(root.selected).toBe("tab");
     // The composite kept its shape.
     expect(ids(find(root, "dash")!)).toEqual(["d1", "d2"]);
   });
 
   it("stays inside an unsolidified container: columns drop what was right of the opener", () => {
-    const root = openFrom(fixture(), "s1", [makeCard("n1", "x()"), makeCard("n2", "y()")]);
+    const root = openFrom(fixture(), "s1", [makeCard("n1", "x()"), makeCard("n2", "y()")], "tab");
     expect(ids(find(root, "sandbox")!)).toEqual(["s1", "n1", "n2"]);
     expect(find(root, "n2")?.openedBy).toBe("n1");
   });
 
   it("goes from a solidified container inside a sandbox to the sandbox, right of it", () => {
     expect(landing(fixture(), "i1")).toEqual({ boxId: "sandbox", branchId: "inner" });
-    const root = openFrom(fixture(), "i1", [makeCard("n", "x()")]);
+    const root = openFrom(fixture(), "i1", [makeCard("n", "x()")], "tab");
     expect(ids(find(root, "sandbox")!)).toEqual(["s1", "inner", "n"]);
   });
 });
@@ -85,14 +88,16 @@ describe("solidifying", () => {
 
 describe("changing the tree", () => {
   it("closing a tab closes what was opened from it, and selects the one before", () => {
-    let root = openFrom(fixture(), "d1", [makeCard("a", "x()"), makeCard("b", "y()")]) as BoxNode;
+    let root = openFrom(fixture(), "d1", [makeCard("a", "x()")], "ta") as BoxNode;
+    root = openFrom(root, "a", [makeCard("b", "y()")], "unused") as BoxNode;
+    root = openFrom(setSolidified(root, "ta", true), "b", [makeCard("c", "z()")], "tc") as BoxNode;
     expect(tabRows(root).map((r) => [r.node.id, r.depth])).toEqual([
       ["dash", 0],
-      ["a", 1],
-      ["b", 2],
+      ["ta", 1],
+      ["tc", 2],
       ["sandbox", 0],
     ]);
-    root = remove(root, "a") as BoxNode;
+    root = remove(root, "ta") as BoxNode;
     expect(ids(root)).toEqual(["dash", "sandbox"]);
     expect(root.selected).toBe("sandbox");
   });

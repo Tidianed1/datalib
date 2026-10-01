@@ -20,8 +20,6 @@ const desktop = isDesktopApp();
 // shell's `under_title_bar`): the toolbar is the title bar, so it leaves
 // the window buttons room and its empty areas move the window.
 const underTitleBar = desktop && /Mac/.test(navigator.platform);
-const goBack = () => history.back();
-const goForward = () => history.forward();
 
 // The gate in front of the whole app, for the three states where showing
 // the app would be a lie.
@@ -90,7 +88,7 @@ onUnmounted(() => stop?.());
 
 <template>
   <main class="datalib-shell" data-feedback-root>
-    <!-- The toolbar: back and forward in the desktop app, the app and
+    <!-- The toolbar: the app and
          library names, and the search box. -->
     <nav
       v-if="!gate"
@@ -100,18 +98,6 @@ onUnmounted(() => stop?.());
       data-tauri-drag-region
     >
       <div class="datalib-toolbar-start" data-tauri-drag-region>
-        <template v-if="desktop">
-          <button class="datalib-tool" title="back (⌘[)" aria-label="Back" @click="goBack">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path fill="currentColor" d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z" />
-            </svg>
-          </button>
-          <button class="datalib-tool" title="forward (⌘])" aria-label="Forward" @click="goForward">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path fill="currentColor" d="M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z" />
-            </svg>
-          </button>
-        </template>
         <LibraryCrumb :config-path="config?.path ?? null" />
       </div>
       <div class="datalib-toolbar-sync" data-tauri-drag-region><SyncProgressChrome /></div>
@@ -206,26 +192,5 @@ onUnmounted(() => stop?.());
   flex: 0 1000 440px;
   min-width: 180px;
   display: flex;
-}
-.datalib-tool {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: var(--datalib-control-h);
-  height: var(--datalib-control-h);
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: var(--datalib-radius);
-  background: transparent;
-  color: var(--datalib-fg);
-  cursor: pointer;
-}
-.datalib-tool svg {
-  width: calc(var(--datalib-icon-size) + 4px);
-  height: calc(var(--datalib-icon-size) + 4px);
-}
-.datalib-tool:hover {
-  background: var(--datalib-hover);
-  border-color: var(--datalib-border);
 }
 </style>
