@@ -61,6 +61,11 @@
           --error-fg: #ff8a80;
         }
       }
+      /* The rules below set `display`, which would otherwise win over
+         the `hidden` attribute the script toggles. */
+      [hidden] {
+        display: none !important;
+      }
       html,
       body {
         margin: 0;
@@ -174,6 +179,7 @@
         align-items: center;
         gap: 14px;
         width: 100%;
+        box-sizing: border-box;
         padding: 14px 16px;
         border: none;
         border-bottom: 1px solid var(--row-line);
@@ -288,6 +294,9 @@
         flex: 1 1 auto;
         min-width: 0;
         overflow-wrap: anywhere;
+      }
+      .where .link {
+        white-space: nowrap;
       }
       .where .what code {
         color: var(--fg);

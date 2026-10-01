@@ -67,4 +67,14 @@ test("an empty folder gets an explained bootstrap, not a 502", async ({ page, re
   await page.goto(`${EMPTY_URL}/data_sources`);
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Set up a data library" })).toHaveCount(0);
+
+  // The Dashboard of a library with no sources says so where the
+  // sources would be, with nothing to sync, and its button opens the
+  // add-source form.
+  await page.goto(`${EMPTY_URL}/`);
+  const sources = page.getByRole("region", { name: "Sources" });
+  await expect(sources.getByText("No sources yet.")).toBeVisible();
+  await expect(page.getByText("Nothing to sync yet")).toBeVisible();
+  await sources.getByRole("button", { name: "Add source" }).click();
+  await expect(page.locator(".wiz-filter")).toBeVisible();
 });
