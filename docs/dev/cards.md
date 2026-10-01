@@ -471,12 +471,14 @@ programs against:
   (`cards/SyncDashboardCard.ce.vue`): the group's Manage row at the top
   and each step's row under it, laid out vertically, each with a
   toolbar of its row-menu actions and small charts over one run
-  (`cards/TimeChart.ce.vue`; which charts, and their arithmetic, are
-  `cards/dashboardCharts.ts`). The series are
+  (`cards/TimeChart.ce.vue`, drawn by [uPlot](https://github.com/leeoniya/uPlot),
+  whose stylesheet the card's `styleSources` carry into its shadow root;
+  which charts, and their arithmetic, are `cards/dashboardCharts.ts`). The series are
   `GET /api/manage/groups/{id}/dashboard`: every metric the step
   reported, its warning and error lines counted up, and its tree's
   size, for the newest run the group took part in or the one picked.
-  Every chart shares the run's time axis and one crosshair. The group's
+  Every chart shares the group's time axis and one crosshair (uPlot's
+  cursor sync, keyed per card). The group's
   log for that run is a collapsible `RunLogPanel` at the bottom.
   `step` scrolls to that step's section.
 - `logView({ run, step, launch, q, jumpToEnd })` — the run log

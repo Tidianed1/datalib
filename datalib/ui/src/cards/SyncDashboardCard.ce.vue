@@ -80,7 +80,9 @@ const dash = ref<Dashboard | null>(null);
 const loadError = ref<string | null>(null);
 const banner = ref<{ ok: boolean; text: string } | null>(null);
 const busy = ref(false);
-const hover = ref<number | null>(null);
+/// uPlot's cursor sync is page-wide by key: this card's charts share one
+/// crosshair, and another dashboard's are not in it.
+const syncKey = `sd-${group}-${props.ctx.cardId}`;
 const now = ref(Date.now());
 
 const rows = computed<ActionRow[]>(() => {
@@ -331,8 +333,7 @@ onUnmounted(() => {
           :chart="c"
           :domain="domain"
           :end="domain[1]"
-          :hover="hover"
-          @hover="hover = $event"
+          :sync-key="syncKey"
         />
       </div>
     </article>
@@ -397,8 +398,7 @@ onUnmounted(() => {
             :chart="c"
             :domain="domain"
             :end="endOf(row.id)"
-            :hover="hover"
-            @hover="hover = $event"
+            :sync-key="syncKey"
           />
         </div>
         <p v-if="charts.length === 0" class="sd-empty">

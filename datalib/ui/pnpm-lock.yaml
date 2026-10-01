@@ -41,6 +41,9 @@ importers:
       toml-eslint-parser:
         specifier: ^1.0.3
         version: 1.0.3
+      uplot:
+        specifier: ^1.6.32
+        version: 1.6.32
       vue:
         specifier: ^3.5.42
         version: 3.5.43(typescript@6.0.3)
@@ -1279,6 +1282,9 @@ packages:
       webpack:
         optional: true
 
+  uplot@1.6.32:
+    resolution: {integrity: sha512-KIMVnG68zvu5XXUbC4LQEPnhwOxBuLyW1AHtpm6IKTXImkbLgkMy+jabjLgSLMasNuGGzQm/ep3tOkyTxpiQIw==}
+
   vanilla-calendar-pro@3.3.2:
     resolution: {integrity: sha512-RaLpDtvQFeKi0ajOpGBedLNrr0YoiYAF+0sppk4XZV/U57AuihJIhw8h2whUvIG1ZSR3LrdSXk3lHLkCPGlHvg==}
 
@@ -2473,6 +2479,8 @@ snapshots:
       rolldown: 1.2.11
       rollup: 4.60.4
       vite: 8.3.1(esbuild@0.27.7)
+
+  uplot@1.6.32: {}
 
   vanilla-calendar-pro@3.3.2: {}
 

@@ -5,7 +5,7 @@ import {
   groupSpan,
   labelText,
   stepCharts,
-  stepPath,
+  aligned,
   sumSeries,
   valueAt,
   yRange,
@@ -51,14 +51,32 @@ describe("reading a step function", () => {
     ]);
   });
 
-  it("draws flat between points and carries the last to the end", () => {
-    const path = stepPath(
-      pts,
-      30,
-      (t) => t,
-      (v) => v,
-    );
-    expect(path).toBe("M10.0,1.0L20.0,1.0L20.0,5.0L30.0,5.0");
+  it("aligns lines on one x column, null before each starts, carried to the end", () => {
+    const chart = {
+      key: "k",
+      title: "k",
+      unit: "count" as const,
+      fromZero: true,
+      lines: [
+        {
+          label: "a",
+          color: { slot: 0 },
+          points: [
+            { t: 5_000, v: 1 },
+            { t: 20_000, v: 5 },
+          ],
+        },
+        { label: "b", color: { slot: 1 }, points: [{ t: 15_000, v: 9 }] },
+      ],
+    };
+    // The domain opens at 10s: a's earlier point folds into its start.
+    expect(aligned(chart, [10_000, 40_000], 30_000)).toEqual({
+      xs: [10, 15, 20, 30],
+      ys: [
+        [1, 1, 5, 5],
+        [null, 9, 9, 9],
+      ],
+    });
   });
 });
 
