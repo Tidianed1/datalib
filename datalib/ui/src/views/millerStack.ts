@@ -22,7 +22,7 @@ export type Slot = {
 export const DEFAULT_WIDTH = 640;
 
 // The stack "/" renders when the URL carries no columns.
-export const DEFAULT_SPECS: ColumnSpec[] = [{ code: "homeView()", size: null, state: "" }];
+export const DEFAULT_SPECS: ColumnSpec[] = [{ code: "dashboardView()", size: null, state: "" }];
 
 export function isBlankSource(source: string): boolean {
   return source.trim() === "";

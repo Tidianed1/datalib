@@ -16,9 +16,9 @@ test.describe("new-card gallery (non-dev mode)", () => {
     await expect(page.locator(".miller-col-source")).toHaveCount(0);
     await page.locator(".miller-add").click();
 
-    // The gallery column appears, builtins listed with Home first.
+    // The gallery column appears, builtins listed with Dashboard first.
     const galleryRows = page.locator(".gv-row");
-    await expect(galleryRows.first()).toContainText("Home");
+    await expect(galleryRows.first()).toContainText("Dashboard");
     expect(decodeURIComponent(await page.evaluate(() => location.pathname))).toContain(
       "galleryView()",
     );

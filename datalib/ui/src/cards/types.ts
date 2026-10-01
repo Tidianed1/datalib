@@ -119,7 +119,7 @@ export type EdgeHoverPayload = {
 export type ViewLibs = {
   // Where a person starts: what needs them, the library, the sources
   // and the newest documents. The card a new window opens on.
-  homeView: () => CardRender;
+  dashboardView: () => CardRender;
   // The Search card: results as a list, the picked one read in place.
   // The same search as gridView, which shows it as a table.
   searchView: (opts?: { q?: string }) => CardRender;
@@ -159,7 +159,7 @@ export type ViewLibs = {
   tableView: (opts: { url: string }) => CardRender;
   // The Manage screen as a card: every source and step config.toml
   // declares, with status, actions and the panels they open.
-  sourcesView: () => CardRender;
+  sourcesView: (opts?: { add?: boolean }) => CardRender;
   // config.toml itself, edited directly.
   configView: () => CardRender;
   // The run log: one process's lines — a step's newest attempt, the

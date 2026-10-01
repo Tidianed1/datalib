@@ -43,10 +43,10 @@ test("?token= mints a session cookie, then the app runs on it", async ({ page, c
   expect(cookie?.sameSite).toBe("Lax");
 
   // The app itself came up, which means the cookie carried the bundle,
-  // the /applet/unified_index/search behind Home's latest activity, and
+  // the /applet/unified_index/search behind the Dashboard's latest activity, and
   // everything else the page asked for — no per-request token plumbing
   // anywhere in the UI.
-  const firstRow = page.locator(".home .recent").first();
+  const firstRow = page.locator(".dashboard .recent").first();
   await expect(firstRow).toBeVisible({ timeout: 20_000 });
 
   // And a fresh navigation with no token at all now works, because the

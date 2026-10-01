@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// The Home card: where a person starts. What needs them, how big the
+// The Dashboard card: where a person starts. What needs them, how big the
 // library is, each source's state, and the newest documents — all read
 // from endpoints other cards already use (the manage rows and the
 // search), so it adds no backend of its own.
@@ -16,12 +16,12 @@ import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop"
 import { copyToClipboard } from "@/clipboard";
 import { pushToast } from "@/toasts";
 import { logSource } from "./libs/logView";
-import { statusTone, needsYou, type Tone } from "./home";
+import { statusTone, needsYou, type Tone } from "./dashboard";
 
 const props = defineProps<{ ctx: CardCtx }>();
 const api = useApi();
 
-props.ctx.setTitle("Home");
+props.ctx.setTitle("Dashboard");
 
 const manage = ref<ManageResponse | null>(null);
 const recent = ref<SearchRow[]>([]);
@@ -70,8 +70,20 @@ const segments = computed(() => {
   return out.map((s) => ({ ...s, pct: (100 * s.bytes) / total }));
 });
 
+/// A library with no sources, or with sources that have never synced,
+/// gets one next step instead of a status: add a source, or start the
+/// first sync.
+const stage = computed<"loading" | "empty" | "first_sync" | "normal">(() => {
+  if (!manage.value) return "loading";
+  if (sources.value.length === 0) return "empty";
+  if (!manage.value.run) return "first_sync";
+  return "normal";
+});
+
 const lastRun = computed(() => {
   const run = manage.value?.run;
+  if (stage.value === "empty") return { tone: "muted" as Tone, text: "Nothing to sync yet" };
+  if (stage.value === "first_sync") return { tone: "run" as Tone, text: "Start your first sync" };
   if (!run) return { tone: "muted" as Tone, text: "Not synced yet" };
   if (run.live) return { tone: "run" as Tone, text: "Syncing now" };
   return { tone: "ok" as Tone, text: `Synced ${formatRelative(run.finished_at, now.value)}` };
@@ -99,6 +111,10 @@ async function syncRow(row: ManageRow) {
 
 function open(...sources: string[]) {
   props.ctx.host.openCards(...sources);
+}
+
+function addSource() {
+  open(`sourcesView(${JSON.stringify({ add: true })})`);
 }
 
 function openLog(row: ManageRow) {
@@ -171,13 +187,14 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="home">
-    <header class="home-head">
-      <span class="home-state" :class="`tone-${lastRun.tone}`">
+  <div class="dashboard">
+    <header class="dashboard-head" :class="{ 'dashboard-head-next': stage === 'first_sync' }">
+      <span class="dashboard-state" :class="`tone-${lastRun.tone}`">
         <span class="dot" />{{ lastRun.text }}
       </span>
       <button
-        class="home-btn"
+        class="dashboard-btn"
+        :class="{ 'dashboard-btn-strong': stage === 'first_sync' }"
         :disabled="!!syncAll.blocked"
         :title="syncAll.blocked ?? syncAll.label"
         @click="syncEverything"
@@ -186,8 +203,8 @@ onBeforeUnmount(() => {
       </button>
     </header>
 
-    <div class="home-body">
-      <p v-if="loadError" class="home-error">Could not load the sources: {{ loadError }}</p>
+    <div class="dashboard-body">
+      <p v-if="loadError" class="dashboard-error">Could not load the sources: {{ loadError }}</p>
 
       <section v-if="attention.length" class="panel panel-warn" aria-label="Needs you">
         <h2 class="panel-head panel-head-warn">
@@ -206,7 +223,9 @@ onBeforeUnmount(() => {
           <button v-if="a.problems" class="link" @click="openProblems(a.row)">Review</button>
           <template v-if="a.failed">
             <button class="link" @click="openLog(a.row)">View log</button>
-            <button class="home-btn home-btn-strong" @click="syncRow(a.row)">Sync again</button>
+            <button class="dashboard-btn dashboard-btn-strong" @click="syncRow(a.row)">
+              Sync again
+            </button>
           </template>
         </div>
       </section>
@@ -249,18 +268,19 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <section class="panel" aria-label="Sources">
+      <section class="panel" :class="{ 'panel-next': stage === 'empty' }" aria-label="Sources">
         <h2 class="panel-head">
           <span class="section-title">Sources</span>
           <button class="link" @click="open('sourcesView()')">Open Sources</button>
         </h2>
-        <div class="grid grid-head">
+        <div v-if="sources.length" class="grid grid-head">
           <span /><span>Name</span><span>Status</span><span>Updated</span
           ><span class="num">Items</span><span class="num">Size</span>
         </div>
-        <p v-if="manage && sources.length === 0" class="empty">
-          No sources yet. Open Sources to add one.
-        </p>
+        <div v-if="stage === 'empty'" class="row add-first">
+          <span class="row-text">No sources yet.</span>
+          <button class="dashboard-btn dashboard-btn-strong" @click="addSource">Add source</button>
+        </div>
         <div v-for="r in sources" :key="r.id" class="grid grid-row">
           <img v-if="iconUrl(r.name.icon)" class="tile" :src="iconUrl(r.name.icon)!" alt="" />
           <span v-else />
@@ -297,7 +317,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.home {
+.dashboard {
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -305,7 +325,7 @@ onBeforeUnmount(() => {
   color: var(--datalib-fg);
   background: var(--datalib-surface-2);
 }
-.home-head {
+.dashboard-head {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
@@ -315,7 +335,7 @@ onBeforeUnmount(() => {
   background: var(--datalib-bg);
   border-bottom: 1px solid var(--datalib-border-soft);
 }
-.home-body {
+.dashboard-body {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
@@ -324,12 +344,20 @@ onBeforeUnmount(() => {
   gap: var(--datalib-gap);
   padding: var(--datalib-pad);
 }
-.home-state {
+/* The one next step for a library that has never synced. */
+.dashboard-head-next {
+  justify-content: space-between;
+  background: color-mix(in srgb, var(--datalib-accent) 8%, var(--datalib-bg));
+}
+.dashboard-head-next .dashboard-state {
+  font-weight: 600;
+}
+.dashboard-state {
   display: flex;
   align-items: center;
   gap: 6px;
 }
-.home-btn {
+.dashboard-btn {
   height: var(--datalib-control-h);
   padding: 0 10px;
   font: inherit;
@@ -340,22 +368,22 @@ onBeforeUnmount(() => {
   color: var(--datalib-fg);
   cursor: pointer;
 }
-.home-btn:hover:not(:disabled) {
+.dashboard-btn:hover:not(:disabled) {
   background: var(--datalib-hover);
 }
-.home-btn:disabled {
+.dashboard-btn:disabled {
   opacity: 0.5;
   cursor: default;
 }
-.home-btn-strong {
+.dashboard-btn-strong {
   border-color: var(--datalib-accent);
   background: var(--datalib-accent);
   color: var(--datalib-on-accent);
 }
-.home-btn-strong:hover {
+.dashboard-btn-strong:hover {
   background: color-mix(in srgb, var(--datalib-accent) 85%, black);
 }
-.home-error {
+.dashboard-error {
   margin: 0;
   color: var(--datalib-error-fg);
 }
@@ -375,6 +403,19 @@ onBeforeUnmount(() => {
   border: 1px solid var(--datalib-border-soft);
   border-radius: var(--datalib-radius);
   overflow: hidden;
+}
+.panel-next {
+  border-color: var(--datalib-accent);
+}
+.panel-next .panel-head {
+  background: color-mix(in srgb, var(--datalib-accent) 8%, var(--datalib-bg));
+}
+.panel-next .section-title {
+  color: var(--datalib-accent);
+}
+.add-first {
+  border-top: none;
+  padding: 8px 10px;
 }
 .panel-warn {
   border-color: var(--datalib-warn-border);

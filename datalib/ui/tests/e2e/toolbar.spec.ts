@@ -5,7 +5,7 @@ import { stubClipboard } from "./grid-helpers";
 // card on what was typed, and ⌘K (Ctrl+K) reaches it from anywhere;
 // the status bar's "Logs" reveals the log once. All act on the
 // URL-synced miller stack, so the path says what they did. A new
-// window opens on Home.
+// window opens on the Dashboard.
 
 async function stackPath(page: import("@playwright/test").Page): Promise<string> {
   return decodeURIComponent(await page.evaluate(() => location.pathname));
@@ -15,17 +15,17 @@ const searchBox = (page: import("@playwright/test").Page) =>
   page.getByRole("searchbox", { name: "Search your data" });
 
 test.describe("toolbar", () => {
-  test("a new window opens on Home", async ({ page }) => {
+  test("a new window opens on the Dashboard", async ({ page }) => {
     await page.goto("/");
     await expect(page.locator(".miller-col")).toHaveCount(1);
-    await expect(page.locator(".miller-col-title")).toHaveText("Home");
+    await expect(page.locator(".miller-col-title")).toHaveText("Dashboard");
   });
 
   test("the search box opens a search card on what was typed", async ({ page }) => {
     await page.goto("/");
-    // The card surface is up once Home is: a search asked before that
+    // The card surface is up once the Dashboard is: a search asked before that
     // replaces the stack instead of opening beside it.
-    await expect(page.locator(".miller-col-title")).toHaveText("Home");
+    await expect(page.locator(".miller-col-title")).toHaveText("Dashboard");
     await searchBox(page).fill("warp");
     await searchBox(page).press("Enter");
     await expect(page.locator(".miller-col")).toHaveCount(2);
