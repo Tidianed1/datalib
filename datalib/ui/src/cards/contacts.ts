@@ -343,7 +343,7 @@ export async function decorateHandles(root: HTMLElement): Promise<Decorated | nu
     s.removeAttribute("title");
     s.setAttribute("aria-label", look.ariaLabel);
     s.dataset.label = look.text;
-    const lead = document.createElement(look.initial ? "span" : "img");
+    const lead = s.ownerDocument.createElement(look.initial ? "span" : "img");
     lead.setAttribute("aria-hidden", "true");
     if (look.initial) {
       lead.className = "handle-initial";
@@ -354,33 +354,18 @@ export async function decorateHandles(root: HTMLElement): Promise<Decorated | nu
       (lead as HTMLImageElement).alt = "";
       lead.className = "handle-mark";
     }
-    s.replaceChildren(lead, document.createTextNode(look.text));
+    s.replaceChildren(lead, s.ownerDocument.createTextNode(look.text));
   }
   return { who, canLink };
 }
 
 /** The selection, as a range inside `root`, or null when it is elsewhere.
- *  The document view lives in a shadow root, where Chromium answers
- *  through `ShadowRoot.getSelection` and WebKit through
- *  `Selection.getComposedRanges`. */
+ *  The body is drawn in the document frame (`docFrame.ts`), whose own
+ *  document holds the selection. */
 function selectionWithin(root: HTMLElement): Range | null {
-  const host = root.getRootNode() as
-    (ShadowRoot & { getSelection?: () => Selection | null }) | Document;
-  const sel = (host instanceof ShadowRoot && host.getSelection?.()) || document.getSelection();
+  const sel = root.ownerDocument.getSelection();
   if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
-  let range: Range = sel.getRangeAt(0);
-  const composed = (
-    sel as Selection & {
-      getComposedRanges?: (o: { shadowRoots: ShadowRoot[] }) => StaticRange[];
-    }
-  ).getComposedRanges;
-  if (host instanceof ShadowRoot && composed && !root.contains(range.commonAncestorContainer)) {
-    const [r] = composed.call(sel, { shadowRoots: [host] });
-    if (!r) return null;
-    range = document.createRange();
-    range.setStart(r.startContainer, r.startOffset);
-    range.setEnd(r.endContainer, r.endOffset);
-  }
+  const range = sel.getRangeAt(0);
   return root.contains(range.commonAncestorContainer) ? range : null;
 }
 
@@ -394,7 +379,7 @@ export function copyWithHandles(ev: ClipboardEvent, root: HTMLElement): void {
   if (!rewriteChipsForCopy(fragment)) return;
   // `innerText` keeps line breaks only for a laid-out element, so the
   // copy is laid out off-screen for the moment it is read.
-  const holder = document.createElement("div");
+  const holder = root.ownerDocument.createElement("div");
   holder.style.cssText = "position:fixed;left:-99999px;top:0;width:800px";
   holder.append(fragment);
   root.append(holder);

@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { clickRowByUuid, EVERY_ROW } from "./grid-helpers";
+import { clickRowByUuid, docBody, EVERY_ROW } from "./grid-helpers";
 
 // The document header printed the raw `created_at` right above the first
 // message, which shows the same moment in its own short form (#902). The
@@ -33,7 +33,7 @@ test("the document header does not repeat the raw created_at", async ({ page, re
   const card = page.locator(`.chat-preview[data-markdown-uuid="${pick!.markdown_uuid}"]`);
   // The body's own stamp being drawn means the document has loaded, so
   // the header below is the real one and not an empty placeholder.
-  await expect(card.locator(".msg-ts").first()).toBeVisible({ timeout: 10_000 });
+  await expect(docBody(card).locator(".msg-ts").first()).toBeVisible({ timeout: 10_000 });
   const header = card.locator(".chat-header");
   await expect(header).toBeVisible();
   await expect(header).not.toContainText(created_at!);

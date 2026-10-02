@@ -677,3 +677,34 @@ export async function settle(
 ): Promise<string> {
   return (await settleRows(page, [id], { [id]: before }, timeout))[id];
 }
+
+/** A document card's rendered body. It is drawn inside the card's
+ *  own frame (`src/cards/docFrame.ts`), so a page-level locator
+ *  does not reach it. `scope` narrows to one card when several are open. */
+export function docBody(scope: Page | Locator): Locator {
+  return scope.frameLocator("iframe.doc-frame").locator("body.chat-body");
+}
+
+/** `selector` in whichever document frame holds it, waiting until one
+ *  does. One locator cannot reach across frames, and each document card
+ *  has its own frame. */
+export async function inDocFrame(page: Page, selector: string, timeout = 10_000): Promise<Locator> {
+  let hit: Locator | null = null;
+  await expect
+    .poll(
+      async () => {
+        for (const f of page.frames()) {
+          if (f === page.mainFrame()) continue;
+          const loc = f.locator(selector);
+          if ((await loc.count().catch(() => 0)) > 0) {
+            hit = loc;
+            return true;
+          }
+        }
+        return false;
+      },
+      { timeout, message: `no document frame holds ${selector}` },
+    )
+    .toBe(true);
+  return hit!;
+}
