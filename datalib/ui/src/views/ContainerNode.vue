@@ -94,6 +94,14 @@ watch(
   },
 );
 
+// A tabs container's shown tab stays mounted once shown (ContainersView
+// says why).
+watch(
+  () => (props.node.kind === "box" && props.node.layout === "tabs" ? props.node.selected : null),
+  (id) => api.markShown(id),
+  { immediate: true },
+);
+
 const slotRef = (el: unknown) => api.setSlot(props.node.id, (el as Element | null) ?? null);
 </script>
 
@@ -178,7 +186,9 @@ const slotRef = (el: unknown) => api.setSlot(props.node.id, (el as Element | nul
       </div>
       <template v-for="child in node.children" :key="child.id">
         <ContainerNode
-          v-if="child.id === node.selected"
+          v-if="api.tabShown(child.id)"
+          v-show="child.id === node.selected"
+          :class="{ 'ct-hidden-pane': child.id !== node.selected }"
           class="ct-fill"
           :node="child"
           parent-layout="tabs"
