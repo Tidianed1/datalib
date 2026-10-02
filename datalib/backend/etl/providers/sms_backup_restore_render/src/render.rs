@@ -321,6 +321,7 @@ fn item(source_id: &str, v: &Value) -> NormalizedChatItem {
                 source_ref: source_ref.clone(),
                 is_aside: false,
                 unread: false,
+                recipients: Vec::new(),
                 problems: Vec::new(),
             }
         }
@@ -381,6 +382,7 @@ fn item(source_id: &str, v: &Value) -> NormalizedChatItem {
                 // Only an explicit `read="0"` on a message someone else
                 // sent: an older store's rows carry no `read` at all.
                 unread: !is_me && v.get("read").and_then(Value::as_bool) == Some(false),
+                recipients: Vec::new(),
                 problems: Vec::new(),
             }
         }

@@ -797,6 +797,14 @@ onMounted(() => {
 .chat-body .msg-author {
   font-weight: 600;
 }
+.chat-body .msg-recipients {
+  font-size: 0.8rem;
+  color: var(--datalib-muted, #94a3b8);
+  margin: 0 0 0.3rem;
+}
+.chat-body .msg-recipients .msg-recipient {
+  color: var(--datalib-fg, inherit);
+}
 /* A handle the contacts app can name: a chip. One it cannot yet: the
    source's own text, marked as clickable to link it. */
 .chat-body .handle-chip {

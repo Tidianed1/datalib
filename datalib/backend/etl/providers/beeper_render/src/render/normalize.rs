@@ -208,6 +208,7 @@ fn to_item(source_id: &str, room: &Room, doc: &DocBucket, m: &Event) -> Normaliz
             source_ref: Some(UpstreamRef::new(ids::KIND_EVENT, m.native_event_id.clone())),
             is_aside: false,
             unread: false,
+            recipients: Vec::new(),
             problems: Vec::new(),
         };
     }
@@ -232,6 +233,7 @@ fn to_item(source_id: &str, room: &Room, doc: &DocBucket, m: &Event) -> Normaliz
         source_ref: Some(UpstreamRef::new(ids::KIND_EVENT, m.native_event_id.clone())),
         is_aside: false,
         unread: false,
+        recipients: Vec::new(),
         problems: Vec::new(),
     }
 }

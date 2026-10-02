@@ -55,7 +55,7 @@ use datalib_schema::problems::{Outcome, ProblemRow, Scope, Stage};
 use datalib_schema::providers::Provider;
 
 use crate::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
-use datalib_etl_render::html::escape_text;
+use datalib_etl_render::html::{escape_attr, escape_text};
 
 /// Per-provider knobs the renderer parameterizes on. Values that
 /// would otherwise be hard-coded as `"signal"` / `"Signal Chat"` /
@@ -518,6 +518,11 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
                 .render(),
             );
             s.push('\n');
+            if let Some(line) = recipients_line(&item.recipients) {
+                s.push('\n');
+                s.push_str(&line);
+                s.push('\n');
+            }
         }
     }
 
@@ -576,6 +581,39 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
 
     s.push_str("\n</div>\n\n");
     Section::keyed(&item.message_uuid, s)
+}
+
+/// Who an item was addressed to, one line straight under its header:
+/// `To <span data-handle="email:…">Will Riker</span>, …; Cc …`. The UI
+/// trusts a `data-handle` here only because nothing a sender wrote can
+/// come between the header and this line.
+fn recipients_line(recipients: &[crate::types::Recipient]) -> Option<String> {
+    use crate::types::RecipientRole;
+    let mut groups: Vec<String> = Vec::new();
+    for role in [RecipientRole::To, RecipientRole::Cc] {
+        let names: Vec<String> = recipients
+            .iter()
+            .filter(|r| r.role == role)
+            .map(|r| {
+                let handle = r.handle.as_ref().map_or(String::new(), |h| {
+                    format!(" data-handle=\"{}\"", escape_attr(h.as_str()))
+                });
+                format!(
+                    "<span class=\"msg-recipient\"{handle}>{}</span>",
+                    escape_text(&r.display)
+                )
+            })
+            .collect();
+        if !names.is_empty() {
+            groups.push(format!(
+                "<span class=\"msg-recipients-role\">{}</span> {}",
+                role.label(),
+                names.join(", ")
+            ));
+        }
+    }
+    (!groups.is_empty())
+        .then(|| format!("<div class=\"msg-recipients\">{}</div>", groups.join("; ")))
 }
 
 fn render_attachment(s: &mut String, att: &crate::types::NormalizedAttachment) {
@@ -1003,6 +1041,7 @@ mod tests {
                     source_ref: None,
                     is_aside: false,
                     unread: false,
+                    recipients: Vec::new(),
                     problems: Vec::new(),
                 }],
             }],
@@ -1175,6 +1214,7 @@ mod tests {
             source_ref: None,
             is_aside: false,
             unread: false,
+            recipients: Vec::new(),
             problems: Vec::new(),
         });
         chat.buckets[0].items.push(aside_item(
@@ -1333,6 +1373,7 @@ mod tests {
             source_ref: None,
             is_aside: true,
             unread: false,
+            recipients: Vec::new(),
             problems: Vec::new(),
         }
     }
@@ -1782,5 +1823,30 @@ mod tests {
             assert_eq!(r.org_uuid.as_deref(), Some("org-123"));
             assert_eq!(r.org_name.as_deref(), Some("Starfleet"));
         }
+    }
+
+    #[test]
+    fn recipients_line_names_each_with_its_handle_and_escapes_what_it_shows() {
+        use crate::types::{Recipient, RecipientRole};
+        let r = |role, display: &str, addr: &str| Recipient {
+            role,
+            display: display.to_string(),
+            handle: datalib_handle::Handle::email(addr),
+        };
+        let line = recipients_line(&[
+            r(RecipientRole::Cc, "<Q>", "q@continuum.org"),
+            r(RecipientRole::To, "Will Riker", "riker@enterprise.org"),
+            r(RecipientRole::To, "Deanna Troi", "not an address"),
+        ])
+        .unwrap();
+        assert_eq!(
+            line,
+            "<div class=\"msg-recipients\"><span class=\"msg-recipients-role\">To</span> \
+             <span class=\"msg-recipient\" data-handle=\"email:riker@enterprise.org\">Will Riker</span>, \
+             <span class=\"msg-recipient\">Deanna Troi</span>; \
+             <span class=\"msg-recipients-role\">Cc</span> \
+             <span class=\"msg-recipient\" data-handle=\"email:q@continuum.org\">&lt;Q&gt;</span></div>"
+        );
+        assert_eq!(recipients_line(&[]), None);
     }
 }

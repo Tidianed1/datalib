@@ -78,6 +78,31 @@ pub struct NormalizedReaction {
     pub source_ref: Option<UpstreamRef>,
 }
 
+/// Someone an item was addressed to.
+#[derive(Debug, Clone, Serialize)]
+pub struct Recipient {
+    pub role: RecipientRole,
+    /// As the source showed them: a display name, else the address.
+    pub display: String,
+    pub handle: Option<datalib_handle::Handle>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum RecipientRole {
+    To,
+    Cc,
+}
+
+impl RecipientRole {
+    /// As the recipients line shows it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::To => "To",
+            Self::Cc => "Cc",
+        }
+    }
+}
+
 /// One item in a chat doc — text message, attachment-bearing message,
 /// or system event. The renderer chooses layout based on
 /// `kind` and `attachments`.
@@ -86,6 +111,9 @@ pub struct NormalizedChatItem {
     /// Stable per-item UUID minted by the provider. Used as the section
     /// anchor (`id="m-{uuid}"`) and the message-level grid_row PK.
     pub message_uuid: String,
+    /// Who it was addressed to, where the source says: an email's To and
+    /// Cc. Empty for a chat, whose members are the conversation's.
+    pub recipients: Vec<Recipient>,
     /// Who said it, as an identifier a contact can be linked to — an
     /// email address, a phone number, a Slack user. `None` where the
     /// provider has no such identifier for the author (yet), or the

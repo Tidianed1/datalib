@@ -188,6 +188,7 @@ fn build_chat(
             )),
             is_aside: is_tool_role(m.role.as_deref()),
             unread: false,
+            recipients: Vec::new(),
             problems,
         });
     }

@@ -342,6 +342,7 @@ async fn load(
             source_ref: Some(UpstreamRef::new(KIND_MESSAGE, guid)),
             is_aside: false,
             unread,
+            recipients: Vec::new(),
             problems: Vec::new(),
         });
     }

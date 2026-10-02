@@ -344,6 +344,7 @@ fn build_chat(
                 )),
                 is_aside: matches!(btype, "tool_use" | "tool_result"),
                 unread: false,
+                recipients: Vec::new(),
                 problems: block_problems,
             });
         }
@@ -377,6 +378,7 @@ fn build_chat(
             )),
             is_aside: false,
             unread: false,
+            recipients: Vec::new(),
             problems: msg_problems,
         });
     }
@@ -513,6 +515,7 @@ fn build_project_page(
             )),
             is_aside: false,
             unread: false,
+            recipients: Vec::new(),
             problems: Vec::new(),
         });
     }
@@ -604,6 +607,7 @@ fn project_item(
         source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
         is_aside: false,
         unread: false,
+        recipients: Vec::new(),
         problems: Vec::new(),
     }
 }

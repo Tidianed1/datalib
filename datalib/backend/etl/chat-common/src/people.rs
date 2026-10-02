@@ -17,6 +17,27 @@ pub fn baseline_contacts(source_id: &str, items: &[NormalizedChatItem]) -> Vec<D
         last_ms: Option<i64>,
     }
     let mut by_handle: BTreeMap<&str, (&datalib_handle::Handle, Tally)> = BTreeMap::new();
+    // Whom an item was addressed to: in the document, but writing nothing.
+    for r in items.iter().flat_map(|i| &i.recipients) {
+        let Some(handle) = &r.handle else {
+            continue;
+        };
+        let (_, tally) = by_handle.entry(handle.as_str()).or_insert((
+            handle,
+            Tally {
+                names: Vec::new(),
+                items: 0,
+                last_ms: None,
+            },
+        ));
+        let name = name_without_handle(&r.display, handle);
+        if !name.is_empty() && !name.eq_ignore_ascii_case(handle.value()) {
+            match tally.names.iter_mut().find(|(n, _)| n == name) {
+                Some((_, count)) => *count += 1,
+                None => tally.names.push((name.to_string(), 1)),
+            }
+        }
+    }
     for item in items {
         let Some(handle) = &item.author_handle else {
             continue;
@@ -144,6 +165,7 @@ mod tests {
             source_ref: None,
             is_aside: false,
             unread: false,
+            recipients: Vec::new(),
             problems: Vec::new(),
         }
     }
@@ -215,5 +237,34 @@ mod tests {
         assert_eq!(p.seen.as_ref().unwrap().items, 2);
         let r = got.iter().find(|c| c.key == "slack:T1/U_RIKER").unwrap();
         assert_eq!(r.names, ["Riker"], "no profile: the baseline as it was");
+    }
+
+    /// Whom a message went to is in the document too, having written
+    /// nothing there: a chip on a To line needs to find them.
+    #[test]
+    fn recipients_are_in_the_document_with_nothing_written() {
+        use crate::types::{Recipient, RecipientRole};
+        let picard = Handle::email("picard@enterprise.org").unwrap();
+        let troi = Handle::email("troi@enterprise.org").unwrap();
+        let mut item = by(Some(&picard), "Jean-Luc Picard", 1);
+        item.recipients = vec![
+            Recipient {
+                role: RecipientRole::To,
+                display: "Deanna Troi".into(),
+                handle: Some(troi.clone()),
+            },
+            Recipient {
+                role: RecipientRole::Cc,
+                display: "picard@enterprise.org".into(),
+                handle: Some(picard.clone()),
+            },
+        ];
+        let got = baseline_contacts("mail", &[item]);
+        let t = got.iter().find(|c| c.key == troi.as_str()).unwrap();
+        assert_eq!(t.names, ["Deanna Troi"]);
+        assert_eq!(t.seen.as_ref().unwrap().items, 0);
+        let p = got.iter().find(|c| c.key == picard.as_str()).unwrap();
+        assert_eq!(p.names, ["Jean-Luc Picard"], "a bare address is no name");
+        assert_eq!(p.seen.as_ref().unwrap().items, 1);
     }
 }

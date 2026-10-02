@@ -298,6 +298,7 @@ fn build_item(
         )),
         is_aside: false,
         unread,
+        recipients: Vec::new(),
         problems,
     }
 }

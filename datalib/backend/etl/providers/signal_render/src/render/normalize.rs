@@ -148,6 +148,7 @@ fn to_item(
         source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
         is_aside: false,
         unread: item.unread,
+        recipients: Vec::new(),
         problems: Vec::new(),
     }
 }

@@ -206,6 +206,7 @@ fn build_chats(
                     source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
                     is_aside: false,
                     unread: false,
+                    recipients: Vec::new(),
                     problems,
                 }
             })

@@ -280,6 +280,7 @@ fn me_item(
         source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
         is_aside: false,
         unread: false,
+        recipients: Vec::new(),
         problems,
     }
 }
@@ -311,6 +312,7 @@ fn post_placeholder(
         source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
         is_aside: false,
         unread: false,
+        recipients: Vec::new(),
         problems: Vec::new(),
     }
 }
