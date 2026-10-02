@@ -33,7 +33,6 @@ import {
   saveComposite,
 } from "@/views/composites";
 import {
-  DEFAULT_COLUMN,
   DIRECTIONS,
   DIRECTION_ICONS,
   DIRECTION_LABELS,
@@ -41,6 +40,7 @@ import {
   LAYOUT_ICONS,
   LAYOUT_LABELS,
   addChild,
+  addChildren,
   cards,
   find,
   instantiate,
@@ -161,24 +161,21 @@ onBeforeUnmount(() => {
   flush();
 });
 
-// The cards a URL names (a link, a popped-out card), in a Columns
-// container of their own, so what they open lands beside them as it
-// did when the URL was the whole layout. The tree, not the URL, is
-// what this layout keeps, so once opened the address goes back to "/".
-function routeNode(): TreeNode | null {
-  const specs = decodeColumns(route.path);
-  if (specs.length === 0) return null;
-  const nodes = specs.map((s) => ({
-    ...makeCard(newCardId(), s.code, s.state),
-    basis: s.size != null ? s.size * DEFAULT_COLUMN : null,
-  }));
-  return makeBox(newCardId(), "columns", nodes);
+// The cards a URL names (a link, a popped-out card), each a tab of its
+// own under the one before. The tree, not the URL, is what this layout
+// keeps, so once opened the address goes back to "/".
+function routeCards(): CardNode[] {
+  const out: CardNode[] = [];
+  for (const s of decodeColumns(route.path)) {
+    out.push({ ...makeCard(newCardId(), s.code, s.state), openedBy: out.at(-1)?.id ?? null });
+  }
+  return out;
 }
 
 function openRoute() {
-  const node = routeNode();
-  if (!node) return;
-  update(addChild(root.value, root.value.id, node));
+  const nodes = routeCards();
+  if (nodes.length === 0) return;
+  update(addChildren(root.value, root.value.id, nodes));
   void router.replace("/");
 }
 watch(
@@ -220,13 +217,13 @@ async function start() {
   void loadComposites();
   const kept = await readKept();
   // A second window starts with nothing but the cards its URL names.
-  const fromUrl = routeNode();
+  const fromUrl = routeCards();
   let tree = kept ?? makeBox(newCardId(), "tabs", mainWindow ? [dashboard()] : []);
-  if (fromUrl) tree = addChild(tree, tree.id, fromUrl) as BoxNode;
+  tree = addChildren(tree, tree.id, fromUrl) as BoxNode;
   // The outermost container is tabs and never solidified, whatever was stored.
   root.value = withATab({ ...tree, layout: "tabs", solidified: false });
   ready.value = true;
-  if (fromUrl) void router.replace("/");
+  if (fromUrl.length > 0) void router.replace("/");
 }
 void start();
 
@@ -279,7 +276,7 @@ function ctxFor(card: CardNode): CardCtx {
     const host: HostCommands = {
       openCards: (...sources) => {
         const nodes = sources.map((s) => makeCard(newCardId(), s));
-        update(openFrom(root.value, cardId, nodes, newCardId()));
+        update(openFrom(root.value, cardId, nodes));
         return nodes.map((n) => n.id);
       },
       hrefFor: (...sources) => chainHref(sources),
@@ -347,8 +344,8 @@ function toggleSolidified(box: BoxNode) {
   update(setSolidified(root.value, box.id, !box.solidified));
 }
 
-function addCard(boxId: string) {
-  update(addChild(root.value, boxId, makeCard(newCardId(), "galleryView()")));
+function addCard(boxId: string, source = "galleryView()") {
+  update(addChild(root.value, boxId, makeCard(newCardId(), source)));
 }
 
 function addBox(boxId: string, layout: Layout) {
@@ -360,16 +357,11 @@ function addBox(boxId: string, layout: Layout) {
 function newTab() {
   addCard(root.value.id);
 }
-// A card opened from the chrome gets a tab holding a Columns container,
-// as a link does (routeNode), so what it opens lands beside it.
+// A card opened from the chrome gets a tab of its own.
 function showCard(source: string) {
   const have = allCards.value.find((c) => c.source === source);
-  if (have) {
-    select(have.id);
-    return;
-  }
-  const tab = makeBox(newCardId(), "columns", [makeCard(newCardId(), source)]);
-  update(addChild(root.value, root.value.id, tab));
+  if (have) select(have.id);
+  else addCard(root.value.id, source);
 }
 defineExpose({ addCard: newTab, showCard });
 
