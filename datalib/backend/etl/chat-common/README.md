@@ -191,9 +191,15 @@ the checked-in copy cannot drift from the sources it was built from.
 A message body reaches the markdown as the sender wrote it, and the app
 renders the markdown with HTML enabled because the section wrappers are
 HTML. So before the page shows a document, `ui/src/cards/sanitize.ts`
-runs it through DOMPurify: scripts, event handlers, `javascript:` URLs,
-form controls and foreign iframes are dropped, and only the tags and
-attributes the renderers actually use survive. **A renderer that starts
-emitting a new tag or attribute has to add it there**, or the page will
-silently strip it; `ui/tests/sanitize.test.ts` is where the vocabulary
-is pinned.
+runs it through DOMPurify: scripts, event handlers, `javascript:` URLs
+and form controls are dropped, and only the tags and attributes the
+renderers actually use survive. **A renderer that starts emitting a new
+tag or attribute has to add it there**, or the page will silently strip
+it; `ui/tests/sanitize.test.ts` is where the vocabulary is pinned.
+
+An `<iframe>` survives only when it frames `plots/<name>.html`. The
+server runs such a page's scripts with no network
+(`DocumentKind::Plot` in `http/src/embed.rs`). It knows the page is a
+plot because the `unified_index` applet names it so. Every other
+document beside a markdown, such as an `.html` attachment in `blobs/`,
+runs no script at all.

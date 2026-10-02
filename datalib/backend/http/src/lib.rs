@@ -438,15 +438,23 @@ async fn proxy_impl(
 /// An applet's answer, as the browser gets it. What an applet serves is
 /// data — a rendered plot page, an attachment out of a render tree — and
 /// a document among it must not run in the app's origin, where it would
-/// hold the session: it gets the same sandbox the DACTAL page does.
+/// hold the session: it gets the sandbox policy of the kind the applet
+/// names, and runs nothing when it names none. A script or wasm file
+/// goes out as bytes, so the app page's `script-src 'self'` cannot run
+/// one a sender attached.
 fn proxied_response(r: applets::ProxyResponse) -> Response<Body> {
     let mut resp = Response::builder()
         .status(StatusCode::from_u16(r.status).unwrap_or(StatusCode::BAD_GATEWAY))
         .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff");
     if embed::is_scriptable_document(&r.content_type) {
-        resp = resp.header(header::CONTENT_SECURITY_POLICY, embed::DOCUMENT_SANDBOX_CSP);
+        resp = resp.header(header::CONTENT_SECURITY_POLICY, r.document.csp());
     }
-    resp.header(header::CONTENT_TYPE, r.content_type)
+    let content_type = if embed::is_executable(&r.content_type) {
+        "application/octet-stream".to_string()
+    } else {
+        r.content_type
+    };
+    resp.header(header::CONTENT_TYPE, content_type)
         .body(Body::from(r.body))
         .unwrap_or_else(|_| applet_error(StatusCode::BAD_GATEWAY, "malformed applet response"))
 }
@@ -1957,41 +1965,69 @@ async fn log_lines(
 mod tests {
     use super::*;
 
-    /// A document an applet serves is sandboxed on the way out; JSON is
-    /// left alone. The header, not the body, is what a browser reads.
+    fn proxied(content_type: &str, document: embed::DocumentKind) -> Response<Body> {
+        proxied_response(applets::ProxyResponse {
+            status: 200,
+            content_type: content_type.into(),
+            document,
+            body: b"<script>1</script>".to_vec(),
+        })
+    }
+
+    fn header_of(r: &Response<Body>, name: header::HeaderName) -> Option<&str> {
+        r.headers().get(name).and_then(|v| v.to_str().ok())
+    }
+
+    /// A document an applet serves is sandboxed on the way out, under the
+    /// policy of the kind it names — none means data, which runs
+    /// nothing. JSON is left alone. The header, not the body, is what a
+    /// browser reads.
     #[test]
     fn proxied_documents_are_sandboxed_and_data_is_not() {
-        let html = proxied_response(applets::ProxyResponse {
-            status: 200,
-            content_type: "text/html; charset=utf-8".into(),
-            body: b"<script>1</script>".to_vec(),
-        });
+        let html = proxied("text/html; charset=utf-8", embed::DocumentKind::Data);
         assert_eq!(html.status(), StatusCode::OK);
-        let csp = html
-            .headers()
-            .get(header::CONTENT_SECURITY_POLICY)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or_default();
-        assert!(csp.starts_with("sandbox "), "{csp:?}");
-        assert!(!csp.contains("allow-same-origin"), "{csp:?}");
         assert_eq!(
-            html.headers().get(header::X_CONTENT_TYPE_OPTIONS).unwrap(),
-            "nosniff"
+            header_of(&html, header::CONTENT_SECURITY_POLICY),
+            Some(embed::DocumentKind::Data.csp())
+        );
+        assert_eq!(
+            header_of(&html, header::X_CONTENT_TYPE_OPTIONS),
+            Some("nosniff")
         );
 
-        let json = proxied_response(applets::ProxyResponse {
-            status: 200,
-            content_type: "application/json".into(),
-            body: b"{}".to_vec(),
-        });
-        assert!(json
-            .headers()
-            .get(header::CONTENT_SECURITY_POLICY)
-            .is_none());
+        let plot = proxied("text/html", embed::DocumentKind::Plot);
         assert_eq!(
-            json.headers().get(header::X_CONTENT_TYPE_OPTIONS).unwrap(),
-            "nosniff"
+            header_of(&plot, header::CONTENT_SECURITY_POLICY),
+            Some(embed::DocumentKind::Plot.csp())
         );
+
+        let json = proxied("application/json", embed::DocumentKind::Data);
+        assert!(header_of(&json, header::CONTENT_SECURITY_POLICY).is_none());
+        assert_eq!(
+            header_of(&json, header::X_CONTENT_TYPE_OPTIONS),
+            Some("nosniff")
+        );
+    }
+
+    /// A `.js` a sender attached is served as bytes: under `nosniff` a
+    /// `<script src>` refuses it, so the app page's `script-src 'self'`
+    /// cannot be turned into a way to run it (audit 2026-10-02, P3).
+    #[test]
+    fn proxied_scripts_are_not_runnable() {
+        for ct in [
+            "text/javascript",
+            "application/javascript",
+            "application/wasm",
+        ] {
+            let r = proxied(ct, embed::DocumentKind::Data);
+            assert_eq!(
+                header_of(&r, header::CONTENT_TYPE),
+                Some("application/octet-stream"),
+                "{ct}"
+            );
+        }
+        let css = proxied("text/css", embed::DocumentKind::Data);
+        assert_eq!(header_of(&css, header::CONTENT_TYPE), Some("text/css"));
     }
 
     /// The ages are how long a running step has gone without a metric
