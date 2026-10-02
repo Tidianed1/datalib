@@ -8,7 +8,7 @@ use std::path::Path;
 use anyhow::Result;
 use datalib_etl::blob_cas::{BlobBundle, CasEdgeRow};
 use datalib_etl::progress::Progress;
-use datalib_etl_chat_common::render::RenderProfile;
+use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
 };
@@ -52,6 +52,7 @@ fn profile() -> RenderProfile {
         reaction_kind: "SMS Reaction".to_string(),
         chat_entity_kind: ids::KIND_CONVERSATION,
         render_version: RENDER_VERSION,
+        text_format: TextFormat::Plain,
     }
 }
 

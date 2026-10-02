@@ -157,6 +157,28 @@ artifact and a separate machine-readable projection, and the index
 reads the projection — **it never re-parses markdown** (AGENTS.md's
 "QMDs are write-only"), whatever database the markdown sits in.
 
+### Upstream text is escaped where it becomes markup
+
+The UI renders every document with markdown-it and `html: true`
+(`ui/src/cards/renderDocument.ts`), because the section wrappers are
+HTML. So a name, a subject or a text message written into the markdown
+as it is would be read as HTML and markdown: `Bob <bob@x>` loses its
+address, and a sender can restyle or fake parts of the page. Scripts
+cannot run — the sanitizer drops them and the frame has no
+`allow-scripts` — but markup still can.
+
+The rule: **a string that is plain text upstream is escaped at the
+point it becomes markup**, by the helper for where it lands —
+`datalib_etl_render::html` lists them (between tags, in an attribute,
+on one markdown line, a multi-line body, a link target, a code span or
+block). A string the source itself authored as markup goes in as it
+is: a Notion page's markdown, a GitHub PR's description, an email's
+HTML part after htmd, an assistant's reply. Escaping never drops a
+character; the grid's search text keeps the text as typed, and
+`plain_text` (the Contents cell) reads the escapes back. A renderer's
+test of this feeds a field `<script>x</script> & co` and checks it
+renders escaped.
+
 ## 3. The projection
 
 Three shapes, in order:

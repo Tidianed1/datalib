@@ -10,6 +10,7 @@ use datalib_etl_chat_common::render::{render_all as cc_render_all, RenderProfile
 use datalib_etl_chat_common::types::{
     own_stamp_ms, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
 };
+use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{changed_rows, keys_reading, Bucket, Input, Inputs, RawRange};
 use serde_json::Value;
@@ -41,6 +42,7 @@ fn profile() -> RenderProfile {
         reaction_kind: "LinkedIn Reaction".to_string(),
         chat_entity_kind: ids::KIND_CONVERSATION,
         render_version: RENDER_VERSION,
+        text_format: TextFormat::Plain,
     }
 }
 

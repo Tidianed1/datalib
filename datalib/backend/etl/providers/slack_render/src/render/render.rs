@@ -15,6 +15,7 @@ use datalib_etl_chat_common::types::{
     own_stamp_ms, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
     NormalizedDoc, NormalizedReaction, UpstreamRef,
 };
+use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_handle::Handle;
 
@@ -65,6 +66,7 @@ fn profile() -> RenderProfile {
         reaction_kind: "Slack Reaction".to_string(),
         chat_entity_kind: ids::KIND_THREAD,
         render_version: RENDER_VERSION,
+        text_format: TextFormat::Markdown,
     }
 }
 

@@ -11,6 +11,7 @@ use anyhow::Result;
 use datalib_etl::periodize::Period;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::Buckets;
+use datalib_etl_chat_common::TextFormat;
 use datalib_etl_chat_common::{RenderProfile, RenderSummary as ChatSummary};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_schema::providers::Provider;
@@ -61,6 +62,7 @@ pub fn profile() -> RenderProfile {
         reaction_kind: "Signal Reaction".to_string(),
         chat_entity_kind: super::ids::KIND_CHAT,
         render_version: RENDER_VERSION,
+        text_format: TextFormat::Plain,
     }
 }
 

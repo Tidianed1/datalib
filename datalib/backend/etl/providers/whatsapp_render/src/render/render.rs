@@ -9,6 +9,7 @@ use datalib_etl::blob_cas::BlobBundle;
 
 use datalib_etl::doltlite_raw;
 use datalib_etl::progress::Progress;
+use datalib_etl_chat_common::TextFormat;
 use datalib_etl_chat_common::{
     render::{Bucket, Buckets, RenderProfile},
     NormalizedChat,
@@ -40,6 +41,7 @@ fn profile() -> RenderProfile {
         reaction_kind: "WhatsApp Reaction".to_string(),
         chat_entity_kind: super::ids::KIND_CHAT,
         render_version: RENDER_VERSION,
+        text_format: TextFormat::Plain,
     }
 }
 

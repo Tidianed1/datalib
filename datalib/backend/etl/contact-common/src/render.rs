@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl::title::Title;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::html::escape_md_inline;
 use datalib_etl_render::inputs::{Bucket, Buckets};
 use datalib_etl_render::section::{join, Section};
 use datalib_schema::grid_rows::GridRow;
@@ -220,23 +221,23 @@ fn render_markdown(
     );
 
     if let Some(rel) = photo_rel {
-        out.push_str(&format!("![{title}]({rel})\n\n"));
+        out.push_str(&format!("![{}]({rel})\n\n", escape_md_inline(&title)));
     }
 
     let mut table_rows: Vec<(String, String)> = contact
         .fields
         .iter()
-        .map(|f| (f.label.clone(), f.value.clone()))
+        .map(|f| (escape_md_inline(&f.label), table_cell(&f.value)))
         .collect();
     if let Some(url) = &contact.photo_url {
-        table_rows.push(("Photo URL".to_string(), format!("<{url}>")));
+        table_rows.push(("Photo URL".to_string(), autolink_cell(url)));
     }
 
     if !table_rows.is_empty() {
         out.push_str("| Field | Value |\n");
         out.push_str("| --- | --- |\n");
         for (k, v) in table_rows {
-            out.push_str(&format!("| {} | {} |\n", k, escape_table_cell(&v)));
+            out.push_str(&format!("| {k} | {v} |\n"));
         }
         out.push('\n');
     }
@@ -317,10 +318,29 @@ fn ext_for(content_type: &str) -> &'static str {
     }
 }
 
-fn escape_table_cell(s: &str) -> String {
-    // Pipes break table cells; backslash-escape them. Collapse newlines
-    // (which also break cells) into spaces.
-    s.replace('|', "\\|").replace('\n', " ")
+/// A plain value as one table cell: each line escaped, and a line break,
+/// which would end the row, drawn as `<br>`.
+fn table_cell(value: &str) -> String {
+    value
+        .lines()
+        .map(escape_md_inline)
+        .collect::<Vec<_>>()
+        .join("<br>")
+}
+
+/// A URL as a link in a table cell, with anything that would end the
+/// link or the cell percent-encoded.
+fn autolink_cell(url: &str) -> String {
+    let mut out = String::from("<");
+    for c in url.chars() {
+        match c {
+            '<' | '>' | '|' => out.push_str(&format!("%{:02X}", c as u32)),
+            c if c.is_whitespace() => out.push_str(&format!("%{:02X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('>');
+    out
 }
 
 fn yaml_safe(s: &str) -> String {
@@ -387,6 +407,49 @@ mod tests {
         // Pipe inside a value is escaped so it doesn't break the table.
         assert!(md.contains("Captain \\| USS Enterprise"));
         assert!(md.contains("provider: linkedin"));
+    }
+
+    /// A name, a field's label and its value are what the address book
+    /// says: none of it opens a tag or breaks out of the table, and a
+    /// multi-line note keeps its lines.
+    #[test]
+    fn a_contact_in_markup_renders_escaped() {
+        const MARKUP: &str = "<script>x</script> & co";
+        let contact = NormalizedContact {
+            display_name: Some(format!("{MARKUP}]")),
+            fields: vec![
+                ContactField::new(MARKUP, MARKUP),
+                ContactField::new("Note", "# not a heading\n| not a cell"),
+            ],
+            photo_url: Some("https://e.invalid/a b|c>.png".to_string()),
+            ..mk_contact()
+        };
+        let md = join(&render_markdown(
+            &mk_profile(),
+            &contact,
+            "linkedin",
+            Some("blobs/p.png"),
+        ));
+        let (_, body) = md
+            .split_once("---\n\n")
+            .expect("front matter, then the body");
+        assert!(!body.contains("<script>"), "{md}");
+        assert!(
+            md.contains("![&lt;script&gt;x&lt;/script&gt; &amp; co\\]](blobs/p.png)"),
+            "{md}"
+        );
+        assert!(
+            md.contains("| &lt;script&gt;x&lt;/script&gt; &amp; co | &lt;script&gt;x&lt;/script&gt; &amp; co |"),
+            "{md}"
+        );
+        assert!(
+            md.contains("| Note | \\# not a heading<br>\\| not a cell |"),
+            "{md}"
+        );
+        assert!(
+            md.contains("| Photo URL | <https://e.invalid/a%20b%7Cc%3E.png> |"),
+            "{md}"
+        );
     }
 
     #[test]

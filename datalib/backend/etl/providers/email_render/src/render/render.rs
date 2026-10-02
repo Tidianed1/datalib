@@ -14,8 +14,10 @@ use datalib_etl_chat_common::render::{Buckets, ChatRenderer, RenderProfile};
 use datalib_etl_chat_common::types::{
     own_stamp_ms, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
 };
+use datalib_etl_chat_common::TextFormat;
 use datalib_etl_email::ingest::db::{LoadedAttachment, LoadedEmail};
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::html::{escape_md_block, escape_md_inline};
 use datalib_etl_render::inputs::Lookup;
 use datalib_handle::Handle;
 use datalib_schema::providers::Provider;
@@ -119,6 +121,7 @@ fn profile() -> RenderProfile {
         reaction_kind: "Email Reaction".to_string(),
         chat_entity_kind: ids::KIND_THREAD,
         render_version: RENDER_VERSION,
+        text_format: TextFormat::Markdown,
     }
 }
 
@@ -407,7 +410,7 @@ fn build_chat(
         if !trailing.is_empty() {
             text.push_str("\n\n### Attachments\n");
             for a in trailing {
-                let label = a.name.clone().unwrap_or_else(|| a.part_id.clone());
+                let label = escape_md_inline(a.name.as_deref().unwrap_or(&a.part_id));
                 match materialized.get(&a.blob_id) {
                     Some(fname) => text.push_str(&format!("\n- [{label}](blobs/{fname})")),
                     None => text.push_str(&format!("\n- {label} _(blob not materialized)_")),
@@ -716,7 +719,7 @@ fn is_inline_attachment(a: &LoadedAttachment) -> bool {
 
 /// Render one email's body to markdown. Prefers the HTML part (htmd
 /// after rewriting `cid:` srcs to materialized blobs); falls back to
-/// plaintext with a light URL-autolink pass.
+/// the plain-text part, escaped.
 fn email_body_markdown(
     parsed: &ParsedEml,
     attachments: &[LoadedAttachment],
@@ -748,7 +751,22 @@ fn email_body_markdown(
     if parsed.text_body.trim().is_empty() {
         return None;
     }
-    Some(autolink_bare_urls(&parsed.text_body))
+    Some(plain_body_markdown(&parsed.text_body))
+}
+
+/// A `text/plain` body as markdown that reads as the sender typed it:
+/// every line escaped as plain text, bare URLs made links, and the
+/// leading `>` marks of a quoted reply kept as markdown quotes — they
+/// mean one, and they are what [`split_quoted`] folds.
+fn plain_body_markdown(text: &str) -> String {
+    text.split('\n')
+        .map(|line| {
+            let rest = line.trim_start_matches(['>', ' ', '\t']);
+            let quote_marks = &line[..line.len() - rest.len()];
+            format!("{quote_marks}{}", autolink_bare_urls(rest))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn rewrite_cid_srcs(html: &str, cid_to_blob: &HashMap<String, String>) -> String {
@@ -795,10 +813,10 @@ fn autolink_bare_urls(s: &str) -> String {
     while i < s.len() {
         let rest = &s[i..];
         let Some(pos) = rest.find("http://").or_else(|| rest.find("https://")) else {
-            out.push_str(rest);
+            out.push_str(&escape_md_block(rest));
             break;
         };
-        out.push_str(&rest[..pos]);
+        out.push_str(&escape_md_block(&rest[..pos]));
         let after = &rest[pos..];
         let end = after
             .find(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '\''))
@@ -812,12 +830,12 @@ fn autolink_bare_urls(s: &str) -> String {
             }
         }
         if url.is_empty() {
-            out.push_str(&after[..end]);
+            out.push_str(&escape_md_block(&after[..end]));
         } else {
             out.push('<');
             out.push_str(url);
             out.push('>');
-            out.push_str(&after[url.len()..end]);
+            out.push_str(&escape_md_block(&after[url.len()..end]));
         }
         i += pos + end;
     }
@@ -827,6 +845,42 @@ fn autolink_bare_urls(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `text/plain` email is what the sender typed: a `<b>` in it is
+    /// those three characters, not bold, and a URL in it is still a link.
+    #[test]
+    fn a_plain_text_body_reads_as_typed() {
+        let typed = "<script>x</script> & co\n\
+                     # not a heading\n\
+                     see https://e.invalid/log?a=1&b=2.\n\
+                     \n\
+                     On Tue, Apr 14, Data <data@enterprise.invalid> wrote:\n\
+                     > The warp core is at <99.7%>.\n\
+                     > Proceed?";
+        let md = plain_body_markdown(typed);
+        assert_eq!(
+            md,
+            "&lt;script&gt;x&lt;/script&gt; &amp; co\n\
+             \\# not a heading\n\
+             see <https://e.invalid/log?a=1&b=2>.\n\
+             \n\
+             On Tue, Apr 14, Data &lt;data@enterprise.invalid&gt; wrote:\n\
+             > The warp core is at &lt;99.7%&gt;.\n\
+             > Proceed?"
+        );
+        let (fresh, quoted) = split_quoted(&md);
+        assert!(
+            fresh
+                .trim_end()
+                .ends_with("see <https://e.invalid/log?a=1&b=2>."),
+            "{fresh}"
+        );
+        let quoted = quoted.expect("the reply history still folds");
+        assert!(
+            quoted.contains("> The warp core is at &lt;99.7%&gt;."),
+            "{quoted}"
+        );
+    }
 
     #[test]
     fn split_quoted_folds_attribution_and_keeps_fresh() {

@@ -14,7 +14,9 @@ use datalib_etl_chat_common::types::{
     own_stamp_ms, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
     NormalizedDoc, UpstreamRef,
 };
+use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::html::escape_md_block;
 use datalib_etl_render::inputs::{Inputs, RawRange};
 use datalib_handle::Handle;
 use datalib_schema::problems::Problem;
@@ -54,6 +56,7 @@ fn profile() -> RenderProfile {
         reaction_kind: "Google Chat Reaction".to_string(),
         chat_entity_kind: ids::KIND_SPACE,
         render_version: RENDER_VERSION,
+        text_format: TextFormat::Plain,
     }
 }
 
@@ -67,6 +70,7 @@ fn voice_profile() -> RenderProfile {
         reaction_kind: "Google Voice Reaction".to_string(),
         chat_entity_kind: ids::KIND_VOICE_CONVERSATION,
         render_version: RENDER_VERSION,
+        text_format: TextFormat::Markdown,
     }
 }
 
@@ -565,7 +569,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 .get("body")
                 .and_then(Value::as_str)
                 .filter(|s| !s.is_empty())
-                .map(str::to_string);
+                .map(escape_md_block);
             NormalizedChatItem {
                 message_uuid,
                 author_handle,
@@ -599,7 +603,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 "Recorded call"
             };
             let caption = match transcript {
-                Some(t) if !t.is_empty() => format!("**{label}:** {t}"),
+                Some(t) if !t.is_empty() => format!("**{label}:** {}", escape_md_block(t)),
                 _ => format!("**{label}**"),
             };
             NormalizedChatItem {
@@ -859,6 +863,36 @@ mod tests {
         assert_eq!(chats[0].buckets[1].period_key, "2019-09");
         // is_me → "Me".
         assert_eq!(chats[0].buckets[1].items[0].author_display, "Me");
+    }
+
+    /// A text and a transcript are what was said; the bold label around
+    /// the transcript is ours. Google Chat's profile is plain, so
+    /// chat-common escapes its messages itself.
+    #[test]
+    fn voice_text_in_markup_renders_escaped() {
+        let messages = vec![
+            json!({
+                "id":"t1","kind":"text","conversation_key":"+1555","conversation_display":"Q",
+                "when":"2010-02-18T16:10:05.000-08:00","sender":{"tel":"+1555","name":"Q"},
+                "body":"<script>x</script> & co"
+            }),
+            json!({
+                "id":"v1","kind":"voicemail","conversation_key":"+1555","conversation_display":"Q",
+                "when":"2010-02-18T16:11:05.000-08:00","party":{"tel":"+1555","name":"Q"},
+                "transcript":"<script>x</script> & co","audio":"vm.mp3"
+            }),
+        ];
+        let chats = build_voice_chats("gt", &with_ids(&messages, "id"));
+        let items = &chats[0].buckets[0].items;
+        assert_eq!(
+            items[0].text.as_deref(),
+            Some("&lt;script&gt;x&lt;/script&gt; &amp; co")
+        );
+        assert_eq!(
+            items[1].text.as_deref(),
+            Some("**Voicemail:** &lt;script&gt;x&lt;/script&gt; &amp; co")
+        );
+        assert_eq!(profile().text_format, TextFormat::Plain);
     }
 
     #[test]

@@ -30,7 +30,7 @@ use datalib_schema::providers::Provider;
 /// `CREATED` became `created_at`, and groups listed their members; to 7
 /// when a card listed the groups it is in, and to 8 when its `CATEGORIES`
 /// joined them.
-pub const RENDER_VERSION: u32 = 8;
+pub const RENDER_VERSION: u32 = 9;
 
 /// Every card by `(addressbook, UID)`, for a group to name its members.
 type Cards<'a> = HashMap<(&'a str, &'a str), &'a ParsedContact>;
@@ -193,7 +193,7 @@ fn normalize(
         ));
     }
     if let Some(n) = &contact.note {
-        fields.push(ContactField::new("Note", n.replace('\n', " <br> ")));
+        fields.push(ContactField::new("Note", n.clone()));
     }
 
     let id = ids::contact(source_id, &contact.addressbook, &contact.uid);
@@ -345,6 +345,18 @@ mod tests {
             ]
         );
         assert_eq!(n.fields[0].value, "Starfleet — USS Enterprise");
+    }
+
+    /// A card's text goes to contact-common as the card has it, markup
+    /// and line breaks included: contact-common escapes it where it
+    /// becomes the page, which a `<br>` added here would defeat.
+    #[test]
+    fn a_note_in_markup_is_handed_on_as_typed() {
+        let mut c = sample();
+        c.note = Some("<script>x</script> & co\nsecond line".to_string());
+        let n = normalize(&c, "tng_contacts", &Cards::new(), &Groups::new());
+        let note = n.fields.iter().find(|f| f.label == "Note").unwrap();
+        assert_eq!(note.value, "<script>x</script> & co\nsecond line");
     }
 
     // Fastmail exports the vCard `REV` in *basic* ISO 8601 (no separators,

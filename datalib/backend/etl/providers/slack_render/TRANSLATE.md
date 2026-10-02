@@ -33,7 +33,11 @@ is `{channel_id}#{thread_ts}` and its link is the thread's permalink.
   `<!everyone>`, resolved against the workspace's users and channels;
 - `<https://…|label>` → `[label](url)`;
 - `:shortcode:` → unicode, through the `emojis` crate;
-- the three entities Slack escapes (`&amp;`, `&lt;`, `&gt;`).
+- the three entities Slack escapes (`&amp;`, `&lt;`, `&gt;`) stay
+  entities in running text, so a `<b>` someone typed shows as typed;
+  they are decoded inside code, which markdown shows literally, and in
+  the `&gt;` that opens a Slack quote. A thread's title decodes them all:
+  it is plain text, and `Title` escapes it.
 
 ## Unread messages
 

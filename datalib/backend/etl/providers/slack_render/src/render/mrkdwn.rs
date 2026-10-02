@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 
+use datalib_etl_render::html::{code_span_parts, escape_text, md_link_dest};
 use datalib_etl_render::inputs::Lookup;
 use once_cell::sync::Lazy;
 use regex::{Captures, Regex};
@@ -50,8 +51,8 @@ pub struct Labels<'a> {
     pub channels: Lookup<'a, BTreeMap<String, String>>,
 }
 
-/// Mentions and emoji only — what a thread title needs, without the
-/// rest of the CommonMark conversion.
+/// Mentions and emoji only, as plain text — what a thread title needs,
+/// without the rest of the CommonMark conversion.
 pub fn resolve_mentions(text: &str, labels: Labels<'_>) -> String {
     let replaced = USER_REF
         .replace_all(text, |caps: &Captures<'_>| user_replacement(caps, labels))
@@ -61,24 +62,35 @@ pub fn resolve_mentions(text: &str, labels: Labels<'_>) -> String {
             channel_replacement(caps, labels)
         })
         .into_owned();
-    emojize_shortcodes(&replaced)
+    decode_entities(&emojize_shortcodes(&replaced))
+}
+
+/// The three entities Slack escapes in message text (per its
+/// Formatting reference), back to the characters typed.
+fn decode_entities(text: &str) -> String {
+    text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
 }
 
 fn user_replacement(caps: &Captures<'_>, labels: Labels<'_>) -> String {
     let uid = &caps[1];
+    // A label inside the mention is message text, entities and all; a
+    // name from the users table is plain and is escaped to match.
     let label = caps.get(2).map(|m| m.as_str().to_string());
     let resolved = label
-        .or_else(|| labels.users.get(uid).cloned())
+        .or_else(|| labels.users.get(uid).map(|name| escape_text(name)))
         .unwrap_or_else(|| uid.to_string());
     format!("@{resolved}")
 }
 
 fn channel_replacement(caps: &Captures<'_>, labels: Labels<'_>) -> String {
     let cid = &caps[1];
-    let label = caps.get(2).map(|m| m.as_str()).filter(|l| !l.is_empty());
+    let label = caps.get(2).map(|m| m.as_str().to_string());
     let resolved = label
-        .or_else(|| labels.channels.get(cid).map(String::as_str))
-        .unwrap_or(cid);
+        .filter(|l| !l.is_empty())
+        .or_else(|| labels.channels.get(cid).map(|name| escape_text(name)))
+        .unwrap_or_else(|| cid.to_string());
     format!("#{resolved}")
 }
 
@@ -111,12 +123,13 @@ pub fn to_commonmark(text: &str, labels: Labels<'_>) -> String {
 
     out = URL_REF
         .replace_all(&out, |caps: &Captures<'_>| {
-            let url = &caps[1];
-            match caps.get(2) {
-                Some(label) if !label.as_str().is_empty() && label.as_str() != url => {
-                    format!("[{}]({})", label.as_str(), url)
+            let url = decode_entities(&caps[1]);
+            match caps.get(2).map(|m| m.as_str()) {
+                Some(label) if !label.is_empty() && label != &caps[1] => {
+                    let label = label.replace('[', "\\[").replace(']', "\\]");
+                    format!("[{label}]({})", md_link_dest(&url))
                 }
-                _ => format!("<{url}>"),
+                _ => format!("<{}>", url.replace('<', "%3C").replace('>', "%3E")),
             }
         })
         .into_owned();
@@ -133,17 +146,36 @@ pub fn to_commonmark(text: &str, labels: Labels<'_>) -> String {
         })
         .into_owned();
 
-    // Slack escapes only these three entities in message text (per the
-    // Formatting reference). Decode after the angle-bracket constructs
-    // are consumed so we never accidentally synthesise a `<@U…>` from
-    // text the user actually typed.
-    out = out
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&");
+    // After the angle-bracket constructs are consumed, so we never
+    // synthesise a `<@U…>` from text the user actually typed.
+    out = decode_entities_where_literal(&out);
 
     out = terminate_blockquotes(&out);
     emojize_shortcodes(&out)
+}
+
+/// Slack's entities stay entities in running text, so a `<b>` someone
+/// typed shows as typed rather than being read as HTML. They are decoded
+/// where markdown would show them literally — inside a code span or
+/// block — and where Slack's own `&gt;` quote mark opens a line.
+fn decode_entities_where_literal(text: &str) -> String {
+    let quoted: Vec<String> = text
+        .split('\n')
+        .map(|line| match line.strip_prefix("&gt;") {
+            Some(rest) => format!(">{rest}"),
+            None => line.to_string(),
+        })
+        .collect();
+    code_span_parts(&quoted.join("\n"))
+        .into_iter()
+        .map(|(part, is_code)| {
+            if is_code {
+                decode_entities(part)
+            } else {
+                part.to_string()
+            }
+        })
+        .collect()
 }
 
 /// Slack `>` quotes only the prefixed line(s); CommonMark would lazily
@@ -256,13 +288,43 @@ mod tests {
     #[test]
     fn html_entities_and_emoji() {
         let lbl = no_labels();
+        // Entities stay entities in running text: markdown-it shows them
+        // as the characters, and never reads them as HTML.
         assert_eq!(
             to_commonmark("a &amp; b &lt;3 &gt;_&lt;", lbl),
-            "a & b <3 >_<"
+            "a &amp; b &lt;3 &gt;_&lt;"
         );
         assert!(to_commonmark(":thumbsup:", lbl).contains('👍'));
         // Unknown shortcode passes through.
         assert_eq!(to_commonmark(":notarealemoji:", lbl), ":notarealemoji:");
+    }
+
+    /// Someone typing markup into Slack sees it as they typed it, in
+    /// running text and in code alike, and Slack's own quote still quotes.
+    #[test]
+    fn markup_typed_into_slack_renders_as_typed() {
+        let lbl = no_labels();
+        assert_eq!(
+            to_commonmark("&lt;script&gt;x&lt;/script&gt; &amp; co", lbl),
+            "&lt;script&gt;x&lt;/script&gt; &amp; co"
+        );
+        assert_eq!(
+            to_commonmark("run `a &lt; b &amp;&amp; c`\n```\n&lt;div&gt;\n```", lbl),
+            "run `a < b && c`\n```\n<div>\n```"
+        );
+        assert_eq!(
+            to_commonmark("&gt; quoted &lt;b&gt;\nplain", lbl),
+            "> quoted &lt;b&gt;\n\nplain"
+        );
+        assert_eq!(
+            to_commonmark("<https://e.invalid/?a=1&amp;b=2|see [this]>", lbl),
+            "[see \\[this\\]](https://e.invalid/?a=1&b=2)"
+        );
+        assert_eq!(
+            resolve_mentions("&lt;b&gt; &amp; co", lbl),
+            "<b> & co",
+            "a thread title is plain text; Title escapes it"
+        );
     }
 
     #[test]

@@ -7,6 +7,7 @@ use std::path::Path;
 use anyhow::Result;
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::html::{escape_md_inline, md_code_block, md_code_span};
 use datalib_etl_timeseries_render::page::{Device, Page, PageProfile};
 use datalib_etl_timeseries_render::text::{iso, pretty_json, thousands};
 use datalib_id::IdNamespace;
@@ -86,7 +87,7 @@ pub fn render_all(
 fn device(dev: &super::parse::DeviceRow) -> Device {
     let facts = format!(
         "{} · configured from {}{}",
-        dev.kind,
+        escape_md_inline(&dev.kind),
         iso(dev.start_ms).unwrap_or_else(|| dev.start_ms.to_string()),
         match dev.last_ts_ms.and_then(iso) {
             Some(t) => format!(" · cursor at {t}"),
@@ -119,10 +120,10 @@ fn store_section(parsed: &ParsedYolink) -> String {
     for scope in &parsed.scope_config {
         let _ = writeln!(
             out,
-            "### Configured scope — `{}`\n\n*Recorded {}.*\n\n```json\n{}\n```\n",
-            scope.scope,
-            scope.updated_at,
-            pretty_json(&scope.config),
+            "### Configured scope — {}\n\n*Recorded {}.*\n\n{}\n",
+            md_code_span(&scope.scope),
+            escape_md_inline(&scope.updated_at),
+            md_code_block("json", &pretty_json(&scope.config)),
         );
     }
     out
@@ -131,6 +132,42 @@ fn store_section(parsed: &ParsedYolink) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A device's kind and a configured scope are the config's words;
+    /// on the page they are text, and the config cannot close its fence.
+    #[test]
+    fn a_device_and_a_scope_in_markup_render_escaped() {
+        let dev = super::super::parse::DeviceRow {
+            name: "porch".into(),
+            kind: "<script>x</script> & co".into(),
+            start_ms: 0,
+            last_ts_ms: None,
+            family_device_id: "secret".into(),
+        };
+        assert!(
+            device(&dev)
+                .facts
+                .starts_with("&lt;script&gt;x&lt;/script&gt; &amp; co · "),
+            "{}",
+            device(&dev).facts
+        );
+        let parsed = ParsedYolink {
+            head: None,
+            devices: Vec::new(),
+            series: Vec::new(),
+            scope_config: vec![super::super::parse::ScopeConfigRow {
+                scope: "a`b".into(),
+                config: "not json ```\n<b>".into(),
+                updated_at: "<i>now</i>".into(),
+            }],
+            reading_errors: 0,
+            reading_count: 0,
+        };
+        let out = store_section(&parsed);
+        assert!(out.contains("### Configured scope — `` a`b ``"), "{out}");
+        assert!(out.contains("*Recorded &lt;i&gt;now&lt;/i&gt;.*"), "{out}");
+        assert!(out.contains("````json\nnot json ```\n<b>\n````"), "{out}");
+    }
 
     #[test]
     fn uuids_are_stable_and_stanza_scoped() {
