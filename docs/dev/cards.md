@@ -311,9 +311,10 @@ drop what was right of the opener's column and add the chain; a Split or
 Page insert it after the opener's child; Tabs give each card a tab of
 its own, filling it, under the tab of the card before. The outermost
 container is never solidified, so an open always lands somewhere. A
-card opened from the toolbar (Logs, Data sources, a search) is a tab of
-its own; a link naming several cards opens them as a chain of tabs.
-Cards side by side are a Columns container someone made in edit mode.
+card opened from the toolbar (Logs, Data sources, a search), or a link
+naming one card, is a tab of its own; a link naming several cards, or
+giving a width (`/gridView():1`), opens them as one tab holding a
+Columns container.
 
 **What shows.** Outside edit mode a solidified subtree shows no card
 chrome, so a composite such as the Dashboard (a Page of its five
@@ -347,7 +348,7 @@ window; the e2e suite sets it, so specs sharing one library do not
 trade tabs.
 
 **The URL.** A path naming cards (`/code:size:state/…`,
-`router/columns.ts`) is a link: the layout opens those cards as tabs
+`router/columns.ts`) is a link: the layout opens those cards as a tab
 and puts the address back to `/`, since what is open is kept in the
 tree. A `/chat/<uuid>` link — the shape every renderer writes into a
 document body — is routed to that document alone (`router/index.ts`).

@@ -256,15 +256,10 @@ export function openFrom(root: TreeNode, fromId: string, nodes: TreeNode[]): Tre
   return reveal(next, nodes[nodes.length - 1].id);
 }
 
-// Append children to a container, and show the last.
-export function addChildren(root: TreeNode, boxId: string, nodes: TreeNode[]): TreeNode {
-  if (nodes.length === 0) return root;
-  const next = mapBox(root, boxId, (b) => ({ ...b, children: [...b.children, ...nodes] }));
-  return reveal(next, nodes[nodes.length - 1].id);
-}
-
+// Append a child to a container, and show it.
 export function addChild(root: TreeNode, boxId: string, node: TreeNode): TreeNode {
-  return addChildren(root, boxId, [node]);
+  const next = mapBox(root, boxId, (b) => ({ ...b, children: [...b.children, node] }));
+  return reveal(next, node.id);
 }
 
 // What a tabs container closes along with a child: everything opened

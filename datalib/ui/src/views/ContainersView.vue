@@ -33,6 +33,7 @@ import {
   saveComposite,
 } from "@/views/composites";
 import {
+  DEFAULT_COLUMN,
   DIRECTIONS,
   DIRECTION_ICONS,
   DIRECTION_LABELS,
@@ -40,7 +41,6 @@ import {
   LAYOUT_ICONS,
   LAYOUT_LABELS,
   addChild,
-  addChildren,
   cards,
   find,
   instantiate,
@@ -161,21 +161,25 @@ onBeforeUnmount(() => {
   flush();
 });
 
-// The cards a URL names (a link, a popped-out card), each a tab of its
-// own under the one before. The tree, not the URL, is what this layout
-// keeps, so once opened the address goes back to "/".
-function routeCards(): CardNode[] {
-  const out: CardNode[] = [];
-  for (const s of decodeColumns(route.path)) {
-    out.push({ ...makeCard(newCardId(), s.code, s.state), openedBy: out.at(-1)?.id ?? null });
-  }
-  return out;
+// The cards a URL names (a link, a popped-out card), as one tab. A
+// single card with no width (what ↗ writes) fills the tab; several
+// cards, or any width, are a Columns container. The tree, not the URL,
+// is what this layout keeps, so once opened the address goes back to "/".
+function routeNode(): TreeNode | null {
+  const specs = decodeColumns(route.path);
+  if (specs.length === 0) return null;
+  const nodes = specs.map((s) => ({
+    ...makeCard(newCardId(), s.code, s.state),
+    basis: s.size != null ? s.size * DEFAULT_COLUMN : null,
+  }));
+  const alone = specs.length === 1 && specs[0].size == null;
+  return alone ? nodes[0] : makeBox(newCardId(), "columns", nodes);
 }
 
 function openRoute() {
-  const nodes = routeCards();
-  if (nodes.length === 0) return;
-  update(addChildren(root.value, root.value.id, nodes));
+  const node = routeNode();
+  if (!node) return;
+  update(addChild(root.value, root.value.id, node));
   void router.replace("/");
 }
 watch(
@@ -217,13 +221,13 @@ async function start() {
   void loadComposites();
   const kept = await readKept();
   // A second window starts with nothing but the cards its URL names.
-  const fromUrl = routeCards();
+  const fromUrl = routeNode();
   let tree = kept ?? makeBox(newCardId(), "tabs", mainWindow ? [dashboard()] : []);
-  tree = addChildren(tree, tree.id, fromUrl) as BoxNode;
+  if (fromUrl) tree = addChild(tree, tree.id, fromUrl) as BoxNode;
   // The outermost container is tabs and never solidified, whatever was stored.
   root.value = withATab({ ...tree, layout: "tabs", solidified: false });
   ready.value = true;
-  if (fromUrl.length > 0) void router.replace("/");
+  if (fromUrl) void router.replace("/");
 }
 void start();
 
