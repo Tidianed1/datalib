@@ -336,7 +336,7 @@ expression: snapshot
       "md_path": "signal/render_markdown/00000000-0000-89df-ad9b-a9094ecd8e23/2364-04.md",
       "modified_at": "2364-04-11T00:09:00+00:00",
       "provider": "signal",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "signal",
       "title": "Will Riker"
     },

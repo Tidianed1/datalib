@@ -974,6 +974,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "facebook",
                 "google-takeout",
                 "linkedin",
+                "signal",
                 "slack",
                 "tng_contacts",
                 "tng_email",
