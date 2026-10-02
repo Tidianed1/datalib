@@ -37,6 +37,12 @@ configured, whom the handle belongs to and draws a chip
 written still finds the author. The UI trusts it only on the header
 line, since a message body can carry any attribute it likes.
 
+An item with `recipients` (an email's To and Cc) gets one more line
+straight under the header — `<div class="msg-recipients">To <span
+class="msg-recipient" data-handle="…">…</span>; Cc …</div>` — and the UI
+trusts a `data-handle` there only because it is the header's very next
+element.
+
 Each document also carries a `DatalibContact` per author handle in it
 (`src/people.rs`): the names the provider showed the handle under, less
 the handle's own `<address>`, how many items it wrote and the last one's

@@ -226,6 +226,7 @@ fn monthly_chat(
     }
     let feed = ids::feed(&owner.source_id, id);
     NormalizedChat {
+        contacts: Vec::new(),
         inputs: inputs.declared(),
         path_prefix: None,
         id: id.to_string(),

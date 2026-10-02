@@ -12,7 +12,8 @@ use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::normalize::iso_to_ms;
 use datalib_etl_chat_common::render::{Buckets, ChatRenderer, RenderProfile};
 use datalib_etl_chat_common::types::{
-    own_stamp_ms, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
+    own_stamp_ms, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, Recipient,
+    RecipientRole, UpstreamRef,
 };
 use datalib_etl_email::ingest::db::{LoadedAttachment, LoadedEmail};
 use datalib_etl_render::grid_index::RenderedMarkdown;
@@ -39,7 +40,8 @@ use mail_parser::{Address, MessageParser, MimeHeaders, PartType};
 /// v10: the label line leads with Starred and Important, and leaves out
 ///     Gmail's All Mail.
 /// v11: the author span carries the author's handle as `data-handle`.
-pub const RENDER_VERSION: u32 = 11;
+/// v12: a recipients line (To, Cc) under the header, each with its handle.
+pub const RENDER_VERSION: u32 = 12;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
 /// `datalib_core::config::EmailOutlink`; the orchestrator maps the
@@ -456,6 +458,7 @@ fn build_chat(
             source_ref: Some(UpstreamRef::new(email_id.entity_kind, email_id.natural_key)),
             is_aside: false,
             unread,
+            recipients: parsed_eml.recipients.clone(),
             problems,
         });
     }
@@ -463,6 +466,7 @@ fn build_chat(
     // The thread's title `↗` points at the root (first) email's outlink.
     let thread_source_url = items.first().and_then(|i| i.source_url.clone());
     let mut chat = NormalizedChat {
+        contacts: Vec::new(),
         inputs: Vec::new(),
         path_prefix: None,
         id: tuid.clone(),
@@ -622,6 +626,7 @@ struct InlinePart {
 struct ParsedEml {
     from_display: String,
     from_handle: Option<Handle>,
+    recipients: Vec<Recipient>,
     text_body: String,
     html_body: String,
     inline_parts: Vec<InlinePart>,
@@ -638,6 +643,24 @@ impl ParsedEml {
             .and_then(|a| a.iter().next())
             .and_then(|a| a.address())
             .and_then(Handle::email);
+        let recipients = [(RecipientRole::To, msg.to()), (RecipientRole::Cc, msg.cc())]
+            .into_iter()
+            .flat_map(|(role, addrs)| {
+                addrs
+                    .into_iter()
+                    .flat_map(|a| a.iter())
+                    .filter_map(move |a| {
+                        let address = a.address().unwrap_or_default();
+                        let name = a.name().unwrap_or_default();
+                        let display = if name.is_empty() { address } else { name };
+                        (!display.is_empty()).then(|| Recipient {
+                            role,
+                            display: display.to_string(),
+                            handle: Handle::email(address),
+                        })
+                    })
+            })
+            .collect();
         let mut text_body = String::new();
         for &idx in &msg.text_body {
             if let Some(part) = msg.part(idx) {
@@ -673,6 +696,7 @@ impl ParsedEml {
         Self {
             from_display,
             from_handle,
+            recipients,
             text_body,
             html_body,
             inline_parts,

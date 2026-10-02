@@ -262,6 +262,7 @@ fn build_chat(
             source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
             items,
         }],
+        contacts: Vec::new(),
         inputs: inputs.declared(),
     }
 }

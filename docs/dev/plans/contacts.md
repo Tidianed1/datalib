@@ -489,11 +489,14 @@ chat-common's baseline; `source_contacts` / `source_contact_handles` in
 every render store and the index; `POST /people` on the `unified_index`
 applet; chips and the hover card drawing your contact first, then each
 source's account, with no contacts app needed for the latter; the
-contacts app answering `resolve` as a `DatalibContact`. Not yet: a
-provider's own accounts (Slack's users, WhatsApp's address book) on
-`NormalizedChat`, email To/Cc, Signal, reactions and mentions,
-`row_handles`, groups, merge, undo, adopting a card's handles, the
-contact card, chips in the grid, and phases 4–6.
+contacts app answering `resolve` as a `DatalibContact`. Providers: a
+chat carries the provider's own accounts (`NormalizedChat::contacts`),
+merged with the baseline — Slack's profiles first, which tie a Slack
+user to an email; Signal's numbers as handles; email's To and Cc as a
+recipients line under the header, chipped like the author. Not yet:
+WhatsApp's address book as accounts, Signal's ACI, reactions and
+mentions, `row_handles`, groups, merge, undo, adopting a card's handles,
+the contact card, chips in the grid, and phases 4–6.
 
 1. **Handles end to end, nothing visible.** The handle crate (pure,
    unit-tested), `data-handle` in chat-common, email and contacts, the

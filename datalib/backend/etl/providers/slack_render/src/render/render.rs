@@ -43,7 +43,8 @@ use datalib_schema::providers::Provider;
 ///     `{team}#{channel}#{ts}`, so an existing root resets and downloads
 ///     again.
 /// v9: the author span carries the author's handle as `data-handle`.
-pub const RENDER_VERSION: u32 = 9;
+/// v10: each thread carries its authors' Slack profiles (title, email).
+pub const RENDER_VERSION: u32 = 10;
 
 #[derive(Debug, Default)]
 pub struct RenderSummary {
@@ -227,11 +228,26 @@ fn build_chats(
                 source_ref: None,
                 items,
             }],
+            // Each author's profile, read the way their label was.
+            contacts: authors_of(bucket)
+                .filter_map(|uid| bucket.inputs.lookup("users", &parsed.users).get(uid))
+                .filter_map(|u| u.contact(source_id))
+                .collect(),
             inputs: bucket.inputs.declared(),
         });
         blobs_by_chat.insert(thread_uuid, bucket.blobs.clone());
     }
     (chats, blobs_by_chat)
+}
+
+/// Each user who wrote in the thread, once, in the order they first did.
+fn authors_of(bucket: &super::parse::SlackThreadBucket) -> impl Iterator<Item = &str> {
+    let mut seen = std::collections::HashSet::new();
+    bucket
+        .messages
+        .iter()
+        .filter_map(|m| m.user_id.as_deref())
+        .filter(move |u| seen.insert(*u))
 }
 
 fn build_item(
@@ -282,6 +298,7 @@ fn build_item(
         )),
         is_aside: false,
         unread,
+        recipients: Vec::new(),
         problems,
     }
 }

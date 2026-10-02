@@ -218,6 +218,7 @@ fn build_post_chats(
         let post = ids::post(source_id, &key);
         let comment_payloads: Vec<&Value> = thread.comments.iter().map(|(_, c)| *c).collect();
         chats.push(NormalizedChat {
+            contacts: Vec::new(),
             inputs: thread.inputs.declared(),
             path_prefix: None,
             id: format!("posts:{key}"),
@@ -279,6 +280,7 @@ fn me_item(
         source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
         is_aside: false,
         unread: false,
+        recipients: Vec::new(),
         problems,
     }
 }
@@ -310,6 +312,7 @@ fn post_placeholder(
         source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
         is_aside: false,
         unread: false,
+        recipients: Vec::new(),
         problems: Vec::new(),
     }
 }

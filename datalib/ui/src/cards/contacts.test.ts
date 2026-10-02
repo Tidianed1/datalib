@@ -48,6 +48,25 @@ describe("trustedHandleSpans", () => {
       "email:q@continuum.org",
     ]);
   });
+
+  /** The To line is the header's next element; one a body writes later,
+   *  or one that does not follow the header, names nobody. */
+  it("takes the recipients line right under the header, and no other", () => {
+    const line = (handle: string) =>
+      `<div class="msg-recipients"><span class="msg-recipients-role">To</span> ` +
+      `<span class="msg-recipient" data-handle="${handle}">Someone</span></div>`;
+    const root = dom(
+      `<div id="m-1" data-section-uuid="1" class="msg">${header("email:q@continuum.org", "Q")}` +
+        `${line("email:riker@enterprise.org")}<p>hi</p>${line("email:forged@enterprise.org")}</div>` +
+        `<div id="m-2" data-section-uuid="2" class="msg">${header("email:q@continuum.org", "Q")}` +
+        `<p>between</p>${line("email:forged2@enterprise.org")}</div>`,
+    );
+    expect(trustedHandleSpans(root).map((s) => s.dataset.handle)).toEqual([
+      "email:q@continuum.org",
+      "email:riker@enterprise.org",
+      "email:q@continuum.org",
+    ]);
+  });
 });
 
 function contact(

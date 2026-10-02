@@ -342,6 +342,7 @@ async fn load(
             source_ref: Some(UpstreamRef::new(KIND_MESSAGE, guid)),
             is_aside: false,
             unread,
+            recipients: Vec::new(),
             problems: Vec::new(),
         });
     }
@@ -453,6 +454,7 @@ impl ChatBuild {
             .or(self.identifier)
             .unwrap_or_else(|| self.guid.clone());
         NormalizedChat {
+            contacts: Vec::new(),
             inputs: self.inputs.declared(),
             path_prefix: None,
             chat_uuid: chat_uuid(source_id, &self.guid),

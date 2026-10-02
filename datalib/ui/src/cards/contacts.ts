@@ -199,18 +199,24 @@ export function rewriteChipsForCopy(fragment: DocumentFragment | Element): boole
   return chips.length > 0;
 }
 
-/** The author spans a renderer wrote, and none a message body did.
+/** The handle spans a renderer wrote, and none a message body did.
  *  DOMPurify keeps every `data-*`, and a body is HTML a stranger wrote,
- *  so a `data-handle` counts only on the `.msg-author` in the first
- *  `h2` directly under a top-level `.msg` — the header line, which the
- *  renderer writes before the body and which a body cannot precede. */
+ *  so a `data-handle` counts only in a top-level `.msg`'s first `h2` —
+ *  its header — on the `.msg-author`, and on the `.msg-recipient`s of a
+ *  `.msg-recipients` line that is the header's very next element. The
+ *  renderer writes both before the body, which cannot precede them. */
 export function trustedHandleSpans(root: Element): HTMLElement[] {
   const out: HTMLElement[] = [];
   for (const msg of root.querySelectorAll<HTMLElement>(".msg[data-section-uuid]")) {
     if (msg.parentElement?.closest(".msg")) continue;
     const header = Array.from(msg.children).find((c) => c.tagName === "H2");
-    const span = header?.querySelector<HTMLElement>(":scope > span.msg-author[data-handle]");
-    if (span) out.push(span);
+    if (!header) continue;
+    const author = header.querySelector<HTMLElement>(":scope > span.msg-author[data-handle]");
+    if (author) out.push(author);
+    const next = header.nextElementSibling;
+    if (next?.matches("div.msg-recipients")) {
+      out.push(...next.querySelectorAll<HTMLElement>(":scope > span.msg-recipient[data-handle]"));
+    }
   }
   return out;
 }
@@ -330,7 +336,10 @@ export async function decorateHandles(root: HTMLElement): Promise<Decorated | nu
     if (!s.isConnected) continue;
     const handle = s.dataset.handle ?? "";
     const look = chipLook(handle, s.dataset.shownAs ?? "", who[handle], canLink);
-    s.className = ["msg-author", ...look.classes].join(" ");
+    // The span's own class — an author's or a recipient's — stays; a
+    // redraw replaces only what the chip added.
+    s.dataset.baseClass ??= s.className;
+    s.className = [s.dataset.baseClass, ...look.classes].join(" ");
     s.removeAttribute("title");
     s.setAttribute("aria-label", look.ariaLabel);
     s.dataset.label = look.text;

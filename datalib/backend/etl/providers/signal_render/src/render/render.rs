@@ -25,7 +25,8 @@ use super::parse::ParsedSignal;
 ///     every row carries its backpointer, and a message's id carries
 ///     `date_sent` in its leading bits (`datalib_id`'s v8 layout).
 ///     Every uuid moved, `chat_uuid` among them.
-pub const RENDER_VERSION: u32 = 7;
+/// v8: the author span carries the sender's number as `data-handle`.
+pub const RENDER_VERSION: u32 = 8;
 
 const SOURCE_LABEL: &str = "Signal";
 const PROVIDER: Provider = Provider::Signal;

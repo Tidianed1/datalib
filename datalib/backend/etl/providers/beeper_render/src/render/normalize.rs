@@ -120,6 +120,7 @@ fn to_chat(source_id: &str, room: &Room, doc: &DocBucket, inputs: &Inputs) -> No
         .collect();
 
     NormalizedChat {
+        contacts: Vec::new(),
         inputs: inputs.declared(),
         id: bundle_key(doc),
         chat_uuid: ids::room(source_id, &room.native_room_id).uuid,
@@ -207,6 +208,7 @@ fn to_item(source_id: &str, room: &Room, doc: &DocBucket, m: &Event) -> Normaliz
             source_ref: Some(UpstreamRef::new(ids::KIND_EVENT, m.native_event_id.clone())),
             is_aside: false,
             unread: false,
+            recipients: Vec::new(),
             problems: Vec::new(),
         };
     }
@@ -231,6 +233,7 @@ fn to_item(source_id: &str, room: &Room, doc: &DocBucket, m: &Event) -> Normaliz
         source_ref: Some(UpstreamRef::new(ids::KIND_EVENT, m.native_event_id.clone())),
         is_aside: false,
         unread: false,
+        recipients: Vec::new(),
         problems: Vec::new(),
     }
 }

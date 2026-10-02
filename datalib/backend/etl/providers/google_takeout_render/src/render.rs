@@ -327,6 +327,7 @@ fn build_chats(
                     source_ref: Some(UpstreamRef::new(msg_id.entity_kind, msg_id.natural_key)),
                     is_aside: false,
                     unread: false,
+                    recipients: Vec::new(),
                     problems,
                 }
             })
@@ -363,6 +364,7 @@ fn build_chats(
 
         let chat_id = ids::space(source_id, &space);
         chats.push(NormalizedChat {
+            contacts: Vec::new(),
             inputs: inputs.declared(),
             path_prefix: None,
             id: space.clone(),
@@ -499,6 +501,7 @@ fn build_voice_chats(source_id: &str, messages: &[(String, Value)]) -> Vec<Norma
 
         let conversation = ids::voice_conversation(source_id, &chat_id);
         chats.push(NormalizedChat {
+            contacts: Vec::new(),
             inputs: inputs.declared(),
             path_prefix: None,
             id: chat_id.clone(),
@@ -586,6 +589,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 source_ref: source_ref.clone(),
                 is_aside: false,
                 unread: false,
+                recipients: Vec::new(),
                 problems: problems.clone(),
             }
         }
@@ -619,6 +623,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 source_ref: source_ref.clone(),
                 is_aside: false,
                 unread: false,
+                recipients: Vec::new(),
                 problems: problems.clone(),
             }
         }
@@ -647,6 +652,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 source_ref: source_ref.clone(),
                 is_aside: false,
                 unread: false,
+                recipients: Vec::new(),
                 problems: problems.clone(),
             }
         }
