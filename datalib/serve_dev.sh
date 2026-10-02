@@ -67,7 +67,9 @@ HEALTH_URL="$BASE_URL/api/health?token=$DATALIB_TOKEN"
 OPEN_URL="$BASE_URL/?token=$DATALIB_TOKEN"
 
 # Positional data-root arg required by the binary; default to
-# ~/Documents/datalib if not supplied (legacy default).
+# ~/Documents/Datalib/Default, the library the desktop app opens first.
+# Not the Datalib folder itself: the app reads a library there as one
+# to move into Default.
 if [[ $# -ge 1 && -n "$1" ]]; then
   ROOT_ARG="$1"
   case "$ROOT_ARG" in
@@ -75,7 +77,7 @@ if [[ $# -ge 1 && -n "$1" ]]; then
     "~/"*)   ROOT_ARG="$HOME/${ROOT_ARG#\~/}" ;;
   esac
 else
-  ROOT_ARG="$HOME/Documents/datalib"
+  ROOT_ARG="$HOME/Documents/Datalib/Default"
 fi
 echo "data root: $ROOT_ARG"
 

@@ -42,7 +42,7 @@ never has to resolve the tauri dependency tree. Drive it with cargo/pnpm:
 # via the config's beforeBuildCommand, compiles the shell, bundles the
 # .app, and launches it. Optional data-root arg skips the folder picker.
 ./run.sh
-./run.sh ~/Documents/datalib
+./run.sh ~/Documents/Datalib/Default
 
 # Release bundle → target/release/bundle/macos/Datalib.app. The CLI is
 # pinned by package.json + pnpm-lock.yaml here (never `pnpm dlx`, which
