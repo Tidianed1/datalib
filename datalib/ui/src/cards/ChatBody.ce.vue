@@ -21,6 +21,15 @@
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from "vue";
 import type { EdgeOut } from "@/api";
 import { decorateRemoteMedia, type RemoteContext, type RemoteRef } from "./remoteMedia";
+import {
+  copyWithHandles,
+  decorateHandles,
+  hoverCard,
+  type HoverCard,
+  type Resolved,
+} from "./contacts";
+import HandleHoverCard from "./HandleHoverCard.ce.vue";
+import HandlePopover from "./HandlePopover.ce.vue";
 import { renderDocument } from "./renderDocument";
 import { isBrowserClick, linkFromClick, type ClickedLink } from "./chatLink";
 import { DOC_FRAME_SRCDOC, asElement, forwardAppKeys, mirrorDensity } from "./docFrame";
@@ -121,6 +130,79 @@ watch(
     bodyChanged = true;
   },
 );
+
+type ChipTarget = {
+  handle: string;
+  shownAs: string;
+  resolved: Resolved | null;
+  x: number;
+  y: number;
+};
+const chipTarget = ref<ChipTarget | null>(null);
+const resolvedHandles = ref<Record<string, Resolved>>({});
+
+async function redrawHandles() {
+  if (!body.value) return;
+  resolvedHandles.value = (await decorateHandles(body.value)) ?? {};
+}
+
+/// Where the frame's viewport sits in this window: the hover card and
+/// the popover are drawn out here, over the frame, from points inside it.
+function frameOrigin(): { x: number; y: number } {
+  const r = frameEl.value?.getBoundingClientRect();
+  return { x: r?.left ?? 0, y: r?.top ?? 0 };
+}
+
+const HOVER_DELAY_MS = 350;
+const hovered = ref<{ card: HoverCard; x: number; y: number } | null>(null);
+let hoverChip: HTMLElement | null = null;
+let hoverTimer: ReturnType<typeof setTimeout> | undefined;
+
+function onChipOver(ev: MouseEvent) {
+  const chip = asElement(ev.target)?.closest<HTMLElement>(".handle-chip[data-handle]");
+  if (!chip || chip === hoverChip) return;
+  hoverChip = chip;
+  clearTimeout(hoverTimer);
+  hoverTimer = setTimeout(() => {
+    if (chipTarget.value) return;
+    const handle = chip.dataset.handle ?? "";
+    const rect = chip.getBoundingClientRect();
+    const at = frameOrigin();
+    hovered.value = {
+      card: hoverCard(handle, chip.dataset.shownAs ?? "", resolvedHandles.value[handle] ?? null),
+      x: at.x + rect.left,
+      y: at.y + rect.bottom,
+    };
+  }, HOVER_DELAY_MS);
+}
+
+function onChipOut(ev: MouseEvent) {
+  const chip = asElement(ev.target)?.closest<HTMLElement>(".handle-chip[data-handle]");
+  if (!chip) return;
+  const to = asElement(ev.relatedTarget);
+  if (to && chip.contains(to)) return;
+  clearTimeout(hoverTimer);
+  hoverChip = null;
+  hovered.value = null;
+}
+
+function onHandleChipClick(ev: MouseEvent) {
+  const chip = asElement(ev.target)?.closest<HTMLElement>(".handle-chip[data-handle]");
+  if (!chip) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  clearTimeout(hoverTimer);
+  hovered.value = null;
+  const handle = chip.dataset.handle ?? "";
+  const at = frameOrigin();
+  chipTarget.value = {
+    handle,
+    shownAs: chip.dataset.shownAs ?? "",
+    resolved: resolvedHandles.value[handle] ?? null,
+    x: at.x + ev.clientX,
+    y: at.y + ev.clientY,
+  };
+}
 
 function onRemoteChipClick(ev: MouseEvent) {
   const chip = asElement(ev.target)?.closest<HTMLButtonElement>("button.remote-media");
@@ -277,6 +359,7 @@ function paint() {
   injectCopyUuidButtons(el);
   decorateRemoteMedia(el);
   decorateLongMessages(el);
+  void redrawHandles();
   decorateEdgeSources();
   applySelection(bodyChanged);
   bodyChanged = false;
@@ -310,14 +393,22 @@ function onFrameLoad() {
     frameStops.push(() => doc.removeEventListener(type, fn));
   };
   on("click", (ev) => {
+    onHandleChipClick(ev);
     onBodyEdgeClick(ev);
     onCopyClick(ev);
     onRemoteChipClick(ev);
     onFrameLinkClick(ev);
   });
   on("auxclick", onFrameLinkClick);
-  on("mouseover", onBodyMouseOver);
-  on("mouseout", onBodyMouseOut);
+  on("mouseover", (ev) => {
+    onBodyMouseOver(ev);
+    onChipOver(ev);
+  });
+  on("mouseout", (ev) => {
+    onBodyMouseOut(ev);
+    onChipOut(ev);
+  });
+  on("copy", (ev) => copyWithHandles(ev, doc.body));
   on("contextmenu", (ev) => {
     const r = frame.getBoundingClientRect();
     emit("frame-contextmenu", ev, { win, dx: r.left, dy: r.top });
@@ -376,6 +467,14 @@ onMounted(paint);
     :srcdoc="DOC_FRAME_SRCDOC"
     @load="onFrameLoad"
   ></iframe>
+  <HandleHoverCard v-if="hovered" v-bind="hovered" />
+  <HandlePopover
+    v-if="chipTarget"
+    :key="chipTarget.handle"
+    v-bind="chipTarget"
+    @close="chipTarget = null"
+    @changed="redrawHandles"
+  />
 </template>
 
 <style>

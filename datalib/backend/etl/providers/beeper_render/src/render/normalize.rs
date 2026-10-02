@@ -193,7 +193,7 @@ fn to_item(source_id: &str, room: &Room, doc: &DocBucket, m: &Event) -> Normaliz
         // kept out of the chat row's search text.
         return NormalizedChatItem {
             message_uuid: ids::event(source_id, &m.native_event_id, m.timestamp_ms).uuid,
-            author_id: m.sender_uuid.clone().unwrap_or_default(),
+            author_handle: None,
             author_display: m.sender_label.clone().unwrap_or_default(),
             date_ms: Some(m.timestamp_ms),
             text: None,
@@ -213,7 +213,7 @@ fn to_item(source_id: &str, room: &Room, doc: &DocBucket, m: &Event) -> Normaliz
 
     NormalizedChatItem {
         message_uuid: ids::event(source_id, &m.native_event_id, m.timestamp_ms).uuid,
-        author_id: m.sender_uuid.clone().unwrap_or_default(),
+        author_handle: None,
         author_display: m.sender_label.clone().unwrap_or_default(),
         date_ms: Some(m.timestamp_ms),
         text: body,

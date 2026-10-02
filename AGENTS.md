@@ -197,6 +197,11 @@ datalib/
                    the build that wrote it and the shape it is in.
     core/          the app stores plus re-exports of `runtime`.
     query/         the search-bar grammar every grid shares; no deps.
+    handle/        `Handle`: one identifier for a person (`email:`, `tel:`,
+                   `slack:`), normalized; what renders write as
+                   `data-handle`. No first-party deps.
+    contacts/      the contacts app's store under `datalib_curated/`;
+                   the `datalib_contacts` applet is its one writer.
     unified_index/ the grid index, the qmd index, the query language over
                    them. Linked by datalib-step and datalib-applet —
                    never by datalib-http or datalib-dag.
@@ -643,6 +648,8 @@ upstream (block types, MIME types), free-form display text
 | a config's source type | `SourceType` | `datalib_step/src/source_type.rs` |
 | whether an ingest method reaches a service or reads files | `Reach` | `source_common/src/lib.rs` |
 | which of datalib's stores a file is, in its `_datalib_meta` | `StoreKind` | `store_meta/src/lib.rs` (`datalib_store_meta`) |
+| what namespace a handle is in | `HandleKind` | `handle/src/lib.rs` (`datalib_handle`) |
+| a contact is a person or a group; how a handle was linked | `ContactKind`, `LinkedHow` | `contacts/src/lib.rs` (`datalib_contacts`) |
 
 The TypeScript side mirrors these as string-literal unions in
 `datalib/ui/src/api.ts`, hand-kept — change both halves together.

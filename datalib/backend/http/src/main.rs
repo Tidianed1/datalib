@@ -2,6 +2,7 @@
 
 use clap::Parser;
 use datalib_http::{router, ApiToken};
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 const DEFAULT_BIND: &str = "127.0.0.1:8731";
@@ -17,9 +18,9 @@ struct Args {
     /// absent; an empty root produces an empty search index.
     data_root: PathBuf,
 
-    /// Skip opening the default browser at the listening URL. Default
-    /// is to open; pass this for headless / scripted runs (e2e tests,
-    /// dev iteration where the tab is already open, CI).
+    /// Skip opening the default browser at the listening URL. It opens
+    /// only when stdout is a terminal, so an agent's or a script's run
+    /// never steals the focus; pass this to skip it at a terminal too.
     #[arg(long)]
     no_open: bool,
 
@@ -140,7 +141,7 @@ async fn main() -> anyhow::Result<()> {
         datalib_http::auth::restrict_to_owner(url_file)?;
     }
 
-    if !args.no_open {
+    if !args.no_open && std::io::stdout().is_terminal() {
         // Best-effort browser open. We don't propagate the error
         // because most users will already have the tab from a prior
         // run (and `webbrowser::open` returns Ok in that case anyway).

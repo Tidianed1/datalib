@@ -1,8 +1,9 @@
 # Contacts: one person (or household, or list) across every source
 
-*Proposal (2026-10-01); nothing here is built. The facts about the tree
-it starts from were read that day and are cited by path; check them
-before relying on one.*
+*Proposal (2026-10-01), partly built: a first slice of phases 1 and 2
+(see "Order of work") landed with the PR that added this banner. The
+facts about the tree it starts from were read on 2026-10-01 and are
+cited by path; check them before relying on one.*
 
 The same person shows up in a mirror under many identifiers: an email
 address, a phone number in WhatsApp and Signal and Messages, a Slack
@@ -25,6 +26,7 @@ them.
 | **handle** | one identifier in one namespace, normalized: `email:riker@enterprise.org`, `tel:+15551234`, `slack:T01/U02`. Upstream data; a render finds it. |
 | **contact** | datalib's record of a person (`kind = person`) or of several people who share handles (`kind = group`: "Mom & Dad", a mailing list). A person creates it. |
 | **link** | a row saying a handle belongs to a contact. A person makes it. |
+| **`DatalibContact`** | a person as one source describes them — the handles it ties together, the names it shows, a photo and details. A source's is read from raw rows at render time; the contacts app's is the one a person made. See [One type for a person](#one-type-for-a-person-datalibcontact). |
 | **address-book card** | a record the `contacts` *provider* mirrors from CardDAV or a `.vcf` — upstream data, like a Slack profile. Not a contact. See [The code name](#the-code-name). |
 
 ## The handle
@@ -132,6 +134,99 @@ Phase 1 measures it on a copy of a real root — counts and sizes only —
 against a budget: the table under 5% of the index, and `grid_index`'s
 incremental pass under 10% slower.
 
+## One type for a person: `DatalibContact`
+
+Every source that knows people already describes them in its own way:
+Slack's user list (a name, a title, an avatar, often an email), WhatsApp's
+address book and the names people give themselves, Signal's recipients
+(a number and an ACI), a vCard, a LinkedIn connection, a Facebook
+friend. A **`DatalibContact`** is the one type for all of them, and for
+the contacts app's own contacts too: who a person is, as one source
+describes them.
+
+All of this happens after the raw layer: a `DatalibContact` is built at
+render time from raw rows, or by the contacts app from its store, and
+everything derived from one is rebuildable.
+
+```rust
+struct DatalibContact {
+    source_id: String,          // who describes the person: a source, or the contacts app
+    key: String,                // that source's own id for them: a Slack user id, a vCard UID, a contact_id
+    kind: ContactKind,          // person, group, organization
+    names: Vec<String>,         // the names it shows, the one it prefers first
+    handles: Vec<ContactHandle>,// each Handle, with its label ("work", "cell") and stopped_working_by
+    photo: Option<Photo>,       // bytes, a blob in the source's CAS, or a URL
+    org: Option<String>,
+    title: Option<String>,
+    note: Option<String>,
+    details: Vec<(String, String)>, // birthday, address, anything else the source says
+    groups: Vec<String>,        // an address book's categories, a group's members
+    source_url: Option<String>,
+    seen: Option<Seen>,         // how many items they authored in this source, the last one's stamp
+}
+```
+
+**It lives in a small crate of its own**, depending on `datalib_handle`
+and serde and nothing else, so the render crates, the contacts crate,
+the applets and the UI's mirror of it share one definition at no cost.
+
+**Many describe the same person, and the source tells them apart.**
+Slack's, the address book's and the one you made are three
+`DatalibContact`s with three `source_id`s. A chip ranks them: the
+contacts app's first, then an address-book card, then a provider's own,
+then chat-common's baseline. So "your contact" is not a different type,
+only the top-ranked one.
+
+**Who produces them**, each needing less from the provider than the one
+before:
+
+- **The contacts app**, from its store: a contact and its handles,
+  `stopped_working_by` included.
+- **A source about people** — the `contacts` provider's vCards,
+  LinkedIn connections, Facebook friends — one per record.
+- **A chat provider, for what only it knows**: Slack's users (with the
+  profile email as a second handle), WhatsApp's contacts (a linked id
+  and its number), Signal's recipients. `NormalizedChat` carries them.
+- **chat-common, for free.** It sees every item's `author_handle` beside
+  the name the provider resolved for it, so it adds a baseline per
+  handle per source — the names it was shown under, how often, last
+  seen — for every chat provider with no per-provider code. A
+  provider's own and the baseline for the same handle merge into one.
+
+**contact-common is the one place a `DatalibContact` is rendered.** It
+turns one into a document — the page a vCard or a contact gets today —
+and writes the `contacts` and `contact_handles` rows a render store
+gains beside `grid_rows`. What rendering needs beyond who the person is
+(the document's uuid, the address book it is filed under, the raw rows
+it was built from for incrementality) is passed in beside the
+`DatalibContact`, never stored on it; that bookkeeping is what made
+`NormalizedContact` a render-side type, and it is retired.
+
+**Not every one becomes a document.** A source about people — an
+address book, LinkedIn connections, the contacts app's snapshot —
+renders each as a document, so it is searchable. A chat provider writes
+only the rows, or every Slack user would be a search result.
+`grid_index` loads the rows into the index the way it loads `grid_rows`,
+and a row's id is minted like any entity id (`entity_ids.md`), from
+`source_id` and `key`.
+
+**Who reads them.**
+
+- **The core resolver.** The `unified_index` applet answers `POST
+  /people` with every `DatalibContact` in the index holding each
+  asked-for handle, ranked. This works with no contacts app at all.
+- **The contacts app**, whose `resolve` answers in the same type. A
+  chip gets one ranked list per handle, whoever produced it; it draws
+  the first, and the hover card shows the rest ("seen as 'J-L Picard'
+  in Gmail, 'Captain' on Slack").
+- **Adopting and suggesting.** One with several handles is exactly what
+  "adopt card" adopts — "link all four of this card's handles" — and a
+  Slack user whose email matches a contact is the first kind of
+  suggestion.
+
+It costs one row per person per source plus one per handle — small
+beside `row_handles`, which grows with every message.
+
 ## A separate app, tightly integrated
 
 Contacts is built as an app of its own that plugs into datalib, not as
@@ -142,29 +237,30 @@ the core gains is generic, and the contacts app is its first user:
 |---|---|
 | `data-handle` spans and `row_handles` | know which rows mention a handle |
 | a handle resolver the document view and the grid call | draw chips |
+| `DatalibContact`: each source's account of a person, in the index | rank its own above them, offer a card's handles to adopt |
 | `grid_rows.live_view` | open a contact's row as a live card |
 | an ordinary source group | put contacts in search and qmd |
 
 Nothing in the core opens the contacts store. So removing the app is:
 take its `[[applets]]` entry and its group out of the config, and
-delete `<data_root>/curated/datalib_contacts/`. Every source, the index
+delete `<data_root>/datalib_curated/datalib_contacts/`. Every source, the index
 and search keep working; handle spans go back to plain text.
 
 ## The app's store
 
-`<data_root>/curated/datalib_contacts/contacts.doltlite_db`, with the
+`<data_root>/datalib_curated/datalib_contacts/contacts.doltlite_db`, with the
 export and anything else the app keeps beside it.
 
 **It lives apart because it is the one store that cannot be rebuilt.**
 Every other store under a root is either derived (render, index, qmd)
 from something that can be fetched again, or the machine's own
-bookkeeping. This one is a person's work. `curated/` holds one
+bookkeeping. This one is a person's work. `datalib_curated/` holds one
 directory per app, so an app's state can be managed or deleted on its
 own; the next app of this kind (tags, notes, saved queries) gets a
 sibling. `feedback` and the remote-media allow rows stay in `system/`:
 they belong to the core. `system` is today the only reserved top-level
 name (`SYSTEM_DIR`, `dag/src/config.rs`); `usable_group_id` has to
-refuse `curated` too.
+refuse `datalib_curated` too.
 
 **Why doltlite:** every edit is a commit, so the history is an audit
 trail ("when did I merge these two?") and undo is a revert; and a
@@ -176,7 +272,7 @@ reaches `main` without a person accepting it.
 | table | key | holds |
 |---|---|---|
 | `contacts` | `contact_id` | `kind` (`person` / `group`), name, note, photo, `merged_into` (set when merged away), created/updated `_at_utc` + `tz_offset` |
-| `handles` | `(kind, value)` | `contact_id`, how it was linked (`manual`, `card`, `suggestion`), `linked_at_utc`, `stopped_working_by` |
+| `handles` | `handle` (`kind:value`, as `datalib_handle` spells it) | `contact_id`, how it was linked (`manual`, `card`, `suggestion`), `linked_at_utc`, `stopped_working_by` |
 | `members` | `(group_id, member_id)` | `added_at_utc` |
 
 - **A handle belongs to exactly one contact.** An address two people
@@ -215,7 +311,7 @@ contact card lists such handles after the working ones, struck
 through, and the vCard export leaves them out.
 
 This does not cover a number that was *reassigned* to someone else:
-the key is still `(kind, value)`, so a handle has one owner for all
+the key is still the handle alone, so a handle has one owner for all
 time. If that case turns up, the key gains a validity range;
 `stopped_working_by` is already its end.
 
@@ -270,10 +366,12 @@ The `identity` cell type (`{id, label, icon, detail}`, `cards.md` §
   photo is a URL the applet serves.
 - **In a document**, a `decorateHandles` pass beside
   `decorateRemoteMedia` in `ChatBody.ce.vue` collects every
-  `[data-handle]`, makes one `resolve` call per document, and draws
-  chips. A resolved chip shows the contact's name and photo. An
-  unresolved one shows the handle kind's mark, the source's own text,
-  and a quiet "+".
+  `[data-handle]`, asks who they are (the core's `DatalibContact`s and
+  the contacts app's, one call each per document), and draws chips. A
+  chip draws the top-ranked one: your contact's name and photo, or else
+  the best a source gave — an address-book name and photo, a Slack
+  avatar — with the handle kind's mark and a quiet "+", since it is not
+  yet a contact of yours.
 - **In the grid**, the search applet returns each row's author handle
   beside its display name, and the grid resolves the visible rows'
   handles through the same `resolve` call, so authors read as contacts
@@ -285,8 +383,9 @@ Three surfaces, in the order a person meets them:
 
 1. **The popover on an unresolved chip.** A typeahead over contacts and
    unlinked address-book cards (picking a card creates the contact and
-   adopts every handle on it), plus "New contact". One gesture, no
-   dialog.
+   adopts every handle on it), plus "New contact". When a source ties
+   the handle to other handles, it offers to link those too. One
+   gesture, no dialog.
 2. **The contact card**, opened from a resolved chip — a card, not a
    modal (`cards.md`). Handles grouped by kind, each with unlink; groups
    it belongs to, or members if it is a group; "Merge with…"; its
@@ -357,7 +456,7 @@ value)`, each identity belonging to one contact; a `messageAttributes`
 table with a row per identity per message for From, To, Cc and Bcc;
 and the address-book name looked up when a message is shown. The
 index is rebuildable and the address book a separate store a person
-edits — the split between the index and `curated/` here.
+edits — the split between the index and `datalib_curated/` here.
 
 Two things it does that this plan does not:
 
@@ -379,17 +478,38 @@ a measurement to ask for.
 
 ## Order of work
 
+**Built so far** (the first slice, so it could be tried): `datalib_handle`
+(`email`, `tel`, `slack`); `data-handle` on the author span for email
+(From), Slack, WhatsApp, Messages and Google Chat/Voice; the
+`datalib_contacts` crate and applet (create, link, unlink, rename,
+stopped working, resolve, search); and in the document view, chips and
+a link/create popover (`ui/src/cards/contacts.ts`,
+`HandlePopover.ce.vue`). A chip shows a short name; hovering shows the
+identifier behind it and how the message showed it
+(`HandleHoverCard.ce.vue`); a copy carries `Name <identifier>` as text
+and keeps `data-handle` in its HTML. Not yet: email To/Cc, Signal's e164,
+address-book cards, reactions and mentions, `row_handles`, groups,
+merge, undo, the contact card, `IdentityChip` in the grid, and
+everything in phases 3–6.
+
 1. **Handles end to end, nothing visible.** The handle crate (pure,
    unit-tested), `data-handle` in chat-common, email and contacts, the
    email and Signal fixes, `row_handles`.
-2. **Store, applet, chips.** `curated/datalib_contacts/`, the
+2. **Store, applet, chips.** `datalib_curated/datalib_contacts/`, the
    applet and its routes, `IdentityChip`, `decorateHandles`, the
    link/create popover.
-3. **Managing contacts.** The contact card, merge, unlink and undo,
-   groups and members, the triage grid, author chips in the grid.
-4. **Contacts in search.** The snapshot step, `live_view`, the
+3. **`DatalibContact`.** The type in its own small crate; contact-common
+   rendering it, with `NormalizedContact` retired; chat-common's
+   baseline; Slack, WhatsApp and Signal filling in their own users; the
+   index rows and their load; `POST /people`; chips and the hover card
+   drawing the ranked list; the contacts app's `resolve` answering in
+   the same type.
+4. **Managing contacts.** The contact card, merge, unlink and undo,
+   groups and members, the triage grid, author chips in the grid,
+   adopting a source's handles.
+5. **Contacts in search.** The snapshot step, `live_view`, the
    `contact:` filter.
-5. **Later.** Suggestions on a branch; Lightroom face tags; a
+6. **Later.** Suggestions on a branch; Lightroom face tags; a
    distinguished "Me" contact seeded from each source's `account`; a
    validity range on a link, for a handle reassigned to someone else.
 

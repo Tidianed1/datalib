@@ -150,11 +150,10 @@ pub fn media_caption(media: &Value, album_name: Option<&str>) -> Option<String> 
         .map(strip_mentions)
 }
 
-/// One item of a feed, as `author_id` wrote it: an attachment item when
-/// it carries any, else a text one.
+/// One item of a feed: an attachment item when it carries any, else a
+/// text one.
 pub fn chat_item(
     item_id: Identity,
-    author_id: String,
     author_display: String,
     date_ms: Option<i64>,
     text: Option<String>,
@@ -162,7 +161,7 @@ pub fn chat_item(
 ) -> NormalizedChatItem {
     NormalizedChatItem {
         message_uuid: item_id.uuid,
-        author_id,
+        author_handle: None,
         author_display,
         date_ms,
         text,

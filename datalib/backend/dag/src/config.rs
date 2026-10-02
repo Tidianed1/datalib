@@ -555,11 +555,29 @@ fn data_root_of(path: &Path, cfg: &DagConfig) -> PathBuf {
     }
 }
 
-/// The one reserved top-level directory: the runner's and the server's own
-/// state. A step writing there would put the scheduler's own bookkeeping
-/// under its change detection. This is the policy; the path constants live in
-/// `datalib_core::layout`, which this crate deliberately doesn't depend on.
+/// The runner's and the server's own state. A step writing there would put
+/// the scheduler's own bookkeeping under its change detection. This is the
+/// policy; the path constants live in `datalib_core::layout`, which this
+/// crate deliberately doesn't depend on.
 pub const SYSTEM_DIR: &str = "system";
+
+/// State a person curates by hand, one directory per app
+/// (`datalib_contacts::CURATED_DIR`). Nothing can rebuild it, so no step
+/// may write there.
+pub const CURATED_DIR: &str = "datalib_curated";
+
+/// Each top-level directory no group or step may claim, and what it holds.
+const RESERVED_DIRS: &[(&str, &str)] = &[
+    (SYSTEM_DIR, "the runner's and the server's own state"),
+    (
+        CURATED_DIR,
+        "state a person curates by hand, which nothing can rebuild",
+    ),
+];
+
+fn reserved_dir(top: &str) -> Option<(&'static str, &'static str)> {
+    RESERVED_DIRS.iter().copied().find(|(dir, _)| *dir == top)
+}
 
 /// One id segment: what a directory name may contain. Deliberately narrower
 /// than the filesystem allows — an id is a path component on every platform
@@ -576,9 +594,9 @@ fn valid_id_segment(seg: &str) -> bool {
 }
 
 /// Whether `id` is a group id a config may name: one id segment, never
-/// the reserved `system`. What makes `<root>/<id>` that group's tree.
+/// a reserved directory. What makes `<root>/<id>` that group's tree.
 pub fn usable_group_id(id: &str) -> bool {
-    valid_id_segment(id) && id != SYSTEM_DIR
+    valid_id_segment(id) && reserved_dir(id).is_none()
 }
 
 const SEGMENT_RULE: &str = "letters, digits, `.`, `_`, `-`, not starting with `-`, and \
@@ -976,14 +994,14 @@ fn accept_groups(
             ));
             continue;
         }
-        if id == SYSTEM_DIR {
+        if let Some((dir, holds)) = reserved_dir(&id) {
             diags.push(c.diag(
                 Severity::Rejected,
                 text,
                 Some("id"),
                 format!(
-                    "group id {SYSTEM_DIR:?} is reserved for the runner's and the server's \
-                     own state; every step under it would write there."
+                    "group id {dir:?} is reserved for {holds}; every step under it would \
+                     write there."
                 ),
             ));
             continue;
@@ -1302,15 +1320,13 @@ fn accept_steps(
         } else {
             Some("id")
         };
-        if id == SYSTEM_DIR || id.starts_with(&format!("{SYSTEM_DIR}/")) {
+        let top = id.split('/').next().unwrap_or_default();
+        if let Some((dir, holds)) = reserved_dir(top) {
             diags.push(c.diag(
                 Severity::Rejected,
                 text,
                 id_key,
-                format!(
-                    "id {id:?} writes under {SYSTEM_DIR:?}, which is reserved for the \
-                     runner's and the server's own state."
-                ),
+                format!("id {id:?} writes under {dir:?}, which is reserved for {holds}."),
             ));
             continue;
         }
@@ -2685,8 +2701,14 @@ mod tests {
     }
 
     #[test]
-    fn rejects_ids_under_system() {
-        for id in ["system", "system/state", "system/a/b"] {
+    fn rejects_ids_under_a_reserved_dir() {
+        for id in [
+            "system",
+            "system/state",
+            "system/a/b",
+            "datalib_curated",
+            "datalib_curated/datalib_contacts",
+        ] {
             let cfg: DagConfig =
                 toml::from_str(&format!(r#"steps = [{{id = "{id}", command = "a"}}]"#)).unwrap();
             let err = to_specs(&cfg).unwrap_err().to_string();
@@ -3525,7 +3547,7 @@ command = "datalib-applet unified_index"
 
     #[test]
     fn a_group_id_is_one_segment_and_never_system() {
-        for bad in ["", "a/b", "..", "-x", "a b", "system"] {
+        for bad in ["", "a/b", "..", "-x", "a b", "system", "datalib_curated"] {
             let check = check_text(&format!("[[groups]]\nid = \"{bad}\"\n"));
             assert_eq!(check.cfg.groups.len(), 0, "{bad:?} should be rejected");
             assert_eq!(check.diagnostics[0].severity, Severity::Rejected);

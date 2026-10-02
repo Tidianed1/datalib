@@ -23,6 +23,7 @@ rust_library(
     deps = [
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/handle:datalib_handle",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/time:datalib_time",

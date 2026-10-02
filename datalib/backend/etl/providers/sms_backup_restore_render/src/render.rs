@@ -306,11 +306,7 @@ fn item(source_id: &str, v: &Value) -> NormalizedChatItem {
             let duration = v.get("duration").and_then(Value::as_i64).unwrap_or(0);
             NormalizedChatItem {
                 message_uuid,
-                author_id: v
-                    .get("conversation_key")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown")
-                    .to_string(),
+                author_handle: None,
                 author_display: display.to_string(),
                 date_ms,
                 text: None,
@@ -339,14 +335,6 @@ fn item(source_id: &str, v: &Value) -> NormalizedChatItem {
             } else {
                 display.to_string()
             };
-            let author_id = if is_me {
-                "me".to_string()
-            } else {
-                v.get("conversation_key")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown")
-                    .to_string()
-            };
             // SMS body lives in `body`; MMS body in `text`.
             let text = v
                 .get("body")
@@ -372,7 +360,7 @@ fn item(source_id: &str, v: &Value) -> NormalizedChatItem {
 
             NormalizedChatItem {
                 message_uuid,
-                author_id,
+                author_handle: None,
                 author_display,
                 date_ms,
                 text,

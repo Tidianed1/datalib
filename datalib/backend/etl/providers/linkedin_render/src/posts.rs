@@ -265,7 +265,7 @@ fn me_item(
     let id = mint(date_ms);
     NormalizedChatItem {
         message_uuid: id.uuid,
-        author_id: "me".to_string(),
+        author_handle: None,
         author_display: ME.to_string(),
         date_ms,
         text: nonempty(&text).map(str::to_string),
@@ -296,7 +296,7 @@ fn post_placeholder(
     let id = ids::post_origin(source_id, key, date_ms);
     NormalizedChatItem {
         message_uuid: id.uuid,
-        author_id: "linkedin".to_string(),
+        author_handle: None,
         author_display: "LinkedIn".to_string(),
         date_ms,
         text: None,

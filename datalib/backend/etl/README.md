@@ -158,8 +158,9 @@ built any other way.
 
 Doltlite does not refuse a second writer; it only makes it wait its
 turn. Two writers on one branch would then commit each other's rows.
-So `open` and `open_derived` are the only ways to a handle that can
-commit, and each takes the file's writer lock — `flock(2)` on the
+So `open`, `open_derived` and `open_curated` (a store a person
+writes by hand, which refuses a schema break like a raw store) are the
+only ways to a handle that can commit, and each takes the file's writer lock — `flock(2)` on the
 sibling `<store>.doltlite_db.lock`, `datalib_flock` — and gives it to
 the connection, which holds it until it closes. A second writer on the
 same file, in another process or in this one, is refused at open with

@@ -190,9 +190,7 @@ fn build_chats(
                 let id = ids::message(source_id, table, row_id, date_ms);
                 NormalizedChatItem {
                     message_uuid: id.uuid,
-                    author_id: nonempty(field(p, "SENDER PROFILE URL"))
-                        .unwrap_or(from)
-                        .to_string(),
+                    author_handle: None,
                     author_display: nonempty(from).unwrap_or("Unknown").to_string(),
                     date_ms,
                     text: nonempty(content).map(str::to_string),

@@ -86,9 +86,11 @@ pub struct NormalizedChatItem {
     /// Stable per-item UUID minted by the provider. Used as the section
     /// anchor (`id="m-{uuid}"`) and the message-level grid_row PK.
     pub message_uuid: String,
-    /// Provider-stable identity string. Doesn't have to be
-    /// human-readable.
-    pub author_id: String,
+    /// Who said it, as an identifier a contact can be linked to — an
+    /// email address, a phone number, a Slack user. `None` where the
+    /// provider has no such identifier for the author (yet), or the
+    /// author is the account itself.
+    pub author_handle: Option<datalib_handle::Handle>,
     /// Pre-resolved author label ("Me", "Will Riker", "+15551234"). The
     /// provider owns the outgoing/incoming rule and any name lookup.
     pub author_display: String,
