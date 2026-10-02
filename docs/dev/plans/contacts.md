@@ -478,19 +478,22 @@ a measurement to ask for.
 
 ## Order of work
 
-**Built so far** (the first slice, so it could be tried): `datalib_handle`
-(`email`, `tel`, `slack`); `data-handle` on the author span for email
-(From), Slack, WhatsApp, Messages and Google Chat/Voice; the
-`datalib_contacts` crate and applet (create, link, unlink, rename,
-stopped working, resolve, search); and in the document view, chips and
-a link/create popover (`ui/src/cards/contacts.ts`,
-`HandlePopover.ce.vue`). A chip shows a short name; hovering shows the
-identifier behind it and how the message showed it
-(`HandleHoverCard.ce.vue`); a copy carries `Name <identifier>` as text
-and keeps `data-handle` in its HTML. Not yet: email To/Cc, Signal's e164,
-address-book cards, reactions and mentions, `row_handles`, groups,
-merge, undo, the contact card, `IdentityChip` in the grid, and
-everything in phases 3–6.
+**Built so far.** Phases 1–2's first slice: `datalib_handle` (`email`,
+`tel`, `slack`); `data-handle` on the author span for email (From),
+Slack, WhatsApp (a linked id through its number), Messages and Google
+Chat/Voice; the `datalib_contacts` crate and applet; chips, the
+link/create popover, the hover card and copy. Phase 3's core:
+`DatalibContact` in `datalib_contact_schema`; contact-common rendering it
+(vCards, LinkedIn, Facebook friends) with `NormalizedContact` retired;
+chat-common's baseline; `source_contacts` / `source_contact_handles` in
+every render store and the index; `POST /people` on the `unified_index`
+applet; chips and the hover card drawing your contact first, then each
+source's account, with no contacts app needed for the latter; the
+contacts app answering `resolve` as a `DatalibContact`. Not yet: a
+provider's own accounts (Slack's users, WhatsApp's address book) on
+`NormalizedChat`, email To/Cc, Signal, reactions and mentions,
+`row_handles`, groups, merge, undo, adopting a card's handles, the
+contact card, chips in the grid, and phases 4–6.
 
 1. **Handles end to end, nothing visible.** The handle crate (pure,
    unit-tested), `data-handle` in chat-common, email and contacts, the

@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 pub use datalib_contact_schema::ContactKind;
+use datalib_contact_schema::{ContactHandle, DatalibContact};
 use datalib_etl::doltlite_raw;
 use datalib_handle::Handle;
 use datalib_store_meta::StoreKind;
@@ -26,6 +27,10 @@ use strum::{EnumString, IntoStaticStr, VariantArray};
 pub const CURATED_DIR: &str = "datalib_curated";
 pub const APP_DIR: &str = "datalib_contacts";
 pub const STORE_FILE: &str = "contacts.doltlite_db";
+
+/// The `source_id` of every contact this app answers with: a contact is
+/// one more account of a person, ranked above every source's.
+pub const SOURCE_ID: &str = "datalib_contacts";
 
 pub fn store_path(data_root: &Path) -> PathBuf {
     data_root.join(CURATED_DIR).join(APP_DIR).join(STORE_FILE)
@@ -75,38 +80,11 @@ impl LinkedHow {
     }
 }
 
-/// What a chip needs to draw a resolved handle.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct Resolved {
-    pub contact_id: String,
-    pub name: String,
-    pub kind: String,
-    /// Set when the person marked this handle as no longer working: a
-    /// partial date (`2019`, `2019-06`, `2019-06-14`) by which it had
-    /// stopped.
-    pub stopped_working_by: Option<String>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ContactSummary {
     pub contact_id: String,
     pub name: String,
     pub kind: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct LinkedHandle {
-    pub handle: String,
-    pub stopped_working_by: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct Contact {
-    pub contact_id: String,
-    pub name: String,
-    pub kind: String,
-    pub note: Option<String>,
-    pub handles: Vec<LinkedHandle>,
 }
 
 /// What linking a handle to a contact comes to, given who holds it now.
@@ -159,28 +137,22 @@ impl Store {
         self.pool.close().await;
     }
 
-    pub async fn resolve(&self, handles: &[Handle]) -> Result<HashMap<String, Resolved>> {
+    /// The contact holding each of `handles`, by handle; a handle no
+    /// contact holds is absent.
+    pub async fn resolve(&self, handles: &[Handle]) -> Result<HashMap<String, DatalibContact>> {
         let mut out = HashMap::new();
         for h in handles {
-            let row = sqlx::query(
-                "SELECT c.contact_id, c.name, c.kind, h.stopped_working_by \
-                   FROM handles h JOIN contacts c ON c.contact_id = h.contact_id \
-                  WHERE h.handle = ?",
-            )
-            .bind(h.as_str())
-            .fetch_optional(&self.pool)
-            .await
-            .context("resolve a handle")?;
-            if let Some(r) = row {
-                out.insert(
-                    h.as_str().to_string(),
-                    Resolved {
-                        contact_id: r.get("contact_id"),
-                        name: r.get("name"),
-                        kind: r.get("kind"),
-                        stopped_working_by: r.get("stopped_working_by"),
-                    },
-                );
+            let holder: Option<String> =
+                sqlx::query_scalar("SELECT contact_id FROM handles WHERE handle = ?")
+                    .bind(h.as_str())
+                    .fetch_optional(&self.pool)
+                    .await
+                    .context("resolve a handle")?;
+            if let Some(contact) = match holder {
+                Some(id) => self.contact(&id).await?,
+                None => None,
+            } {
+                out.insert(h.as_str().to_string(), contact);
             }
         }
         Ok(out)
@@ -215,17 +187,29 @@ impl Store {
             .collect())
     }
 
-    pub async fn contact(&self, contact_id: &str) -> Result<Option<Contact>> {
-        let Some(r) =
-            sqlx::query("SELECT contact_id, name, kind, note FROM contacts WHERE contact_id = ?")
-                .bind(contact_id)
-                .fetch_optional(&self.pool)
-                .await
-                .context("read a contact")?
+    pub async fn contact(&self, contact_id: &str) -> Result<Option<DatalibContact>> {
+        let Some(r) = sqlx::query(
+            "SELECT contact_id, name, kind, note, created_at_utc, updated_at_utc \
+               FROM contacts WHERE contact_id = ?",
+        )
+        .bind(contact_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("read a contact")?
         else {
             return Ok(None);
         };
-        let handles = sqlx::query(
+        let kind: String = r.get("kind");
+        let mut contact = DatalibContact::new(
+            SOURCE_ID,
+            contact_id,
+            ContactKind::parse(&kind).unwrap_or(ContactKind::Person),
+        );
+        contact.names = vec![r.get("name")];
+        contact.note = r.get("note");
+        contact.created_at = r.get("created_at_utc");
+        contact.modified_at = r.get("updated_at_utc");
+        contact.handles = sqlx::query(
             "SELECT handle, stopped_working_by FROM handles WHERE contact_id = ? \
               ORDER BY stopped_working_by IS NOT NULL, handle",
         )
@@ -234,18 +218,13 @@ impl Store {
         .await
         .context("read a contact's handles")?
         .iter()
-        .map(|h| LinkedHandle {
-            handle: h.get("handle"),
-            stopped_working_by: h.get("stopped_working_by"),
+        .filter_map(|h| {
+            let mut linked = ContactHandle::of(Handle::parse(h.get("handle"))?);
+            linked.stopped_working_by = h.get("stopped_working_by");
+            Some(linked)
         })
         .collect();
-        Ok(Some(Contact {
-            contact_id: r.get("contact_id"),
-            name: r.get("name"),
-            kind: r.get("kind"),
-            note: r.get("note"),
-            handles,
-        }))
+        Ok(Some(contact))
     }
 
     /// A new contact holding `handles`. Refused, with nothing written, if
@@ -494,8 +473,9 @@ mod tests {
 
         let got = store.resolve(&[riker.clone(), tel.clone()]).await.unwrap();
         assert_eq!(got.len(), 2);
-        assert_eq!(got[riker.as_str()].name, "Will Riker");
-        assert_eq!(got[tel.as_str()].contact_id, id);
+        assert_eq!(got[riker.as_str()].name(), Some("Will Riker"));
+        assert_eq!(got[tel.as_str()].key, id);
+        assert_eq!(got[tel.as_str()].source_id, SOURCE_ID);
 
         let other = store
             .create("Thomas Riker", ContactKind::Person, &[])
@@ -529,7 +509,11 @@ mod tests {
             .await
             .unwrap());
         let c = store.contact(&id).await.unwrap().unwrap();
-        assert_eq!(c.handles[0].handle, riker.as_str(), "working handles first");
+        assert_eq!(
+            c.handles[0].handle.as_ref(),
+            Some(&riker),
+            "working handles first"
+        );
         assert_eq!(c.handles[1].stopped_working_by.as_deref(), Some("2019-06"));
 
         assert!(store.unlink(&tel).await.unwrap());
