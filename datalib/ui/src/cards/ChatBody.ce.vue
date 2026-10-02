@@ -25,8 +25,10 @@ import {
   copyWithHandles,
   decorateHandles,
   hoverCard,
+  type DatalibContact,
+  type Decorated,
   type HoverCard,
-  type Resolved,
+  type Who,
 } from "./contacts";
 import HandleHoverCard from "./HandleHoverCard.ce.vue";
 import HandlePopover from "./HandlePopover.ce.vue";
@@ -134,16 +136,17 @@ watch(
 type ChipTarget = {
   handle: string;
   shownAs: string;
-  resolved: Resolved | null;
+  resolved: DatalibContact | null;
   x: number;
   y: number;
 };
 const chipTarget = ref<ChipTarget | null>(null);
-const resolvedHandles = ref<Record<string, Resolved>>({});
+const decorated = ref<Decorated | null>(null);
+const NOBODY: Who = { mine: null, accounts: [] };
 
 async function redrawHandles() {
   if (!body.value) return;
-  resolvedHandles.value = (await decorateHandles(body.value)) ?? {};
+  decorated.value = await decorateHandles(body.value);
 }
 
 /// Where the frame's viewport sits in this window: the hover card and
@@ -169,7 +172,12 @@ function onChipOver(ev: MouseEvent) {
     const rect = chip.getBoundingClientRect();
     const at = frameOrigin();
     hovered.value = {
-      card: hoverCard(handle, chip.dataset.shownAs ?? "", resolvedHandles.value[handle] ?? null),
+      card: hoverCard(
+        handle,
+        chip.dataset.shownAs ?? "",
+        decorated.value?.who[handle] ?? NOBODY,
+        decorated.value?.canLink ?? false,
+      ),
       x: at.x + rect.left,
       y: at.y + rect.bottom,
     };
@@ -188,7 +196,9 @@ function onChipOut(ev: MouseEvent) {
 
 function onHandleChipClick(ev: MouseEvent) {
   const chip = asElement(ev.target)?.closest<HTMLElement>(".handle-chip[data-handle]");
-  if (!chip) return;
+  // Without a contacts app there is nothing to change; the hover card is
+  // all a chip has to say.
+  if (!chip || !decorated.value?.canLink) return;
   ev.preventDefault();
   ev.stopPropagation();
   clearTimeout(hoverTimer);
@@ -198,7 +208,7 @@ function onHandleChipClick(ev: MouseEvent) {
   chipTarget.value = {
     handle,
     shownAs: chip.dataset.shownAs ?? "",
-    resolved: resolvedHandles.value[handle] ?? null,
+    resolved: decorated.value.who[handle]?.mine ?? null,
     x: at.x + ev.clientX,
     y: at.y + ev.clientY,
   };

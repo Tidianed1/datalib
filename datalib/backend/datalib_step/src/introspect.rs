@@ -445,6 +445,7 @@ pub fn plan(
             rows,
             sections: Vec::new(),
             edges: Vec::new(),
+            contacts: Vec::new(),
             problems: Vec::new(),
         },
         samples,

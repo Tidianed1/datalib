@@ -1,31 +1,42 @@
-// The contacts app as the document view sees it. A renderer writes the
-// author's handle on the author span (`data-handle="email:…"`); this
-// asks the `datalib_contacts` applet which contact each handle belongs
-// to and turns the span into a chip. The applet is an app of its own
-// (docs/dev/plans/contacts.md): with none configured, spans stay plain
-// text and nothing is offered. The rules are pure and unit-tested; only
-// `decorateHandles` touches a DOM.
+// Who a handle in a document is. A renderer writes the author's handle
+// on the author span (`data-handle="email:…"`); this asks the index
+// (`unified_index`'s `/people`: each source's account of the person) and
+// the contacts app (`datalib_contacts`: the contact a person made, ranked
+// first) and turns the span into a chip. The contacts app is an app of
+// its own (docs/dev/plans/contacts.md): without it chips still say what
+// the sources know, but offer nothing to link. The rules are pure and
+// unit-tested; only `decorateHandles` touches a DOM.
 
 import { iconUrl } from "@/config/icons";
 import { pushToast } from "@/toasts";
+import { UNIFIED_INDEX } from "@/api";
 
 export const CONTACTS_APPLET = "/applet/datalib_contacts";
 
-export type Resolved = {
-  contact_id: string;
-  name: string;
-  kind: string;
-  /** A partial date (`2019`, `2019-06`, `2019-06-14`) by which this
-   *  handle had stopped working, or null while it works. */
-  stopped_working_by: string | null;
+/** `datalib_contact_schema::DatalibContact`, hand-kept: a person as one
+ *  source describes them. */
+export type DatalibContact = {
+  source_id: string;
+  key: string;
+  kind: "person" | "group";
+  names: string[];
+  handles: {
+    medium: "email" | "phone" | "other";
+    label: string | null;
+    value: string;
+    handle: string | null;
+    stopped_working_by: string | null;
+  }[];
+  org: string | null;
+  title: string | null;
+  seen: { items: number; last_at: string | null } | null;
 };
 
 export type ContactSummary = { contact_id: string; name: string; kind: string };
 
-export type Contact = ContactSummary & {
-  note: string | null;
-  handles: { handle: string; stopped_working_by: string | null }[];
-};
+/** For one handle: the contact a person made, if any, and every source's
+ *  account of whoever holds it, ranked. */
+export type Who = { mine: DatalibContact | null; accounts: DatalibContact[] };
 
 // ── Pure rules ─────────────────────────────────────────────────────────
 
@@ -70,6 +81,15 @@ export function sourceLabel(shownAs: string, handle: string): string {
   return suggestedName(shownAs, handle) || shownAs.trim() || handleValue(handle);
 }
 
+export function nameOf(c: DatalibContact): string {
+  return c.names[0] ?? c.key;
+}
+
+/** A partial date by which `handle` had stopped working, as `c` records it. */
+export function stoppedBy(c: DatalibContact | null, handle: string): string | null {
+  return c?.handles.find((h) => h.handle === handle)?.stopped_working_by ?? null;
+}
+
 export type ChipLook = {
   text: string;
   ariaLabel: string;
@@ -80,22 +100,29 @@ export type ChipLook = {
   icon: string | null;
 };
 
-export function chipLook(handle: string, shownAs: string, r: Resolved | undefined): ChipLook {
-  if (!r) {
-    const text = sourceLabel(shownAs, handle);
+/** `canLink` is whether a contacts app is there to link the handle with. */
+export function chipLook(handle: string, shownAs: string, who: Who, canLink: boolean): ChipLook {
+  const { mine, accounts } = who;
+  if (!mine) {
+    const text = accounts[0] ? nameOf(accounts[0]) : sourceLabel(shownAs, handle);
     return {
       text,
       ariaLabel: `${text}, ${handleValue(handle)}, not linked to a contact`,
-      classes: ["handle-chip", "handle-unresolved"],
+      classes: ["handle-chip", "handle-unresolved", ...(canLink ? ["handle-linkable"] : [])],
       initial: null,
       icon: handleIcon(handle),
     };
   }
+  const name = nameOf(mine);
   return {
-    text: r.name,
-    ariaLabel: `${r.name}, ${handleValue(handle)}`,
-    classes: ["handle-chip", "handle-resolved", ...(r.stopped_working_by ? ["handle-stale"] : [])],
-    initial: [...r.name.trim()][0]?.toUpperCase() ?? "?",
+    text: name,
+    ariaLabel: `${name}, ${handleValue(handle)}`,
+    classes: [
+      "handle-chip",
+      "handle-resolved",
+      ...(stoppedBy(mine, handle) ? ["handle-stale"] : []),
+    ],
+    initial: [...name.trim()][0]?.toUpperCase() ?? "?",
     icon: null,
   };
 }
@@ -108,14 +135,38 @@ export type HoverCard = {
   lines: string[];
 };
 
-export function hoverCard(handle: string, shownAs: string, r: Resolved | null): HoverCard {
-  const label = sourceLabel(shownAs, handle);
+const MAX_ACCOUNTS = 4;
+const MAX_OTHER_HANDLES = 4;
+
+export function hoverCard(handle: string, shownAs: string, who: Who, canLink: boolean): HoverCard {
+  const { mine, accounts } = who;
+  const name = mine
+    ? nameOf(mine)
+    : accounts[0]
+      ? nameOf(accounts[0])
+      : sourceLabel(shownAs, handle);
   const lines: string[] = [];
-  if (r?.stopped_working_by) lines.push(`Stopped working by ${r.stopped_working_by}`);
-  if (shownAs.trim() && (!r || shownAs.trim() !== r.name))
-    lines.push(`Shown here as “${shownAs.trim()}”`);
-  lines.push(r ? "Click to edit" : "Not linked to a contact. Click to link it.");
-  return { name: r?.name ?? label, value: handleValue(handle), icon: handleIcon(handle), lines };
+  const stopped = stoppedBy(mine, handle);
+  if (stopped) lines.push(`Stopped working by ${stopped}`);
+  if (shownAs.trim() && shownAs.trim() !== name) lines.push(`Shown here as “${shownAs.trim()}”`);
+  for (const a of accounts.slice(0, MAX_ACCOUNTS)) {
+    const items = a.seen ? ` · ${a.seen.items} ${a.seen.items === 1 ? "item" : "items"}` : "";
+    lines.push(`${nameOf(a)} in ${a.source_id}${items}`);
+  }
+  const others = [
+    ...new Set(
+      [mine, ...accounts]
+        .flatMap((c) => c?.handles ?? [])
+        .filter((h) => h.handle !== handle)
+        // An address or a number reads as itself; a Slack user's
+        // `T…/U…` needs its kind beside it.
+        .map((h) => (h.medium === "other" && h.handle ? h.handle : h.value)),
+    ),
+  ];
+  if (others.length) lines.push(`Also ${others.slice(0, MAX_OTHER_HANDLES).join(", ")}`);
+  if (mine) lines.push("Click to edit");
+  else if (canLink) lines.push("Not linked to a contact. Click to link it.");
+  return { name, value: handleValue(handle), icon: handleIcon(handle), lines };
 }
 
 /** A chip as copied text: the name it shows and the identifier behind
@@ -166,9 +217,15 @@ export function trustedHandleSpans(root: Element): HTMLElement[] {
 
 // ── The applet ────────────────────────────────────────────────────────
 
-/** Whether a failed call means the app is simply not configured. */
-function isAbsent(status: number, body: string): boolean {
-  return status === 502 && body.includes('no applet "datalib_contacts"');
+/** Whether a failed call means the app is simply not configured: the
+ *  gateway's 502 names the applet it has no entry for. */
+export function isAbsent(status: number, body: string): boolean {
+  if (status !== 502) return false;
+  try {
+    return (JSON.parse(body) as { error?: string }).error === 'no applet "datalib_contacts"';
+  } catch {
+    return false;
+  }
 }
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
@@ -193,7 +250,9 @@ const post = <T>(path: string, body: unknown) =>
   call<T>(path, { method: "POST", body: JSON.stringify(body) });
 
 /** `null` when no contacts app is configured. */
-export async function resolveHandles(handles: string[]): Promise<Record<string, Resolved> | null> {
+export async function resolveHandles(
+  handles: string[],
+): Promise<Record<string, DatalibContact> | null> {
   const r = await fetch(`${CONTACTS_APPLET}/resolve`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -202,7 +261,19 @@ export async function resolveHandles(handles: string[]): Promise<Record<string, 
   const text = await r.text();
   if (isAbsent(r.status, text)) return null;
   if (!r.ok) throw new Error(`resolve → ${r.status}: ${text}`);
-  return (JSON.parse(text) as { resolved: Record<string, Resolved> }).resolved;
+  return (JSON.parse(text) as { resolved: Record<string, DatalibContact> }).resolved;
+}
+
+/** Every source's account of whoever holds each handle, ranked; a handle
+ *  no source mentions is absent. */
+export async function peopleFor(handles: string[]): Promise<Record<string, DatalibContact[]>> {
+  const r = await fetch(`${UNIFIED_INDEX}/people`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ handles }),
+  });
+  if (!r.ok) throw new Error(`people → ${r.status}: ${await r.text()}`);
+  return ((await r.json()) as { people: Record<string, DatalibContact[]> }).people;
 }
 
 export async function searchContacts(q: string): Promise<ContactSummary[]> {
@@ -212,10 +283,6 @@ export async function searchContacts(q: string): Promise<ContactSummary[]> {
 
 export async function createContact(name: string, handles: string[]): Promise<string> {
   return (await post<{ contact_id: string }>("/contacts", { name, handles })).contact_id;
-}
-
-export async function fetchContact(contactId: string): Promise<Contact> {
-  return call<Contact>(`/contact/${encodeURIComponent(contactId)}`);
 }
 
 export async function linkHandle(handle: string, contactId: string): Promise<void> {
@@ -234,30 +301,35 @@ export async function setStoppedWorking(handle: string, by: string | null): Prom
 
 let warnedOnce = false;
 
-/** Resolve every trusted handle span under `root` and draw it as a
- *  chip, returning what resolved; `null` when there is nothing to draw.
- *  Safe to call again after an edit: each span keeps what the source
- *  showed in `data-shown-as`. */
-export async function decorateHandles(root: HTMLElement): Promise<Record<string, Resolved> | null> {
+export type Decorated = { who: Record<string, Who>; canLink: boolean };
+
+/** Ask who every trusted handle span under `root` is and draw it as a
+ *  chip; `null` when there is nothing to draw. Safe to call again after
+ *  an edit: each span keeps what the source showed in `data-shown-as`. */
+export async function decorateHandles(root: HTMLElement): Promise<Decorated | null> {
   const spans = trustedHandleSpans(root);
   if (spans.length === 0) return null;
   for (const s of spans) {
     if (s.dataset.shownAs === undefined) s.dataset.shownAs = s.textContent ?? "";
   }
   const handles = [...new Set(spans.map((s) => s.dataset.handle ?? ""))];
-  let resolved: Record<string, Resolved> | null;
+  let mine: Record<string, DatalibContact> | null;
+  let people: Record<string, DatalibContact[]>;
   try {
-    resolved = await resolveHandles(handles);
+    [mine, people] = await Promise.all([resolveHandles(handles), peopleFor(handles)]);
   } catch (e) {
     if (!warnedOnce) pushToast(`Contacts: ${(e as Error).message}`);
     warnedOnce = true;
     return null;
   }
-  if (resolved === null) return null;
+  const canLink = mine !== null;
+  const who: Record<string, Who> = Object.fromEntries(
+    handles.map((h) => [h, { mine: mine?.[h] ?? null, accounts: people[h] ?? [] }]),
+  );
   for (const s of spans) {
     if (!s.isConnected) continue;
     const handle = s.dataset.handle ?? "";
-    const look = chipLook(handle, s.dataset.shownAs ?? "", resolved[handle]);
+    const look = chipLook(handle, s.dataset.shownAs ?? "", who[handle], canLink);
     s.className = ["msg-author", ...look.classes].join(" ");
     s.removeAttribute("title");
     s.setAttribute("aria-label", look.ariaLabel);
@@ -275,7 +347,7 @@ export async function decorateHandles(root: HTMLElement): Promise<Record<string,
     }
     s.replaceChildren(lead, s.ownerDocument.createTextNode(look.text));
   }
-  return resolved;
+  return { who, canLink };
 }
 
 /** The selection, as a range inside `root`, or null when it is elsewhere.

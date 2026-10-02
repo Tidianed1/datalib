@@ -200,6 +200,8 @@ datalib/
     handle/        `Handle`: one identifier for a person (`email:`, `tel:`,
                    `slack:`), normalized; what renders write as
                    `data-handle`. No first-party deps.
+    contact_schema/ `DatalibContact`: a person as one source describes
+                   them. Only the shape; contact-common renders it.
     contacts/      the contacts app's store under `datalib_curated/`;
                    the `datalib_contacts` applet is its one writer.
     unified_index/ the grid index, the qmd index, the query language over
@@ -649,7 +651,8 @@ upstream (block types, MIME types), free-form display text
 | whether an ingest method reaches a service or reads files | `Reach` | `source_common/src/lib.rs` |
 | which of datalib's stores a file is, in its `_datalib_meta` | `StoreKind` | `store_meta/src/lib.rs` (`datalib_store_meta`) |
 | what namespace a handle is in | `HandleKind` | `handle/src/lib.rs` (`datalib_handle`) |
-| a contact is a person or a group; how a handle was linked | `ContactKind`, `LinkedHow` | `contacts/src/lib.rs` (`datalib_contacts`) |
+| a contact is a person or a group; how one is reached | `ContactKind`, `Medium` | `contact_schema/src/lib.rs` (`datalib_contact_schema`) |
+| how a handle was linked | `LinkedHow` | `contacts/src/lib.rs` (`datalib_contacts`) |
 
 The TypeScript side mirrors these as string-literal unions in
 `datalib/ui/src/api.ts`, hand-kept — change both halves together.

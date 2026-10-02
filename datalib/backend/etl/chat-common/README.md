@@ -37,6 +37,12 @@ configured, whom the handle belongs to and draws a chip
 written still finds the author. The UI trusts it only on the header
 line, since a message body can carry any attribute it likes.
 
+Each document also carries a `DatalibContact` per author handle in it
+(`src/people.rs`): the names the provider showed the handle under, less
+the handle's own `<address>`, how many items it wrote and the last one's
+stamp. A provider needs no code for this; the index sums them per source
+to say who a handle is.
+
 ## Asides: runs of tool steps fold into one `<details>`
 
 An item with `is_aside` set is machinery rather than conversation — an

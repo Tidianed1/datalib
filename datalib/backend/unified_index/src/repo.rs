@@ -136,6 +136,16 @@ pub trait IndexRepo: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Every source's account of whoever holds each of `handles`, one
+    /// row per document that mentioned them; `people::merge_and_rank`
+    /// makes them one account per source.
+    async fn people_for_handles(
+        &self,
+        _handles: &[String],
+    ) -> Result<Vec<crate::people::HandleRow>, RepoError> {
+        Ok(Vec::new())
+    }
+
     /// List rendered documents (the `markdowns` table), newest first,
     /// for the document-picker card. Returns an empty Vec for an empty
     /// or missing store — like [`grid_row_refs`](Self::grid_row_refs),

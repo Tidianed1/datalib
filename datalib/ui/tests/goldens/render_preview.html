@@ -700,8 +700,11 @@ code.hljs {
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
-  cursor: pointer;
   border-radius: 999px;
+}
+.chat-body .handle-resolved,
+.chat-body .handle-linkable {
+  cursor: pointer;
 }
 .chat-body .handle-resolved {
   padding: 0 0.5rem 0 0.15rem;
@@ -728,7 +731,7 @@ code.hljs {
   height: 0.9em;
   opacity: 0.6;
 }
-.chat-body .handle-unresolved::after {
+.chat-body .handle-linkable::after {
   content: "+";
   font-weight: 400;
   color: var(--datalib-muted, #94a3b8);
@@ -3480,15 +3483,15 @@ Riker out.</p>
 </thead>
 <tbody>
 <tr>
-<td>Company</td>
+<td>Org</td>
 <td>Starfleet</td>
 </tr>
 <tr>
-<td>Position</td>
+<td>Title</td>
 <td>Captain</td>
 </tr>
 <tr>
-<td>Email Address</td>
+<td>Email</td>
 <td><a href="mailto:jlpicard@starfleet.gov">jlpicard@starfleet.gov</a></td>
 </tr>
 <tr>
@@ -3512,11 +3515,11 @@ Riker out.</p>
 </thead>
 <tbody>
 <tr>
-<td>Company</td>
+<td>Org</td>
 <td>Starfleet</td>
 </tr>
 <tr>
-<td>Position</td>
+<td>Title</td>
 <td>Commander</td>
 </tr>
 <tr>
@@ -3540,11 +3543,11 @@ Riker out.</p>
 </thead>
 <tbody>
 <tr>
-<td>Company</td>
+<td>Org</td>
 <td>Starfleet</td>
 </tr>
 <tr>
-<td>Position</td>
+<td>Title</td>
 <td>Lt. Commander, Operations</td>
 </tr>
 <tr>

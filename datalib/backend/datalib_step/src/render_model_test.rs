@@ -375,6 +375,7 @@ fn to_rendered(id: &str, doc: &Doc, md_path: PathBuf, version: u32) -> RenderedM
         rows,
         sections: Vec::new(),
         edges,
+        contacts: Vec::new(),
         problems: Vec::new(),
     }
 }

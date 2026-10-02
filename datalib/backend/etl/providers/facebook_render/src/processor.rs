@@ -12,7 +12,7 @@ use datalib_etl::processor::PlanContext;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::render_all as chat_render_all;
 use datalib_etl_chat_common::types::NormalizedChat;
-use datalib_etl_contact_common::{render_all as contact_render_all, NormalizedContact};
+use datalib_etl_contact_common::{render_all as contact_render_all, ContactDoc};
 use datalib_etl_facebook::ingest::schema_raw::{
     ALBUMS_TABLE, COMMENTS_TABLE, FRIENDS_TABLE, OTHER_POSTS_TABLE, POSTS_TABLE, PROFILE_TABLE,
     REACTIONS_TABLE,
@@ -122,7 +122,7 @@ struct Loaded {
     albums: Vec<NormalizedChat>,
     comments: Vec<NormalizedChat>,
     reactions: Vec<NormalizedChat>,
-    friends: Vec<NormalizedContact>,
+    friends: Vec<ContactDoc>,
     /// Per chat id, the media bytes its attachments reference.
     blobs: HashMap<String, BlobBundle>,
     buckets: Buckets,
@@ -265,7 +265,7 @@ fn narrow_chats(
 }
 
 fn narrow_contacts(
-    contacts: &mut Vec<NormalizedContact>,
+    contacts: &mut Vec<ContactDoc>,
     changed: Option<&HashMap<String, HashSet<String>>>,
     range: RawRange<'_>,
 ) -> Buckets {
@@ -273,12 +273,12 @@ fn narrow_contacts(
         contacts
             .iter()
             .filter(|c| touched(&c.inputs, changed))
-            .map(|c| c.contact_uuid.clone())
+            .map(|c| c.doc_uuid.clone())
             .collect::<HashSet<String>>()
     });
     let render = range.narrow(forward.as_ref());
     if let Some(render) = &render {
-        contacts.retain(|c| render.contains(&c.contact_uuid));
+        contacts.retain(|c| render.contains(&c.doc_uuid));
     }
     empty_buckets(render)
 }

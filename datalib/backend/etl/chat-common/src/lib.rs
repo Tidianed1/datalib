@@ -4,6 +4,7 @@
 pub mod account;
 pub mod changed;
 pub mod normalize;
+pub mod people;
 pub mod render;
 pub mod samples;
 pub mod types;

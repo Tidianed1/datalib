@@ -436,8 +436,11 @@
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
-  cursor: pointer;
   border-radius: 999px;
+}
+.chat-body .handle-resolved,
+.chat-body .handle-linkable {
+  cursor: pointer;
 }
 .chat-body .handle-resolved {
   padding: 0 0.5rem 0 0.15rem;
@@ -464,7 +467,7 @@
   height: 0.9em;
   opacity: 0.6;
 }
-.chat-body .handle-unresolved::after {
+.chat-body .handle-linkable::after {
   content: "+";
   font-weight: 400;
   color: var(--datalib-muted, #94a3b8);
