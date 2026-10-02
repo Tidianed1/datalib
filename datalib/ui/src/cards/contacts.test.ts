@@ -1,9 +1,17 @@
-// The chip rules: which spans count, what a chip says, and the name a
-// new contact is offered.
+// The chip rules: which spans count, what a chip and its hover card say,
+// what a copy carries, and the name a new contact is offered.
 
 import { describe, expect, it } from "vitest";
 
-import { chipLook, suggestedName, todayPartialDate, trustedHandleSpans } from "./contacts";
+import {
+  chipLook,
+  copyText,
+  hoverCard,
+  rewriteChipsForCopy,
+  suggestedName,
+  todayPartialDate,
+  trustedHandleSpans,
+} from "./contacts";
 
 function dom(html: string): HTMLElement {
   const div = document.createElement("div");
@@ -41,25 +49,70 @@ describe("trustedHandleSpans", () => {
 });
 
 describe("chipLook", () => {
-  it("shows the source's text and the kind's mark when unresolved", () => {
+  it("shows the source's name without the address, and the kind's mark, when unresolved", () => {
     const look = chipLook(
       "email:riker@enterprise.org",
       "Will Riker <riker@enterprise.org>",
       undefined,
     );
-    expect(look.text).toBe("Will Riker <riker@enterprise.org>");
+    expect(look.text).toBe("Will Riker");
     expect(look.icon).toBe("email");
     expect(look.classes).toContain("handle-unresolved");
+    expect(chipLook("tel:+15550123456", "+15550123456", undefined).text).toBe("+15550123456");
   });
 
-  it("shows the contact's name when resolved, and says when the handle stopped working", () => {
+  it("shows the contact's name when resolved, faded when the handle stopped working", () => {
     const r = { contact_id: "c", name: "Will Riker", kind: "person", stopped_working_by: "2019" };
     const look = chipLook("tel:+15550123456", "+1 555 012 3456", r);
     expect(look.text).toBe("Will Riker");
     expect(look.initial).toBe("W");
     expect(look.classes).toContain("handle-stale");
-    expect(look.title).toContain("stopped working by 2019");
-    expect(look.title).toContain("+1 555 012 3456");
+  });
+});
+
+describe("hoverCard", () => {
+  it("names the identifier behind the short name, and how the message showed it", () => {
+    const r = { contact_id: "c", name: "Will Riker", kind: "person", stopped_working_by: "2019" };
+    const card = hoverCard("tel:+15550123456", "+1 555 012 3456", r);
+    expect(card.name).toBe("Will Riker");
+    expect(card.value).toBe("+15550123456");
+    expect(card.icon).toBe("sms");
+    expect(card.lines).toEqual([
+      "Stopped working by 2019",
+      "Shown here as “+1 555 012 3456”",
+      "Click to edit",
+    ]);
+  });
+
+  it("says an unlinked handle can be linked", () => {
+    const card = hoverCard("email:q@continuum.org", "Q <q@continuum.org>", null);
+    expect(card.name).toBe("Q");
+    expect(card.lines.at(-1)).toContain("Not linked");
+  });
+});
+
+describe("copy", () => {
+  it("carries the name and the identifier", () => {
+    expect(copyText("email:riker@enterprise.org", "Will Riker")).toBe(
+      "Will Riker <riker@enterprise.org>",
+    );
+    expect(copyText("tel:+15550123456", "Will Riker")).toBe("Will Riker (+15550123456)");
+    expect(copyText("slack:T1/U2", "Data")).toBe("Data (slack:T1/U2)");
+    expect(copyText("tel:+15550123456", "+15550123456")).toBe("+15550123456");
+  });
+
+  /** A copied chip once came out as "WWill Riker": the initial disc's
+   *  letter and the name, with the address gone. */
+  it("replaces each chip in a selection, disc and all, keeping data-handle", () => {
+    const root = dom(
+      `<p>From <span class="msg-author handle-chip handle-resolved" data-handle="email:riker@enterprise.org" data-label="Will Riker"><span class="handle-initial">W</span>Will Riker</span>, hello</p>`,
+    );
+    expect(rewriteChipsForCopy(root)).toBe(true);
+    expect(root.textContent).toBe("From Will Riker <riker@enterprise.org>, hello");
+    expect(root.querySelector("[data-handle]")?.getAttribute("data-handle")).toBe(
+      "email:riker@enterprise.org",
+    );
+    expect(rewriteChipsForCopy(dom("<p>no chips</p>"))).toBe(false);
   });
 });
 

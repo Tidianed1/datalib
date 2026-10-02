@@ -18,7 +18,14 @@
 import { ref, computed, watch, nextTick, onMounted } from "vue";
 import type { EdgeOut } from "@/api";
 import { decorateRemoteMedia, type RemoteContext, type RemoteRef } from "./remoteMedia";
-import { decorateHandles, type Resolved } from "./contacts";
+import {
+  copyWithHandles,
+  decorateHandles,
+  hoverCard,
+  type HoverCard,
+  type Resolved,
+} from "./contacts";
+import HandleHoverCard from "./HandleHoverCard.ce.vue";
 import HandlePopover from "./HandlePopover.ce.vue";
 import { renderDocument } from "./renderDocument";
 import { isBrowserClick } from "./chatLink";
@@ -123,11 +130,45 @@ async function redrawHandles() {
   resolvedHandles.value = (await decorateHandles(root.value)) ?? {};
 }
 
+const HOVER_DELAY_MS = 350;
+const hovered = ref<{ card: HoverCard; x: number; y: number } | null>(null);
+let hoverChip: HTMLElement | null = null;
+let hoverTimer: ReturnType<typeof setTimeout> | undefined;
+
+function onChipOver(ev: MouseEvent) {
+  const chip = (ev.target as Element | null)?.closest<HTMLElement>(".handle-chip[data-handle]");
+  if (!chip || chip === hoverChip) return;
+  hoverChip = chip;
+  clearTimeout(hoverTimer);
+  hoverTimer = setTimeout(() => {
+    if (chipTarget.value) return;
+    const handle = chip.dataset.handle ?? "";
+    const rect = chip.getBoundingClientRect();
+    hovered.value = {
+      card: hoverCard(handle, chip.dataset.shownAs ?? "", resolvedHandles.value[handle] ?? null),
+      x: rect.left,
+      y: rect.bottom,
+    };
+  }, HOVER_DELAY_MS);
+}
+
+function onChipOut(ev: MouseEvent) {
+  const chip = (ev.target as Element | null)?.closest<HTMLElement>(".handle-chip[data-handle]");
+  if (!chip) return;
+  const to = ev.relatedTarget;
+  if (to instanceof Node && chip.contains(to)) return;
+  clearTimeout(hoverTimer);
+  hoverChip = null;
+  hovered.value = null;
+}
+
 function onHandleChipClick(ev: MouseEvent) {
   const chip = (ev.target as HTMLElement | null)?.closest<HTMLElement>(".handle-chip[data-handle]");
   if (!chip) return;
   ev.preventDefault();
   ev.stopPropagation();
+  clearTimeout(hoverTimer);
+  hovered.value = null;
   const handle = chip.dataset.handle ?? "";
   chipTarget.value = {
     handle,
@@ -351,9 +392,21 @@ onMounted(() => {
         onRemoteChipClick(ev);
       }
     "
-    @mouseover="onBodyMouseOver"
-    @mouseout="onBodyMouseOut"
+    @mouseover="
+      (ev) => {
+        onBodyMouseOver(ev);
+        onChipOver(ev);
+      }
+    "
+    @mouseout="
+      (ev) => {
+        onBodyMouseOut(ev);
+        onChipOut(ev);
+      }
+    "
+    @copy="(ev) => root && copyWithHandles(ev, root)"
   ></div>
+  <HandleHoverCard v-if="hovered" v-bind="hovered" />
   <HandlePopover
     v-if="chipTarget"
     :key="chipTarget.handle"
@@ -752,6 +805,8 @@ onMounted(() => {
   font-style: italic;
 }
 .chat-body .handle-initial {
+  /* Decoration: a copy carries the name and identifier, not the disc. */
+  user-select: none;
   display: inline-grid;
   place-items: center;
   width: 1.3em;

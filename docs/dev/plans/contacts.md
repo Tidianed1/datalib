@@ -386,7 +386,10 @@ a measurement to ask for.
 `datalib_contacts` crate and applet (create, link, unlink, rename,
 stopped working, resolve, search); and in the document view, chips and
 a link/create popover (`ui/src/cards/contacts.ts`,
-`HandlePopover.ce.vue`). Not yet: email To/Cc, Signal's e164,
+`HandlePopover.ce.vue`). A chip shows a short name; hovering shows the
+identifier behind it and how the message showed it
+(`HandleHoverCard.ce.vue`); a copy carries `Name <identifier>` as text
+and keeps `data-handle` in its HTML. Not yet: email To/Cc, Signal's e164,
 address-book cards, reactions and mentions, `row_handles`, groups,
 merge, undo, the contact card, `IdentityChip` in the grid, and
 everything in phases 3–5.

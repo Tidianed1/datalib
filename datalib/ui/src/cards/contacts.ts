@@ -63,9 +63,16 @@ export function todayPartialDate(now: Date = new Date()): string {
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
 
+/** What the source called the handle, without the identifier it may
+ *  have carried: `Will Riker <riker@enterprise.org>` → `Will Riker`. The
+ *  identifier itself when that is all the source showed. */
+export function sourceLabel(shownAs: string, handle: string): string {
+  return suggestedName(shownAs, handle) || shownAs.trim() || handleValue(handle);
+}
+
 export type ChipLook = {
   text: string;
-  title: string;
+  ariaLabel: string;
   classes: string[];
   /** A contact's initial, drawn in a small disc; null for an
    *  unresolved handle, which shows its kind's mark instead. */
@@ -75,22 +82,70 @@ export type ChipLook = {
 
 export function chipLook(handle: string, shownAs: string, r: Resolved | undefined): ChipLook {
   if (!r) {
+    const text = sourceLabel(shownAs, handle);
     return {
-      text: shownAs,
-      title: `${handleValue(handle)} — not linked to a contact. Click to link it.`,
+      text,
+      ariaLabel: `${text}, ${handleValue(handle)}, not linked to a contact`,
       classes: ["handle-chip", "handle-unresolved"],
       initial: null,
       icon: handleIcon(handle),
     };
   }
-  const stale = r.stopped_working_by ? ` (stopped working by ${r.stopped_working_by})` : "";
   return {
     text: r.name,
-    title: `${r.name} — ${handleValue(handle)}${stale}. Shown here as “${shownAs}”.`,
-    classes: ["handle-chip", "handle-resolved", ...(stale ? ["handle-stale"] : [])],
+    ariaLabel: `${r.name}, ${handleValue(handle)}`,
+    classes: ["handle-chip", "handle-resolved", ...(r.stopped_working_by ? ["handle-stale"] : [])],
     initial: [...r.name.trim()][0]?.toUpperCase() ?? "?",
     icon: null,
   };
+}
+
+export type HoverCard = {
+  name: string;
+  /** The handle as a person reads it, beside its kind's mark. */
+  value: string;
+  icon: string | null;
+  lines: string[];
+};
+
+export function hoverCard(handle: string, shownAs: string, r: Resolved | null): HoverCard {
+  const label = sourceLabel(shownAs, handle);
+  const lines: string[] = [];
+  if (r?.stopped_working_by) lines.push(`Stopped working by ${r.stopped_working_by}`);
+  if (shownAs.trim() && (!r || shownAs.trim() !== r.name))
+    lines.push(`Shown here as “${shownAs.trim()}”`);
+  lines.push(r ? "Click to edit" : "Not linked to a contact. Click to link it.");
+  return { name: r?.name ?? label, value: handleValue(handle), icon: handleIcon(handle), lines };
+}
+
+/** A chip as copied text: the name it shows and the identifier behind
+ *  it, so a paste loses neither. */
+export function copyText(handle: string, label: string): string {
+  const value = handleValue(handle);
+  if (!label || label === value) return value;
+  switch (handleKind(handle)) {
+    case "email":
+      return `${label} <${value}>`;
+    case "tel":
+      return `${label} (${value})`;
+    default:
+      return `${label} (${handle})`;
+  }
+}
+
+/** Replace every chip in a copied fragment with its copy text, keeping
+ *  `data-handle` on a plain span so a paste into the app can chip it
+ *  again. Mutates `fragment`; returns whether it held any chip. */
+export function rewriteChipsForCopy(fragment: DocumentFragment | Element): boolean {
+  const chips = Array.from(fragment.querySelectorAll<HTMLElement>(".handle-chip[data-handle]"));
+  for (const chip of chips) {
+    const handle = chip.dataset.handle ?? "";
+    const span = chip.ownerDocument.createElement("span");
+    span.dataset.handle = handle;
+    span.textContent = copyText(handle, chip.dataset.label ?? "");
+    chip.replaceWith(span);
+  }
+  return chips.length > 0;
 }
 
 /** The author spans a renderer wrote, and none a message body did.
@@ -204,8 +259,11 @@ export async function decorateHandles(root: HTMLElement): Promise<Record<string,
     const handle = s.dataset.handle ?? "";
     const look = chipLook(handle, s.dataset.shownAs ?? "", resolved[handle]);
     s.className = ["msg-author", ...look.classes].join(" ");
-    s.title = look.title;
+    s.removeAttribute("title");
+    s.setAttribute("aria-label", look.ariaLabel);
+    s.dataset.label = look.text;
     const lead = document.createElement(look.initial ? "span" : "img");
+    lead.setAttribute("aria-hidden", "true");
     if (look.initial) {
       lead.className = "handle-initial";
       lead.textContent = look.initial;
@@ -218,4 +276,51 @@ export async function decorateHandles(root: HTMLElement): Promise<Record<string,
     s.replaceChildren(lead, document.createTextNode(look.text));
   }
   return resolved;
+}
+
+/** The selection, as a range inside `root`, or null when it is elsewhere.
+ *  The document view lives in a shadow root, where Chromium answers
+ *  through `ShadowRoot.getSelection` and WebKit through
+ *  `Selection.getComposedRanges`. */
+function selectionWithin(root: HTMLElement): Range | null {
+  const host = root.getRootNode() as
+    (ShadowRoot & { getSelection?: () => Selection | null }) | Document;
+  const sel = (host instanceof ShadowRoot && host.getSelection?.()) || document.getSelection();
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+  let range: Range = sel.getRangeAt(0);
+  const composed = (
+    sel as Selection & {
+      getComposedRanges?: (o: { shadowRoots: ShadowRoot[] }) => StaticRange[];
+    }
+  ).getComposedRanges;
+  if (host instanceof ShadowRoot && composed && !root.contains(range.commonAncestorContainer)) {
+    const [r] = composed.call(sel, { shadowRoots: [host] });
+    if (!r) return null;
+    range = document.createRange();
+    range.setStart(r.startContainer, r.startOffset);
+    range.setEnd(r.endContainer, r.endOffset);
+  }
+  return root.contains(range.commonAncestorContainer) ? range : null;
+}
+
+/** A copy from the document: chips become `Name <identifier>` in the
+ *  plain text and keep their `data-handle` in the HTML. A selection with
+ *  no chip in it is left to the browser. */
+export function copyWithHandles(ev: ClipboardEvent, root: HTMLElement): void {
+  const range = selectionWithin(root);
+  if (!range || !ev.clipboardData) return;
+  const fragment = range.cloneContents();
+  if (!rewriteChipsForCopy(fragment)) return;
+  // `innerText` keeps line breaks only for a laid-out element, so the
+  // copy is laid out off-screen for the moment it is read.
+  const holder = document.createElement("div");
+  holder.style.cssText = "position:fixed;left:-99999px;top:0;width:800px";
+  holder.append(fragment);
+  root.append(holder);
+  const text = holder.innerText;
+  const html = holder.innerHTML;
+  holder.remove();
+  ev.clipboardData.setData("text/plain", text);
+  ev.clipboardData.setData("text/html", html);
+  ev.preventDefault();
 }
