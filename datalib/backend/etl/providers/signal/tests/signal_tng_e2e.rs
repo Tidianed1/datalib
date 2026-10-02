@@ -217,8 +217,10 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
         "outgoing author labelled as Me in:\n{md}"
     );
     assert!(
-        md.contains("<span class=\"msg-author\">Will Riker</span>"),
-        "Riker's name resolved from recipient in:\n{md}"
+        md.contains(
+            "<span class=\"msg-author\" data-handle=\"tel:+17015550101\">Will Riker</span>"
+        ),
+        "Riker's name resolved from recipient, his number as the handle, in:\n{md}"
     );
 
     // PNG attachment surfaces as an inline image link under the

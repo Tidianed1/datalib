@@ -285,6 +285,7 @@ fn build_chat(
             source_ref: None,
             items,
         }],
+        contacts: Vec::new(),
         inputs: inputs.declared(),
     }
 }

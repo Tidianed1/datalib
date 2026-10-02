@@ -85,6 +85,7 @@ fn text(uuid: &str, author: &str, at: i64, body: &str) -> NormalizedChatItem {
         source_ref: None,
         is_aside: false,
         unread: false,
+        recipients: Vec::new(),
         problems: Vec::new(),
     }
 }
@@ -99,6 +100,7 @@ fn aside(uuid: &str, at: i64, body: &str) -> NormalizedChatItem {
 
 fn chat(id: &str, display: &str, items: Vec<NormalizedChatItem>) -> NormalizedChat {
     NormalizedChat {
+        contacts: Vec::new(),
         inputs: Vec::new(),
         id: id.to_string(),
         chat_uuid: id.to_string(),

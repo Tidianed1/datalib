@@ -395,6 +395,7 @@ async fn parse_async(
             });
         }
         out.push(NormalizedChat {
+            contacts: Vec::new(),
             inputs: ch.inputs.declared(),
             path_prefix: None,
             id: ch.chat_jid.clone(),
@@ -525,6 +526,7 @@ fn build_item(
         source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
         is_aside: false,
         unread,
+        recipients: Vec::new(),
         problems: Vec::new(),
     }
 }

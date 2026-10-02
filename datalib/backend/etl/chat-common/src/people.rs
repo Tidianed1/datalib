@@ -17,6 +17,27 @@ pub fn baseline_contacts(source_id: &str, items: &[NormalizedChatItem]) -> Vec<D
         last_ms: Option<i64>,
     }
     let mut by_handle: BTreeMap<&str, (&datalib_handle::Handle, Tally)> = BTreeMap::new();
+    // Whom an item was addressed to: in the document, but writing nothing.
+    for r in items.iter().flat_map(|i| &i.recipients) {
+        let Some(handle) = &r.handle else {
+            continue;
+        };
+        let (_, tally) = by_handle.entry(handle.as_str()).or_insert((
+            handle,
+            Tally {
+                names: Vec::new(),
+                items: 0,
+                last_ms: None,
+            },
+        ));
+        let name = name_without_handle(&r.display, handle);
+        if !name.is_empty() && !name.eq_ignore_ascii_case(handle.value()) {
+            match tally.names.iter_mut().find(|(n, _)| n == name) {
+                Some((_, count)) => *count += 1,
+                None => tally.names.push((name.to_string(), 1)),
+            }
+        }
+    }
     for item in items {
         let Some(handle) = &item.author_handle else {
             continue;
@@ -61,6 +82,49 @@ pub fn baseline_contacts(source_id: &str, items: &[NormalizedChatItem]) -> Vec<D
         .collect()
 }
 
+/// The people a document carries: chat-common's baseline for each author
+/// handle, and where the provider gave its own account of the person
+/// behind one, that account instead — keeping what the baseline counted
+/// and every name it saw. One provider account reached through two
+/// handles is one person.
+pub fn document_contacts(
+    source_id: &str,
+    items: &[NormalizedChatItem],
+    provider: &[DatalibContact],
+) -> Vec<DatalibContact> {
+    let mut out: BTreeMap<String, DatalibContact> = BTreeMap::new();
+    for seen in baseline_contacts(source_id, items) {
+        let theirs = provider.iter().find(|p| {
+            p.handles
+                .iter()
+                .any(|h| h.handle.as_ref().map(|h| h.as_str()) == Some(seen.key.as_str()))
+        });
+        let Some(theirs) = theirs else {
+            out.insert(seen.key.clone(), seen);
+            continue;
+        };
+        let merged = out.entry(theirs.key.clone()).or_insert_with(|| {
+            let mut c = theirs.clone();
+            c.source_id = source_id.to_string();
+            c.seen = None;
+            c
+        });
+        for name in seen.names {
+            if !merged.names.contains(&name) {
+                merged.names.push(name);
+            }
+        }
+        merged.seen = match (merged.seen.take(), seen.seen) {
+            (Some(a), Some(b)) => Some(Seen {
+                items: a.items + b.items,
+                last_at: a.last_at.max(b.last_at),
+            }),
+            (a, b) => a.or(b),
+        };
+    }
+    out.into_values().collect()
+}
+
 /// What a header shows as `Will Riker <riker@enterprise.org>` names the
 /// person `Will Riker`: the handle's own value, in angle brackets, is the
 /// handle, not part of the name.
@@ -101,6 +165,7 @@ mod tests {
             source_ref: None,
             is_aside: false,
             unread: false,
+            recipients: Vec::new(),
             problems: Vec::new(),
         }
     }
@@ -141,5 +206,65 @@ mod tests {
         ];
         let got = baseline_contacts("mail", &items);
         assert_eq!(got[0].names, ["Will Riker", "Riker, Will"]);
+    }
+
+    /// A Slack user's profile knows their email; the messages only their
+    /// user id. The document carries the profile, counted the way the
+    /// baseline counted, so the email reaches the index too.
+    #[test]
+    fn a_providers_account_replaces_the_baseline_and_keeps_its_count() {
+        let picard = Handle::slack("T1", "U_PICARD").unwrap();
+        let riker = Handle::slack("T1", "U_RIKER").unwrap();
+        let mut profile = DatalibContact::new("ignored", "slack:T1/U_PICARD", ContactKind::Person);
+        profile.names = vec!["Jean-Luc Picard".into()];
+        profile.title = Some("Captain".into());
+        profile.handles = vec![
+            ContactHandle::of(picard.clone()),
+            ContactHandle::email(None, "picard@enterprise.org"),
+        ];
+        let items = vec![
+            by(Some(&picard), "Picard", 1),
+            by(Some(&picard), "Picard", 2),
+            by(Some(&riker), "Riker", 3),
+        ];
+        let got = document_contacts("slack", &items, &[profile]);
+        assert_eq!(got.len(), 2);
+        let p = got.iter().find(|c| c.key == "slack:T1/U_PICARD").unwrap();
+        assert_eq!(p.source_id, "slack");
+        assert_eq!(p.title.as_deref(), Some("Captain"));
+        assert_eq!(p.names, ["Jean-Luc Picard", "Picard"]);
+        assert_eq!(p.handles.len(), 2, "the email rides along");
+        assert_eq!(p.seen.as_ref().unwrap().items, 2);
+        let r = got.iter().find(|c| c.key == "slack:T1/U_RIKER").unwrap();
+        assert_eq!(r.names, ["Riker"], "no profile: the baseline as it was");
+    }
+
+    /// Whom a message went to is in the document too, having written
+    /// nothing there: a chip on a To line needs to find them.
+    #[test]
+    fn recipients_are_in_the_document_with_nothing_written() {
+        use crate::types::{Recipient, RecipientRole};
+        let picard = Handle::email("picard@enterprise.org").unwrap();
+        let troi = Handle::email("troi@enterprise.org").unwrap();
+        let mut item = by(Some(&picard), "Jean-Luc Picard", 1);
+        item.recipients = vec![
+            Recipient {
+                role: RecipientRole::To,
+                display: "Deanna Troi".into(),
+                handle: Some(troi.clone()),
+            },
+            Recipient {
+                role: RecipientRole::Cc,
+                display: "picard@enterprise.org".into(),
+                handle: Some(picard.clone()),
+            },
+        ];
+        let got = baseline_contacts("mail", &[item]);
+        let t = got.iter().find(|c| c.key == troi.as_str()).unwrap();
+        assert_eq!(t.names, ["Deanna Troi"]);
+        assert_eq!(t.seen.as_ref().unwrap().items, 0);
+        let p = got.iter().find(|c| c.key == picard.as_str()).unwrap();
+        assert_eq!(p.names, ["Jean-Luc Picard"], "a bare address is no name");
+        assert_eq!(p.seen.as_ref().unwrap().items, 1);
     }
 }

@@ -37,6 +37,12 @@ configured, whom the handle belongs to and draws a chip
 written still finds the author. The UI trusts it only on the header
 line, since a message body can carry any attribute it likes.
 
+An item with `recipients` (an email's To and Cc) gets one more line
+straight under the header — `<div class="msg-recipients">To <span
+class="msg-recipient" data-handle="…">…</span>; Cc …</div>` — and the UI
+trusts a `data-handle` there only because it is the header's very next
+element.
+
 Each document also carries a `DatalibContact` per author handle in it
 (`src/people.rs`): the names the provider showed the handle under, less
 the handle's own `<address>`, how many items it wrote and the last one's
@@ -213,9 +219,17 @@ actually use survive. **A renderer that starts emitting a new tag or
 attribute has to add it there**, or the page will silently strip it;
 `ui/tests/sanitize.test.ts` is where the vocabulary is pinned.
 
-An `<iframe>` survives only when it frames `plots/<name>.html`. The
-server runs such a page's scripts with no network
-(`DocumentKind::Plot` in `http/src/embed.rs`). It knows the page is a
-plot because the `unified_index` applet names it so. Every other
+The sanitizer is not the boundary, though. The page draws the body in a
+frame whose policy is `script-src 'none'` (`ui/src/cards/docFrame.ts`),
+so markup that gets past the sanitizer still cannot run.
+`ui/tests/e2e/document-sandbox.spec.ts` checks this by writing script
+straight into a document's frame. The UI's own code still reaches into
+the frame, so the `data-section-uuid` wrappers work as before.
+
+An `<iframe>` survives the sanitizer only when it frames
+`plots/<name>.html`, and the frame's policy allows frames from the asset
+route alone. The server runs such a page's scripts with no
+network (`DocumentKind::Plot` in `http/src/embed.rs`). It knows the page
+is a plot because the `unified_index` applet names it so. Every other
 document beside a markdown, such as an `.html` attachment in `blobs/`,
 runs no script at all.

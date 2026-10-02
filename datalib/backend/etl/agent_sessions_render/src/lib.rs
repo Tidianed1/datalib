@@ -49,6 +49,7 @@ pub fn item(
         source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
         is_aside,
         unread: false,
+        recipients: Vec::new(),
         problems: Vec::new(),
     }
 }

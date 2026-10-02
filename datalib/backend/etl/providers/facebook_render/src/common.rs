@@ -181,6 +181,7 @@ pub fn chat_item(
         source_ref: Some(UpstreamRef::new(item_id.entity_kind, item_id.natural_key)),
         is_aside: false,
         unread: false,
+        recipients: Vec::new(),
         problems: Vec::new(),
     }
 }

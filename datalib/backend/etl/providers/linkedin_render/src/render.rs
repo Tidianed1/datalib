@@ -208,6 +208,7 @@ fn build_chats(
                     source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
                     is_aside: false,
                     unread: false,
+                    recipients: Vec::new(),
                     problems,
                 }
             })
@@ -221,6 +222,7 @@ fn build_chats(
 
         let conversation = ids::conversation(source_id, table, &conv);
         chats.push(NormalizedChat {
+            contacts: Vec::new(),
             inputs: inputs.declared(),
             path_prefix: None,
             id: format!("{table}:{conv}"),

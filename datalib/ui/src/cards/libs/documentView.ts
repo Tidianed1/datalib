@@ -7,10 +7,6 @@ import ChatBody from "../ChatBody.ce.vue";
 import HandleHoverCard from "../HandleHoverCard.ce.vue";
 import HandlePopover from "../HandlePopover.ce.vue";
 import FeedbackButton from "@/components/FeedbackButton.ce.vue";
-// Inside a shadow root we have to inject stylesheets ourselves —
-// the document-head styles Vite would normally produce don't pierce
-// the shadow boundary. `?inline` asks Vite for the stylesheet text.
-import hljsCss from "highlight.js/styles/github-dark.css?inline";
 import { vueCard } from "../vueCard";
 import type { CardRender } from "../types";
 
@@ -27,6 +23,6 @@ export function documentView(
       markdownUuid: markdownUuid ?? null,
       sectionUuid: sectionUuid ?? null,
     },
-    { styleSources: [ChatBody, HandlePopover, HandleHoverCard, FeedbackButton, hljsCss] },
+    { styleSources: [ChatBody, HandlePopover, HandleHoverCard, FeedbackButton] },
   );
 }
