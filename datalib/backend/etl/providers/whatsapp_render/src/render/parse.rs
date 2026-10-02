@@ -474,7 +474,7 @@ fn build_item(
     let author_handle = if key.from_me == 1 {
         None
     } else {
-        Handle::whatsapp_jid(sender_jid.as_deref().unwrap_or(&key.chat_jid))
+        names.handle(sender_jid.as_deref().unwrap_or(&key.chat_jid))
     };
 
     // WhatsApp message_type codes (Android schema):
@@ -649,6 +649,11 @@ impl JidNames {
         Ok(out)
     }
 
+    /// A linked id's handle is its phone number's, where `jid_map` knows it.
+    fn handle(&self, jid: &str) -> Option<Handle> {
+        Handle::whatsapp_jid(self.phone_jid.get(jid).map_or(jid, String::as_str))
+    }
+
     fn label(&self, jid: &str, inputs: &Inputs) -> String {
         if let Some(rowid) = self.row_id.get(jid) {
             let rowid = rowid.to_string();
@@ -704,7 +709,23 @@ fn label_from_jid(jid: &str) -> String {
 
 #[cfg(test)]
 mod jid_names_tests {
-    use super::{Inputs, JidNames};
+    use super::{Handle, Inputs, JidNames};
+
+    /// Most people in a current backup are a linked id, not a phone JID;
+    /// without the map their messages would carry no handle at all.
+    #[test]
+    fn a_linked_id_takes_its_phone_numbers_handle() {
+        let mut names = JidNames::default();
+        names.phone_jid.insert(
+            "1@lid".to_string(),
+            "17015550101@s.whatsapp.net".to_string(),
+        );
+        let phone = Handle::tel("+17015550101");
+        assert_eq!(names.handle("1@lid"), phone);
+        assert_eq!(names.handle("17015550101@s.whatsapp.net"), phone);
+        assert_eq!(names.handle("3@lid"), None);
+        assert_eq!(names.handle("bridge-crew@g.us"), None);
+    }
 
     /// The precedence the issue asked for: a learned name, else the
     /// phone number behind the linked id, else the raw JID — and a
