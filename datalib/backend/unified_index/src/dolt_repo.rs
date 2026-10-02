@@ -844,6 +844,36 @@ impl IndexRepo for DoltRepo {
         Ok(out)
     }
 
+    async fn people_for_handles(
+        &self,
+        handles: &[String],
+    ) -> Result<Vec<crate::people::HandleRow>, RepoError> {
+        let Some(mut at) = self.pinned().await? else {
+            return Ok(Vec::new());
+        };
+        let wanted = serde_json::to_string(handles)
+            .map_err(|e| RepoError::Internal(format!("encode handles: {e}")))?;
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT h.handle, c.contact_json \
+               FROM source_contact_handles h \
+               JOIN source_contacts c \
+                 ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key \
+              WHERE h.handle IN (SELECT value FROM json_each(?))",
+        )
+        .bind(wanted)
+        .fetch_all(&mut *at.tx)
+        .await
+        .map_err(|e| RepoError::Internal(format!("read people by handle: {e}")))?;
+        rows.into_iter()
+            .map(|(handle, json)| {
+                let contact = serde_json::from_str(&json).map_err(|e| {
+                    RepoError::Internal(format!("a source contact for {handle} will not read: {e}"))
+                })?;
+                Ok(crate::people::HandleRow { handle, contact })
+            })
+            .collect()
+    }
+
     async fn outgoing_edges(&self, markdown_uuid: &str) -> Result<Vec<EdgeRowOut>, RepoError> {
         // LEFT JOIN so that an edge with a dangling FK (destination no
         // longer in `markdowns`) still surfaces — the UI can show the

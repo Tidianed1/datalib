@@ -106,6 +106,7 @@ pub fn serve(port: u16) -> Result<()> {
             .route("/search/groups", get(groups_handler))
             .route("/qmd_state", post(qmd_state))
             .route("/docs", get(list_docs))
+            .route("/people", post(people))
             .route("/embedding_map", get(map::handler))
             .route("/embedding_map/matches", get(map::matches_handler))
             .route("/problems", get(problems::handler))
@@ -912,6 +913,29 @@ async fn qmd_state(
         docs,
         errors,
     })
+}
+
+#[derive(Deserialize)]
+struct PeopleBody {
+    handles: Vec<String>,
+}
+
+/// Every source's account of whoever holds each asked-for handle, ranked
+/// (`datalib_unified_index::people`). A handle no source mentions is
+/// simply absent.
+async fn people(
+    State(s): State<Index>,
+    Json(body): Json<PeopleBody>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    match s.repo.people_for_handles(&body.handles).await {
+        Ok(rows) => Ok(Json(serde_json::json!({
+            "people": datalib_unified_index::people::merge_and_rank(rows)
+        }))),
+        Err(e) => {
+            tracing::error!(error = %e, "could not read people by handle");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
 }
 
 async fn list_docs(State(s): State<Index>) -> Result<Json<Vec<DocRow>>, StatusCode> {
