@@ -147,6 +147,9 @@ fn render_one(
         rows: row.into_iter().collect(),
         sections,
         edges: Vec::new(),
+        // The page is about this person, so it carries them: the index
+        // can then say who any of their handles is.
+        contacts: vec![contact.clone()],
         problems,
     })
     .with_context(|| format!("on_doc_complete {m_uuid}"))?;

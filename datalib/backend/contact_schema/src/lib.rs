@@ -5,11 +5,11 @@
 //! render crates fill it from raw rows, contact-common renders it, the
 //! contacts app answers in it. `docs/dev/plans/contacts.md` has the design.
 
-use datalib_handle::Handle;
-use serde::Serialize;
+use datalib_handle::{Handle, HandleKind};
+use serde::{Deserialize, Serialize};
 use strum::{EnumString, IntoStaticStr, VariantArray};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DatalibContact {
     /// Who describes the person: a source's group id, or the contacts app.
     pub source_id: String,
@@ -36,6 +36,15 @@ pub struct DatalibContact {
     /// Stamps the record itself carries, as the source wrote them.
     pub created_at: Option<String>,
     pub modified_at: Option<String>,
+    /// How much of this source the person wrote, where it is a chat.
+    pub seen: Option<Seen>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Seen {
+    pub items: u64,
+    /// The newest item's stamp, as the source wrote it.
+    pub last_at: Option<String>,
 }
 
 impl DatalibContact {
@@ -56,6 +65,7 @@ impl DatalibContact {
             source_url: None,
             created_at: None,
             modified_at: None,
+            seen: None,
         }
     }
 
@@ -64,7 +74,18 @@ impl DatalibContact {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, EnumString, IntoStaticStr, VariantArray)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    EnumString,
+    IntoStaticStr,
+    VariantArray,
+)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum ContactKind {
@@ -88,7 +109,7 @@ impl ContactKind {
 /// One way to reach the person, as the source wrote it. `handle` is the
 /// normalized identifier when there is one; a phone number written
 /// without its country code has none, and is kept anyway.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContactHandle {
     pub medium: Medium,
     /// The source's word for it: `work`, `cell`, `home`.
@@ -123,10 +144,16 @@ impl ContactHandle {
         }
     }
 
-    /// An identifier that is not an address or a number: a Slack user.
-    pub fn other(handle: Handle) -> Self {
+    /// A handle with nothing the source wrote beside it: what chat-common
+    /// knows of an author.
+    pub fn of(handle: Handle) -> Self {
+        let medium = match handle.kind() {
+            HandleKind::Email => Medium::Email,
+            HandleKind::Tel => Medium::Phone,
+            HandleKind::Slack => Medium::Other,
+        };
         Self {
-            medium: Medium::Other,
+            medium,
             label: None,
             value: handle.value().to_string(),
             handle: Some(handle),
@@ -135,7 +162,18 @@ impl ContactHandle {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, EnumString, IntoStaticStr, VariantArray)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    EnumString,
+    IntoStaticStr,
+    VariantArray,
+)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum Medium {
@@ -150,7 +188,7 @@ impl Medium {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Detail {
     pub label: String,
     pub value: String,
@@ -165,11 +203,12 @@ impl Detail {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Photo {
     /// The image itself, from the source's own record.
     Inline {
         content_type: String,
+        /// Written to the document's `blobs/`; never stored as a row.
         #[serde(skip)]
         bytes: Vec<u8>,
     },

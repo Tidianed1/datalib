@@ -271,6 +271,7 @@ fn render_one(
         rows,
         sections,
         edges: Vec::new(),
+        contacts: crate::people::baseline_contacts(source_id, &doc.items),
         problems,
     })
     .with_context(|| format!("on_doc_complete {}", doc.markdown_uuid))?;

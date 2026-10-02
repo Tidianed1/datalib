@@ -1117,6 +1117,7 @@ mod tests {
                 rows: vec![row],
                 sections: Vec::new(),
                 edges: Vec::new(),
+                contacts: Vec::new(),
                 problems: Vec::new(),
             };
             apply_one(&lock, root, &md).await.unwrap();

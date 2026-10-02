@@ -147,6 +147,7 @@ fn render_book(
         rows,
         sections: Vec::new(),
         edges,
+        contacts: Vec::new(),
         problems,
     })
     .with_context(|| format!("on_doc_complete book {}", book.n))?;
@@ -223,6 +224,7 @@ fn render_chapter(
         rows,
         sections: Vec::new(),
         edges,
+        contacts: Vec::new(),
         problems,
     })
     .with_context(|| {
