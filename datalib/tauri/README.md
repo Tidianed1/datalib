@@ -157,9 +157,14 @@ Microsoft's [Fluent Emoji](https://github.com/microsoft/fluentui-emoji)
   closes the windows it opened. The window's navigation rules
   (`app_window`) read the open server's origin at each navigation,
   since each library's server has a port of its own.
-- ⌘+ / ⌘− / ⌘0 zoom the page in every window, as in a browser
-  (`zoom_hotkeys_enabled`): the way to make text larger, since the
-  status bar's density moves spacing only.
+- View → Zoom In / Zoom Out / Actual Size (⌘= or ⌘+, ⌘−, ⌘0) zoom the
+  page, as in a browser: the way to make text larger, since the status
+  bar's density moves spacing only. The shell holds the level
+  (`src/zoom.rs`), applies it to every window and again after each page
+  load — so it survives the move from the libraries screen to a library
+  — and keeps it in the app's config directory for the next launch.
+  Tauri's `zoom_hotkeys_enabled` is not used: on macOS it injects a
+  script whose count of the level starts again at 100% on every page.
 - The main window reopens at the size (and maximized state) it was
   closed at, via `tauri-plugin-window-state`, which keeps it in
   `.window-state.json` under the app's config directory. It cannot be

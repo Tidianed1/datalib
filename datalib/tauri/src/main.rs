@@ -4,13 +4,15 @@
 
 mod launcher;
 mod raw_store;
+mod zoom;
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
-use tauri::webview::{NewWindowFeatures, NewWindowResponse};
+use tauri::menu::{Menu, MenuItem, MenuItemKind, PredefinedMenuItem, Submenu};
+use tauri::webview::{NewWindowFeatures, NewWindowResponse, PageLoadEvent};
 use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindowBuilder, Wry};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri_plugin_opener::OpenerExt;
@@ -29,6 +31,68 @@ struct DataRoot(Mutex<Option<PathBuf>>);
 /// re-exported by tauri, and naming it would mean adding a direct `url`
 /// dependency for one comparison.
 struct AppOrigin(Mutex<Option<String>>);
+
+/// The page zoom the View menu set (zoom.rs), applied to every window
+/// and to each page as it loads.
+struct PageZoom(Mutex<f64>);
+
+const ZOOM_IN: &str = "zoom-in";
+const ZOOM_OUT: &str = "zoom-out";
+const ZOOM_ACTUAL: &str = "zoom-actual";
+
+fn page_zoom(app: &AppHandle) -> f64 {
+    *app.state::<PageZoom>().0.lock().unwrap()
+}
+
+fn zoom_file(app: &AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| zoom::zoom_file(&dir))
+}
+
+fn change_zoom(app: &AppHandle, step: impl Fn(f64) -> f64) {
+    let state = app.state::<PageZoom>();
+    let level = {
+        let mut zoom = state.0.lock().unwrap();
+        *zoom = step(*zoom);
+        *zoom
+    };
+    for window in app.webview_windows().values() {
+        let _ = window.set_zoom(level);
+    }
+    if let Some(file) = zoom_file(app) {
+        if let Err(e) = zoom::save(&file, level) {
+            eprintln!("could not keep the zoom in {}: {e}", file.display());
+        }
+    }
+}
+
+/// The app's menu: the platform's default, with Zoom In, Zoom Out and
+/// Actual Size at the top of its View menu (one is added where the
+/// default has none). Zoom In is ⌘=, the key ⌘+ is typed with, as in a
+/// browser.
+fn app_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
+    let menu = Menu::default(app)?;
+    let zoom_in = MenuItem::with_id(app, ZOOM_IN, "Zoom In", true, Some("CmdOrCtrl+="))?;
+    let zoom_out = MenuItem::with_id(app, ZOOM_OUT, "Zoom Out", true, Some("CmdOrCtrl+-"))?;
+    let actual = MenuItem::with_id(app, ZOOM_ACTUAL, "Actual Size", true, Some("CmdOrCtrl+0"))?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    let view = menu.items()?.into_iter().find_map(|item| match item {
+        MenuItemKind::Submenu(sub) if sub.text().ok().as_deref() == Some("View") => Some(sub),
+        _ => None,
+    });
+    match view {
+        Some(view) => view.insert_items(&[&actual, &zoom_in, &zoom_out, &separator], 0)?,
+        None => menu.append(&Submenu::with_items(
+            app,
+            "View",
+            true,
+            &[&actual, &zoom_in, &zoom_out],
+        )?)?,
+    }
+    Ok(menu)
+}
 
 #[tauri::command]
 fn version() -> &'static str {
@@ -442,8 +506,19 @@ fn main() {
         .manage(HttpChild(Mutex::new(None)))
         .manage(DataRoot(Mutex::new(None)))
         .manage(AppOrigin(Mutex::new(None)))
+        .manage(PageZoom(Mutex::new(zoom::ACTUAL)))
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            ZOOM_IN => change_zoom(app, zoom::zoom_in),
+            ZOOM_OUT => change_zoom(app, zoom::zoom_out),
+            ZOOM_ACTUAL => change_zoom(app, |_| zoom::ACTUAL),
+            _ => {}
+        })
         .setup(|app| {
             let handle = app.handle().clone();
+            if let Some(file) = zoom_file(&handle) {
+                *handle.state::<PageZoom>().0.lock().unwrap() = zoom::load(&file);
+            }
+            handle.set_menu(app_menu(&handle)?)?;
             // A data root supplied non-interactively (positional arg or
             // `$DATALIB_DATA_ROOT`) skips the launcher and boots
             // straight into it — mirrors `datalib_http_bin <root>`
@@ -571,10 +646,7 @@ fn main_window(app: &AppHandle, url: WebviewUrl) -> WebviewWindowBuilder<'_, Wry
         WebviewWindowBuilder::new(app, MAIN_WINDOW, url)
             .title("Data Liberation")
             .inner_size(1280.0, 800.0)
-            .min_inner_size(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
-            // ⌘+ / ⌘− / ⌘0 zoom the page, as in a browser: how text is made
-            // larger, since the status bar's density moves spacing only.
-            .zoom_hotkeys_enabled(true),
+            .min_inner_size(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT),
         app,
     )
 }
@@ -699,7 +771,15 @@ fn app_window<'a>(
 ) -> WebviewWindowBuilder<'a, Wry, AppHandle> {
     let nav_app = app.clone();
     let new_app = app.clone();
+    let zoom_app = app.clone();
     under_title_bar(builder)
+        // A new page starts at the webview's default zoom; put it back at
+        // the View menu's.
+        .on_page_load(move |window, payload| {
+            if payload.event() == PageLoadEvent::Finished {
+                let _ = window.set_zoom(page_zoom(&zoom_app));
+            }
+        })
         .on_navigation(move |next| {
             if !leaves_the_app(next, &nav_app) {
                 return true;
@@ -723,7 +803,6 @@ fn app_window<'a>(
                     .title("Data Liberation")
                     .inner_size(1100.0, 760.0)
                     .min_inner_size(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
-                    .zoom_hotkeys_enabled(true)
                     .window_features(features),
                 &new_app,
             )
