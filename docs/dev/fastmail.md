@@ -64,6 +64,10 @@ login can keep the bare address as its name: it is on another service.
   subscription looks the same — on a lapsed trial Fastmail refuses app
   passwords for every legacy protocol while JMAP keeps working, so an
   IMAP login with the same password is the tell.
+The next two arrive inside **"no carddav request reached the server"**
+(or caldav), which says latchkey sent nothing, so neither the server URL
+nor the password was tested:
+
 - **"No credentials found for fastmail-dav (account '…')"**: latchkey
   holds nothing under that name, and nothing was sent. `latchkey auth
   list` shows the names it does hold.
