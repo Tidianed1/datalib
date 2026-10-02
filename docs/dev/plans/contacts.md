@@ -174,19 +174,29 @@ the provider than the one before:
   WhatsApp's contacts (a linked id and its number), Signal's recipients.
   chat-common writes them with the baseline, and a provider's profile
   and the baseline for the same handle are one profile.
-- **contact-common, by construction.** A `NormalizedContact` *is* a
-  profile, so contact-common keeps the typed emails and phones its
-  parsers already have and writes the card's profile beside its
-  document. An address-book card is the richest profile there is.
+- **contact-common, by construction.** A `NormalizedContact` is a
+  profile plus what it takes to render one as a document (its group,
+  its field table, its photo bytes, its inputs), so it holds a
+  `Profile` rather than repeating its fields, and its parsers keep the
+  typed emails and phones they already have instead of flattening
+  them. An address-book card is the richest profile there is.
 
-**Where they are kept.** The type lives beside `Handle` in
-`datalib_handle`, which has no first-party dependencies, so the render
-crates, the contacts crate, the applets and the UI's mirror of it share
-one definition. A render store gains `profiles` and `profile_handles`
-tables, written by the render step beside `grid_rows`; `grid_index`
-loads them into the index the way it loads `grid_rows`. A profile's id
-is minted like any entity id (`entity_ids.md`), from the source and the
-profile's `key`.
+**Where they are kept: contact-common owns them.** The `Profile` type,
+the `profiles` and `profile_handles` tables a render store gains, and
+the one function that writes them all live in contact-common, so a
+person is described and stored one way. chat-common depends on
+contact-common for both (the two share a base and neither depends on
+the other today, so there is no cycle), and so does the contacts app:
+its `resolve` answers in contact-common's `Profile`, and its snapshot
+renders contacts through contact-common. `grid_index` loads the tables
+into the index the way it loads `grid_rows`. A profile's id is minted
+like any entity id (`entity_ids.md`), from the source and the profile's
+`key`. `datalib_handle` stays a leaf holding only `Handle`.
+
+The cost is that the `datalib_contacts` crate, which today links only
+`datalib_etl`, takes the render side too, so it sits above
+`datalib_schema` and its tests join the count `AGENTS.md` §"Ingest and
+render are separate crates" measures. The applet already links both.
 
 **Who reads them.**
 
@@ -482,7 +492,7 @@ everything in phases 3–6.
 2. **Store, applet, chips.** `datalib_curated/datalib_contacts/`, the
    applet and its routes, `IdentityChip`, `decorateHandles`, the
    link/create popover.
-3. **Profiles.** The `Profile` type in `datalib_handle`; chat-common's
+3. **Profiles.** The `Profile` type and its tables in contact-common; chat-common's
    baseline; `NormalizedChat::profiles` filled by Slack, WhatsApp and
    Signal; contact-common's cards; the `profiles` tables and their load;
    `POST /profiles`; chips and the hover card drawing the ranked list;
