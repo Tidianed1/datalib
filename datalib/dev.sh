@@ -162,11 +162,16 @@ for _ in $(seq 1 50); do
   sleep 0.2
 done
 
-case "$(uname -s)" in
-  Darwin) open "$URL" ;;
-  Linux)  xdg-open "$URL" >/dev/null 2>&1 || true ;;
-  *)      echo "open $URL in your browser" ;;
-esac
+# Only for a person at a terminal; see serve_dev.sh.
+if [[ -n "${DATALIB_NO_OPEN:-}" || ! -t 1 ]]; then
+  echo "open $URL in your browser"
+else
+  case "$(uname -s)" in
+    Darwin) open "$URL" ;;
+    Linux)  xdg-open "$URL" >/dev/null 2>&1 || true ;;
+    *)      echo "open $URL in your browser" ;;
+  esac
+fi
 
 # Block on whichever child exits first; trap handles teardown.
 wait -n "$BACKEND_PID" "$VITE_PID"
