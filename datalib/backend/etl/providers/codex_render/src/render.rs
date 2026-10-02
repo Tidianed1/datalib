@@ -12,7 +12,7 @@ use std::path::Path;
 use anyhow::Result;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::normalize::iso_to_ms;
-use datalib_etl_chat_common::render::RenderProfile;
+use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
 use datalib_etl_chat_common::{render_changed, RenderTarget};
 use datalib_etl_render::grid_index::RenderedMarkdown;
@@ -42,6 +42,7 @@ fn profile() -> RenderProfile {
         reaction_kind: "Codex Reaction".to_string(),
         chat_entity_kind: ids::KIND_THREAD,
         render_version: RENDER_VERSION,
+        text_format: TextFormat::Markdown,
     }
 }
 
@@ -739,6 +740,32 @@ mod tests {
         assert_eq!(agent.buckets[0].items.len(), 1);
         assert_ne!(agent.chat_uuid, chats[0].chat_uuid);
         assert_eq!(chats[0].buckets[0].items.len(), 1);
+    }
+
+    /// A tool's name comes from whoever wrote the tool; in a summary it
+    /// is text.
+    #[test]
+    fn a_tool_named_in_markup_renders_escaped() {
+        let transcripts = vec![meta("t1", "t", None)];
+        let records = vec![rec(
+            "t1",
+            1,
+            "2364-04-11T10:00:00.000Z",
+            "response_item",
+            json!({"type": "function_call", "call_id": "c1", "name": "<script>x</script> & co", "arguments": "{}"}),
+        )];
+        let items = build_chats("codex", &transcripts, &records, 1024)
+            .remove(0)
+            .buckets
+            .remove(0)
+            .items;
+        let text = items[0].text.as_deref().unwrap();
+        assert!(
+            text.starts_with(
+                "<details><summary>Tool call: &lt;script&gt;x&lt;/script&gt; &amp; co</summary>"
+            ),
+            "{text}"
+        );
     }
 
     #[test]

@@ -147,10 +147,19 @@ fn without_block_marks(line: &str) -> &str {
 }
 
 /// The rendered bodies carry escaped HTML (`&lt;br&gt;`) as well as real
-/// tags; unescaping first lets one pass strip both. `&amp;` goes last so
+/// tags, and plain text a renderer backslash-escaped (`\# Ops`);
+/// unescaping first lets one pass strip both. `&amp;` goes last so
 /// `&amp;lt;` stays the text `&lt;`.
 fn unescaped(line: &str) -> String {
-    line.replace("&lt;", "<")
+    let mut chars = line.chars().peekable();
+    let mut out = String::with_capacity(line.len());
+    while let Some(c) = chars.next() {
+        match chars.peek() {
+            Some(next) if c == '\\' && next.is_ascii_punctuation() => {}
+            _ => out.push(c),
+        }
+    }
+    out.replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&quot;", "\"")
         .replace("&#39;", "'")
@@ -324,6 +333,15 @@ mod tests {
                  Report to [Transporter Room 3](https://sf.test/tr3?a=1&amp;b=2) at **0900**."
             ),
             "Your shore leave is approved Report to Transporter Room 3 at 0900."
+        );
+    }
+
+    /// Plain text a renderer escaped reads as it was typed.
+    #[test]
+    fn an_escaped_character_reads_as_itself() {
+        assert_eq!(
+            text("\\# Ops \\[1\\] snake\\_case C:\\Users &lt;b&gt;"),
+            "# Ops [1] snake_case C:\\Users"
         );
     }
 

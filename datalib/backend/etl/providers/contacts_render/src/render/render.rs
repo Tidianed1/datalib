@@ -28,7 +28,7 @@ use datalib_schema::providers::Provider;
 /// `CREATED` became `created_at`, and groups listed their members; to 7
 /// when a card listed the groups it is in, and to 8 when its `CATEGORIES`
 /// joined them.
-pub const RENDER_VERSION: u32 = 8;
+pub const RENDER_VERSION: u32 = 9;
 
 /// Every card by `(addressbook, UID)`, for a group to name its members.
 type Cards<'a> = HashMap<(&'a str, &'a str), &'a ParsedContact>;
@@ -345,6 +345,20 @@ mod tests {
             ]
         );
         assert_eq!(rows[0].1, "Starfleet — USS Enterprise");
+    }
+
+    /// A card's text goes to contact-common as the card has it, markup
+    /// and line breaks included: contact-common escapes it where it
+    /// becomes the page, which a `<br>` added here would defeat.
+    #[test]
+    fn a_note_in_markup_is_handed_on_as_typed() {
+        let mut c = sample();
+        c.note = Some("<script>x</script> & co\nsecond line".to_string());
+        let n = normalize(&c, "tng_contacts", &Cards::new(), &Groups::new());
+        assert_eq!(
+            n.contact.note.as_deref(),
+            Some("<script>x</script> & co\nsecond line")
+        );
     }
 
     // Fastmail exports the vCard `REV` in *basic* ISO 8601 (no separators,

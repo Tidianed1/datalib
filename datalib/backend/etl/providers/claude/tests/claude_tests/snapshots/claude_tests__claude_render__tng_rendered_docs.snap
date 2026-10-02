@@ -521,7 +521,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": null,
-      "byte_size": 1069,
+      "byte_size": 1077,
       "channel": "Borg Encryption Signature Lookup",
       "content_hash": "f779dbe41451fb058b15bebe3513d22b33976a5b5131eee65b9f47c681cc62c2",
       "conversation_name": "Borg Encryption Signature Lookup",
@@ -731,9 +731,9 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
-      "byte_size": 214,
+      "byte_size": 222,
       "channel": "Borg Encryption Signature Lookup",
-      "content_hash": "e5a3b7e31b7ee6f67eb980622d2acb0f61306d3338cdf9b8818b4fd5a8e89503",
+      "content_hash": "612a2b37dc50aae768a2ca2ac9697649194df31307be097de04dbe3b4f2d6695",
       "conversation_name": "Borg Encryption Signature Lookup",
       "conversation_uuid": "00000000-0000-882d-b21e-5e54f3f20dbb",
       "created_at": "2369-04-16T09:01:30+00:00",

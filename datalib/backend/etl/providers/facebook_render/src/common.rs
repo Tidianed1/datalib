@@ -4,7 +4,7 @@
 
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::bulk::BulkUpsertable as _;
-use datalib_etl_chat_common::render::RenderProfile;
+use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{
     ItemKind, NormalizedAttachment, NormalizedChatItem, UpstreamRef,
 };
@@ -28,6 +28,7 @@ pub fn profile(
     chat_kind: &str,
     message_kind: &str,
     chat_entity_kind: &'static str,
+    text_format: TextFormat,
 ) -> RenderProfile {
     RenderProfile {
         stamp_precision: crate::ids::STAMP_PRECISION,
@@ -38,6 +39,7 @@ pub fn profile(
         reaction_kind: "Facebook Reaction".to_string(),
         chat_entity_kind,
         render_version: RENDER_VERSION,
+        text_format,
     }
 }
 

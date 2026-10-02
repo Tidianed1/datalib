@@ -198,16 +198,26 @@ it without a bundler.
 `//datalib/ui:render_preview_test` regenerates the page and diffs it, so
 the checked-in copy cannot drift from the sources it was built from.
 
-## The UI sanitizes what you emit
+## Plain text is escaped; the UI sanitizes the rest
 
-A message body reaches the markdown as the sender wrote it, and the app
-renders the markdown with HTML enabled because the section wrappers are
-HTML. So before the page shows a document, `ui/src/cards/sanitize.ts`
-runs it through DOMPurify: scripts, event handlers, `javascript:` URLs
-and form controls are dropped, and only the tags and attributes the
-renderers actually use survive. **A renderer that starts emitting a new
-tag or attribute has to add it there**, or the page will silently strip
-it; `ui/tests/sanitize.test.ts` is where the vocabulary is pinned.
+The app renders the markdown with HTML enabled, because the section
+wrappers are HTML, so anything upstream wrote has to be escaped where it
+becomes markup (`docs/dev/data_architecture_parse_and_render.md`
+§"Upstream text is escaped where it becomes markup"). This crate
+escapes every field it writes — the author, a label, a reactor, a file
+name, a system note — and an item's `text` according to the profile's
+`text_format`: `Plain` for what a person typed (a text message, a
+LinkedIn message), `Markdown` for an assistant's reply or for markdown
+the provider built itself, having escaped the plain text it put inside
+(Facebook's posts, Beeper's reply line, an email). The grid's search
+text is `text` as given either way.
+
+What markdown does reach the page, `ui/src/cards/sanitize.ts` runs
+through DOMPurify: scripts, event handlers, `javascript:` URLs and form
+controls are dropped, and only the tags and attributes the renderers
+actually use survive. **A renderer that starts emitting a new tag or
+attribute has to add it there**, or the page will silently strip it;
+`ui/tests/sanitize.test.ts` is where the vocabulary is pinned.
 
 The sanitizer is not the boundary, though. The page draws the body in a
 frame whose policy is `script-src 'none'` (`ui/src/cards/docFrame.ts`),

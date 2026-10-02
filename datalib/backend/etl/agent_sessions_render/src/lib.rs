@@ -4,6 +4,7 @@
 
 use datalib_etl_chat_common::normalize::json_pretty_sorted;
 use datalib_etl_chat_common::types::{ItemKind, NormalizedChatItem, UpstreamRef};
+use datalib_etl_render::html::{escape_text, md_code_block};
 use datalib_id::Identity;
 use serde_json::Value;
 
@@ -53,8 +54,10 @@ pub fn item(
     }
 }
 
-/// A collapsed block: `summary` shows, `body` opens.
+/// A collapsed block: `summary`, plain text, shows; `body`, markdown,
+/// opens.
 pub fn details(summary: &str, body: &str) -> String {
+    let summary = escape_text(summary);
     if body.trim().is_empty() {
         format!("<details><summary>{summary}</summary>\n\n</details>")
     } else {
@@ -66,11 +69,7 @@ pub fn fenced(s: &str) -> String {
     if s.trim().is_empty() {
         return String::new();
     }
-    // A fence longer than any run of backticks in the body, so a tool
-    // result that itself contains ``` cannot close it early.
-    let longest = s.split(|c| c != '`').map(str::len).max().unwrap_or(0);
-    let fence = "`".repeat(longest.max(2) + 1);
-    format!("{fence}\n{}\n{fence}", s.trim_end())
+    md_code_block("", s.trim_end())
 }
 
 /// At most `max_bytes` of `s`, cut on a char boundary, with a line
@@ -111,7 +110,7 @@ pub fn json_block(v: &Value, max_bytes: usize) -> String {
     if json_is_empty(v) {
         return String::new();
     }
-    format!("```json\n{}\n```", clamp(&json_pretty_sorted(v), max_bytes))
+    md_code_block("json", &clamp(&json_pretty_sorted(v), max_bytes))
 }
 
 fn json_is_empty(v: &Value) -> bool {
@@ -127,6 +126,16 @@ fn json_is_empty(v: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A tool is named by whoever wrote it; its name cannot open a tag
+    /// inside the summary.
+    #[test]
+    fn a_tool_named_in_markup_renders_escaped() {
+        assert_eq!(
+            details("Tool use: <script>x</script> & co", ""),
+            "<details><summary>Tool use: &lt;script&gt;x&lt;/script&gt; &amp; co</summary>\n\n</details>"
+        );
+    }
 
     #[test]
     fn long_tool_results_are_cut_and_say_so() {

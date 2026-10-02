@@ -22,7 +22,7 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// `datalib_step`'s render step checks that every version stored on
 /// disk is one its processors declare, so this must not be mixed into
 /// the stored value.
-pub const LAYOUT_VERSION: u32 = 6;
+pub const LAYOUT_VERSION: u32 = 7;
 
 /// What every chat-common provider declares through
 /// `RenderProcessor::render_params`, merged with its own knobs: the
@@ -55,7 +55,23 @@ use datalib_schema::problems::{Outcome, ProblemRow, Scope, Stage};
 use datalib_schema::providers::Provider;
 
 use crate::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
-use datalib_etl_render::html::{escape_attr, escape_text};
+use datalib_etl_render::html::{
+    escape_attr, escape_md_block, escape_md_inline, escape_text, md_code_span,
+};
+
+/// What a provider's [`NormalizedChatItem::text`] is: what a person
+/// typed, or markdown. The renderer escapes the first where it becomes
+/// markup, so a text message saying `<b>hi</b>` shows those characters;
+/// the second it writes as it is. Either way the grid's search text is
+/// the text as given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextFormat {
+    /// A text message, a comment: nothing in it is markup.
+    Plain,
+    /// Markdown — an assistant's reply, or markdown the provider built
+    /// itself, having escaped the plain text it put inside.
+    Markdown,
+}
 
 /// Per-provider knobs the renderer parameterizes on. Values that
 /// would otherwise be hard-coded as `"signal"` / `"Signal Chat"` /
@@ -92,6 +108,8 @@ pub struct RenderProfile {
     /// new field on grid_rows). The chat-common renderer stamps this
     /// into the store so a re-run knows to invalidate stale docs.
     pub render_version: u32,
+    /// What every item's `text` is.
+    pub text_format: TextFormat,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -435,15 +453,15 @@ fn render_orphan_reactions(doc: &NormalizedDoc) -> Option<String> {
     s.push_str("---\n\n## Reactions to messages not in this mirror\n\n");
     for group in &doc.orphan_reactions {
         s.push_str(&format!(
-            "- target `{}`:\n",
-            escape_text(&group.target_native_id)
+            "- target {}:\n",
+            md_code_span(&group.target_native_id)
         ));
         for r in &group.reactions {
             s.push_str(&format!(
                 "  - <span id=\"m-{uuid}\" data-section-uuid=\"{uuid}\">{emoji} {who}</span> ({ts})\n",
                 uuid = r.reaction_uuid,
-                emoji = r.emoji,
-                who = escape_text(&r.reactor_display),
+                emoji = escape_md_inline(&r.emoji),
+                who = escape_md_inline(&r.reactor_display),
                 ts = timestamp_html(r.date_ms),
             ));
         }
@@ -502,7 +520,8 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
                 .unwrap_or("(system event)");
             s.push_str(&format!(
                 "*<small>{ts} — system: {summary}</small>*\n\n",
-                ts = timestamp_html(item.date_ms)
+                ts = timestamp_html(item.date_ms),
+                summary = escape_md_inline(summary),
             ));
             s.push_str("</div>\n\n");
             return Section::keyed(&item.message_uuid, s);
@@ -526,16 +545,21 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
         }
     }
 
-    let labelled = |text: &str| {
+    let body = |text: &str| match profile.text_format {
+        TextFormat::Plain => escape_md_block(text),
+        TextFormat::Markdown => text.to_string(),
+    };
+    let labelled = |text: String| {
         if item.labels.is_empty() {
-            text.to_string()
+            text
         } else {
-            format!("🏷 {}\n\n{text}", item.labels.join(" · "))
+            let labels: Vec<String> = item.labels.iter().map(|l| escape_md_inline(l)).collect();
+            format!("🏷 {}\n\n{text}", labels.join(" · "))
         }
     };
     match item.kind {
         ItemKind::Text => {
-            let text = labelled(item.text.as_deref().unwrap_or(""));
+            let text = labelled(body(item.text.as_deref().unwrap_or("")));
             if !text.is_empty() {
                 s.push('\n');
                 s.push_str(&text);
@@ -545,7 +569,7 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
         ItemKind::Attachment => {
             if let Some(caption) = item.text.as_deref().filter(|t| !t.is_empty()) {
                 s.push('\n');
-                s.push_str(caption);
+                s.push_str(&body(caption));
                 s.push('\n');
             }
             if item.attachments.is_empty() {
@@ -573,8 +597,8 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
             s.push_str(&format!(
                 "- <span id=\"m-{uuid}\" data-section-uuid=\"{uuid}\">{emoji} {who}</span>\n",
                 uuid = r.reaction_uuid,
-                emoji = r.emoji,
-                who = r.reactor_display,
+                emoji = escape_md_inline(&r.emoji),
+                who = escape_md_inline(&r.reactor_display),
             ));
         }
     }
@@ -627,6 +651,7 @@ fn render_attachment(s: &mut String, att: &crate::types::NormalizedAttachment) {
                 .map(str::to_string)
         })
         .unwrap_or_else(|| "attachment".to_string());
+    let label = escape_md_inline(&label);
     let size = att
         .byte_len
         .map(human_bytes)
@@ -669,12 +694,14 @@ fn render_attachment(s: &mut String, att: &crate::types::NormalizedAttachment) {
         // underneath is a fallback for renderers that strip media tags.
         Some(rel) if is_audio => {
             s.push_str(&format!(
-                "<audio controls src=\"{rel}\"></audio>\n\n{kind_marker} [{label}]({rel}) — {size}\n"
+                "<audio controls src=\"{src}\"></audio>\n\n{kind_marker} [{label}]({rel}) — {size}\n",
+                src = escape_attr(rel),
             ));
         }
         Some(rel) if is_video => {
             s.push_str(&format!(
-                "<video controls src=\"{rel}\"></video>\n\n{kind_marker} [{label}]({rel}) — {size}\n"
+                "<video controls src=\"{src}\"></video>\n\n{kind_marker} [{label}]({rel}) — {size}\n",
+                src = escape_attr(rel),
             ));
         }
         Some(rel) => {
@@ -683,7 +710,7 @@ fn render_attachment(s: &mut String, att: &crate::types::NormalizedAttachment) {
         None => {
             s.push_str(&format!("{kind_marker} *[{label} (not yet fetched)]*\n",));
             if let Some(url) = &att.source_url {
-                s.push_str(&format!("*(source: {url})*\n"));
+                s.push_str(&format!("*(source: {})*\n", escape_md_inline(url)));
             }
         }
     }
@@ -1257,6 +1284,7 @@ mod tests {
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
             stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
+            text_format: TextFormat::Markdown,
         };
         let chat = mk_chat();
         let md = join(&render_markdown(
@@ -1312,6 +1340,98 @@ mod tests {
             "{md}"
         );
         assert!(!md.contains("<script>"), "{md}");
+    }
+
+    /// A text message is what someone typed, so a `<b>` in it, a
+    /// leading `#`, or a name that is markup, shows as those characters
+    /// rather than restyling the page. The grid keeps the text as typed.
+    #[test]
+    fn every_plain_field_renders_escaped() {
+        const MARKUP: &str = "<script>x</script> & co";
+        let profile = RenderProfile {
+            text_format: TextFormat::Plain,
+            ..test_profile()
+        };
+        let mut chat = mk_chat();
+        let item = &mut chat.buckets[0].items[0];
+        item.text = Some(format!("{MARKUP}\n# not a heading"));
+        item.labels = vec![MARKUP.to_string()];
+        item.reactions[0].reactor_display = MARKUP.to_string();
+        let mut attachment = chat.buckets[0].items[0].clone();
+        attachment.message_uuid = "66666666-6666-6666-6666-666666666666".to_string();
+        attachment.kind = ItemKind::Attachment;
+        attachment.text = Some(MARKUP.to_string());
+        attachment.reactions = Vec::new();
+        attachment.attachments = vec![NormalizedAttachment {
+            rel_path: None,
+            file_name: Some(format!("{MARKUP}].png")),
+            mime_type: Some("image/png".to_string()),
+            byte_len: None,
+            source_url: Some(MARKUP.to_string()),
+            ref_id: None,
+        }];
+        let mut system = chat.buckets[0].items[0].clone();
+        system.message_uuid = "77777777-7777-7777-7777-777777777777".to_string();
+        system.kind = ItemKind::System;
+        system.system_note = Some(MARKUP.to_string());
+        chat.buckets[0].items.extend([attachment, system]);
+
+        let md = join(&render_markdown(
+            &profile,
+            &chat,
+            &chat.buckets[0],
+            "Test · Bridge Crew",
+        ));
+
+        assert!(!md.contains("<script>"), "{md}");
+        assert!(!md.contains(" & co"), "{md}");
+        assert!(
+            md.contains("\n&lt;script&gt;x&lt;/script&gt; &amp; co\n\\# not a heading\n"),
+            "the body: {md}"
+        );
+        assert!(
+            md.contains("🏷 &lt;script&gt;x&lt;/script&gt; &amp; co\n"),
+            "{md}"
+        );
+        assert!(
+            md.contains("🫡 &lt;script&gt;x&lt;/script&gt; &amp; co</span>"),
+            "the reactor: {md}"
+        );
+        assert!(
+            md.contains("*[&lt;script&gt;x&lt;/script&gt; &amp; co\\].png (not yet fetched)]*"),
+            "the file name: {md}"
+        );
+        assert!(
+            md.contains("*(source: &lt;script&gt;x&lt;/script&gt; &amp; co)*"),
+            "{md}"
+        );
+        assert!(
+            md.contains("— system: &lt;script&gt;x&lt;/script&gt; &amp; co</small>"),
+            "{md}"
+        );
+
+        let typed = format!("{MARKUP}\n# not a heading");
+        let rows = rows_of(&profile, &chat);
+        assert!(
+            rows.iter()
+                .any(|r| r.content_hash == datalib_schema::grid_rows::content_hash(&typed)),
+            "the grid's text is the text as typed"
+        );
+    }
+
+    /// Markdown is the provider's to write: an assistant's reply keeps
+    /// its emphasis and its code.
+    #[test]
+    fn markdown_text_is_written_as_given() {
+        let mut chat = mk_chat();
+        chat.buckets[0].items[0].text = Some("**Engage** `warp(9)`".to_string());
+        let md = join(&render_markdown(
+            &test_profile(),
+            &chat,
+            &chat.buckets[0],
+            "Test · Bridge Crew",
+        ));
+        assert!(md.contains("\n**Engage** `warp(9)`\n"), "{md}");
     }
 
     /// Every stamp in a rendered document is hoverable, not just the
@@ -1536,6 +1656,7 @@ mod tests {
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
             stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
+            text_format: TextFormat::Markdown,
         };
         let md = join(&render_markdown(&profile, &chat, &chat.buckets[0], "Test"));
         assert!(md.contains("not yet fetched"));
@@ -1553,6 +1674,7 @@ mod tests {
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
             stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
+            text_format: TextFormat::Markdown,
         };
         let mut chat = mk_chat();
         chat.source_url = Some("https://example.com/post/42".to_string());
@@ -1584,6 +1706,7 @@ mod tests {
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
             stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
+            text_format: TextFormat::Markdown,
         };
         let mut chat = mk_chat();
         chat.title = Some("#bridge: Make it so.".to_string());
@@ -1640,6 +1763,7 @@ mod tests {
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
             stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
+            text_format: TextFormat::Markdown,
         };
         let mut chat = mk_chat();
         chat.buckets[0].items[0].source_url = Some("https://slack.example/p123".to_string());
@@ -1674,6 +1798,7 @@ mod tests {
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
             stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
+            text_format: TextFormat::Markdown,
         };
         let mut chat = mk_chat();
         chat.buckets[0].items[0].kind_label = Some("LLM Response".to_string());
@@ -1694,6 +1819,7 @@ mod tests {
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
             stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
+            text_format: TextFormat::Markdown,
         }
     }
 
@@ -1811,6 +1937,7 @@ mod tests {
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
             stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
+            text_format: TextFormat::Markdown,
         };
         let mut chat = mk_chat();
         chat.org_uuid = Some("org-123".to_string());

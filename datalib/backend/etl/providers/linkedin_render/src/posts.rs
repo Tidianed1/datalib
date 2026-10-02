@@ -12,7 +12,9 @@ use datalib_etl_chat_common::types::{
     own_stamp_ms, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
     NormalizedDoc, UpstreamRef,
 };
+use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::html::{escape_md_block, md_link_dest};
 use datalib_etl_render::inputs::{changed_rows, Input, Inputs};
 use serde_json::Value;
 
@@ -38,6 +40,7 @@ fn profile() -> RenderProfile {
         reaction_kind: "LinkedIn Post Reaction".to_string(),
         chat_entity_kind: ids::KIND_POST,
         render_version: RENDER_VERSION,
+        text_format: TextFormat::Markdown,
     }
 }
 
@@ -254,12 +257,12 @@ fn me_item(
     body: String,
     url: &str,
 ) -> NormalizedChatItem {
-    let mut text = body;
+    let mut text = escape_md_block(&body);
     if let Some(u) = nonempty(url) {
         if !text.is_empty() {
             text.push_str("\n\n");
         }
-        text.push_str(&format!("[🔗 View on LinkedIn]({u})"));
+        text.push_str(&format!("[🔗 View on LinkedIn]({})", md_link_dest(u)));
     }
     let mut problems = Vec::new();
     let date_ms = own_stamp_ms(Some(date), "Date", parse_date_ms, &mut problems);
@@ -455,6 +458,29 @@ mod tests {
         assert_eq!(chats[0].display, "Post: My post body");
         // Whole-post linkout on the thread header / chat-level row.
         assert_eq!(chats[0].source_url.as_deref(), Some(ugc));
+    }
+
+    /// A post and a comment are what was typed: escaped on the page,
+    /// as typed in the thread's title.
+    #[test]
+    fn a_post_in_markup_renders_escaped() {
+        let ugc = "https://www.linkedin.com/feed/update/urn%3Ali%3AugcPost%3A1";
+        let shares = vec![share(ugc, "2026-05-07 16:41:18", "<script>x</script> & co")];
+        let comments = vec![comment(ugc, "2026-05-08 09:00:00", "# <b>co</b>")];
+        let chats = build_post_chats("li", &with_ids(&shares), &with_ids(&comments), None, &[]);
+        let items = &chats[0].buckets[0].items;
+        assert_eq!(
+            items[0].text.as_deref(),
+            Some(&*format!(
+                "&lt;script&gt;x&lt;/script&gt; &amp; co\n\n[🔗 View on LinkedIn]({ugc})"
+            ))
+        );
+        assert!(items[1]
+            .text
+            .as_deref()
+            .unwrap()
+            .starts_with("\\# &lt;b&gt;co&lt;/b&gt;\n"));
+        assert_eq!(chats[0].display, "Post: <script>x</script> & co");
     }
 
     #[test]

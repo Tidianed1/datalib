@@ -7,6 +7,8 @@
 //! becomes `urlOpenAIhttps://openai.com` in the rendered markdown,
 //! which is both ugly and breaks the link.
 
+use datalib_etl_render::html::md_link_dest;
+
 const START: char = '\u{e200}';
 const END: char = '\u{e201}';
 const SEP: char = '\u{e202}';
@@ -55,10 +57,12 @@ fn expand_wrappers(s: &str) -> String {
         if parts.len() == 3 && parts[0] == "url" {
             let text = parts[1];
             let href = parts[2];
+            // The text is the model's, so its emphasis stays; only a
+            // bracket, which would end the link early, is escaped.
             out.push('[');
-            out.push_str(text);
+            out.push_str(&text.replace('[', "\\[").replace(']', "\\]"));
             out.push_str("](");
-            out.push_str(href);
+            out.push_str(&md_link_dest(href));
             out.push(')');
         }
         // Other sentinel kinds (filecite, cite, search, …): drop.
@@ -74,6 +78,13 @@ mod tests {
     fn inline_url_becomes_markdown_link() {
         let raw = "test for \u{e200}url\u{e202}OpenAI\u{e202}https://openai.com\u{e201}.";
         assert_eq!(clean_text(raw), "test for [OpenAI](https://openai.com).");
+    }
+
+    /// A link's text cannot end the link early, nor its target.
+    #[test]
+    fn a_link_in_brackets_stays_one_link() {
+        let raw = "\u{e200}url\u{e202}[1] Ops\u{e202}https://e.invalid/a (b)\u{e201}";
+        assert_eq!(clean_text(raw), "[\\[1\\] Ops](<https://e.invalid/a (b)>)");
     }
 
     #[test]

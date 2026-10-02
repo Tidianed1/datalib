@@ -9,7 +9,7 @@ use std::path::Path;
 use anyhow::Result;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::normalize::iso_to_ms;
-use datalib_etl_chat_common::render::RenderProfile;
+use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{
     ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
 };
@@ -43,6 +43,7 @@ fn profile() -> RenderProfile {
         reaction_kind: "Claude Code Reaction".to_string(),
         chat_entity_kind: ids::KIND_SESSION,
         render_version: RENDER_VERSION,
+        text_format: TextFormat::Markdown,
     }
 }
 
@@ -584,6 +585,49 @@ mod tests {
             .iter()
             .any(|i| i.table == "transcripts" && i.id == "s1"));
         assert_eq!(c.inputs.iter().filter(|i| i.table == "records").count(), 4);
+    }
+
+    /// A tool's name comes from whoever wrote the tool; in a summary it
+    /// is text, and its output stays inside its fence.
+    #[test]
+    fn a_tool_named_in_markup_renders_escaped() {
+        let transcripts = vec![meta("s1", "Deflector realignment", None)];
+        let records = vec![
+            rec(
+                "a1",
+                "2364-04-11T10:00:05.000Z",
+                json!({"type": "assistant", "message": {"model": "claude-opus-5", "content": [
+                    {"type": "tool_use", "id": "t1", "name": "<script>x</script> & co", "input": {}}
+                ]}}),
+            ),
+            rec(
+                "u2",
+                "2364-04-11T10:00:07.000Z",
+                json!({"type": "user", "message": {"content": [
+                    {"type": "tool_result", "tool_use_id": "t1", "content": "```\n<script>x</script>"}
+                ]}}),
+            ),
+        ];
+        let chats = build_chats("cc", &transcripts, &records, 1024);
+        let texts: Vec<&str> = chats[0].buckets[0]
+            .items
+            .iter()
+            .filter_map(|i| i.text.as_deref())
+            .collect();
+        assert!(
+            texts[0].starts_with(
+                "<details><summary>Tool use: &lt;script&gt;x&lt;/script&gt; &amp; co</summary>"
+            ),
+            "{texts:?}"
+        );
+        assert!(
+            texts[1].contains("<summary>Tool result: &lt;script&gt;x&lt;/script&gt; &amp; co"),
+            "{texts:?}"
+        );
+        assert!(
+            texts[1].contains("````\n```\n<script>x</script>\n````"),
+            "{texts:?}"
+        );
     }
 
     #[test]

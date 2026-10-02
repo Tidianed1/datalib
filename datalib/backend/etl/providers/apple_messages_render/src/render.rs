@@ -22,6 +22,7 @@ use datalib_etl_chat_common::types::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
     NormalizedReaction, UpstreamRef,
 };
+use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{changed_rows, Inputs, RawRange};
 use datalib_handle::Handle;
@@ -92,6 +93,7 @@ fn profile() -> RenderProfile {
         reaction_kind: "Messages Tapback".to_string(),
         chat_entity_kind: ENTITY_KIND_CONVERSATION,
         render_version: RENDER_VERSION,
+        text_format: TextFormat::Plain,
     }
 }
 

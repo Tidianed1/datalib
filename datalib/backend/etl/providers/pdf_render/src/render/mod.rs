@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::html::{escape_html_outside_code, escape_md_inline};
 use datalib_etl_render::inputs::{Bucket, Buckets, Input, RawRange};
 use datalib_etl_render::section::{msg_div_open, MSG_DIV_CLOSE};
 
@@ -220,38 +221,11 @@ fn render_one(
         body.push_str(&format!("modified_at: {}\n", yaml_str(m)));
     }
     body.push_str("---\n\n");
-    body.push_str(&format!("# {title}\n\n"));
-
-    let mut page_rows: Vec<(u32, String)> = Vec::with_capacity(pages.len());
-    for p in &pages {
-        if p.non_textual {
-            // A page we could not read. It goes in the markdown so the
-            // gap is visible to whoever opens the document, but carries
-            // no section wrapper and no grid row: there is no content to
-            // navigate to, and the note is the same sentence on every
-            // such page in every document. See `convert::note_for_page`.
-            body.push_str(&p.text);
-            body.push_str("\n\n");
-            continue;
-        }
-        // Per-page section wrapper. The `data-section-uuid` must be
-        // byte-equal to the page grid row's `uuid` or row→preview
-        // navigation silently fails (see `etl::section` docs).
-        let uuid = grid_rows::page(
-            source_id,
-            &t.blake3,
-            p.number,
-            grid_rows::document_stamp(t.doc_created_at.as_deref(), t.doc_modified_at.as_deref()),
-        )
-        .uuid;
-        body.push_str(&msg_div_open(&uuid, grid_rows::PROVIDER));
-        body.push('\n');
-        body.push_str(&p.text);
-        body.push('\n');
-        body.push_str(MSG_DIV_CLOSE);
-        body.push_str("\n\n");
-        page_rows.push((p.number, p.text.clone()));
-    }
+    let doc_stamp =
+        grid_rows::document_stamp(t.doc_created_at.as_deref(), t.doc_modified_at.as_deref());
+    let page_uuid = |number| grid_rows::page(source_id, &t.blake3, number, doc_stamp).uuid;
+    let (pages_md, page_rows) = pages_markdown(&title, &pages, page_uuid);
+    body.push_str(&pages_md);
 
     if let Some(parent) = md_path.parent() {
         fs::create_dir_all(parent)?;
@@ -288,6 +262,43 @@ fn render_one(
     })
 }
 
+/// The document under its title: one section per readable page, and the
+/// note for a page that could not be read. Returns the markdown and each
+/// readable page's number and text, for its grid row.
+fn pages_markdown(
+    title: &str,
+    pages: &[convert::Page],
+    page_uuid: impl Fn(u32) -> String,
+) -> (String, Vec<(u32, String)>) {
+    let mut body = format!("# {}\n\n", escape_md_inline(title));
+    let mut page_rows: Vec<(u32, String)> = Vec::with_capacity(pages.len());
+    for p in pages {
+        if p.non_textual {
+            // A page we could not read. It goes in the markdown so the
+            // gap is visible to whoever opens the document, but carries
+            // no section wrapper and no grid row: there is no content to
+            // navigate to, and the note is the same sentence on every
+            // such page in every document. See `convert::note_for_page`.
+            body.push_str(&p.text);
+            body.push_str("\n\n");
+            continue;
+        }
+        // Per-page section wrapper. The `data-section-uuid` must be
+        // byte-equal to the page grid row's `uuid` or row→preview
+        // navigation silently fails (see `etl::section` docs).
+        body.push_str(&msg_div_open(&page_uuid(p.number), grid_rows::PROVIDER));
+        body.push('\n');
+        // pdf-inspector writes the page as markdown but leaves the
+        // words in it as the PDF had them.
+        body.push_str(&escape_html_outside_code(&p.text));
+        body.push('\n');
+        body.push_str(MSG_DIV_CLOSE);
+        body.push_str("\n\n");
+        page_rows.push((p.number, p.text.clone()));
+    }
+    (body, page_rows)
+}
+
 fn yaml_str(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
@@ -295,6 +306,32 @@ fn yaml_str(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A PDF's title and its words are text: a `<` in a technical manual
+    /// shows as one, and only code keeps its characters as they are.
+    #[test]
+    fn a_document_in_markup_renders_escaped() {
+        let pages = [convert::Page {
+            number: 1,
+            text: "<script>x</script> & co\n\n`<kbd>`".to_string(),
+            non_textual: false,
+        }];
+        let (md, rows) = pages_markdown("<script>x</script> & co", &pages, |n| format!("p{n}"));
+        assert!(
+            md.starts_with("# &lt;script&gt;x&lt;/script&gt; &amp; co\n\n"),
+            "{md}"
+        );
+        assert!(
+            md.contains("\n&lt;script&gt;x&lt;/script&gt; &amp; co\n\n`<kbd>`\n"),
+            "{md}"
+        );
+        assert!(!md.contains("<script>"), "{md}");
+        assert_eq!(
+            rows,
+            [(1, pages[0].text.clone())],
+            "the grid keeps the words"
+        );
+    }
 
     #[test]
     fn md_path_is_content_named() {
