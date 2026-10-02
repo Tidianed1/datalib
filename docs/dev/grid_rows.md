@@ -263,7 +263,9 @@ finds it.
 The body is markdown, and `datalib_schema::plain_text` turns it into
 what a person reads: tags, images, link targets, heading and quote
 marks, emphasis and code fences go, and a `<details>` block reads as
-its summary unless it is all the body there is. A qmd hit's snippet
+its summary unless it is all the body there is. Text inside a code
+fence or a code span is kept as written, backslashes and `*` included,
+since that is what the page shows. A qmd hit's snippet
 goes through the same pass. So what a producer puts in the body is
 what the row *says*, in the order that matters: a calendar event's
 description comes before its guest list, a chat's document row leaves

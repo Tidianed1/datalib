@@ -173,9 +173,7 @@ fn build_post_chats(
         // isn't in the export when we only have comments on it.
         if let Some((row_id, s)) = thread.share {
             let date = field(s, "Date");
-            let mut body = nonempty(field(s, "ShareCommentary"))
-                .unwrap_or("")
-                .to_string();
+            let mut body = share_commentary(s).unwrap_or_default();
             // Append the shared link / media so a link-only repost still
             // has a non-empty body.
             for k in ["SharedUrl", "MediaUrl"] {
@@ -361,9 +359,31 @@ fn post_urn(link: &str) -> Option<String> {
     }
 }
 
+/// A post's text. The export writes a post of several lines with each
+/// line in quotes of its own inside the quoted CSV field, so it reads
+/// `first"` / `""` / `"second` once parsed; those quotes are undone when
+/// every line has them. A quote inside a line is the post's own.
+fn share_commentary(share: &Value) -> Option<String> {
+    let text = nonempty(field(share, "ShareCommentary"))?;
+    Some(without_line_quotes(text).unwrap_or_else(|| text.to_string()))
+}
+
+fn without_line_quotes(text: &str) -> Option<String> {
+    if !text.contains('\n') {
+        return None;
+    }
+    let whole = format!("\"{text}\"");
+    let lines = whole
+        .split('\n')
+        .map(|line| line.strip_prefix('"')?.strip_suffix('"'))
+        .collect::<Option<Vec<&str>>>()?;
+    Some(lines.join("\n"))
+}
+
 fn thread_title(share: Option<&Value>, comments: &[&Value]) -> String {
-    let snippet = share
-        .and_then(|s| nonempty(field(s, "ShareCommentary")))
+    let commentary = share.and_then(share_commentary);
+    let snippet = commentary
+        .as_deref()
         .or_else(|| comments.first().and_then(|c| nonempty(field(c, "Message"))));
     match snippet {
         Some(text) => {
@@ -426,6 +446,26 @@ mod tests {
             "SharedUrl": "", "MediaUrl": "", "Visibility": "PUBLIC",
         })
     }
+    /// Regression: a post of several paragraphs rendered with a stray
+    /// `"` ending its first line and a `""` line between paragraphs.
+    #[test]
+    fn a_multi_line_post_loses_the_exports_line_quotes() {
+        assert_eq!(
+            share_commentary(&share("l", "d", "Engage.\"\n\"\"\n\"Make it \"so\".")).as_deref(),
+            Some("Engage.\n\nMake it \"so\".")
+        );
+        assert_eq!(
+            share_commentary(&share("l", "d", "\"Fascinating\" barely covers it.")).as_deref(),
+            Some("\"Fascinating\" barely covers it."),
+            "one line is left as written"
+        );
+        assert_eq!(
+            share_commentary(&share("l", "d", "Line one\nLine two")).as_deref(),
+            Some("Line one\nLine two"),
+            "lines without the quotes are left as written"
+        );
+    }
+
     fn comment(link: &str, date: &str, msg: &str) -> Value {
         json!({ "Date": date, "Link": link, "Message": msg })
     }

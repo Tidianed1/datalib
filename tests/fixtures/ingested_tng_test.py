@@ -976,6 +976,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "linkedin",
                 "signal",
                 "slack",
+                "sms-backup-restore",
                 "tng_contacts",
                 "tng_email",
                 "whatsapp",

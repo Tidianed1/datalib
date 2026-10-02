@@ -51,6 +51,12 @@ pub enum DavError {
          password, not an API token."
     )]
     CredentialRefused { service: HttpService, tried: String },
+    #[error(
+        "no {service} request reached the server — tried {tried}. Each failed before an \
+         answer came back; the error with each URL says why (latchkey refusing to send one, \
+         or the host unreachable)."
+    )]
+    Unreached { service: HttpService, tried: String },
 }
 
 impl DavError {
@@ -288,7 +294,8 @@ pub async fn find_principal(
 
 /// Why discovery found no principal, from what each URL answered (`None`
 /// for a reply that named none). Refused only when every URL refused, so
-/// a wrong server URL still reads as one.
+/// a wrong server URL still reads as one; unreached when no request got
+/// an answer, since then neither the URL nor the login was tested.
 fn no_principal(service: HttpService, misses: &[(String, Option<DavError>)]) -> DavError {
     let tried = misses
         .iter()
@@ -302,8 +309,14 @@ fn no_principal(service: HttpService, misses: &[(String, Option<DavError>)]) -> 
         && misses
             .iter()
             .all(|(_, e)| matches!(e.as_ref().and_then(DavError::status), Some(401 | 403)));
+    let unreached = !misses.is_empty()
+        && misses
+            .iter()
+            .all(|(_, e)| matches!(e, Some(DavError::Transport { .. })));
     if refused {
         DavError::CredentialRefused { service, tried }
+    } else if unreached {
+        DavError::Unreached { service, tried }
     } else {
         DavError::NoPrincipal { service, tried }
     }
@@ -516,6 +529,38 @@ mod tests {
         assert!(e
             .to_string()
             .contains("http 401 on Propfind https://a.test/dav/"));
+    }
+
+    /// latchkey refusing to send a request (two accounts and none named)
+    /// used to read as "check the server URL and that latchkey holds a
+    /// login" — neither of which was the problem.
+    #[test]
+    fn no_request_reaching_the_server_is_unreached() {
+        let refused_by_latchkey = |url: &str| {
+            Some(DavError::Transport {
+                service: HttpService::Caldav,
+                source: crate::http::HttpError::Curl {
+                    service: HttpService::Caldav,
+                    url: url.into(),
+                    exit: 1,
+                    stderr: "Multiple accounts are stored for service 'fastmail-dav'".into(),
+                },
+            })
+        };
+        let misses = vec![
+            (
+                "https://a.test/dav/".into(),
+                refused_by_latchkey("https://a.test/dav/"),
+            ),
+            (
+                "https://a.test/.well-known/caldav".into(),
+                refused_by_latchkey("https://a.test/.well-known/caldav"),
+            ),
+        ];
+        let e = no_principal(HttpService::Caldav, &misses);
+        assert!(matches!(e, DavError::Unreached { .. }), "{e}");
+        assert!(e.to_string().contains("Multiple accounts"), "{e}");
+        assert!(!e.to_string().contains("holds a login"), "{e}");
     }
 
     #[test]

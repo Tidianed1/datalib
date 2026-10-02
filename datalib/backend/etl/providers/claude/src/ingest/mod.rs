@@ -777,11 +777,20 @@ async fn docs_need_refetch(db: &RawDb, project_uuid: &str, metadata_changed: boo
 }
 
 pub(crate) fn canonicalize_project_payload(payload: &Value) -> Value {
+    with_bag_sorted(payload, "permissions")
+}
+
+/// An org's `capabilities` is a set the API returns in no fixed order.
+pub(crate) fn canonicalize_org_payload(payload: &Value) -> Value {
+    with_bag_sorted(payload, "capabilities")
+}
+
+fn with_bag_sorted(payload: &Value, field: &str) -> Value {
     let mut out = payload.clone();
-    if let Some(permissions) = out.get_mut("permissions").and_then(Value::as_array_mut) {
+    if let Some(bag) = out.get_mut(field).and_then(Value::as_array_mut) {
         // Sort by the rendered string so mixed types (which would make
         // `as_str` sort unstable) still get a total order.
-        permissions.sort_by_key(|v| {
+        bag.sort_by_key(|v| {
             v.as_str()
                 .map(str::to_string)
                 .unwrap_or_else(|| v.to_string())
@@ -1210,7 +1219,8 @@ async fn upsert_orgs(db: &RawDb, payloads: &[Value], now: &IsoOffsetTimestamp) -
             .get("name")
             .and_then(|v| v.as_str())
             .map(String::from);
-        let payload_str = serde_json::to_string(payload).context("serialize org")?;
+        let payload_str =
+            serde_json::to_string(&canonicalize_org_payload(payload)).context("serialize org")?;
         rows.push(OrgRow {
             id_and_payload: WirePayload {
                 id: id.to_string(),
@@ -1552,6 +1562,22 @@ mod tests {
             canonicalize_project_payload(&mixed)["permissions"],
             serde_json::json!([1, 2, "a"]),
             "mixed types still get a total order rather than panicking"
+        );
+    }
+
+    /// An org's capabilities arrive in no fixed order, and an unchanged
+    /// org must serialize identically.
+    #[test]
+    fn org_capabilities_are_stored_in_a_stable_order() {
+        let one = serde_json::json!({"uuid": "o1", "capabilities": ["warp", "bridge"]});
+        let other_order = serde_json::json!({"uuid": "o1", "capabilities": ["bridge", "warp"]});
+        assert_eq!(
+            canonicalize_org_payload(&one),
+            canonicalize_org_payload(&other_order)
+        );
+        assert_eq!(
+            canonicalize_org_payload(&one)["capabilities"],
+            serde_json::json!(["bridge", "warp"])
         );
     }
 

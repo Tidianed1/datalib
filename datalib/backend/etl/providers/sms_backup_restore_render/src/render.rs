@@ -21,6 +21,7 @@ use crate::ids;
 
 use datalib_etl_sms_backup_restore::ingest::schema_raw::SmsAttachmentRow;
 use datalib_etl_sms_backup_restore::ingest::{db_path_for, RawDb};
+use datalib_handle::Handle;
 use datalib_schema::providers::Provider;
 
 /// v2: a row whose `date` field is missing or non-numeric gets a null
@@ -30,7 +31,8 @@ use datalib_schema::providers::Provider;
 ///     backpointer, and a message's id carries its stamp in its leading
 ///     bits (`datalib_id`'s v8 layout). Every uuid moved, `chat_uuid`
 ///     among them.
-pub const RENDER_VERSION: u32 = 4;
+/// v5: an incoming message's author carries the sender's `tel:` handle.
+pub const RENDER_VERSION: u32 = 5;
 
 /// Projection for [`BlobBundle::load_many`] over the SMS CAS edge: the
 /// `ref_name` ({message_id}/{partname}) is the bundle key; `content_type`
@@ -333,10 +335,13 @@ fn item(source_id: &str, v: &Value) -> NormalizedChatItem {
                 .get("conversation_display")
                 .and_then(Value::as_str)
                 .unwrap_or("Unknown");
-            let author_display = if is_me {
-                "Me".to_string()
+            let (author_handle, author_display) = if is_me {
+                (None, "Me".to_string())
             } else {
-                display.to_string()
+                // A group MMS joins its numbers with `~`, which `tel`
+                // refuses: the backup does not say which one sent it.
+                let address = v.get("address").and_then(Value::as_str).unwrap_or("");
+                (Handle::tel(address), display.to_string())
             };
             // SMS body lives in `body`; MMS body in `text`.
             let text = v
@@ -363,7 +368,7 @@ fn item(source_id: &str, v: &Value) -> NormalizedChatItem {
 
             NormalizedChatItem {
                 message_uuid,
-                author_handle: None,
+                author_handle,
                 author_display,
                 date_ms,
                 text,
@@ -515,6 +520,39 @@ mod tests {
             .map(|i| i.text.as_deref().unwrap())
             .collect();
         assert_eq!(unread, vec!["unread"]);
+    }
+
+    /// An incoming text names its sender's number as a `tel:` handle, so
+    /// a contact linked in WhatsApp or Messages reaches it too. Mine, a
+    /// number without its country code and a group MMS name nobody.
+    #[test]
+    fn an_incoming_message_carries_its_senders_number() {
+        let row = |id: &str, kind: &str, address: &str, is_me: bool| {
+            json!({"id":id,"kind":kind,"conversation_key":address,"conversation_display":"Jean-Luc Picard",
+                   "date":1778277198761i64,"is_me":is_me,"address":address,"body":id,"attachments":[]})
+        };
+        let messages = vec![
+            row("theirs", "sms", "+1 (555) 012-3456", false),
+            row("mine", "sms", "+15550123456", true),
+            row("local", "sms", "5550123456", false),
+            row("group", "mms", "+15550123456~+15550109876", false),
+        ];
+        let chats = build_chats("sms", &with_ids(&messages), &[]);
+        let handle_of = |id: &str| {
+            chats
+                .iter()
+                .flat_map(|c| &c.buckets)
+                .flat_map(|b| &b.items)
+                .find(|i| i.source_ref.as_ref().unwrap().native_id == id)
+                .unwrap()
+                .author_handle
+                .as_ref()
+                .map(|h| h.as_str().to_string())
+        };
+        assert_eq!(handle_of("theirs").as_deref(), Some("tel:+15550123456"));
+        assert_eq!(handle_of("mine"), None);
+        assert_eq!(handle_of("local"), None);
+        assert_eq!(handle_of("group"), None);
     }
 
     #[test]

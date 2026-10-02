@@ -32,7 +32,9 @@ use datalib_schema::providers::Provider;
 ///     every uuid moved.
 /// v6: a connection's page uses the shared contact labels — Org, Title,
 ///     Email — rather than the export's column names.
-pub const RENDER_VERSION: u32 = 6;
+/// v7: a post of several lines loses the quotes the export puts around
+///     each line.
+pub const RENDER_VERSION: u32 = 7;
 
 fn profile() -> RenderProfile {
     RenderProfile {
