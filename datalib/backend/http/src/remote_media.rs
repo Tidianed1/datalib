@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use url::{Host, Url};
 
-use crate::embed::{is_scriptable_document, DOCUMENT_SANDBOX_CSP};
+use crate::embed::{is_scriptable_document, DocumentKind};
 use crate::AppState;
 
 /// Set to `1` to let the route reach loopback and private addresses —
@@ -457,11 +457,11 @@ pub fn response(content_type: &str, body: Vec<u8>) -> Response<Body> {
         HeaderValue::from_static("nosniff"),
     );
     // An SVG is an image in an `<img>` and a document with scripts when
-    // navigated to; the sandbox keeps the second case out of this origin.
+    // navigated to; the data policy keeps the second case inert.
     if is_scriptable_document(content_type) {
         headers.insert(
             header::CONTENT_SECURITY_POLICY,
-            HeaderValue::from_static(DOCUMENT_SANDBOX_CSP),
+            HeaderValue::from_static(DocumentKind::Data.csp()),
         );
     }
     resp
