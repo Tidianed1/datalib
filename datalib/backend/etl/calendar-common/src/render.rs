@@ -108,6 +108,7 @@ fn render_one(
         rows: row.into_iter().collect(),
         sections,
         edges: edges(event),
+        contacts: Vec::new(),
         problems,
     })
 }

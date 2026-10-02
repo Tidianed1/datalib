@@ -4,7 +4,8 @@
 <data_root>/<group>/ingest/entities.doltlite_db   per-source entities + sync bookkeeping
 <data_root>/<group>/ingest/blobs.sqlite           content-addressed blobs (plain SQLite)
 <data_root>/<group>/render_markdown/…             the rendered tree + its render store
-<data_root>/unified_index/grid_index/db.doltlite_db   grid_rows / markdowns / edges / problems
+<data_root>/unified_index/grid_index/db.doltlite_db   grid_rows / markdowns / edges / problems /
+                                                  source_contacts (who each handle is, per source)
 <data_root>/unified_index/qmd_aggregator/           the qmd index (plain SQLite inside)
 <data_root>/unified_index/embedding_map/embedding_map.json
                                                   every embedded document's place on

@@ -18,13 +18,15 @@ import {
   todayPartialDate,
   unlinkHandle,
   type ContactSummary,
-  type Resolved,
+  nameOf,
+  stoppedBy as stoppedByOf,
+  type DatalibContact,
 } from "./contacts";
 
 const props = defineProps<{
   handle: string;
   shownAs: string;
-  resolved: Resolved | null;
+  resolved: DatalibContact | null;
   x: number;
   y: number;
 }>();
@@ -34,7 +36,8 @@ const query = ref(suggestedName(props.shownAs, props.handle));
 const matches = ref<ContactSummary[]>([]);
 const error = ref<string | null>(null);
 const busy = ref(false);
-const stoppedBy = ref(props.resolved?.stopped_working_by ?? "");
+const stopped = computed(() => stoppedByOf(props.resolved, props.handle));
+const stoppedBy = ref(stopped.value ?? "");
 const input = ref<HTMLInputElement | null>(null);
 const box = ref<HTMLElement | null>(null);
 
@@ -107,13 +110,13 @@ onUnmounted(() => {
       <span class="hp-value">{{ handleValue(handle) }}</span>
     </div>
     <template v-if="resolved">
-      <div class="hp-contact">{{ resolved.name }}</div>
+      <div class="hp-contact">{{ nameOf(resolved) }}</div>
       <div class="hp-row">
         <button type="button" :disabled="busy" @click="unlink">Unlink</button>
       </div>
       <div class="hp-row">
-        <template v-if="resolved.stopped_working_by">
-          <span class="hp-note">Stopped working by {{ resolved.stopped_working_by }}</span>
+        <template v-if="stopped">
+          <span class="hp-note">Stopped working by {{ stopped }}</span>
           <button type="button" :disabled="busy" @click="markWorks">It works</button>
         </template>
         <template v-else>

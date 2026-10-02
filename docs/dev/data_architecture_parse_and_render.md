@@ -73,6 +73,13 @@ database per source, at
     an identical row.
   - `grid_rows` — the document's projected rows.
   - `edges` — its outgoing links.
+  - `source_contacts` and `source_contact_handles` — the people it
+    describes or mentions, each as its source describes them (a
+    `DatalibContact`, `contact_schema/`), and the handles that reach
+    them. chat-common adds one per author handle with no provider code;
+    contact-common adds a card's own. Like edges they belong to the
+    document, and the index answers "who is this handle" from them
+    (`unified_index`'s `POST /people`).
   - `problems` — what render could not do getting there (§4).
   - `render_inputs` and `render_cursor` — what each bucket was rendered
     from, and how far into the raw store the last run got (§5).

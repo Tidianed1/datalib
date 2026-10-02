@@ -37,6 +37,12 @@ configured, whom the handle belongs to and draws a chip
 written still finds the author. The UI trusts it only on the header
 line, since a message body can carry any attribute it likes.
 
+Each document also carries a `DatalibContact` per author handle in it
+(`src/people.rs`): the names the provider showed the handle under, less
+the handle's own `<address>`, how many items it wrote and the last one's
+stamp. A provider needs no code for this; the index sums them per source
+to say who a handle is.
+
 ## Asides: runs of tool steps fold into one `<details>`
 
 An item with `is_aside` set is machinery rather than conversation — an
@@ -201,9 +207,15 @@ the provider built itself, having escaped the plain text it put inside
 text is `text` as given either way.
 
 What markdown does reach the page, `ui/src/cards/sanitize.ts` runs
-through DOMPurify: scripts, event handlers, `javascript:` URLs,
-form controls and foreign iframes are dropped, and only the tags and
-attributes the renderers actually use survive. **A renderer that starts
-emitting a new tag or attribute has to add it there**, or the page will
-silently strip it; `ui/tests/sanitize.test.ts` is where the vocabulary
-is pinned.
+through DOMPurify: scripts, event handlers, `javascript:` URLs and form
+controls are dropped, and only the tags and attributes the renderers
+actually use survive. **A renderer that starts emitting a new tag or
+attribute has to add it there**, or the page will silently strip it;
+`ui/tests/sanitize.test.ts` is where the vocabulary is pinned.
+
+An `<iframe>` survives only when it frames `plots/<name>.html`. The
+server runs such a page's scripts with no network
+(`DocumentKind::Plot` in `http/src/embed.rs`). It knows the page is a
+plot because the `unified_index` applet names it so. Every other
+document beside a markdown, such as an `.html` attachment in `blobs/`,
+runs no script at all.

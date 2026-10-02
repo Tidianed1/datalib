@@ -23,6 +23,7 @@ rust_library(
     ],
     deps = [
         "//datalib/backend/columns:datalib_columns",
+        "//datalib/backend/contact_schema:datalib_contact_schema",
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/pin:datalib_pin",
         "//datalib/backend/query:datalib_query",

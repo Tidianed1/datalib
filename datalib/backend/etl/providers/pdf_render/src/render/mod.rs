@@ -257,6 +257,7 @@ fn render_one(
         rows,
         sections: Vec::new(),
         edges: Vec::new(),
+        contacts: Vec::new(),
         problems: Vec::new(),
     })
 }

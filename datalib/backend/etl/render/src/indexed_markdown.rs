@@ -29,6 +29,8 @@ use datalib_schema::measurements::{SourceMeasurementRow, DDL as MEASUREMENTS_DDL
 use datalib_schema::problems::{ProblemRow, ScopeKind, Severity, Stage, DDL as PROBLEMS_DDL};
 use datalib_schema::render_cursor::{RenderCursorRow, DDL as RENDER_CURSOR_DDL};
 use datalib_schema::render_inputs::{DDL as RENDER_INPUTS_DDL, INDEX_DDL as RENDER_INPUTS_INDEX};
+use datalib_schema::source_contact_handles::DDL as SOURCE_CONTACT_HANDLES_DDL;
+use datalib_schema::source_contacts::DDL as SOURCE_CONTACTS_DDL;
 
 use crate::grid_index::{RenderedMarkdown, WriteLock};
 use datalib_etl::bulk::BulkUpsertable;
@@ -49,6 +51,8 @@ fn store_ddl() -> Vec<&'static str> {
         .iter()
         .chain(MARKDOWNS_DDL.iter())
         .chain(EDGES_DDL.iter())
+        .chain(SOURCE_CONTACTS_DDL.iter())
+        .chain(SOURCE_CONTACT_HANDLES_DDL.iter())
         .chain(PROBLEMS_DDL.iter())
         .chain(MEASUREMENTS_DDL.iter())
         .chain(RENDER_CURSOR_DDL.iter())
@@ -981,6 +985,10 @@ impl IndexedMarkdownStore {
                                  AS markdown_uuid
                           FROM dolt_diff_edges
                          WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                        UNION
+                        SELECT coalesce(to_markdown_uuid, from_markdown_uuid) AS markdown_uuid
+                          FROM dolt_diff_source_contacts
+                         WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                     )
                     WHERE markdown_uuid IS NOT NULL
                 ",
@@ -1048,10 +1056,31 @@ impl IndexedMarkdownStore {
             )
             .await
             .context("read edges")?;
+            let mut contacts_by_doc =
+                group_by_document::<datalib_schema::source_contacts::SourceContactRow>(
+                    &self.pool,
+                    "SELECT * FROM source_contacts \
+                      WHERE markdown_uuid IN (SELECT value FROM json_each(?1)) \
+                      ORDER BY markdown_uuid, contact_key",
+                    "markdown_uuid",
+                    &wanted,
+                )
+                .await
+                .context("read source contacts")?;
             let mut out = Vec::with_capacity(mds.len());
             for md in mds {
                 let rows = rows_by_doc.remove(&md.markdown_uuid).unwrap_or_default();
                 let edges = edges_by_doc.remove(&md.markdown_uuid).unwrap_or_default();
+                let contacts = contacts_by_doc
+                    .remove(&md.markdown_uuid)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|r| {
+                        serde_json::from_str(&r.contact_json).with_context(|| {
+                            format!("source contact {} of {}", r.contact_key, r.markdown_uuid)
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
                 // `renderer_version` is `"<index>.<render>"`; the render
                 // half is what the renderer declared.
                 let render_version = md
@@ -1073,6 +1102,7 @@ impl IndexedMarkdownStore {
                     rows,
                     sections: Vec::new(),
                     edges,
+                    contacts,
                     problems: Vec::new(),
                 });
             }
@@ -1299,6 +1329,7 @@ mod tests {
             rows: vec![row(markdown_uuid, markdown_uuid)],
             sections: Vec::new(),
             edges: Vec::new(),
+            contacts: Vec::new(),
             problems,
         }
     }
@@ -1319,6 +1350,63 @@ mod tests {
     /// under `dolt_at_`, so a 20k-document store took minutes. The grouping
     /// must still put every row and edge under its own document, in key
     /// order, and `only` must still drop the rest.
+    #[test]
+    /// A document's people round-trip through the store with every field
+    /// they had, and a re-render that no longer names someone drops them —
+    /// rows and handles both — the way a re-render drops stale edges.
+    fn source_contacts_travel_with_their_document() {
+        use datalib_contact_schema::{ContactHandle, ContactKind, DatalibContact, Seen};
+        let td = tempfile::tempdir().unwrap();
+        let st = store(td.path());
+        let mut riker =
+            DatalibContact::new("src", "email:riker@enterprise.org", ContactKind::Person);
+        riker.names = vec!["Will Riker".into()];
+        riker.handles = vec![
+            ContactHandle::email(None, "riker@enterprise.org"),
+            ContactHandle::phone(Some("cell".into()), "(555) 010-1234"),
+        ];
+        riker.seen = Some(Seen {
+            items: 2,
+            last_at: Some("2369-05-28T15:08:20+00:00".into()),
+        });
+        let mut d = doc(td.path(), "a", "fp");
+        d.contacts = vec![riker.clone()];
+        st.put_document(td.path(), &d).unwrap();
+        st.commit("with riker").unwrap();
+        let handles = |st: &IndexedMarkdownStore| -> Vec<String> {
+            blocking(
+                sqlx::query_scalar("SELECT handle FROM source_contact_handles ORDER BY handle")
+                    .fetch_all(&st.pool),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            handles(&st),
+            ["email:riker@enterprise.org"],
+            "only a handle the source could normalize is looked up by"
+        );
+        st.close();
+
+        let rd = IndexedMarkdownStore::open_for_reading(td.path(), None)
+            .unwrap()
+            .expect("a committed store is readable");
+        let pin = rd.pin().unwrap().clone();
+        let docs = rd.documents_matching(td.path(), None, &pin).unwrap();
+        assert_eq!(docs[0].contacts, vec![riker]);
+        rd.close();
+
+        let st = store(td.path());
+        st.put_document(td.path(), &doc(td.path(), "a", "fp"))
+            .unwrap();
+        assert!(handles(&st).is_empty());
+        let rows: i64 = blocking(
+            sqlx::query_scalar("SELECT count(*) FROM source_contacts").fetch_one(&st.pool),
+        )
+        .unwrap();
+        assert_eq!(rows, 0);
+        st.close();
+    }
+
     #[test]
     fn a_pinned_read_groups_rows_and_edges_under_their_own_documents() {
         let td = tempfile::tempdir().unwrap();
