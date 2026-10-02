@@ -523,6 +523,8 @@ export default defineConfig({
         // The sandboxed DACTAL iframe: an opaque origin loading module
         // scripts, which WebKit and Chromium have disagreed about.
         /dactal-sandbox\.spec\.ts/,
+        // The document frame that runs no script; the desktop app is WebKit.
+        /document-sandbox\.spec\.ts/,
         // /data_sources — the sources card's Pipeline table, and the
         // commit-history grid it opens in a modal.
         /data-sources-grid\.spec\.ts/,

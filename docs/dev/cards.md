@@ -432,7 +432,9 @@ programs against:
   opens a fresh card rather than mutating an existing one. Shows
   doc-level outgoing edges and decorates span-level edge sources
   (see [`edges.md`](edges.md)); clicking either opens the destination
-  via `host.openCards`.
+  via `host.openCards`. The body is drawn in a frame whose policy runs
+  no script (`cards/docFrame.ts`). Its links, clicks and selection
+  reach the card as events, and the frame scrolls itself.
 - `documentPickerView()` — parameter-less gallery stand-in for
   `documentView`: lists every rendered document (`/applet/unified_index/docs`) and
   replaces itself with `documentView("<uuid>")` on pick.
