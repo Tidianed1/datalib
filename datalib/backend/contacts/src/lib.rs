@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
+pub use datalib_contact_schema::ContactKind;
 use datalib_etl::doltlite_raw;
 use datalib_handle::Handle;
 use datalib_store_meta::StoreKind;
@@ -60,25 +61,6 @@ const DDL: &[&str] = &[
         PRIMARY KEY (group_id, member_id)
     )",
 ];
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, EnumString, IntoStaticStr, VariantArray)]
-#[serde(rename_all = "snake_case")]
-#[strum(serialize_all = "snake_case")]
-pub enum ContactKind {
-    Person,
-    Group,
-}
-
-impl ContactKind {
-    pub fn as_str(self) -> &'static str {
-        self.into()
-    }
-
-    /// `None` for a spelling this build does not know.
-    pub fn parse(s: &str) -> Option<Self> {
-        s.parse().ok()
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, EnumString, IntoStaticStr, VariantArray)]
 #[serde(rename_all = "snake_case")]
@@ -480,10 +462,6 @@ mod tests {
 
     #[test]
     fn strum_spellings_round_trip() {
-        for k in ContactKind::VARIANTS {
-            assert_eq!(ContactKind::parse(k.as_str()), Some(*k));
-            assert_eq!(serde_json::to_value(k).unwrap(), k.as_str());
-        }
         for k in LinkedHow::VARIANTS {
             assert_eq!(serde_json::to_value(k).unwrap(), k.as_str());
         }
