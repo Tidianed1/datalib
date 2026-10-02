@@ -7,7 +7,7 @@ import ContainersView from "@/views/ContainersView.vue";
 import RootStorageBar from "@/components/RootStorageBar.vue";
 import { editMode } from "@/editMode";
 import { density, larger, smaller } from "@/density";
-import { MAX_STEP, MIN_STEP, STEPS, stepIndex } from "@/densityScale";
+import { MAX_STEP, MIN_STEP, STEP, STEPS, onScale, stepIndex } from "@/densityScale";
 import { LOG_CARD, surface, type SurfaceCommands } from "@/surface";
 
 // The toolbar's commands go to the layout.
@@ -40,7 +40,7 @@ onBeforeUnmount(() => {
       </button>
       <!-- Density: every size steps together — text, spacing, rows,
            controls. The glyphs are lines packed close or spread out;
-           the ticks between them say where on the scale it is. -->
+           the slider between them sets any step directly. -->
       <div class="cards-toggle cards-size" role="group" aria-label="density">
         <button
           aria-label="More compact"
@@ -52,22 +52,18 @@ onBeforeUnmount(() => {
             <path d="M4 8h16M4 12h16M4 16h16" />
           </svg>
         </button>
-        <span
-          class="cards-size-ticks"
-          role="meter"
-          :aria-valuemin="0"
-          :aria-valuemax="STEPS - 1"
-          :aria-valuenow="stepIndex(density)"
+        <input
+          class="cards-size-slider"
+          type="range"
+          aria-label="Density"
+          :min="MIN_STEP"
+          :max="MAX_STEP"
+          :step="STEP"
+          :value="density"
           :aria-valuetext="`step ${stepIndex(density) + 1} of ${STEPS}`"
           :title="`density: step ${stepIndex(density) + 1} of ${STEPS}`"
-        >
-          <span
-            v-for="i in STEPS"
-            :key="i"
-            class="cards-size-tick"
-            :class="{ 'is-on': i - 1 <= stepIndex(density) }"
-          />
-        </span>
+          @input="density = onScale(($event.target as HTMLInputElement).value)"
+        />
         <button
           aria-label="More spacious"
           title="more spacious: larger text and more room"
@@ -171,20 +167,11 @@ onBeforeUnmount(() => {
   stroke-width: 2;
   stroke-linecap: round;
 }
-.cards-size-ticks {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 0 6px;
-}
-.cards-size-tick {
-  width: 3px;
-  height: 10px;
-  border-radius: 1px;
-  background: var(--datalib-border);
-}
-.cards-size-tick.is-on {
-  background: var(--datalib-fg);
+.cards-size-slider {
+  width: 90px;
+  margin: 0 6px;
+  accent-color: var(--datalib-fg);
+  cursor: pointer;
 }
 .cards-toggle button:disabled {
   color: var(--datalib-faint);

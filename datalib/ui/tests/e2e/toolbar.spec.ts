@@ -53,17 +53,20 @@ test.describe("toolbar", () => {
     await page.goto("/");
     const toolbar = page.locator(".datalib-toolbar");
     const group = page.getByRole("group", { name: "density" });
-    const meter = group.getByRole("meter");
-    await expect(meter).toHaveAttribute("aria-valuenow", "0");
+    const slider = group.getByRole("slider", { name: "Density" });
+    await expect(slider).toHaveValue("0");
     await expect(group.getByRole("button", { name: "More compact" })).toBeDisabled();
     const before = (await toolbar.boundingBox())!.height;
 
     for (let i = 0; i < 4; i++) await group.getByRole("button", { name: "More spacious" }).click();
-    await expect(meter).toHaveAttribute("aria-valuenow", "4");
+    await expect(slider).toHaveValue("1");
     expect((await toolbar.boundingBox())!.height).toBeGreaterThan(before);
 
+    // The slider sets a step directly, and the step is kept.
+    await slider.fill("1.5");
+    await expect(slider).toHaveValue("1.5");
     await page.reload();
-    await expect(meter).toHaveAttribute("aria-valuenow", "4");
+    await expect(slider).toHaveValue("1.5");
   });
 
   test("the status bar copies the data root's path in a browser", async ({ page }) => {

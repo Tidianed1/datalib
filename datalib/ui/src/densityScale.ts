@@ -14,8 +14,8 @@ export function onScale(value: unknown): number {
   return Math.min(MAX_STEP, Math.max(MIN_STEP, Math.round(n / STEP) * STEP));
 }
 
-// How many steps the scale has, and which one `step` is (0-based):
-// what the status bar's ticks show.
+// How many steps the scale has, and which one `step` is (0-based): what
+// the status bar's slider says to a screen reader.
 export const STEPS = Math.round((MAX_STEP - MIN_STEP) / STEP) + 1;
 
 export function stepIndex(step: number): number {
