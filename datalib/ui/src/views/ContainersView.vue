@@ -617,6 +617,26 @@ function startResize(id: string, axis: "x" | "y", ev: PointerEvent) {
 const rows = computed(() => tabRows(root.value));
 const selectedTab = computed(() => root.value.children.find((c) => c.id === root.value.selected));
 
+// The tabs, in any tabs container, shown at least once. A shown tab is
+// then hidden in place rather than unmounted when another is picked: its
+// cards' DOM must not move, since taking a <style> out of the page and
+// putting it back rebuilds its stylesheet, and a grid that keeps its
+// own column rules (SlickGrid) goes on writing to the old ones.
+const shownTabs = reactive(new Set<string>());
+function markShown(id: string | null) {
+  if (id !== null) shownTabs.add(id);
+}
+watch(() => root.value.selected, markShown, { immediate: true });
+watch(root, (tree) => {
+  const live = new Set<string>();
+  const walk = (n: TreeNode) => {
+    live.add(n.id);
+    if (n.kind === "box") n.children.forEach(walk);
+  };
+  walk(tree);
+  for (const id of [...shownTabs]) if (!live.has(id)) shownTabs.delete(id);
+});
+
 watchEffect(() => {
   const tab = selectedTab.value;
   document.title = tab ? `${titleOf(tab)} · Datalib` : "Datalib";
@@ -632,6 +652,8 @@ const api: ContainersApi = {
   close,
   commitSource,
   openPanel: (ev, build) => openPanel(ev, build),
+  tabShown: (id) => shownTabs.has(id),
+  markShown,
   addCard,
   panelFor,
   startResize,
@@ -685,12 +707,15 @@ provide(CONTAINERS_API, api);
       </ul>
     </nav>
     <section class="ct-main">
-      <ContainerNode
-        v-if="selectedTab"
-        :key="selectedTab.id"
-        :node="selectedTab"
-        parent-layout="tabs"
-      />
+      <template v-for="tab in root.children" :key="tab.id">
+        <ContainerNode
+          v-if="shownTabs.has(tab.id)"
+          v-show="tab.id === root.selected"
+          :class="{ 'ct-hidden-pane': tab.id !== root.selected }"
+          :node="tab"
+          parent-layout="tabs"
+        />
+      </template>
     </section>
 
     <div class="ct-pool" aria-hidden="true">

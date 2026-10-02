@@ -12,8 +12,10 @@ import { expect, type APIRequestContext, type Locator, type Page } from "@playwr
 
 /// The search grid's rows, wherever it is on the page.
 // The containers layout: the tabs down the side, and the cards the
-// selected tab shows (every card in it, however deep).
-export const SHOWN_CARDS = ".ct-main .ct-card";
+// selected tab shows (every card in it, however deep). A tab shown once
+// stays mounted, hidden and marked ct-hidden-pane; its cards do not
+// count. (Not `:visible`: a card that draws nothing is zero-high.)
+export const SHOWN_CARDS = ".ct-main .ct-card:not(.ct-hidden-pane .ct-card)";
 export const shownCards = (page: Page) => page.locator(SHOWN_CARDS);
 export const tabLabels = (page: Page) => page.locator(".ct-tab .ct-tab-label");
 // The shown card whose source contains `source`.

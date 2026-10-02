@@ -42,6 +42,10 @@ export type ContainersApi = {
   // Open the panel `build` describes at the pointer. It is rebuilt as
   // the tree changes, so an action that keeps it open shows its effect.
   openPanel(ev: MouseEvent, build: () => Panel): void;
+  // Whether a tab has been shown, so it stays mounted (hidden) when
+  // another is picked; and marking one shown.
+  tabShown(id: string): boolean;
+  markShown(id: string | null): void;
   // A gallery card at the end of container `boxId`.
   addCard(boxId: string): void;
   // The panel of node `id`, as a builder for openPanel.

@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { cardOf, GRID, shownCards, tabLabels } from "./grid-helpers";
+import { cardOf, GRID, SHOWN_CARDS, shownCards, tabLabels } from "./grid-helpers";
 
 // A URL naming cards — a link, a popped-out card, a `/chat/<uuid>` link
 // every renderer writes into a document body — opens those cards as a
@@ -7,7 +7,7 @@ import { cardOf, GRID, shownCards, tabLabels } from "./grid-helpers";
 // the address goes back to "/".
 
 // In the tab shown: a tab switched away from keeps its cards mounted.
-const chatPreview = ".ct-main .chat-preview";
+const chatPreview = `${SHOWN_CARDS} .chat-preview`;
 
 test("a URL naming cards opens them as a tab, and the address goes back to /", async ({ page }) => {
   await page.goto(GRID);

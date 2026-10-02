@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { SHOWN_CARDS } from "./grid-helpers";
 
 // The containers layout: tabs down the side, each holding cards or
 // containers. The Dashboard is a solidified composite of five cards, so
@@ -22,7 +23,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 const tabs = (page: Page) => page.locator(".ct-tab");
-const mainCards = (page: Page) => page.locator(".ct-main .ct-card");
+const mainCards = (page: Page) => page.locator(SHOWN_CARDS);
 
 type SavedTab = { name?: string | null };
 
@@ -117,4 +118,33 @@ test("a composite cannot take a built-in composite's name", async ({ page }) => 
   await expect(page.getByText('"Dashboard" is a built-in composite')).toBeVisible();
   await page.getByRole("button", { name: "Cancel" }).click();
   await expect(page.getByLabel("Save as composite")).toHaveCount(0);
+});
+
+// A tab switched away from used to have its cards' DOM moved out of the
+// page and back, which rebuilt the Sources table's stylesheet under
+// SlickGrid: its column rules went stale and every cell of a row piled
+// up at one place.
+test("a tab switched away from and back keeps its table drawn", async ({ page }) => {
+  await page.goto("/data_sources");
+  const grid = page.locator(".ct-main .tg-grid");
+  const row = grid.locator(".slick-row", { hasText: "slack" }).first();
+  await expect(row).toBeVisible({ timeout: 20_000 });
+  // The first column is frozen, so the line is a row in each pane, joined
+  // by its data-row.
+  const line = grid.locator(`.slick-row[data-row="${await row.getAttribute("data-row")}"]`);
+  const lefts = () =>
+    line
+      .locator(".slick-cell")
+      .evaluateAll((cells) => cells.map((c) => Math.round(c.getBoundingClientRect().left)));
+  // Every cell at a place of its own; piled up, they share one. (The
+  // grid may re-create a row's cells in another order, so not in order.)
+  const spread = async () => {
+    const xs = await lefts();
+    return xs.length > 2 && new Set(xs).size === xs.length;
+  };
+  await expect.poll(spread).toBe(true);
+
+  await tabs(page).filter({ hasText: "Dashboard" }).click();
+  await tabs(page).filter({ hasText: "Sources" }).click();
+  await expect.poll(spread).toBe(true);
 });
