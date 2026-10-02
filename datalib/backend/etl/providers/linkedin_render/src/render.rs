@@ -29,7 +29,9 @@ use datalib_schema::providers::Provider;
 ///     bits (`datalib_id`'s v8 layout). The raw `connections` key is the
 ///     profile URL now, so an existing root resets and downloads again;
 ///     every uuid moved.
-pub const RENDER_VERSION: u32 = 5;
+/// v6: a connection's page uses the shared contact labels — Org, Title,
+///     Email — rather than the export's column names.
+pub const RENDER_VERSION: u32 = 6;
 
 fn profile() -> RenderProfile {
     RenderProfile {

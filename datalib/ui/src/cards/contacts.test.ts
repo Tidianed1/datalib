@@ -7,6 +7,8 @@ import {
   chipLook,
   copyText,
   hoverCard,
+  isAbsent,
+  type DatalibContact,
   rewriteChipsForCopy,
   suggestedName,
   todayPartialDate,
@@ -48,22 +50,58 @@ describe("trustedHandleSpans", () => {
   });
 });
 
+function contact(
+  source_id: string,
+  name: string,
+  handles: [string, string | null][],
+  seen: number | null = null,
+): DatalibContact {
+  return {
+    source_id,
+    key: `${source_id}:${name}`,
+    kind: "person",
+    names: [name],
+    handles: handles.map(([handle, stopped]) => ({
+      medium: handle.startsWith("tel:") ? "phone" : "email",
+      label: null,
+      value: handle.slice(handle.indexOf(":") + 1),
+      handle,
+      stopped_working_by: stopped,
+    })),
+    org: null,
+    title: null,
+    seen: seen === null ? null : { items: seen, last_at: null },
+  };
+}
+
+const TEL = "tel:+15550123456";
+const NOBODY = { mine: null, accounts: [] };
+
 describe("chipLook", () => {
-  it("shows the source's name without the address, and the kind's mark, when unresolved", () => {
+  it("shows the source's name without the address, and the kind's mark, when nobody knows them", () => {
     const look = chipLook(
       "email:riker@enterprise.org",
       "Will Riker <riker@enterprise.org>",
-      undefined,
+      NOBODY,
+      true,
     );
     expect(look.text).toBe("Will Riker");
     expect(look.icon).toBe("email");
-    expect(look.classes).toContain("handle-unresolved");
-    expect(chipLook("tel:+15550123456", "+15550123456", undefined).text).toBe("+15550123456");
+    expect(look.classes).toContain("handle-linkable");
+    expect(chipLook(TEL, "+15550123456", NOBODY, true).text).toBe("+15550123456");
   });
 
-  it("shows the contact's name when resolved, faded when the handle stopped working", () => {
-    const r = { contact_id: "c", name: "Will Riker", kind: "person", stopped_working_by: "2019" };
-    const look = chipLook("tel:+15550123456", "+1 555 012 3456", r);
+  it("names an unlinked handle after the best source's account, linkable only with the app", () => {
+    const who = { mine: null, accounts: [contact("address_book", "Deanna Troi", [[TEL, null]])] };
+    const look = chipLook(TEL, "+15550123456", who, false);
+    expect(look.text).toBe("Deanna Troi");
+    expect(look.classes).toContain("handle-unresolved");
+    expect(look.classes).not.toContain("handle-linkable");
+  });
+
+  it("shows the contact's name when linked, faded when the handle stopped working", () => {
+    const mine = contact("datalib_contacts", "Will Riker", [[TEL, "2019"]]);
+    const look = chipLook(TEL, "+1 555 012 3456", { mine, accounts: [] }, true);
     expect(look.text).toBe("Will Riker");
     expect(look.initial).toBe("W");
     expect(look.classes).toContain("handle-stale");
@@ -71,23 +109,35 @@ describe("chipLook", () => {
 });
 
 describe("hoverCard", () => {
-  it("names the identifier behind the short name, and how the message showed it", () => {
-    const r = { contact_id: "c", name: "Will Riker", kind: "person", stopped_working_by: "2019" };
-    const card = hoverCard("tel:+15550123456", "+1 555 012 3456", r);
+  it("says what each source knows, and the person's other handles", () => {
+    const mine = contact("datalib_contacts", "Will Riker", [
+      [TEL, "2019"],
+      ["email:riker@enterprise.org", null],
+    ]);
+    const accounts = [
+      contact("tng_contacts", "William T. Riker", [[TEL, null]]),
+      contact("whatsapp", "Will", [[TEL, null]], 1),
+    ];
+    const card = hoverCard(TEL, "+1 555 012 3456", { mine, accounts }, true);
     expect(card.name).toBe("Will Riker");
     expect(card.value).toBe("+15550123456");
     expect(card.icon).toBe("sms");
     expect(card.lines).toEqual([
       "Stopped working by 2019",
       "Shown here as “+1 555 012 3456”",
+      "William T. Riker in tng_contacts",
+      "Will in whatsapp · 1 item",
+      "Also riker@enterprise.org",
       "Click to edit",
     ]);
   });
 
-  it("says an unlinked handle can be linked", () => {
-    const card = hoverCard("email:q@continuum.org", "Q <q@continuum.org>", null);
+  it("offers to link only when there is a contacts app to link with", () => {
+    const card = hoverCard("email:q@continuum.org", "Q <q@continuum.org>", NOBODY, true);
     expect(card.name).toBe("Q");
     expect(card.lines.at(-1)).toContain("Not linked");
+    const without = hoverCard("email:q@continuum.org", "Q <q@continuum.org>", NOBODY, false);
+    expect(without.lines.join(" ")).not.toContain("link");
   });
 });
 
@@ -132,5 +182,21 @@ describe("suggestedName", () => {
 describe("todayPartialDate", () => {
   it("is a full local date", () => {
     expect(todayPartialDate(new Date(2026, 0, 5))).toBe("2026-01-05");
+  });
+});
+
+describe("isAbsent", () => {
+  /** With no contacts app configured the gateway answers 502 in JSON, and
+   *  the quotes in its message arrive escaped; reading the raw text for
+   *  them took every no-app page for an error and drew no chips. */
+  it("reads the gateway's JSON, not its raw text", () => {
+    const body = JSON.stringify({ error: 'no applet "datalib_contacts"' });
+    expect(body).toContain('\\"');
+    expect(isAbsent(502, body)).toBe(true);
+    expect(
+      isAbsent(502, JSON.stringify({ error: 'applet "datalib_contacts": it is not running' })),
+    ).toBe(false);
+    expect(isAbsent(500, body)).toBe(false);
+    expect(isAbsent(502, "<html>bad gateway</html>")).toBe(false);
   });
 });

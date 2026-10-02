@@ -22,8 +22,10 @@ import {
   copyWithHandles,
   decorateHandles,
   hoverCard,
+  type DatalibContact,
+  type Decorated,
   type HoverCard,
-  type Resolved,
+  type Who,
 } from "./contacts";
 import HandleHoverCard from "./HandleHoverCard.ce.vue";
 import HandlePopover from "./HandlePopover.ce.vue";
@@ -118,16 +120,17 @@ watch(
 type ChipTarget = {
   handle: string;
   shownAs: string;
-  resolved: Resolved | null;
+  resolved: DatalibContact | null;
   x: number;
   y: number;
 };
 const chipTarget = ref<ChipTarget | null>(null);
-const resolvedHandles = ref<Record<string, Resolved>>({});
+const decorated = ref<Decorated | null>(null);
+const NOBODY: Who = { mine: null, accounts: [] };
 
 async function redrawHandles() {
   if (!root.value) return;
-  resolvedHandles.value = (await decorateHandles(root.value)) ?? {};
+  decorated.value = await decorateHandles(root.value);
 }
 
 const HOVER_DELAY_MS = 350;
@@ -145,7 +148,12 @@ function onChipOver(ev: MouseEvent) {
     const handle = chip.dataset.handle ?? "";
     const rect = chip.getBoundingClientRect();
     hovered.value = {
-      card: hoverCard(handle, chip.dataset.shownAs ?? "", resolvedHandles.value[handle] ?? null),
+      card: hoverCard(
+        handle,
+        chip.dataset.shownAs ?? "",
+        decorated.value?.who[handle] ?? NOBODY,
+        decorated.value?.canLink ?? false,
+      ),
       x: rect.left,
       y: rect.bottom,
     };
@@ -164,7 +172,9 @@ function onChipOut(ev: MouseEvent) {
 
 function onHandleChipClick(ev: MouseEvent) {
   const chip = (ev.target as HTMLElement | null)?.closest<HTMLElement>(".handle-chip[data-handle]");
-  if (!chip) return;
+  // Without a contacts app there is nothing to change; the hover card is
+  // all a chip has to say.
+  if (!chip || !decorated.value?.canLink) return;
   ev.preventDefault();
   ev.stopPropagation();
   clearTimeout(hoverTimer);
@@ -173,7 +183,7 @@ function onHandleChipClick(ev: MouseEvent) {
   chipTarget.value = {
     handle,
     shownAs: chip.dataset.shownAs ?? "",
-    resolved: resolvedHandles.value[handle] ?? null,
+    resolved: decorated.value.who[handle]?.mine ?? null,
     x: ev.clientX,
     y: ev.clientY,
   };
@@ -793,8 +803,11 @@ onMounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
-  cursor: pointer;
   border-radius: 999px;
+}
+.chat-body .handle-resolved,
+.chat-body .handle-linkable {
+  cursor: pointer;
 }
 .chat-body .handle-resolved {
   padding: 0 0.5rem 0 0.15rem;
@@ -821,7 +834,7 @@ onMounted(() => {
   height: 0.9em;
   opacity: 0.6;
 }
-.chat-body .handle-unresolved::after {
+.chat-body .handle-linkable::after {
   content: "+";
   font-weight: 400;
   color: var(--datalib-muted, #94a3b8);

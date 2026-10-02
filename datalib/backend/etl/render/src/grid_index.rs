@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
+use datalib_contact_schema::DatalibContact;
 use datalib_etl::bulk::BulkUpsertable;
 use datalib_etl::doltlite_raw::StoreKind;
 use datalib_etl::stop::StopFlag;
@@ -26,6 +27,8 @@ use datalib_schema::edges::{EdgeRow, DDL as EDGES_DDL};
 use datalib_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL, INDEXES as GRID_ROWS_INDEXES};
 use datalib_schema::markdowns::DDL as MARKDOWNS_TABLE_DDL;
 use datalib_schema::problems::{ProblemRow, DDL as PROBLEMS_DDL};
+use datalib_schema::source_contact_handles::DDL as SOURCE_CONTACT_HANDLES_DDL;
+use datalib_schema::source_contacts::DDL as SOURCE_CONTACTS_DDL;
 use datalib_schema::source_cursors::{SourceCursorRow, DDL as SOURCE_CURSORS_DDL};
 use serde::Serialize;
 use sqlx::sqlite::SqlitePool;
@@ -368,6 +371,8 @@ pub fn schema_hash() -> String {
 pub(crate) const DOCUMENT_LOOKUP_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS grid_rows_by_markdown ON grid_rows (markdown_uuid)",
     "CREATE INDEX IF NOT EXISTS edges_by_src_markdown ON edges (src_markdown_uuid)",
+    // A chip asks who a handle is.
+    "CREATE INDEX IF NOT EXISTS source_contact_handles_by_handle ON source_contact_handles (handle)",
 ];
 
 /// Every `CREATE TABLE` in the grid index, in creation order. One list, so
@@ -379,6 +384,8 @@ fn index_ddl() -> impl Iterator<Item = &'static str> {
         .map(|(_table, ddl)| *ddl)
         .chain(std::iter::once(MARKDOWNS_DDL))
         .chain(EDGES_DDL.iter().map(|(_table, ddl)| *ddl))
+        .chain(SOURCE_CONTACTS_DDL.iter().map(|(_table, ddl)| *ddl))
+        .chain(SOURCE_CONTACT_HANDLES_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(PROBLEMS_DDL.iter().map(|(_table, ddl)| *ddl))
         // `source_cursors` belongs in this list, not beside it: the reconcile
         // drops and rebuilds every table named here together, and a cursor
@@ -565,6 +572,9 @@ pub struct RenderedMarkdown {
     /// renderers that don't emit edges; the DELETE still runs, so stale rows
     /// from a previous render get cleaned up.
     pub edges: Vec<EdgeRow>,
+    /// The people this document describes or mentions, as its source
+    /// describes them; owned by the document like its edges.
+    pub contacts: Vec<DatalibContact>,
     /// What render could not do while producing this document: records
     /// dropped, fields nulled, lossy rules that fired. Travels with the
     /// document so the rows and the record of what was lost commit together.
@@ -1113,6 +1123,8 @@ pub(crate) async fn delete_document_rows(
     for sql in [
         "DELETE FROM grid_rows WHERE markdown_uuid = ?",
         "DELETE FROM edges WHERE src_markdown_uuid = ?",
+        "DELETE FROM source_contacts WHERE markdown_uuid = ?",
+        "DELETE FROM source_contact_handles WHERE markdown_uuid = ?",
         "DELETE FROM markdowns WHERE markdown_uuid = ?",
     ] {
         sqlx::query(sql)
@@ -1187,6 +1199,19 @@ async fn apply_markdown(
         .context("delete prior edges")?;
     for edge in &md.edges {
         insert_edge(conn, edge).await?;
+    }
+    for sql in [
+        "DELETE FROM source_contacts WHERE markdown_uuid = ?",
+        "DELETE FROM source_contact_handles WHERE markdown_uuid = ?",
+    ] {
+        sqlx::query(sql)
+            .bind(&md.markdown_uuid)
+            .execute(&mut **conn)
+            .await
+            .context("delete prior source contacts")?;
+    }
+    for contact in &md.contacts {
+        insert_source_contact(conn, &md.markdown_uuid, contact).await?;
     }
 
     upsert_markdown(conn, md, canonical, qmd_path)
@@ -1277,6 +1302,46 @@ async fn upsert_markdown(
     .execute(&mut **conn)
     .await
     .context("insert markdowns row")?;
+    Ok(())
+}
+
+/// One source's account of a person, and each handle it ties to them,
+/// under the document that carried it. Two accounts of one person in one
+/// document are one row: the later wins.
+async fn insert_source_contact(
+    conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
+    markdown_uuid: &str,
+    contact: &DatalibContact,
+) -> Result<()> {
+    let json = serde_json::to_string(contact).context("serialize a source contact")?;
+    let seen = contact.seen.as_ref();
+    sqlx::query(
+        "INSERT OR REPLACE INTO source_contacts \
+         (markdown_uuid, contact_key, source_id, name, seen_items, last_seen_at, contact_json) \
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(markdown_uuid)
+    .bind(&contact.key)
+    .bind(&contact.source_id)
+    .bind(contact.name())
+    .bind(seen.map_or(0, |s| s.items as i64))
+    .bind(seen.and_then(|s| s.last_at.as_deref()))
+    .bind(json)
+    .execute(&mut **conn)
+    .await
+    .with_context(|| format!("insert source contact {}", contact.key))?;
+    for handle in contact.handles.iter().filter_map(|h| h.handle.as_ref()) {
+        sqlx::query(
+            "INSERT OR IGNORE INTO source_contact_handles (markdown_uuid, contact_key, handle) \
+             VALUES (?, ?, ?)",
+        )
+        .bind(markdown_uuid)
+        .bind(&contact.key)
+        .bind(handle.as_str())
+        .execute(&mut **conn)
+        .await
+        .with_context(|| format!("insert handle {handle} of {}", contact.key))?;
+    }
     Ok(())
 }
 
@@ -1660,6 +1725,7 @@ mod write_lock_tests {
             rows: vec![row],
             sections: Vec::new(),
             edges: Vec::new(),
+            contacts: Vec::new(),
             problems: Vec::new(),
         }
     }
@@ -2143,6 +2209,7 @@ mod source_cursor_tests {
             rows: vec![row],
             sections: Vec::new(),
             edges: Vec::new(),
+            contacts: Vec::new(),
             problems: Vec::new(),
         }
     }

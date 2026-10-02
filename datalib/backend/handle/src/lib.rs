@@ -11,7 +11,7 @@
 
 use std::fmt;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use strum::{EnumString, IntoStaticStr, VariantArray};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, IntoStaticStr, VariantArray)]
@@ -33,9 +33,23 @@ impl HandleKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(into = "String", try_from = "String")]
 pub struct Handle(String);
+
+impl From<Handle> for String {
+    fn from(h: Handle) -> String {
+        h.0
+    }
+}
+
+impl TryFrom<String> for Handle {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, String> {
+        Handle::parse(&s).ok_or_else(|| format!("{s:?} is not a handle"))
+    }
+}
 
 impl Handle {
     /// An email address, lowercased. `Name <addr>` is not accepted:
@@ -226,5 +240,16 @@ mod tests {
         for kind in HandleKind::VARIANTS {
             assert_eq!(HandleKind::parse(kind.as_str()), Some(*kind));
         }
+    }
+
+    /// A handle read back from a store goes through `parse`, so a row
+    /// cannot carry a spelling the normalizers would not have produced.
+    #[test]
+    fn serde_round_trips_through_parse() {
+        let h = Handle::tel("+15550123456").unwrap();
+        let json = serde_json::to_string(&h).unwrap();
+        assert_eq!(json, "\"tel:+15550123456\"");
+        assert_eq!(serde_json::from_str::<Handle>(&json).unwrap(), h);
+        assert!(serde_json::from_str::<Handle>("\"tel:+1 555\"").is_err());
     }
 }

@@ -1,6 +1,7 @@
 //! `render_all` — one `.md` + one [`GridRow`] per contact, handed to
-//! the `on_doc_complete` callback the orchestrator threads through. Provider-agnostic: everything provider-specific
-//! arrives via [`ContactRenderProfile`] + the [`NormalizedContact`]s.
+//! the `on_doc_complete` callback the orchestrator threads through.
+//! Provider-agnostic: everything provider-specific arrives via
+//! [`ContactRenderProfile`] + the [`ContactDoc`]s.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,7 +16,9 @@ use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
 
-use crate::types::{ContactPhoto, NormalizedContact};
+use datalib_contact_schema::{ContactHandle, DatalibContact, Medium, Photo};
+
+use crate::types::ContactDoc;
 
 /// Per-provider knobs the renderer parameterizes on, so a single render
 /// function serves every contact-style provider. Sibling of
@@ -32,7 +35,7 @@ pub struct ContactRenderProfile {
     pub contact_kind: String,
     /// `grid_rows.upstream_entity_kind` for every row — the
     /// `entity_kind` component of the `datalib_id` recipe that minted
-    /// `contact_uuid`.
+    /// `doc_uuid`.
     pub contact_entity_kind: &'static str,
     /// Whose mirror this is — the `account` column on every row. A
     /// LinkedIn export names its owner; a `.vcf` file names nobody.
@@ -60,7 +63,7 @@ pub struct RenderSummary {
 
 pub fn render_all(
     profile: &ContactRenderProfile,
-    contacts: &[NormalizedContact],
+    contacts: &[ContactDoc],
     out_dir: &Path,
     source_id: &str,
     progress: &Progress,
@@ -72,18 +75,18 @@ pub fn render_all(
     };
     progress.set_length(Some(summary.contacts_total as u64));
 
-    for contact in contacts {
-        summary.documents.push(contact.contact_uuid.clone());
+    for doc in contacts {
+        summary.documents.push(doc.doc_uuid.clone());
         summary.buckets.push(Bucket {
-            key: contact.contact_uuid.clone(),
-            inputs: contact.inputs.clone(),
+            key: doc.doc_uuid.clone(),
+            inputs: doc.inputs.clone(),
         });
         // Nothing here fails on the card's account — a row that will not
         // validate is recorded as a problem and a photo that will not
         // write is skipped — so what is left is the disk and the sink,
         // and either failing is the run's to report, not one card's.
-        let photo_written = render_one(profile, contact, out_dir, source_id, on_doc_complete)
-            .with_context(|| format!("render contact {}", contact.contact_uuid))?;
+        let photo_written = render_one(profile, doc, out_dir, source_id, on_doc_complete)
+            .with_context(|| format!("render contact {}", doc.doc_uuid))?;
         summary.contacts_rendered += 1;
         if photo_written {
             summary.photos_materialized += 1;
@@ -95,25 +98,29 @@ pub fn render_all(
 
 fn render_one(
     profile: &ContactRenderProfile,
-    contact: &NormalizedContact,
+    doc: &ContactDoc,
     out_dir: &Path,
     source_id: &str,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<bool> {
-    let m_uuid = &contact.contact_uuid;
-    let (md_path, page_dir) = output_paths(out_dir, source_id, contact);
+    let m_uuid = &doc.doc_uuid;
+    let contact = &doc.contact;
+    let (md_path, page_dir) = output_paths(out_dir, source_id, doc);
     fs::create_dir_all(&page_dir).with_context(|| format!("mkdir -p {}", page_dir.display()))?;
 
     // Photo first — written to `blobs/`, referenced from the markdown
     // with a relative path. If the photo write fails, the markdown still
     // renders (skip the embed) so a broken image doesn't poison the row.
     let photo_rel = match &contact.photo {
-        Some(p) => write_photo(&page_dir, m_uuid, p).ok(),
-        None => None,
+        Some(Photo::Inline {
+            content_type,
+            bytes,
+        }) => write_photo(&page_dir, m_uuid, content_type, bytes).ok(),
+        _ => None,
     };
     let photo_written = photo_rel.is_some();
 
-    let sections = render_markdown(profile, contact, source_id, photo_rel.as_deref());
+    let sections = render_markdown(profile, doc, source_id, photo_rel.as_deref());
     fs::write(&md_path, join(&sections)).with_context(|| format!("write {}", md_path.display()))?;
 
     let md_rel = md_path
@@ -123,7 +130,7 @@ fn render_one(
         .into_owned();
 
     let mut problems: Vec<ProblemRow> = Vec::new();
-    let row = build_grid_row(profile, contact, source_id, &md_rel, &mut problems);
+    let row = build_grid_row(profile, doc, source_id, &md_rel, &mut problems);
 
     // `row` reaches the index through `on_doc_complete` below; the
     // renderer writes no projection of its own any more.
@@ -140,6 +147,9 @@ fn render_one(
         rows: row.into_iter().collect(),
         sections,
         edges: Vec::new(),
+        // The page is about this person, so it carries them: the index
+        // can then say who any of their handles is.
+        contacts: vec![contact.clone()],
         problems,
     })
     .with_context(|| format!("on_doc_complete {m_uuid}"))?;
@@ -147,47 +157,96 @@ fn render_one(
     Ok(photo_written)
 }
 
-fn output_paths(
-    out_dir: &Path,
-    source_id: &str,
-    contact: &NormalizedContact,
-) -> (PathBuf, PathBuf) {
+fn output_paths(out_dir: &Path, source_id: &str, doc: &ContactDoc) -> (PathBuf, PathBuf) {
     // One directory per contact, keyed by the stable contact UUID — never a
     // name/group-label slug, so a rename or regrouping re-renders in place.
     // The contact's `blobs/` (photo) live inside this dir. Display name and
     // group label still live in the frontmatter + grid row.
     let page_dir =
-        datalib_etl::layout::render_markdown_root(out_dir, source_id).join(&contact.contact_uuid);
+        datalib_etl::layout::render_markdown_root(out_dir, source_id).join(&doc.doc_uuid);
     let md_path = page_dir.join("index.md");
     (md_path, page_dir)
 }
 
-fn display_or_id(contact: &NormalizedContact) -> &str {
-    contact
-        .display_name
-        .as_deref()
-        .or(contact.external_id.as_deref())
-        .unwrap_or(&contact.contact_uuid)
+fn display_or_id(doc: &ContactDoc) -> &str {
+    doc.contact
+        .name()
+        .or(Some(doc.contact.key.as_str()).filter(|k| !k.is_empty()))
+        .unwrap_or(&doc.doc_uuid)
+}
+
+/// The page's field table and the grid row's text, in one order for
+/// every source: where the person is filed, who they are, how to reach
+/// them, then whatever else the source says.
+pub fn table_rows(contact: &DatalibContact) -> Vec<(String, String)> {
+    let mut rows: Vec<(String, String)> = Vec::new();
+    rows.extend(
+        contact
+            .groups
+            .iter()
+            .map(|g| ("Group".to_string(), g.clone())),
+    );
+    rows.extend(
+        contact
+            .members
+            .iter()
+            .map(|m| ("Member".to_string(), m.clone())),
+    );
+    if let Some(org) = &contact.org {
+        rows.push(("Org".to_string(), org.clone()));
+    }
+    if let Some(title) = &contact.title {
+        rows.push(("Title".to_string(), title.clone()));
+    }
+    rows.extend(
+        contact
+            .handles
+            .iter()
+            .map(|h| (handle_label(h), h.value.clone())),
+    );
+    rows.extend(
+        contact
+            .details
+            .iter()
+            .map(|d| (d.label.clone(), d.value.clone())),
+    );
+    if let Some(note) = &contact.note {
+        rows.push(("Note".to_string(), note.replace('\n', " <br> ")));
+    }
+    rows
+}
+
+fn handle_label(h: &ContactHandle) -> String {
+    let base = match h.medium {
+        Medium::Email => "Email",
+        Medium::Phone => "Phone",
+        Medium::Other => h.handle.as_ref().map_or("Handle", |h| h.kind().as_str()),
+    };
+    match h.label.as_deref() {
+        Some(l) if !l.is_empty() => format!("{base} ({l})"),
+        _ => base.to_string(),
+    }
 }
 
 fn render_markdown(
     profile: &ContactRenderProfile,
-    contact: &NormalizedContact,
+    doc: &ContactDoc,
     source_id: &str,
     photo_rel: Option<&str>,
 ) -> Vec<Section> {
-    let m_uuid = &contact.contact_uuid;
+    let m_uuid = &doc.doc_uuid;
+    let contact = &doc.contact;
     let mut out = String::with_capacity(512);
 
     out.push_str("---\n");
     out.push_str(&format!("markdown_uuid: {m_uuid}\n"));
     out.push_str(&format!("source_id: {source_id}\n"));
     out.push_str(&format!("provider: {}\n", profile.provider));
-    out.push_str(&format!("group: {}\n", yaml_safe(&contact.group_label)));
-    if let Some(id) = &contact.external_id {
-        out.push_str(&format!("external_id: {}\n", yaml_safe(id)));
+    out.push_str(&format!("group: {}\n", yaml_safe(&doc.group_label)));
+    if !contact.key.is_empty() {
+        out.push_str(&format!("external_id: {}\n", yaml_safe(&contact.key)));
     }
-    if let Some(dn) = &contact.display_name {
+    if let Some(dn) = contact.name() {
         out.push_str(&format!("title: {}\n", yaml_safe(dn)));
     }
     // A stamp we don't have is omitted, never written empty; the grid
@@ -204,7 +263,7 @@ fn render_markdown(
     // The page body — title, photo, field table — is the one section
     // the contact's grid row names.
     let mut out = String::with_capacity(1024);
-    let title = display_or_id(contact).to_string();
+    let title = display_or_id(doc).to_string();
     // Shared `Title` helper so contact pages carry the same
     // `data-page-title-uuid` hook the Vue side uses for the
     // copy-page-id button. `source_url` is the contact's canonical web
@@ -223,12 +282,8 @@ fn render_markdown(
         out.push_str(&format!("![{title}]({rel})\n\n"));
     }
 
-    let mut table_rows: Vec<(String, String)> = contact
-        .fields
-        .iter()
-        .map(|f| (f.label.clone(), f.value.clone()))
-        .collect();
-    if let Some(url) = &contact.photo_url {
+    let mut table_rows = table_rows(contact);
+    if let Some(Photo::Url(url)) = &contact.photo {
         table_rows.push(("Photo URL".to_string(), format!("<{url}>")));
     }
 
@@ -248,22 +303,23 @@ fn render_markdown(
 /// not validate — see `GridRowBuilder::build_or_record`.
 fn build_grid_row(
     profile: &ContactRenderProfile,
-    contact: &NormalizedContact,
+    doc: &ContactDoc,
     source_id: &str,
     md_rel: &str,
     problems: &mut Vec<ProblemRow>,
 ) -> Option<GridRow> {
-    let title = display_or_id(contact).to_string();
+    let contact = &doc.contact;
+    let title = display_or_id(doc).to_string();
     // Body the UI displays / qmd indexes — compact, single string:
     // the name followed by every field value.
     let mut text = title.clone();
-    for f in &contact.fields {
+    for (_, value) in table_rows(contact) {
         text.push('\n');
-        text.push_str(&f.value);
+        text.push_str(&value);
     }
 
     GridRow::builder()
-        .uuid(contact.contact_uuid.clone())
+        .uuid(doc.doc_uuid.clone())
         .provider(profile.provider)
         .kind(profile.contact_kind.clone())
         .source_label(profile.source_label.clone())
@@ -273,32 +329,32 @@ fn build_grid_row(
         .modified_at(contact.modified_at.clone())
         .author(Some(title))
         .account(profile.account.clone())
-        .channel(Some(contact.group_label.clone()))
-        .conversation_name(Some(contact.group_label.clone()))
-        .conversation_uuid(contact.group_uuid.clone())
-        .entire_chat(format!("/contact/{}", contact.contact_uuid))
+        .channel(Some(doc.group_label.clone()))
+        .conversation_name(Some(doc.group_label.clone()))
+        .conversation_uuid(doc.group_uuid.clone())
+        .entire_chat(format!("/contact/{}", doc.doc_uuid))
         .body(text)
         .qmd_path(Some(md_rel.to_string()))
         .source_url(contact.source_url.clone())
-        .upstream_id(contact.external_id.clone())
+        .upstream_id(Some(contact.key.clone()).filter(|k| !k.is_empty()))
         .upstream_entity_kind(Some(profile.contact_entity_kind.to_string()))
-        .upstream_account(contact.upstream_account.clone())
-        .markdown_uuid(Some(contact.contact_uuid.clone()))
-        .build_or_record(
-            source_id,
-            &contact.contact_uuid,
-            profile.render_version,
-            problems,
-        )
+        .upstream_account(doc.upstream_account.clone())
+        .markdown_uuid(Some(doc.doc_uuid.clone()))
+        .build_or_record(source_id, &doc.doc_uuid, profile.render_version, problems)
 }
 
-fn write_photo(page_dir: &Path, contact_uuid: &str, photo: &ContactPhoto) -> Result<String> {
+fn write_photo(
+    page_dir: &Path,
+    doc_uuid: &str,
+    content_type: &str,
+    bytes: &[u8],
+) -> Result<String> {
     let blobs_dir = page_dir.join("blobs");
     fs::create_dir_all(&blobs_dir).with_context(|| format!("mkdir -p {}", blobs_dir.display()))?;
-    let ext = ext_for(&photo.content_type);
-    let filename = format!("{contact_uuid}.{ext}");
+    let ext = ext_for(content_type);
+    let filename = format!("{doc_uuid}.{ext}");
     let path = blobs_dir.join(&filename);
-    fs::write(&path, &photo.bytes).with_context(|| format!("write {}", path.display()))?;
+    fs::write(&path, bytes).with_context(|| format!("write {}", path.display()))?;
     Ok(format!("blobs/{filename}"))
 }
 
@@ -335,29 +391,62 @@ fn yaml_safe(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::ContactField;
+    use datalib_contact_schema::{ContactKind, Detail};
 
-    fn mk_contact() -> NormalizedContact {
-        NormalizedContact {
-            inputs: Vec::new(),
-            contact_uuid: "11111111-1111-1111-1111-111111111111".to_string(),
+    fn mk_contact() -> ContactDoc {
+        let mut contact = DatalibContact::new(
+            "linkedin",
+            "https://www.linkedin.com/in/jlp",
+            ContactKind::Person,
+        );
+        contact.names = vec!["Jean-Luc Picard".to_string()];
+        // Offset-bearing per the grid's created_at contract (the
+        // builder now rejects bare dates — see GridRowBuilder).
+        contact.created_at = Some("2024-01-02T00:00:00+00:00".to_string());
+        contact.source_url = Some("https://www.linkedin.com/in/jlp".to_string());
+        contact.org = Some("Starfleet".to_string());
+        contact.title = Some("Captain | USS Enterprise".to_string());
+        ContactDoc {
+            contact,
+            doc_uuid: "11111111-1111-1111-1111-111111111111".to_string(),
             group_uuid: "22222222-2222-2222-2222-222222222222".to_string(),
             group_label: "LinkedIn Connections".to_string(),
-            display_name: Some("Jean-Luc Picard".to_string()),
-            external_id: Some("https://www.linkedin.com/in/jlp".to_string()),
             upstream_account: None,
-            // Offset-bearing per the grid's created_at contract (the
-            // builder now rejects bare dates — see GridRowBuilder).
-            created_at: Some("2024-01-02T00:00:00+00:00".to_string()),
-            modified_at: None,
-            source_url: Some("https://www.linkedin.com/in/jlp".to_string()),
-            fields: vec![
-                ContactField::new("Company", "Starfleet"),
-                ContactField::new("Position", "Captain | USS Enterprise"),
-            ],
-            photo: None,
-            photo_url: None,
+            inputs: Vec::new(),
         }
+    }
+
+    /// Every source's page lists the same things in the same order, and a
+    /// number with no country code is still on it.
+    #[test]
+    fn the_table_is_one_order_for_every_source() {
+        let mut c = DatalibContact::new("s", "k", ContactKind::Person);
+        c.note = Some("two\nlines".into());
+        c.details = vec![Detail::new("Address (home)", "1 Main St")];
+        c.handles = vec![
+            ContactHandle::email(Some("work".into()), "riker@enterprise.org"),
+            ContactHandle::phone(Some("cell".into()), "(555) 010-1234"),
+        ];
+        c.title = Some("Commander".into());
+        c.org = Some("Starfleet".into());
+        c.members = vec!["Troi".into()];
+        c.groups = vec!["Bridge".into()];
+        let labels: Vec<String> = table_rows(&c).into_iter().map(|(l, _)| l).collect();
+        assert_eq!(
+            labels,
+            [
+                "Group",
+                "Member",
+                "Org",
+                "Title",
+                "Email (work)",
+                "Phone (cell)",
+                "Address (home)",
+                "Note"
+            ]
+        );
+        assert_eq!(table_rows(&c)[5].1, "(555) 010-1234");
+        assert_eq!(table_rows(&c)[7].1, "two <br> lines");
     }
 
     fn mk_profile() -> ContactRenderProfile {
@@ -377,13 +466,13 @@ mod tests {
         assert_eq!(sections[0].uuid, None, "frontmatter belongs to no row");
         assert_eq!(
             sections[1].uuid.as_deref(),
-            Some(mk_contact().contact_uuid.as_str()),
+            Some(mk_contact().doc_uuid.as_str()),
             "the body is the contact's section"
         );
         let md = join(&sections);
         assert!(md.contains("Jean-Luc Picard"));
         assert!(md.contains("https://www.linkedin.com/in/jlp"));
-        assert!(md.contains("| Company | Starfleet |"));
+        assert!(md.contains("| Org | Starfleet |"));
         // Pipe inside a value is escaped so it doesn't break the table.
         assert!(md.contains("Captain \\| USS Enterprise"));
         assert!(md.contains("provider: linkedin"));
