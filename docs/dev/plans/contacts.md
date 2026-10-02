@@ -26,6 +26,7 @@ them.
 | **handle** | one identifier in one namespace, normalized: `email:riker@enterprise.org`, `tel:+15551234`, `slack:T01/U02`. Upstream data; a render finds it. |
 | **contact** | datalib's record of a person (`kind = person`) or of several people who share handles (`kind = group`: "Mom & Dad", a mailing list). A person creates it. |
 | **link** | a row saying a handle belongs to a contact. A person makes it. |
+| **profile** | a person as one source describes them: the handles it ties together, the names it shows, an avatar and details. Upstream data, read at render time; see [One type for a person as a source describes them](#one-type-for-a-person-as-a-source-describes-them). |
 | **address-book card** | a record the `contacts` *provider* mirrors from CardDAV or a `.vcf` — upstream data, like a Slack profile. Not a contact. See [The code name](#the-code-name). |
 
 ## The handle
@@ -133,6 +134,83 @@ Phase 1 measures it on a copy of a real root — counts and sizes only —
 against a budget: the table under 5% of the index, and `grid_index`'s
 incremental pass under 10% slower.
 
+## One type for a person as a source describes them
+
+Every source that knows people already describes them in its own way:
+Slack's user list (a name, a title, an avatar, often an email), WhatsApp's
+address book and the names people give themselves, Signal's recipients
+(a number and an ACI), Beeper's room members. contact-common already
+unifies one family of them — a vCard, a LinkedIn connection, a Facebook
+friend are all a `NormalizedContact`. A **profile** is the one type for
+all of it, so the chip and everything after it read one shape whichever
+source it came from.
+
+All of this happens after the raw layer: a profile is built at render
+time from raw rows, and everything that holds one is derived and
+rebuildable.
+
+```rust
+struct Profile {
+    key: String,             // the source's own id for the person: a Slack user id, a vCard UID, a handle
+    handles: Vec<Handle>,    // every handle this source ties to the person
+    names: Vec<String>,      // the names it shows, the one it prefers first
+    avatar: Option<BlobRef>, // a blob in the source's CAS
+    title: Option<String>,   // a job title, an organization
+    details: Vec<(String, String)>,
+    seen: Option<Seen>,      // how many items it authored here, and the last one's stamp
+}
+```
+
+**Where profiles come from**, in three layers that each need less from
+the provider than the one before:
+
+- **chat-common, for free.** It sees every item's `author_handle` beside
+  the name the provider resolved for it, so it writes a baseline
+  profile per handle per source — the names it was shown under, how
+  often, last seen — for every chat provider with no per-provider code.
+- **A provider, for what only it knows.** `NormalizedChat` carries the
+  provider's own profiles (`profiles: Vec<Profile>`), filled from its
+  raw tables: Slack's users (with the profile email as a second handle),
+  WhatsApp's contacts (a linked id and its number), Signal's recipients.
+  chat-common writes them with the baseline, and a provider's profile
+  and the baseline for the same handle are one profile.
+- **contact-common, by construction.** A `NormalizedContact` *is* a
+  profile, so contact-common keeps the typed emails and phones its
+  parsers already have and writes the card's profile beside its
+  document. An address-book card is the richest profile there is.
+
+**Where they are kept.** The type lives beside `Handle` in
+`datalib_handle`, which has no first-party dependencies, so the render
+crates, the contacts crate, the applets and the UI's mirror of it share
+one definition. A render store gains `profiles` and `profile_handles`
+tables, written by the render step beside `grid_rows`; `grid_index`
+loads them into the index the way it loads `grid_rows`. A profile's id
+is minted like any entity id (`entity_ids.md`), from the source and the
+profile's `key`.
+
+**Who reads them.**
+
+- **The core resolver.** The `unified_index` applet answers `POST
+  /profiles` with every profile holding each asked-for handle, ranked:
+  an address-book card, then a provider's own profile, then the
+  baseline. This works with no contacts app at all.
+- **The contacts app, in the same shape.** Its `resolve` returns a
+  contact as a profile whose source is `datalib_contacts`, ranked above
+  every other. So a chip gets one ranked list of profiles per handle,
+  whoever produced them; it draws the first, and the hover card shows
+  the rest ("seen as 'J-L Picard' in Gmail, 'Captain' on Slack").
+- **Adopting and suggesting.** A profile with several handles is exactly
+  what "adopt card" adopts — "link all four of this card's handles" —
+  and a Slack profile whose email matches an existing contact is the
+  first kind of suggestion.
+- **The snapshot.** The contacts app renders each contact as a
+  `NormalizedContact` through contact-common, so a contact and an
+  address-book card look alike in search, and the snapshot writes the
+  contact's profile like any other source.
+
+A profile costs one row per person per source plus one per handle —
+small beside `row_handles`, which grows with every message.
+
 ## A separate app, tightly integrated
 
 Contacts is built as an app of its own that plugs into datalib, not as
@@ -143,6 +221,7 @@ the core gains is generic, and the contacts app is its first user:
 |---|---|
 | `data-handle` spans and `row_handles` | know which rows mention a handle |
 | a handle resolver the document view and the grid call | draw chips |
+| profiles: each source's account of a person, in the index | rank a contact above them, offer a card's handles to adopt |
 | `grid_rows.live_view` | open a contact's row as a live card |
 | an ordinary source group | put contacts in search and qmd |
 
@@ -271,10 +350,12 @@ The `identity` cell type (`{id, label, icon, detail}`, `cards.md` §
   photo is a URL the applet serves.
 - **In a document**, a `decorateHandles` pass beside
   `decorateRemoteMedia` in `ChatBody.ce.vue` collects every
-  `[data-handle]`, makes one `resolve` call per document, and draws
-  chips. A resolved chip shows the contact's name and photo. An
-  unresolved one shows the handle kind's mark, the source's own text,
-  and a quiet "+".
+  `[data-handle]`, asks for their profiles (the core's and the
+  contacts app's, one call each per document), and draws chips. A chip
+  draws the top-ranked profile: a contact's name and photo, or else the
+  best profile a source gave — an address-book name and photo, a Slack
+  avatar — with the handle kind's mark and a quiet "+", since it is not
+  yet a contact.
 - **In the grid**, the search applet returns each row's author handle
   beside its display name, and the grid resolves the visible rows'
   handles through the same `resolve` call, so authors read as contacts
@@ -286,8 +367,9 @@ Three surfaces, in the order a person meets them:
 
 1. **The popover on an unresolved chip.** A typeahead over contacts and
    unlinked address-book cards (picking a card creates the contact and
-   adopts every handle on it), plus "New contact". One gesture, no
-   dialog.
+   adopts every handle on it), plus "New contact". When the handle's
+   profiles tie it to other handles, it offers to link those too. One
+   gesture, no dialog.
 2. **The contact card**, opened from a resolved chip — a card, not a
    modal (`cards.md`). Handles grouped by kind, each with unlink; groups
    it belongs to, or members if it is a group; "Merge with…"; its
@@ -392,7 +474,7 @@ identifier behind it and how the message showed it
 and keeps `data-handle` in its HTML. Not yet: email To/Cc, Signal's e164,
 address-book cards, reactions and mentions, `row_handles`, groups,
 merge, undo, the contact card, `IdentityChip` in the grid, and
-everything in phases 3–5.
+everything in phases 3–6.
 
 1. **Handles end to end, nothing visible.** The handle crate (pure,
    unit-tested), `data-handle` in chat-common, email and contacts, the
@@ -400,11 +482,17 @@ everything in phases 3–5.
 2. **Store, applet, chips.** `datalib_curated/datalib_contacts/`, the
    applet and its routes, `IdentityChip`, `decorateHandles`, the
    link/create popover.
-3. **Managing contacts.** The contact card, merge, unlink and undo,
-   groups and members, the triage grid, author chips in the grid.
-4. **Contacts in search.** The snapshot step, `live_view`, the
+3. **Profiles.** The `Profile` type in `datalib_handle`; chat-common's
+   baseline; `NormalizedChat::profiles` filled by Slack, WhatsApp and
+   Signal; contact-common's cards; the `profiles` tables and their load;
+   `POST /profiles`; chips and the hover card drawing the ranked list;
+   the contacts app's `resolve` answering in the same shape.
+4. **Managing contacts.** The contact card, merge, unlink and undo,
+   groups and members, the triage grid, author chips in the grid,
+   adopting a profile's handles.
+5. **Contacts in search.** The snapshot step, `live_view`, the
    `contact:` filter.
-5. **Later.** Suggestions on a branch; Lightroom face tags; a
+6. **Later.** Suggestions on a branch; Lightroom face tags; a
    distinguished "Me" contact seeded from each source's `account`; a
    validity range on a link, for a handle reassigned to someone else.
 
