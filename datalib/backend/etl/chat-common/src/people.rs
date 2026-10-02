@@ -61,6 +61,49 @@ pub fn baseline_contacts(source_id: &str, items: &[NormalizedChatItem]) -> Vec<D
         .collect()
 }
 
+/// The people a document carries: chat-common's baseline for each author
+/// handle, and where the provider gave its own account of the person
+/// behind one, that account instead — keeping what the baseline counted
+/// and every name it saw. One provider account reached through two
+/// handles is one person.
+pub fn document_contacts(
+    source_id: &str,
+    items: &[NormalizedChatItem],
+    provider: &[DatalibContact],
+) -> Vec<DatalibContact> {
+    let mut out: BTreeMap<String, DatalibContact> = BTreeMap::new();
+    for seen in baseline_contacts(source_id, items) {
+        let theirs = provider.iter().find(|p| {
+            p.handles
+                .iter()
+                .any(|h| h.handle.as_ref().map(|h| h.as_str()) == Some(seen.key.as_str()))
+        });
+        let Some(theirs) = theirs else {
+            out.insert(seen.key.clone(), seen);
+            continue;
+        };
+        let merged = out.entry(theirs.key.clone()).or_insert_with(|| {
+            let mut c = theirs.clone();
+            c.source_id = source_id.to_string();
+            c.seen = None;
+            c
+        });
+        for name in seen.names {
+            if !merged.names.contains(&name) {
+                merged.names.push(name);
+            }
+        }
+        merged.seen = match (merged.seen.take(), seen.seen) {
+            (Some(a), Some(b)) => Some(Seen {
+                items: a.items + b.items,
+                last_at: a.last_at.max(b.last_at),
+            }),
+            (a, b) => a.or(b),
+        };
+    }
+    out.into_values().collect()
+}
+
 /// What a header shows as `Will Riker <riker@enterprise.org>` names the
 /// person `Will Riker`: the handle's own value, in angle brackets, is the
 /// handle, not part of the name.
@@ -141,5 +184,36 @@ mod tests {
         ];
         let got = baseline_contacts("mail", &items);
         assert_eq!(got[0].names, ["Will Riker", "Riker, Will"]);
+    }
+
+    /// A Slack user's profile knows their email; the messages only their
+    /// user id. The document carries the profile, counted the way the
+    /// baseline counted, so the email reaches the index too.
+    #[test]
+    fn a_providers_account_replaces_the_baseline_and_keeps_its_count() {
+        let picard = Handle::slack("T1", "U_PICARD").unwrap();
+        let riker = Handle::slack("T1", "U_RIKER").unwrap();
+        let mut profile = DatalibContact::new("ignored", "slack:T1/U_PICARD", ContactKind::Person);
+        profile.names = vec!["Jean-Luc Picard".into()];
+        profile.title = Some("Captain".into());
+        profile.handles = vec![
+            ContactHandle::of(picard.clone()),
+            ContactHandle::email(None, "picard@enterprise.org"),
+        ];
+        let items = vec![
+            by(Some(&picard), "Picard", 1),
+            by(Some(&picard), "Picard", 2),
+            by(Some(&riker), "Riker", 3),
+        ];
+        let got = document_contacts("slack", &items, &[profile]);
+        assert_eq!(got.len(), 2);
+        let p = got.iter().find(|c| c.key == "slack:T1/U_PICARD").unwrap();
+        assert_eq!(p.source_id, "slack");
+        assert_eq!(p.title.as_deref(), Some("Captain"));
+        assert_eq!(p.names, ["Jean-Luc Picard", "Picard"]);
+        assert_eq!(p.handles.len(), 2, "the email rides along");
+        assert_eq!(p.seen.as_ref().unwrap().items, 2);
+        let r = got.iter().find(|c| c.key == "slack:T1/U_RIKER").unwrap();
+        assert_eq!(r.names, ["Riker"], "no profile: the baseline as it was");
     }
 }

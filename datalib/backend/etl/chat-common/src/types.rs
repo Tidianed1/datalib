@@ -316,6 +316,12 @@ pub struct NormalizedChat {
     pub path_prefix: Option<String>,
     /// Buckets sorted by period_key.
     pub buckets: Vec<NormalizedDoc>,
+    /// The provider's own account of people in this chat: what only its
+    /// raw tables know, such as a Slack profile's title and email. Each
+    /// document carries the ones whose handles its authors wrote under,
+    /// merged with what chat-common saw (`people::document_contacts`).
+    #[serde(skip)]
+    pub contacts: Vec<datalib_contact_schema::DatalibContact>,
     /// Every raw row this chat was built from, found or not — what the
     /// processor declares through `RenderCtx::declare_bucket` so a
     /// change to any of them renders this chat again. Empty only for a

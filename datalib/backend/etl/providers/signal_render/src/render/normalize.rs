@@ -89,6 +89,7 @@ pub fn to_chats(
                     items,
                 }
             }],
+            contacts: Vec::new(),
             inputs: inputs.declared(),
         });
         if !doc.blobs.is_empty() {

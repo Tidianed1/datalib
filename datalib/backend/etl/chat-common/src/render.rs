@@ -271,7 +271,7 @@ fn render_one(
         rows,
         sections,
         edges: Vec::new(),
-        contacts: crate::people::baseline_contacts(source_id, &doc.items),
+        contacts: crate::people::document_contacts(source_id, &doc.items, &chat.contacts),
         problems,
     })
     .with_context(|| format!("on_doc_complete {}", doc.markdown_uuid))?;
@@ -961,6 +961,7 @@ mod tests {
 
     fn mk_chat() -> NormalizedChat {
         NormalizedChat {
+            contacts: Vec::new(),
             inputs: Vec::new(),
             id: "100".to_string(),
             chat_uuid: "11111111-1111-1111-1111-111111111111".to_string(),

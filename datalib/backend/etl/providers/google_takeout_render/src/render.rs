@@ -363,6 +363,7 @@ fn build_chats(
 
         let chat_id = ids::space(source_id, &space);
         chats.push(NormalizedChat {
+            contacts: Vec::new(),
             inputs: inputs.declared(),
             path_prefix: None,
             id: space.clone(),
@@ -499,6 +500,7 @@ fn build_voice_chats(source_id: &str, messages: &[(String, Value)]) -> Vec<Norma
 
         let conversation = ids::voice_conversation(source_id, &chat_id);
         chats.push(NormalizedChat {
+            contacts: Vec::new(),
             inputs: inputs.declared(),
             path_prefix: None,
             id: chat_id.clone(),

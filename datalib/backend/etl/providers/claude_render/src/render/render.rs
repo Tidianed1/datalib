@@ -425,6 +425,7 @@ fn build_chat(
             source_ref: None,
             items,
         }],
+        contacts: Vec::new(),
         inputs: inputs.declared(),
     }
 }
@@ -551,6 +552,7 @@ fn build_project_page(
             source_ref: None,
             items,
         }],
+        contacts: Vec::new(),
         inputs: project.inputs.declared(),
     }
 }

@@ -216,6 +216,7 @@ fn one_item_chat(
     }
     let post = ids::post(&owner.source_id, row_id);
     NormalizedChat {
+        contacts: Vec::new(),
         inputs: inputs.declared(),
         path_prefix: None,
         id: format!("post:{row_id}"),

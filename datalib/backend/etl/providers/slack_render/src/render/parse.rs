@@ -463,6 +463,8 @@ async fn load_users(
                     .or_else(|| profile.and_then(|p| opt_str(p, "real_name"))),
                 display_name: profile.and_then(|p| opt_str(p, "display_name")),
                 email: profile.and_then(|p| opt_str(p, "email")),
+                title: profile.and_then(|p| opt_str(p, "title")),
+                avatar_url: profile.and_then(|p| opt_str(p, "image_192")),
             },
         );
     }
@@ -827,6 +829,8 @@ fn ingest_user(u: &Value, default_team_id: &str, out: &mut BTreeMap<String, User
                 .or_else(|| profile.and_then(|p| opt_str(p, "real_name"))),
             display_name: profile.and_then(|p| opt_str(p, "display_name")),
             email: profile.and_then(|p| opt_str(p, "email")),
+            title: profile.and_then(|p| opt_str(p, "title")),
+            avatar_url: profile.and_then(|p| opt_str(p, "image_192")),
         },
     );
 }

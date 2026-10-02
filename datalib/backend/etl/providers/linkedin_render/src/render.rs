@@ -219,6 +219,7 @@ fn build_chats(
 
         let conversation = ids::conversation(source_id, table, &conv);
         chats.push(NormalizedChat {
+            contacts: Vec::new(),
             inputs: inputs.declared(),
             path_prefix: None,
             id: format!("{table}:{conv}"),

@@ -199,6 +199,7 @@ fn build_chat(
         .unwrap_or_else(|| "(untitled)".to_string());
     let chat_uuid = ids::conversation(source_id, &conv_id).uuid;
     NormalizedChat {
+        contacts: Vec::new(),
         inputs: Vec::new(),
         path_prefix: None,
         id: chat_uuid.clone(),

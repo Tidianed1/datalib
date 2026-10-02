@@ -453,6 +453,7 @@ impl ChatBuild {
             .or(self.identifier)
             .unwrap_or_else(|| self.guid.clone());
         NormalizedChat {
+            contacts: Vec::new(),
             inputs: self.inputs.declared(),
             path_prefix: None,
             chat_uuid: chat_uuid(source_id, &self.guid),

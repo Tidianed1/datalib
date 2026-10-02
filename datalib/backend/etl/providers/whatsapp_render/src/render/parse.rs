@@ -395,6 +395,7 @@ async fn parse_async(
             });
         }
         out.push(NormalizedChat {
+            contacts: Vec::new(),
             inputs: ch.inputs.declared(),
             path_prefix: None,
             id: ch.chat_jid.clone(),

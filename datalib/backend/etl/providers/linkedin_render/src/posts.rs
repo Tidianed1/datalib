@@ -218,6 +218,7 @@ fn build_post_chats(
         let post = ids::post(source_id, &key);
         let comment_payloads: Vec<&Value> = thread.comments.iter().map(|(_, c)| *c).collect();
         chats.push(NormalizedChat {
+            contacts: Vec::new(),
             inputs: thread.inputs.declared(),
             path_prefix: None,
             id: format!("posts:{key}"),

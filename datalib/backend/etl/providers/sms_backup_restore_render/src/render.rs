@@ -262,6 +262,7 @@ fn build_chats(
 
         let conversation = ids::conversation(source_id, &id);
         chats.push(NormalizedChat {
+            contacts: Vec::new(),
             inputs: inputs.declared(),
             path_prefix: None,
             id: id.clone(),

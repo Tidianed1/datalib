@@ -120,6 +120,7 @@ fn to_chat(source_id: &str, room: &Room, doc: &DocBucket, inputs: &Inputs) -> No
         .collect();
 
     NormalizedChat {
+        contacts: Vec::new(),
         inputs: inputs.declared(),
         id: bundle_key(doc),
         chat_uuid: ids::room(source_id, &room.native_room_id).uuid,
