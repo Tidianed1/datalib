@@ -1,0 +1,18 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "zoom-pages",
+  "description": "Lets ⌘+ / ⌘− / ⌘0 (and Ctrl+scroll) zoom the page in the desktop app — the libraries screen and a library's page alike. main.rs turns on `zoom_hotkeys_enabled` for every window; on macOS that does not reach WKWebView's own zoom but injects a script that catches the keys and invokes `plugin:webview|set_webview_zoom`, which is refused without `core:webview:allow-set-webview-zoom` — SILENTLY: the keys simply do nothing. A capability with a `remote` block applies to the app's local pages too, so this one covers the libraries screen as well. The `remote` block is REQUIRED for the same reason as in reveal-local-files.json, with the trailing `/**` load-bearing.",
+  "windows": [
+    "main",
+    "card-*"
+  ],
+  "remote": {
+    "urls": [
+      "http://127.0.0.1:*/**",
+      "http://localhost:*/**"
+    ]
+  },
+  "permissions": [
+    "core:webview:allow-set-webview-zoom"
+  ]
+}
