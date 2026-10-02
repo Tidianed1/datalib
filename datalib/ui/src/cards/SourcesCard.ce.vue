@@ -105,9 +105,9 @@ onMounted(() => {
   if (props.add) openAdd();
 });
 
-// Rows sized to the density switch; the grid reads its height once, so
-// a switch rebuilds it.
-const rowHeight = computed(() => (density.value === "comfortable" ? 36 : 28));
+// Rows sized to the density; the grid reads its height once, so a
+// change rebuilds it.
+const rowHeight = computed(() => Math.round(28 + 8 * density.value));
 </script>
 
 <template>

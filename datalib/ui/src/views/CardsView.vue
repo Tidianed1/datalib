@@ -1,12 +1,13 @@
 <script setup lang="ts">
 // Routed view for the card surface: the containers layout, and the
 // status bar along the bottom — the data root and its size, the log,
-// then the density and dev toggles flush right.
+// then the density and the edit toggle flush right.
 import { onBeforeUnmount, onMounted, useTemplateRef } from "vue";
 import ContainersView from "@/views/ContainersView.vue";
 import RootStorageBar from "@/components/RootStorageBar.vue";
 import { editMode } from "@/editMode";
-import { density, DENSITIES } from "@/density";
+import { density, larger, smaller } from "@/density";
+import { MAX_STEP, MIN_STEP, STEP, STEPS, onScale, stepIndex } from "@/densityScale";
 import { LOG_CARD, surface, type SurfaceCommands } from "@/surface";
 
 // The toolbar's commands go to the layout.
@@ -37,16 +38,41 @@ onBeforeUnmount(() => {
       >
         Logs
       </button>
-      <div class="cards-toggle cards-density-toggle" role="group" aria-label="density">
+      <!-- Density: spacing only — rows, controls, padding — packed close
+           or spread out, as the glyphs draw it; text keeps its size. The
+           slider between them sets any step directly. -->
+      <div class="cards-toggle cards-size" role="group" aria-label="density">
         <button
-          v-for="d in DENSITIES"
-          :key="d"
-          :class="{ 'is-active': density === d }"
-          :aria-pressed="density === d"
-          :title="d === 'compact' ? 'fit more on screen' : 'larger text and more room'"
-          @click="density = d"
+          aria-label="More compact"
+          title="more compact: tighter spacing, more on screen"
+          :disabled="density <= MIN_STEP"
+          @click="smaller"
         >
-          {{ d === "compact" ? "Compact" : "Comfortable" }}
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 8h16M4 12h16M4 16h16" />
+          </svg>
+        </button>
+        <input
+          class="cards-size-slider"
+          type="range"
+          aria-label="Density"
+          :min="MIN_STEP"
+          :max="MAX_STEP"
+          :step="STEP"
+          :value="density"
+          :aria-valuetext="`step ${stepIndex(density) + 1} of ${STEPS}`"
+          :title="`density: step ${stepIndex(density) + 1} of ${STEPS}`"
+          @input="density = onScale(($event.target as HTMLInputElement).value)"
+        />
+        <button
+          aria-label="More spacious"
+          title="more spacious: more room between things"
+          :disabled="density >= MAX_STEP"
+          @click="larger"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 4h16M4 12h16M4 20h16" />
+          </svg>
         </button>
       </div>
       <button
@@ -125,8 +151,31 @@ onBeforeUnmount(() => {
 }
 /* The toggles sit flush right as a cluster — the first one carries the
    auto margin. */
-.cards-density-toggle {
+.cards-size {
   margin-left: auto;
+  align-items: center;
+}
+.cards-size button {
+  display: flex;
+  align-items: center;
+}
+.cards-size svg {
+  width: var(--datalib-icon-size);
+  height: var(--datalib-icon-size);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+.cards-size-slider {
+  width: 90px;
+  margin: 0 6px;
+  accent-color: var(--datalib-fg);
+  cursor: pointer;
+}
+.cards-toggle button:disabled {
+  color: var(--datalib-faint);
+  cursor: default;
 }
 .cards-toggle {
   /* Always claim full intrinsic width (never shrink). */
@@ -148,7 +197,7 @@ onBeforeUnmount(() => {
 .cards-toggle button + button {
   border-left: 1px solid var(--datalib-border);
 }
-.cards-toggle button:hover {
+.cards-toggle button:hover:not(:disabled) {
   background: var(--datalib-hover);
 }
 .cards-toggle button.is-active {
