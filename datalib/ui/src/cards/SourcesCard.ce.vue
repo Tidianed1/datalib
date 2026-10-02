@@ -105,7 +105,7 @@ onMounted(() => {
   if (props.add) openAdd();
 });
 
-// Rows sized to the size step; the grid reads its height once, so a
+// Rows sized to the density; the grid reads its height once, so a
 // change rebuilds it.
 const rowHeight = computed(() => Math.round(28 + 8 * density.value));
 </script>

@@ -66,12 +66,14 @@ itself. CSS custom properties (the app's `--datalib-*` theme variables) do
 inherit across the boundary and are the supported way to pick up
 theming. They live in `datalib/ui/src/theme.css`: the colours for
 light and dark, the system font, and every size — row height, control
-height, padding, font sizes — drawn from one number,
+height, padding, font sizes. The spacing ones — row and control
+heights, padding, gaps — are drawn from one number,
 `--datalib-density`, which the status bar's **density** sets on `<html>`
-(`datalib/ui/src/density.ts`; the scale is `densityScale.ts`: 0 to 2 in
-quarter steps). A card that sizes itself with
-`var(--datalib-font-size)`, `var(--datalib-row-h)` and the rest
-follows the density without knowing it exists. `--datalib-bg` is a
+(`datalib/ui/src/density.ts`; the scale is `densityScale.ts`: 0 to 1 in
+eighths). Text keeps one size; the browser's zoom (⌘+ / ⌘−,
+turned on in the desktop app too) makes everything larger. A card that
+sizes itself with `var(--datalib-row-h)`, `var(--datalib-pad)` and the
+rest follows the density without knowing it exists. `--datalib-bg` is a
 card's own background; `--datalib-ground` is the grey the cards sit
 on.
 

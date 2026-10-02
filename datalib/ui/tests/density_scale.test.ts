@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { MAX_STEP, MIN_STEP, STEPS, onScale, stepIndex } from "@/densityScale";
 
 describe("the size scale", () => {
-  it("puts a stored value on a quarter step, in range", () => {
+  it("puts a stored value on an eighth, in range", () => {
     expect(onScale("1")).toBe(1);
-    expect(onScale("0.6")).toBe(0.5);
+    expect(onScale("0.6")).toBe(0.625);
     expect(onScale(9)).toBe(MAX_STEP);
     expect(onScale(-1)).toBe(MIN_STEP);
   });
@@ -18,7 +18,7 @@ describe("the size scale", () => {
   it("counts nine steps, the first 0 and the last 8", () => {
     expect(STEPS).toBe(9);
     expect(stepIndex(MIN_STEP)).toBe(0);
-    expect(stepIndex(1)).toBe(4);
+    expect(stepIndex(0.5)).toBe(4);
     expect(stepIndex(MAX_STEP)).toBe(8);
   });
 });

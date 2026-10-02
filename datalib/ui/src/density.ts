@@ -1,6 +1,6 @@
-// How big the app draws, as a step on densityScale.ts's scale. theme.css
-// sets every size from `--datalib-density`, which this sets on <html>
-// before the first paint. Persisted per browser.
+// How tightly the app packs things, as a step on densityScale.ts's
+// scale. theme.css sets spacing from `--datalib-density`, which this sets
+// on <html> before the first paint. Persisted per browser.
 import { ref, watch } from "vue";
 import { MAX_STEP, MIN_STEP, STEP, onScale } from "./densityScale";
 

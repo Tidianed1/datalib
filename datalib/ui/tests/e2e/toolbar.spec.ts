@@ -59,14 +59,14 @@ test.describe("toolbar", () => {
     const before = (await toolbar.boundingBox())!.height;
 
     for (let i = 0; i < 4; i++) await group.getByRole("button", { name: "More spacious" }).click();
-    await expect(slider).toHaveValue("1");
+    await expect(slider).toHaveValue("0.5");
     expect((await toolbar.boundingBox())!.height).toBeGreaterThan(before);
 
     // The slider sets a step directly, and the step is kept.
-    await slider.fill("1.5");
-    await expect(slider).toHaveValue("1.5");
+    await slider.fill("0.75");
+    await expect(slider).toHaveValue("0.75");
     await page.reload();
-    await expect(slider).toHaveValue("1.5");
+    await expect(slider).toHaveValue("0.75");
   });
 
   test("the status bar copies the data root's path in a browser", async ({ page }) => {
@@ -93,13 +93,13 @@ test.describe("toolbar", () => {
     expect(1280 - (wide.x + wide.width)).toBeLessThan(16);
     const truncated = () => name.evaluate((el) => el.scrollWidth > el.clientWidth);
 
-    // Step 0, then step 1 (four quarter steps larger).
+    // Density 0, then 0.5 (four steps more spacious).
     for (const larger of [0, 4]) {
       await page.setViewportSize({ width: 1280, height: 800 });
       for (let i = 0; i < larger; i++)
         await page.getByRole("button", { name: "More spacious" }).click();
       // 700px leaves the name room whatever its random suffix measures;
-      // 600px was within a few letters of it at step 1.
+      // 600px was within a few letters of it with larger text.
       for (const width of [700, 420]) {
         await page.setViewportSize({ width, height: 800 });
         const b = (await box.boundingBox())!;

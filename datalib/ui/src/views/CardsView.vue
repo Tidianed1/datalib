@@ -38,13 +38,13 @@ onBeforeUnmount(() => {
       >
         Logs
       </button>
-      <!-- Density: every size steps together — text, spacing, rows,
-           controls. The glyphs are lines packed close or spread out;
-           the slider between them sets any step directly. -->
+      <!-- Density: spacing only — rows, controls, padding — packed close
+           or spread out, as the glyphs draw it; text keeps its size. The
+           slider between them sets any step directly. -->
       <div class="cards-toggle cards-size" role="group" aria-label="density">
         <button
           aria-label="More compact"
-          title="more compact: smaller text and tighter spacing, more on screen"
+          title="more compact: tighter spacing, more on screen"
           :disabled="density <= MIN_STEP"
           @click="smaller"
         >
@@ -66,7 +66,7 @@ onBeforeUnmount(() => {
         />
         <button
           aria-label="More spacious"
-          title="more spacious: larger text and more room"
+          title="more spacious: more room between things"
           :disabled="density >= MAX_STEP"
           @click="larger"
         >

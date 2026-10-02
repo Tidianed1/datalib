@@ -1,10 +1,10 @@
-// The size scale as numbers: a step from MIN_STEP (the most on screen)
-// to MAX_STEP in STEP increments. Step 0 is the old Compact and step 1
-// the old Comfortable; theme.css draws every size from the step. Pure,
-// so density.ts and its tests share one rule.
+// The density scale as numbers: a step from MIN_STEP (the most on
+// screen) to MAX_STEP in STEP increments. theme.css draws spacing from
+// the step; text keeps one size. Pure, so density.ts and its tests
+// share one rule.
 export const MIN_STEP = 0;
-export const MAX_STEP = 2;
-export const STEP = 0.25;
+export const MAX_STEP = 1;
+export const STEP = 0.125;
 
 // A stored or typed value, on the scale: rounded to a step, kept in
 // range; MIN_STEP for anything that is not a number.

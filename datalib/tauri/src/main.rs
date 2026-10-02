@@ -571,7 +571,10 @@ fn main_window(app: &AppHandle, url: WebviewUrl) -> WebviewWindowBuilder<'_, Wry
         WebviewWindowBuilder::new(app, MAIN_WINDOW, url)
             .title("Data Liberation")
             .inner_size(1280.0, 800.0)
-            .min_inner_size(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT),
+            .min_inner_size(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
+            // ⌘+ / ⌘− / ⌘0 zoom the page, as in a browser: how text is made
+            // larger, since the status bar's density moves spacing only.
+            .zoom_hotkeys_enabled(true),
         app,
     )
 }
@@ -720,6 +723,7 @@ fn app_window<'a>(
                     .title("Data Liberation")
                     .inner_size(1100.0, 760.0)
                     .min_inner_size(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
+                    .zoom_hotkeys_enabled(true)
                     .window_features(features),
                 &new_app,
             )
