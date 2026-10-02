@@ -327,7 +327,7 @@ fn build_chat(
             let body = block_body_md(btype, b.text.as_deref(), &raw_obj);
             items.push(NormalizedChatItem {
                 message_uuid: block_id.uuid.clone(),
-                author_id: btype.to_string(),
+                author_handle: None,
                 author_display: block_author,
                 date_ms: block_ms,
                 text: filter_nonempty(body),
@@ -360,7 +360,7 @@ fn build_chat(
         };
         items.push(NormalizedChatItem {
             message_uuid: msg_id.uuid.clone(),
-            author_id: sender.to_string(),
+            author_handle: None,
             author_display: author_display.clone(),
             date_ms: msg_ms,
             text: filter_nonempty(body),
@@ -495,7 +495,7 @@ fn build_project_page(
         let doc_id = ids::project_document(source_id, &doc.doc_uuid, ms);
         items.push(NormalizedChatItem {
             message_uuid: doc_id.uuid.clone(),
-            author_id: "project_doc".into(),
+            author_handle: None,
             author_display: label,
             date_ms: ms,
             text: body,
@@ -588,7 +588,7 @@ fn project_item(
 ) -> NormalizedChatItem {
     NormalizedChatItem {
         message_uuid: id.uuid,
-        author_id: kind_label.to_string(),
+        author_handle: None,
         author_display: author_display.to_string(),
         date_ms: id.at,
         text: Some(text),

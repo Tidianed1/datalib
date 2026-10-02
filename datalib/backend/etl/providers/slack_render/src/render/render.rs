@@ -16,6 +16,7 @@ use datalib_etl_chat_common::types::{
     NormalizedDoc, NormalizedReaction, UpstreamRef,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_handle::Handle;
 
 use super::mrkdwn::{emojize_shortcodes, resolve_mentions, to_commonmark, Labels};
 use super::{ids, slack_link, ts_to_ms, Message, ParsedSlack};
@@ -41,7 +42,8 @@ use datalib_schema::providers::Provider;
 ///     recipe. The raw store keys messages and threads by
 ///     `{team}#{channel}#{ts}`, so an existing root resets and downloads
 ///     again.
-pub const RENDER_VERSION: u32 = 8;
+/// v9: the author span carries the author's handle as `data-handle`.
+pub const RENDER_VERSION: u32 = 9;
 
 #[derive(Debug, Default)]
 pub struct RenderSummary {
@@ -259,7 +261,10 @@ fn build_item(
     let date_ms = own_stamp_ms(Some(&m.ts), "ts", ts_to_ms, &mut problems);
     NormalizedChatItem {
         message_uuid: msg_id.uuid.clone(),
-        author_id: m.user_id.clone().unwrap_or_else(|| "unknown".into()),
+        author_handle: m
+            .user_id
+            .as_deref()
+            .and_then(|u| Handle::slack(&m.team_id, u)),
         author_display,
         date_ms,
         text: (!body.trim().is_empty()).then_some(body),

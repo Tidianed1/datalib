@@ -26,7 +26,6 @@ pub const TRANSCRIPT_BUCKETS_SQL: &str = "
 /// One item of a transcript, as chat-common renders it.
 pub fn item(
     id: Identity,
-    author_id: &str,
     author_display: String,
     date_ms: Option<i64>,
     text: String,
@@ -35,7 +34,7 @@ pub fn item(
 ) -> NormalizedChatItem {
     NormalizedChatItem {
         message_uuid: id.uuid,
-        author_id: author_id.to_string(),
+        author_handle: None,
         author_display,
         date_ms,
         text: (!text.trim().is_empty()).then_some(text),

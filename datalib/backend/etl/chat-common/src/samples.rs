@@ -70,7 +70,7 @@ pub fn write_samples(out_dir: &Path) -> Result<Vec<String>> {
 fn text(uuid: &str, author: &str, at: i64, body: &str) -> NormalizedChatItem {
     NormalizedChatItem {
         message_uuid: uuid.to_string(),
-        author_id: author.to_string(),
+        author_handle: None,
         author_display: author.to_string(),
         date_ms: Some(at),
         text: Some(body.to_string()),

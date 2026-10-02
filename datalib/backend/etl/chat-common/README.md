@@ -27,6 +27,16 @@ Slack's "Today at 11:02": this file is written once and read for years,
 so a word meaning "the day this was rendered" would be wrong by the
 next morning.
 
+**The author span carries the author's handle** where the provider has
+one — `<span class="msg-author" data-handle="email:riker@enterprise.org">`
+— from `NormalizedChatItem::author_handle` (`datalib_handle`). The text
+stays what the source showed; the UI asks the contacts app, if one is
+configured, whom the handle belongs to and draws a chip
+(`ui/src/cards/contacts.ts`). The attribute is load-bearing, like
+`data-section-uuid`: it is how a contact linked after this file was
+written still finds the author. The UI trusts it only on the header
+line, since a message body can carry any attribute it likes.
+
 ## Asides: runs of tool steps fold into one `<details>`
 
 An item with `is_aside` set is machinery rather than conversation — an

@@ -44,7 +44,6 @@ fn album(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
         let item_id = ids::album_description(&owner.source_id, row_id, date_ms);
         items.push(chat_item(
             item_id,
-            "me".to_string(),
             owner.name.clone(),
             date_ms,
             Some(strip_mentions(description)),
@@ -62,7 +61,6 @@ fn album(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
             kind_label: Some("Facebook Photo".to_string()),
             ..chat_item(
                 item_id,
-                "me".to_string(),
                 owner.name.clone(),
                 date_ms,
                 media_caption(photo, Some(name)),

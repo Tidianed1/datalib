@@ -294,7 +294,6 @@ fn user_items(
         let body = fenced(&clamp(&tool_result_text(b.get("content")), max_bytes));
         out.push(item(
             id,
-            "tool_result",
             name.to_string(),
             ms.map(|m| m + n as i64),
             details(&summary, &body),
@@ -330,7 +329,6 @@ fn user_items(
     };
     out.push(item(
         ids::record(source_id, uuid, ms.map(|m| m + n as i64)),
-        "user",
         author.to_string(),
         ms.map(|m| m + n as i64),
         text,
@@ -370,7 +368,6 @@ fn assistant_items(
                 let quoted = format!("> {}", thought.trim_end().replace('\n', "\n> "));
                 out.push(item(
                     ids::thinking_block(source_id, uuid, i, block_ms),
-                    "thinking",
                     model.clone(),
                     block_ms,
                     details("Thinking", &quoted),
@@ -390,7 +387,6 @@ fn assistant_items(
                     .unwrap_or_default();
                 out.push(item(
                     id,
-                    "tool_use",
                     model.clone(),
                     block_ms,
                     details(&format!("Tool use: {name}"), &body),
@@ -408,7 +404,6 @@ fn assistant_items(
     let ms = ms.map(|m| m + blocks_of(v).len() as i64);
     out.push(item(
         ids::record(source_id, uuid, ms),
-        "assistant",
         model,
         ms,
         text,
@@ -446,7 +441,6 @@ fn system_item(
     }
     let mut it = item(
         ids::record(source_id, uuid, ms),
-        "system",
         "Claude Code".to_string(),
         ms,
         String::new(),

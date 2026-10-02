@@ -17,6 +17,7 @@ use datalib_etl_chat_common::types::{
 use datalib_etl_email::ingest::db::{LoadedAttachment, LoadedEmail};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::Lookup;
+use datalib_handle::Handle;
 use datalib_schema::providers::Provider;
 use mail_parser::{Address, MessageParser, MimeHeaders, PartType};
 
@@ -37,7 +38,8 @@ use mail_parser::{Address, MessageParser, MimeHeaders, PartType};
 ///     Every uuid moved, `chat_uuid` among them.
 /// v10: the label line leads with Starred and Important, and leaves out
 ///     Gmail's All Mail.
-pub const RENDER_VERSION: u32 = 10;
+/// v11: the author span carries the author's handle as `data-handle`.
+pub const RENDER_VERSION: u32 = 11;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
 /// `datalib_core::config::EmailOutlink`; the orchestrator maps the
@@ -435,7 +437,7 @@ fn build_chat(
             .is_some_and(|kws| kws.iter().any(|k| k == "$seen"));
         items.push(NormalizedChatItem {
             message_uuid: email_id.uuid.clone(),
-            author_id: em.account_id.clone(),
+            author_handle: parsed_eml.from_handle.clone(),
             author_display: if parsed_eml.from_display.is_empty() {
                 "(unknown sender)".to_string()
             } else {
@@ -619,6 +621,7 @@ struct InlinePart {
 #[derive(Default)]
 struct ParsedEml {
     from_display: String,
+    from_handle: Option<Handle>,
     text_body: String,
     html_body: String,
     inline_parts: Vec<InlinePart>,
@@ -630,6 +633,11 @@ impl ParsedEml {
             return Self::default();
         };
         let from_display = format_address(msg.from());
+        let from_handle = msg
+            .from()
+            .and_then(|a| a.iter().next())
+            .and_then(|a| a.address())
+            .and_then(Handle::email);
         let mut text_body = String::new();
         for &idx in &msg.text_body {
             if let Some(part) = msg.part(idx) {
@@ -664,6 +672,7 @@ impl ParsedEml {
         }
         Self {
             from_display,
+            from_handle,
             text_body,
             html_body,
             inline_parts,

@@ -19,8 +19,10 @@ rust_binary(
     visibility = ["//visibility:public"],
     deps = [
         "//datalib/backend/columns:datalib_columns",
+        "//datalib/backend/contacts:datalib_contacts",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/fetch:datalib_fetch",
+        "//datalib/backend/handle:datalib_handle",
         "//datalib/backend/obs:datalib_obs",
         "//datalib/backend/parent_watch:datalib_parent_watch",
         "//datalib/backend/problems:datalib_problems",
