@@ -46,6 +46,7 @@ pub mod remote_media;
 pub mod request_log;
 pub mod supervisor;
 pub mod ui_events;
+pub mod ui_state;
 pub mod usage;
 pub mod watch;
 
@@ -210,6 +211,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/runs/{run}/log", get(run_log))
         .route("/api/log", get(log_lines))
         .route("/api/ui/events", post(ui_events::post_events))
+        .route(
+            "/api/ui/state/{name}",
+            get(ui_state::get_state).put(ui_state::put_state),
+        )
         .route("/api/sync/stream", get(sync_stream))
         .route("/api/frontend", get(get_frontend))
         // Remote media a document was let load (remote_media.rs): the
@@ -433,15 +438,23 @@ async fn proxy_impl(
 /// An applet's answer, as the browser gets it. What an applet serves is
 /// data — a rendered plot page, an attachment out of a render tree — and
 /// a document among it must not run in the app's origin, where it would
-/// hold the session: it gets the same sandbox the DACTAL page does.
+/// hold the session: it gets the sandbox policy of the kind the applet
+/// names, and runs nothing when it names none. A script or wasm file
+/// goes out as bytes, so the app page's `script-src 'self'` cannot run
+/// one a sender attached.
 fn proxied_response(r: applets::ProxyResponse) -> Response<Body> {
     let mut resp = Response::builder()
         .status(StatusCode::from_u16(r.status).unwrap_or(StatusCode::BAD_GATEWAY))
         .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff");
     if embed::is_scriptable_document(&r.content_type) {
-        resp = resp.header(header::CONTENT_SECURITY_POLICY, embed::DOCUMENT_SANDBOX_CSP);
+        resp = resp.header(header::CONTENT_SECURITY_POLICY, r.document.csp());
     }
-    resp.header(header::CONTENT_TYPE, r.content_type)
+    let content_type = if embed::is_executable(&r.content_type) {
+        "application/octet-stream".to_string()
+    } else {
+        r.content_type
+    };
+    resp.header(header::CONTENT_TYPE, content_type)
         .body(Body::from(r.body))
         .unwrap_or_else(|_| applet_error(StatusCode::BAD_GATEWAY, "malformed applet response"))
 }
@@ -978,44 +991,39 @@ pub struct InitConfigResponse {
 /// makes the check and the write one operation.
 async fn init_config(State(s): State<AppState>) -> Result<Json<InitConfigResponse>, StatusCode> {
     let path = s.config_path();
-
-    if let Some(parent) = path.parent() {
-        datalib_core::layout::create_data_root(parent).map_err(|e| {
-            tracing::error!("init_config: mkdir {}: {e}", parent.display());
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let created = write_starter_config(&s.root).map_err(|e| {
+        tracing::error!("init_config: {}: {e}", path.display());
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    if created {
+        reload_applets(&s).await;
     }
+    Ok(Json(InitConfigResponse {
+        created,
+        path: path.display().to_string(),
+        text: std::fs::read_to_string(&path).unwrap_or_default(),
+        error: None,
+    }))
+}
 
-    let text = scaffold_toml();
-    // `create_new` is the whole point: the existence check and the
-    // write are one syscall, so this can never overwrite a config that
-    // arrived between them.
+/// Write the starter `config.toml` into `root`, creating the root, unless
+/// a config is already there. True when this call wrote it.
+/// `POST /api/config/init` and `datalib-http --init` both come here.
+///
+/// `create_new` is the whole point: the existence check and the write
+/// are one syscall, so this can never overwrite a config that arrived
+/// between them.
+pub fn write_starter_config(root: &std::path::Path) -> std::io::Result<bool> {
+    use std::io::Write;
+    datalib_core::layout::create_data_root(root)?;
+    let path = datalib_dag::config::root_config_path(root);
     match owner_only_options().create_new(true).open(&path) {
         Ok(mut f) => {
-            use std::io::Write;
-            f.write_all(text.as_bytes()).map_err(|e| {
-                tracing::error!("init_config: write {}: {e}", path.display());
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?;
-            drop(f);
-            reload_applets(&s).await;
-            Ok(Json(InitConfigResponse {
-                created: true,
-                path: path.display().to_string(),
-                text,
-                error: None,
-            }))
+            f.write_all(scaffold_toml().as_bytes())?;
+            Ok(true)
         }
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(Json(InitConfigResponse {
-            created: false,
-            path: path.display().to_string(),
-            text: std::fs::read_to_string(&path).unwrap_or_default(),
-            error: None,
-        })),
-        Err(e) => {
-            tracing::error!("init_config: create {}: {e}", path.display());
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(e) => Err(e),
     }
 }
 
@@ -1957,41 +1965,69 @@ async fn log_lines(
 mod tests {
     use super::*;
 
-    /// A document an applet serves is sandboxed on the way out; JSON is
-    /// left alone. The header, not the body, is what a browser reads.
+    fn proxied(content_type: &str, document: embed::DocumentKind) -> Response<Body> {
+        proxied_response(applets::ProxyResponse {
+            status: 200,
+            content_type: content_type.into(),
+            document,
+            body: b"<script>1</script>".to_vec(),
+        })
+    }
+
+    fn header_of(r: &Response<Body>, name: header::HeaderName) -> Option<&str> {
+        r.headers().get(name).and_then(|v| v.to_str().ok())
+    }
+
+    /// A document an applet serves is sandboxed on the way out, under the
+    /// policy of the kind it names — none means data, which runs
+    /// nothing. JSON is left alone. The header, not the body, is what a
+    /// browser reads.
     #[test]
     fn proxied_documents_are_sandboxed_and_data_is_not() {
-        let html = proxied_response(applets::ProxyResponse {
-            status: 200,
-            content_type: "text/html; charset=utf-8".into(),
-            body: b"<script>1</script>".to_vec(),
-        });
+        let html = proxied("text/html; charset=utf-8", embed::DocumentKind::Data);
         assert_eq!(html.status(), StatusCode::OK);
-        let csp = html
-            .headers()
-            .get(header::CONTENT_SECURITY_POLICY)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or_default();
-        assert!(csp.starts_with("sandbox "), "{csp:?}");
-        assert!(!csp.contains("allow-same-origin"), "{csp:?}");
         assert_eq!(
-            html.headers().get(header::X_CONTENT_TYPE_OPTIONS).unwrap(),
-            "nosniff"
+            header_of(&html, header::CONTENT_SECURITY_POLICY),
+            Some(embed::DocumentKind::Data.csp())
+        );
+        assert_eq!(
+            header_of(&html, header::X_CONTENT_TYPE_OPTIONS),
+            Some("nosniff")
         );
 
-        let json = proxied_response(applets::ProxyResponse {
-            status: 200,
-            content_type: "application/json".into(),
-            body: b"{}".to_vec(),
-        });
-        assert!(json
-            .headers()
-            .get(header::CONTENT_SECURITY_POLICY)
-            .is_none());
+        let plot = proxied("text/html", embed::DocumentKind::Plot);
         assert_eq!(
-            json.headers().get(header::X_CONTENT_TYPE_OPTIONS).unwrap(),
-            "nosniff"
+            header_of(&plot, header::CONTENT_SECURITY_POLICY),
+            Some(embed::DocumentKind::Plot.csp())
         );
+
+        let json = proxied("application/json", embed::DocumentKind::Data);
+        assert!(header_of(&json, header::CONTENT_SECURITY_POLICY).is_none());
+        assert_eq!(
+            header_of(&json, header::X_CONTENT_TYPE_OPTIONS),
+            Some("nosniff")
+        );
+    }
+
+    /// A `.js` a sender attached is served as bytes: under `nosniff` a
+    /// `<script src>` refuses it, so the app page's `script-src 'self'`
+    /// cannot be turned into a way to run it (audit 2026-10-02, P3).
+    #[test]
+    fn proxied_scripts_are_not_runnable() {
+        for ct in [
+            "text/javascript",
+            "application/javascript",
+            "application/wasm",
+        ] {
+            let r = proxied(ct, embed::DocumentKind::Data);
+            assert_eq!(
+                header_of(&r, header::CONTENT_TYPE),
+                Some("application/octet-stream"),
+                "{ct}"
+            );
+        }
+        let css = proxied("text/css", embed::DocumentKind::Data);
+        assert_eq!(header_of(&css, header::CONTENT_TYPE), Some("text/css"));
     }
 
     /// The ages are how long a running step has gone without a metric

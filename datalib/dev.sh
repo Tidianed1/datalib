@@ -6,8 +6,8 @@
 #
 # Configuration:
 #   $1 (positional)     data root. Leading tildes expanded relative to
-#                       $HOME. Defaults to ~/Documents/datalib when
-#                       not given.
+#                       $HOME. Defaults to ~/Documents/Datalib/Default,
+#                       the library the desktop app opens first.
 #                       e.g. `bazelisk run //datalib:dev -- ~/datalib.thad`
 #   DATALIB_PORT    Vite port (default: ephemeral, freshly allocated)
 #   DATALIB_BIND    Backend bind addr (default: 127.0.0.1:<ephemeral>)
@@ -108,7 +108,7 @@ if [[ $# -ge 1 && -n "$1" ]]; then
     "~/"*)   ROOT_ARG="$HOME/${ROOT_ARG#\~/}" ;;
   esac
 else
-  ROOT_ARG="$HOME/Documents/datalib"
+  ROOT_ARG="$HOME/Documents/Datalib/Default"
 fi
 echo "data root: $ROOT_ARG"
 
@@ -162,11 +162,16 @@ for _ in $(seq 1 50); do
   sleep 0.2
 done
 
-case "$(uname -s)" in
-  Darwin) open "$URL" ;;
-  Linux)  xdg-open "$URL" >/dev/null 2>&1 || true ;;
-  *)      echo "open $URL in your browser" ;;
-esac
+# Only for a person at a terminal; see serve_dev.sh.
+if [[ -n "${DATALIB_NO_OPEN:-}" || ! -t 1 ]]; then
+  echo "open $URL in your browser"
+else
+  case "$(uname -s)" in
+    Darwin) open "$URL" ;;
+    Linux)  xdg-open "$URL" >/dev/null 2>&1 || true ;;
+    *)      echo "open $URL in your browser" ;;
+  esac
+fi
 
 # Block on whichever child exits first; trap handles teardown.
 wait -n "$BACKEND_PID" "$VITE_PID"

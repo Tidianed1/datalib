@@ -27,6 +27,28 @@ Slack's "Today at 11:02": this file is written once and read for years,
 so a word meaning "the day this was rendered" would be wrong by the
 next morning.
 
+**The author span carries the author's handle** where the provider has
+one — `<span class="msg-author" data-handle="email:riker@enterprise.org">`
+— from `NormalizedChatItem::author_handle` (`datalib_handle`). The text
+stays what the source showed; the UI asks the contacts app, if one is
+configured, whom the handle belongs to and draws a chip
+(`ui/src/cards/contacts.ts`). The attribute is load-bearing, like
+`data-section-uuid`: it is how a contact linked after this file was
+written still finds the author. The UI trusts it only on the header
+line, since a message body can carry any attribute it likes.
+
+An item with `recipients` (an email's To and Cc) gets one more line
+straight under the header — `<div class="msg-recipients">To <span
+class="msg-recipient" data-handle="…">…</span>; Cc …</div>` — and the UI
+trusts a `data-handle` there only because it is the header's very next
+element.
+
+Each document also carries a `DatalibContact` per author handle in it
+(`src/people.rs`): the names the provider showed the handle under, less
+the handle's own `<address>`, how many items it wrote and the last one's
+stamp. A provider needs no code for this; the index sums them per source
+to say who a handle is.
+
 ## Asides: runs of tool steps fold into one `<details>`
 
 An item with `is_aside` set is machinery rather than conversation — an
@@ -176,14 +198,38 @@ it without a bundler.
 `//datalib/ui:render_preview_test` regenerates the page and diffs it, so
 the checked-in copy cannot drift from the sources it was built from.
 
-## The UI sanitizes what you emit
+## Plain text is escaped; the UI sanitizes the rest
 
-A message body reaches the markdown as the sender wrote it, and the app
-renders the markdown with HTML enabled because the section wrappers are
-HTML. So before the page shows a document, `ui/src/cards/sanitize.ts`
-runs it through DOMPurify: scripts, event handlers, `javascript:` URLs,
-form controls and foreign iframes are dropped, and only the tags and
-attributes the renderers actually use survive. **A renderer that starts
-emitting a new tag or attribute has to add it there**, or the page will
-silently strip it; `ui/tests/sanitize.test.ts` is where the vocabulary
-is pinned.
+The app renders the markdown with HTML enabled, because the section
+wrappers are HTML, so anything upstream wrote has to be escaped where it
+becomes markup (`docs/dev/data_architecture_parse_and_render.md`
+§"Upstream text is escaped where it becomes markup"). This crate
+escapes every field it writes — the author, a label, a reactor, a file
+name, a system note — and an item's `text` according to the profile's
+`text_format`: `Plain` for what a person typed (a text message, a
+LinkedIn message), `Markdown` for an assistant's reply or for markdown
+the provider built itself, having escaped the plain text it put inside
+(Facebook's posts, Beeper's reply line, an email). The grid's search
+text is `text` as given either way.
+
+What markdown does reach the page, `ui/src/cards/sanitize.ts` runs
+through DOMPurify: scripts, event handlers, `javascript:` URLs and form
+controls are dropped, and only the tags and attributes the renderers
+actually use survive. **A renderer that starts emitting a new tag or
+attribute has to add it there**, or the page will silently strip it;
+`ui/tests/sanitize.test.ts` is where the vocabulary is pinned.
+
+The sanitizer is not the boundary, though. The page draws the body in a
+frame whose policy is `script-src 'none'` (`ui/src/cards/docFrame.ts`),
+so markup that gets past the sanitizer still cannot run.
+`ui/tests/e2e/document-sandbox.spec.ts` checks this by writing script
+straight into a document's frame. The UI's own code still reaches into
+the frame, so the `data-section-uuid` wrappers work as before.
+
+An `<iframe>` survives the sanitizer only when it frames
+`plots/<name>.html`, and the frame's policy allows frames from the asset
+route alone. The server runs such a page's scripts with no
+network (`DocumentKind::Plot` in `http/src/embed.rs`). It knows the page
+is a plot because the `unified_index` applet names it so. Every other
+document beside a markdown, such as an `.html` attachment in `blobs/`,
+runs no script at all.

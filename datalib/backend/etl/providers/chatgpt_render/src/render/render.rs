@@ -15,7 +15,9 @@ use datalib_etl_chat_common::types::{
     own_stamp_ms, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
     NormalizedDoc, UpstreamRef,
 };
+use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::html::md_code_block;
 
 use super::ids;
 use super::parse::{
@@ -55,6 +57,7 @@ fn profile() -> RenderProfile {
         reaction_kind: "ChatGPT Reaction".to_string(),
         chat_entity_kind: ENTITY_KIND_CONVERSATION,
         render_version: RENDER_VERSION,
+        text_format: TextFormat::Markdown,
     }
 }
 
@@ -171,7 +174,7 @@ fn build_chat(
         let msg_id = ids::message(source_id, &m.message_id, ms);
         items.push(NormalizedChatItem {
             message_uuid: msg_id.uuid.clone(),
-            author_id: m.role.clone().unwrap_or_else(|| "unknown".into()),
+            author_handle: None,
             author_display,
             date_ms: ms,
             text: body,
@@ -188,6 +191,7 @@ fn build_chat(
             )),
             is_aside: is_tool_role(m.role.as_deref()),
             unread: false,
+            recipients: Vec::new(),
             problems,
         });
     }
@@ -199,6 +203,7 @@ fn build_chat(
         .unwrap_or_else(|| "(untitled)".to_string());
     let chat_uuid = ids::conversation(source_id, &conv_id).uuid;
     NormalizedChat {
+        contacts: Vec::new(),
         inputs: Vec::new(),
         path_prefix: None,
         id: chat_uuid.clone(),
@@ -273,11 +278,8 @@ fn render_message_body(parts: &[&OAContentPartRow]) -> Option<String> {
         let t = p.text.as_deref().unwrap_or("").trim_end();
         match p.kind.as_str() {
             "text" => blocks.push(t.to_string()),
-            "code" => blocks.push(format!(
-                "```{}\n{t}\n```",
-                p.language.as_deref().unwrap_or("")
-            )),
-            "execution_output" => blocks.push(format!("```\n{t}\n```")),
+            "code" => blocks.push(md_code_block(p.language.as_deref().unwrap_or(""), t)),
+            "execution_output" => blocks.push(md_code_block("", t)),
             "thoughts" | "reasoning_recap" => blocks.push(format!("> {}", t.replace('\n', "\n> "))),
             _ => blocks.push(t.to_string()),
         }
@@ -320,5 +322,39 @@ fn kind_for_role_and_type(role: Option<&str>, content_type: Option<&str>) -> &'s
             _ => "LLM Response",
         },
         _ => "Tool Call",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn part(kind: &str, language: Option<&str>, text: &str) -> OAContentPartRow {
+        OAContentPartRow {
+            message_id: "m1".to_string(),
+            part_index: 0,
+            kind: kind.to_string(),
+            language: language.map(str::to_string),
+            text: Some(text.to_string()),
+            raw_json: serde_json::Value::Null,
+        }
+    }
+
+    /// Code and its output are shown as they are, whatever they contain:
+    /// a fence inside cannot close ours and let the rest out as markup.
+    #[test]
+    fn code_and_its_output_stay_inside_their_fences() {
+        let code = part(
+            "code",
+            Some("python\n<b>"),
+            "print('```')\n<script>x</script>",
+        );
+        let output = part("execution_output", None, "```\n<script>x</script> & co");
+        let body = render_message_body(&[&code, &output]).unwrap();
+        assert_eq!(
+            body,
+            "````python\nprint('```')\n<script>x</script>\n````\n\n\
+             ````\n```\n<script>x</script> & co\n````"
+        );
     }
 }

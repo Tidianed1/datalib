@@ -221,6 +221,7 @@ pub fn render_all(
             rows,
             sections: Vec::new(),
             edges: Vec::new(),
+            contacts: Vec::new(),
             problems,
         })?;
         summary.buckets.push(Bucket {

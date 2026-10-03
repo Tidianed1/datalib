@@ -43,7 +43,7 @@ test("the grid opens one row per document, Contents second", async ({ page, requ
   await page.goto(GRID);
   await expectDefaults(page, request);
   // Named after what it is, not after the term it opens with.
-  await expect(page.locator(".miller-col-title").first()).toHaveText("Search");
+  await expect(page.locator(".ct-main .ct-card-title").first()).toHaveText("Search");
 });
 
 /// The default is a term in the search bar, and deleting it shows every
@@ -54,7 +54,6 @@ test("a cleared default stays cleared", async ({ page, request }) => {
   await expect(page.getByTestId("search-input")).toHaveValue("is:document");
   await page.getByTestId("search-clear").click();
   await expect(page.locator(".grid-column .status")).toContainText(`(of ${every})`);
-  await expect(page).not.toHaveURL(/\/$/);
 
   await page.reload();
   await expect(page.getByTestId("search-input")).toHaveValue("");
@@ -76,16 +75,4 @@ test("the empty search bar suggests a source this library has", async ({ page, r
   const year = /after:(\d{4})-01-01/.exec(hint)?.[1];
   expect(year, hint).toBeTruthy();
   expect(await total(request, `source_id:${source} after:${year}-01-01`), hint).toBeGreaterThan(0);
-});
-
-test.describe("in the tabs layout, the app's own default", () => {
-  test.beforeEach(async ({ page }) => {
-    await page.addInitScript(() => localStorage.setItem("datalib-layout", "tabs"));
-  });
-
-  test("the grid opens one row per document, Contents second", async ({ page, request }) => {
-    await page.goto(GRID);
-    await expect(page.locator(".tabs-row .tabs-label").first()).toHaveText("Search");
-    await expectDefaults(page, request);
-  });
 });

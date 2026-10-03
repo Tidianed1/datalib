@@ -14,8 +14,11 @@ use datalib_etl_chat_common::types::{
     own_stamp_ms, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
     NormalizedDoc, UpstreamRef,
 };
+use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::html::escape_md_block;
 use datalib_etl_render::inputs::{Inputs, RawRange};
+use datalib_handle::Handle;
 use datalib_schema::problems::Problem;
 use serde_json::Value;
 
@@ -32,7 +35,8 @@ use datalib_schema::providers::Provider;
 ///     backpointer, and a message's id carries its stamp in its leading
 ///     bits (`datalib_id`'s v8 layout). Every uuid moved, `chat_uuid`
 ///     among them.
-pub const RENDER_VERSION: u32 = 4;
+/// v5: the author span carries the author's handle as `data-handle`.
+pub const RENDER_VERSION: u32 = 5;
 
 /// Projection for [`BlobBundle::load_many`] over the Voice CAS edge: the
 /// `ref_name` (attachment filename) is the bundle key; `content_type`
@@ -52,6 +56,7 @@ fn profile() -> RenderProfile {
         reaction_kind: "Google Chat Reaction".to_string(),
         chat_entity_kind: ids::KIND_SPACE,
         render_version: RENDER_VERSION,
+        text_format: TextFormat::Plain,
     }
 }
 
@@ -65,6 +70,7 @@ fn voice_profile() -> RenderProfile {
         reaction_kind: "Google Voice Reaction".to_string(),
         chat_entity_kind: ids::KIND_VOICE_CONVERSATION,
         render_version: RENDER_VERSION,
+        text_format: TextFormat::Markdown,
     }
 }
 
@@ -295,10 +301,10 @@ fn build_chats(
                     .and_then(|c| c.get("name"))
                     .and_then(Value::as_str)
                     .unwrap_or("Unknown");
-                let email = creator
+                let handle = creator
                     .and_then(|c| c.get("email"))
                     .and_then(Value::as_str)
-                    .unwrap_or(name);
+                    .and_then(Handle::email);
                 let id = m.get("message_id").and_then(Value::as_str).unwrap_or("");
                 let text = m.get("text").and_then(Value::as_str);
                 let mut problems = Vec::new();
@@ -311,7 +317,7 @@ fn build_chats(
                 let msg_id = ids::message(source_id, id, date_ms);
                 NormalizedChatItem {
                     message_uuid: msg_id.uuid.clone(),
-                    author_id: email.to_string(),
+                    author_handle: handle,
                     author_display: name.to_string(),
                     date_ms,
                     text: text.filter(|s| !s.is_empty()).map(str::to_string),
@@ -325,6 +331,7 @@ fn build_chats(
                     source_ref: Some(UpstreamRef::new(msg_id.entity_kind, msg_id.natural_key)),
                     is_aside: false,
                     unread: false,
+                    recipients: Vec::new(),
                     problems,
                 }
             })
@@ -361,6 +368,7 @@ fn build_chats(
 
         let chat_id = ids::space(source_id, &space);
         chats.push(NormalizedChat {
+            contacts: Vec::new(),
             inputs: inputs.declared(),
             path_prefix: None,
             id: space.clone(),
@@ -497,6 +505,7 @@ fn build_voice_chats(source_id: &str, messages: &[(String, Value)]) -> Vec<Norma
 
         let conversation = ids::voice_conversation(source_id, &chat_id);
         chats.push(NormalizedChat {
+            contacts: Vec::new(),
             inputs: inputs.declared(),
             path_prefix: None,
             id: chat_id.clone(),
@@ -555,18 +564,18 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                     .unwrap_or("Unknown")
                     .to_string()
             };
-            let author_id = sender
+            let author_handle = sender
                 .and_then(|s| s.get("tel").and_then(Value::as_str))
-                .map(str::to_string)
-                .unwrap_or_else(|| if is_me { "me".into() } else { "unknown".into() });
+                .filter(|_| !is_me)
+                .and_then(Handle::tel);
             let body = m
                 .get("body")
                 .and_then(Value::as_str)
                 .filter(|s| !s.is_empty())
-                .map(str::to_string);
+                .map(escape_md_block);
             NormalizedChatItem {
                 message_uuid,
-                author_id,
+                author_handle,
                 author_display,
                 date_ms,
                 text: body,
@@ -584,6 +593,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 source_ref: source_ref.clone(),
                 is_aside: false,
                 unread: false,
+                recipients: Vec::new(),
                 problems: problems.clone(),
             }
         }
@@ -597,12 +607,12 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 "Recorded call"
             };
             let caption = match transcript {
-                Some(t) if !t.is_empty() => format!("**{label}:** {t}"),
+                Some(t) if !t.is_empty() => format!("**{label}:** {}", escape_md_block(t)),
                 _ => format!("**{label}**"),
             };
             NormalizedChatItem {
                 message_uuid,
-                author_id: party_id(party),
+                author_handle: party_handle(party),
                 author_display,
                 date_ms,
                 text: Some(caption),
@@ -617,6 +627,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 source_ref: source_ref.clone(),
                 is_aside: false,
                 unread: false,
+                recipients: Vec::new(),
                 problems: problems.clone(),
             }
         }
@@ -631,7 +642,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
             };
             NormalizedChatItem {
                 message_uuid,
-                author_id: party_id(party),
+                author_handle: party_handle(party),
                 author_display: party_display(party),
                 date_ms,
                 text: None,
@@ -645,6 +656,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 source_ref: source_ref.clone(),
                 is_aside: false,
                 unread: false,
+                recipients: Vec::new(),
                 problems: problems.clone(),
             }
         }
@@ -660,11 +672,10 @@ fn party_display(party: Option<&Value>) -> String {
         .to_string()
 }
 
-fn party_id(party: Option<&Value>) -> String {
+fn party_handle(party: Option<&Value>) -> Option<Handle> {
     party
         .and_then(|p| p.get("tel").and_then(Value::as_str))
-        .map(str::to_string)
-        .unwrap_or_else(|| "unknown".to_string())
+        .and_then(Handle::tel)
 }
 
 /// Unix millis from the canonical `when` (RFC 3339), falling back to the
@@ -858,6 +869,36 @@ mod tests {
         assert_eq!(chats[0].buckets[1].period_key, "2019-09");
         // is_me → "Me".
         assert_eq!(chats[0].buckets[1].items[0].author_display, "Me");
+    }
+
+    /// A text and a transcript are what was said; the bold label around
+    /// the transcript is ours. Google Chat's profile is plain, so
+    /// chat-common escapes its messages itself.
+    #[test]
+    fn voice_text_in_markup_renders_escaped() {
+        let messages = vec![
+            json!({
+                "id":"t1","kind":"text","conversation_key":"+1555","conversation_display":"Q",
+                "when":"2010-02-18T16:10:05.000-08:00","sender":{"tel":"+1555","name":"Q"},
+                "body":"<script>x</script> & co"
+            }),
+            json!({
+                "id":"v1","kind":"voicemail","conversation_key":"+1555","conversation_display":"Q",
+                "when":"2010-02-18T16:11:05.000-08:00","party":{"tel":"+1555","name":"Q"},
+                "transcript":"<script>x</script> & co","audio":"vm.mp3"
+            }),
+        ];
+        let chats = build_voice_chats("gt", &with_ids(&messages, "id"));
+        let items = &chats[0].buckets[0].items;
+        assert_eq!(
+            items[0].text.as_deref(),
+            Some("&lt;script&gt;x&lt;/script&gt; &amp; co")
+        );
+        assert_eq!(
+            items[1].text.as_deref(),
+            Some("**Voicemail:** &lt;script&gt;x&lt;/script&gt; &amp; co")
+        );
+        assert_eq!(profile().text_format, TextFormat::Plain);
     }
 
     #[test]

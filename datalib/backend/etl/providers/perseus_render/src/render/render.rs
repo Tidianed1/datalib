@@ -12,6 +12,7 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 use datalib_etl::layout::render_markdown_root;
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::html::{escape_md_block, escape_md_inline};
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
@@ -147,6 +148,7 @@ fn render_book(
         rows,
         sections: Vec::new(),
         edges,
+        contacts: Vec::new(),
         problems,
     })
     .with_context(|| format!("on_doc_complete book {}", book.n))?;
@@ -223,6 +225,7 @@ fn render_chapter(
         rows,
         sections: Vec::new(),
         edges,
+        contacts: Vec::new(),
         problems,
     })
     .with_context(|| {
@@ -322,8 +325,9 @@ fn render_chapter_md(
          language: {lang}\n\
          ---\n\
          \n\
-         # {title}\n\
+         # {heading}\n\
          \n",
+        heading = escape_md_inline(&title),
         edition_id = edition.id,
         book_n = chapter.book_n,
         ch_n = chapter.n,
@@ -350,7 +354,7 @@ fn render_chapter_md(
                 .uuid
             })
         } else {
-            text.to_string()
+            escape_md_block(text)
         };
         out.push_str(&section_div_open(&s_uuid));
         out.push_str("\n\n");
@@ -369,25 +373,27 @@ fn wrap_sentences(
     sentences: &[Sentence],
     anchor_for: impl Fn(usize) -> String,
 ) -> String {
+    // Escaped slice by slice: the sentence offsets are into the text as
+    // the edition has it.
     if sentences.is_empty() {
-        return text.to_string();
+        return escape_md_block(text);
     }
     let mut out = String::with_capacity(text.len() + sentences.len() * 64);
     let mut cursor = 0usize;
     for (i, sent) in sentences.iter().enumerate() {
         if sent.start > cursor {
-            out.push_str(&text[cursor..sent.start]);
+            out.push_str(&escape_md_block(&text[cursor..sent.start]));
         }
         let uuid = anchor_for(i);
         out.push_str("<span data-section-uuid=\"");
         out.push_str(&uuid);
         out.push_str("\">");
-        out.push_str(&text[sent.start..sent.end]);
+        out.push_str(&escape_md_block(&text[sent.start..sent.end]));
         out.push_str("</span>");
         cursor = sent.end;
     }
     if cursor < text.len() {
-        out.push_str(&text[cursor..]);
+        out.push_str(&escape_md_block(&text[cursor..]));
     }
     out
 }
@@ -667,6 +673,48 @@ mod tests {
         assert!(md.contains(&format!("data-section-uuid=\"{s_uuid}\"")));
         // No per-sentence spans when the edition isn't in a pair.
         assert!(!md.contains("<span data-section-uuid"));
+    }
+
+    /// An edition's title and its text are text: the TEI decodes `&lt;`
+    /// to `<`, and here it goes back to showing as one, sentence spans
+    /// and all.
+    #[test]
+    fn a_chapter_in_markup_renders_escaped() {
+        let ed = edition("perseus-grc2", "grc", "<script>x</script> & co");
+        let chapter = Chapter {
+            book_n: "1".into(),
+            n: "1".into(),
+            sections: vec![section("1", &[("perseus-grc2", "<b>x</b> & co.")])],
+        };
+        let md = render_chapter_md("perseus", &chapter, &ed, &PerseusAlignments::default());
+        let (_, body) = md
+            .split_once("---\n\n")
+            .expect("front matter, then the body");
+        assert!(
+            !body.contains("<script>") && !body.contains("<b>"),
+            "{body}"
+        );
+        assert!(
+            body.contains("# Thucydides 1.1 — &lt;script&gt;x&lt;/script&gt; &amp; co\n"),
+            "{body}"
+        );
+        assert!(
+            body.contains("\n&lt;b&gt;x&lt;/b&gt; &amp; co.\n"),
+            "{body}"
+        );
+
+        let text = "<b>x</b> & co. Next.";
+        let sentence = |start: usize, end: usize| Sentence {
+            text: text[start..end].to_string(),
+            start,
+            end,
+        };
+        let sentences = [sentence(0, 14), sentence(15, 20)];
+        assert_eq!(
+            wrap_sentences(text, &sentences, |i| format!("s{i}")),
+            "<span data-section-uuid=\"s0\">&lt;b&gt;x&lt;/b&gt; &amp; co.</span> \
+             <span data-section-uuid=\"s1\">Next.</span>"
+        );
     }
 
     #[test]

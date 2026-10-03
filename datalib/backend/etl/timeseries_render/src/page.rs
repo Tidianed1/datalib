@@ -12,6 +12,7 @@ use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl::title::Title;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::html::{escape_md_inline, md_code_span};
 use datalib_etl_render::processor::RenderCtx;
 use datalib_id::{entity_id_str, IdNamespace};
 use datalib_schema::grid_rows::GridRow;
@@ -64,7 +65,8 @@ pub struct Device {
     /// from this.
     pub key: String,
     pub name: String,
-    /// The line under the device's heading.
+    /// The line under the device's heading: markdown, whose plain parts
+    /// the provider has escaped.
     pub facts: String,
     /// The first line(s) of its grid row's text; one line per series
     /// follows.
@@ -265,6 +267,7 @@ pub fn write_page(
         rows,
         sections: Vec::new(),
         edges: Vec::new(),
+        contacts: Vec::new(),
         problems,
     })
     .with_context(|| format!("on_doc_complete {m_uuid}"))
@@ -459,7 +462,7 @@ fn render_device_sections(
             "<div id=\"m-{uuid}\" data-section-uuid=\"{uuid}\" class=\"msg msg--{}\">\n",
             profile.tag
         );
-        let _ = writeln!(out, "### {}\n", dev.name);
+        let _ = writeln!(out, "### {}\n", escape_md_inline(&dev.name));
         let _ = writeln!(out, "*{}*\n", dev.facts);
         match by_device.get(dev.key.as_str()) {
             Some(list) if !list.is_empty() => render_metric_table(out, profile, list),
@@ -488,7 +491,7 @@ fn render_device_sections(
             profile.devices_table,
             orphans
                 .iter()
-                .map(|d| format!("`{d}`"))
+                .map(|d| md_code_span(d))
                 .collect::<Vec<_>>()
                 .join(", "),
             profile.orphan_hint,
@@ -634,4 +637,58 @@ fn build_grid_rows(
         );
     }
     rows
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::series::Series;
+
+    const PROFILE: PageProfile = PageProfile {
+        provider: Provider::Test,
+        tag: "test",
+        source_label: "Test",
+        id_namespace: IdNamespace::Yolink,
+        title_prefix: "Test sensors",
+        noun: "readings",
+        intro: "",
+        metric_word: "metric",
+        decimals: 1,
+        metrics: &[],
+        quantities: &[],
+        no_devices: "*(no devices)*",
+        devices_preamble: None,
+        orphan_key_word: "device",
+        devices_table: "devices",
+        orphan_hint: "",
+        render_version: 1,
+    };
+
+    /// A device's name and the key of a series nobody names are the
+    /// source's words; on the page they are text.
+    #[test]
+    fn a_device_in_markup_renders_escaped() {
+        let series = [Series::new("a`b".into(), "m".into())];
+        let page = Page {
+            head: None,
+            devices: vec![Device {
+                key: "k1".into(),
+                name: "<script>x</script> & co".into(),
+                facts: "facts".into(),
+                grid_text: String::new(),
+                last_ts_ms: None,
+            }],
+            series: &series,
+            sample_count: 0,
+            store_section: String::new(),
+        };
+        let mut out = String::new();
+        render_device_sections(&mut out, &PROFILE, &page, "s");
+        assert!(
+            out.contains("### &lt;script&gt;x&lt;/script&gt; &amp; co\n"),
+            "{out}"
+        );
+        assert!(!out.contains("<script>"), "{out}");
+        assert!(out.contains("row:** `` a`b ``."), "{out}");
+    }
 }

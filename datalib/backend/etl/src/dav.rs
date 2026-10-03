@@ -45,6 +45,18 @@ pub enum DavError {
          latchkey holds a login for this host."
     )]
     NoPrincipal { service: HttpService, tried: String },
+    #[error(
+        "the {service} server refused the credential latchkey sent — tried {tried}. The login \
+         is wrong, revoked, or not the kind this server takes: DAV usually wants an app \
+         password, not an API token."
+    )]
+    CredentialRefused { service: HttpService, tried: String },
+    #[error(
+        "no {service} request reached the server — tried {tried}. Each failed before an \
+         answer came back; the error with each URL says why (latchkey refusing to send one, \
+         or the host unreachable)."
+    )]
+    Unreached { service: HttpService, tried: String },
 }
 
 impl DavError {
@@ -256,7 +268,7 @@ pub async fn find_principal(
     if let Some(o) = origin(server_url) {
         candidates.push(format!("{o}/.well-known/{well_known}"));
     }
-    let mut tried: Vec<String> = Vec::new();
+    let mut misses: Vec<(String, Option<DavError>)> = Vec::new();
     for url in candidates {
         *requests += 1;
         let found =
@@ -272,15 +284,42 @@ pub async fn find_principal(
                 if let Some(principal) = principal {
                     return Ok(principal);
                 }
-                tried.push(format!("{url}: no current-user-principal"));
+                misses.push((url, None));
             }
-            Err(e) => tried.push(format!("{url}: {e}")),
+            Err(e) => misses.push((url, Some(e))),
         }
     }
-    Err(DavError::NoPrincipal {
-        service,
-        tried: tried.join("; "),
-    })
+    Err(no_principal(service, &misses))
+}
+
+/// Why discovery found no principal, from what each URL answered (`None`
+/// for a reply that named none). Refused only when every URL refused, so
+/// a wrong server URL still reads as one; unreached when no request got
+/// an answer, since then neither the URL nor the login was tested.
+fn no_principal(service: HttpService, misses: &[(String, Option<DavError>)]) -> DavError {
+    let tried = misses
+        .iter()
+        .map(|(url, e)| match e {
+            Some(e) => format!("{url}: {e}"),
+            None => format!("{url}: no current-user-principal"),
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    let refused = !misses.is_empty()
+        && misses
+            .iter()
+            .all(|(_, e)| matches!(e.as_ref().and_then(DavError::status), Some(401 | 403)));
+    let unreached = !misses.is_empty()
+        && misses
+            .iter()
+            .all(|(_, e)| matches!(e, Some(DavError::Transport { .. })));
+    if refused {
+        DavError::CredentialRefused { service, tried }
+    } else if unreached {
+        DavError::Unreached { service, tried }
+    } else {
+        DavError::NoPrincipal { service, tried }
+    }
 }
 
 /// `href` against `base`: servers hand back absolute URLs, root-relative
@@ -459,6 +498,92 @@ mod tests {
             ms.responses[0].props.principal.as_deref(),
             Some("/dav/principals/user/picard@enterprise.test/")
         );
+    }
+
+    fn http(status: u16, url: &str) -> Option<DavError> {
+        Some(DavError::Http {
+            service: HttpService::Carddav,
+            method: HttpMethod::Propfind,
+            status,
+            url: url.into(),
+        })
+    }
+
+    /// A 401 on every discovery URL means the server turned the
+    /// credential away; it used to read as "check that latchkey holds a
+    /// login", which sent people looking for a login that was there.
+    #[test]
+    fn every_url_refusing_is_a_refused_credential() {
+        let misses = vec![
+            (
+                "https://a.test/dav/".into(),
+                http(401, "https://a.test/dav/"),
+            ),
+            (
+                "https://a.test/.well-known/carddav".into(),
+                http(403, "https://a.test/dav/"),
+            ),
+        ];
+        let e = no_principal(HttpService::Carddav, &misses);
+        assert!(matches!(e, DavError::CredentialRefused { .. }), "{e}");
+        assert!(e
+            .to_string()
+            .contains("http 401 on Propfind https://a.test/dav/"));
+    }
+
+    /// latchkey refusing to send a request (two accounts and none named)
+    /// used to read as "check the server URL and that latchkey holds a
+    /// login" — neither of which was the problem.
+    #[test]
+    fn no_request_reaching_the_server_is_unreached() {
+        let refused_by_latchkey = |url: &str| {
+            Some(DavError::Transport {
+                service: HttpService::Caldav,
+                source: crate::http::HttpError::Curl {
+                    service: HttpService::Caldav,
+                    url: url.into(),
+                    exit: 1,
+                    stderr: "Multiple accounts are stored for service 'fastmail-dav'".into(),
+                },
+            })
+        };
+        let misses = vec![
+            (
+                "https://a.test/dav/".into(),
+                refused_by_latchkey("https://a.test/dav/"),
+            ),
+            (
+                "https://a.test/.well-known/caldav".into(),
+                refused_by_latchkey("https://a.test/.well-known/caldav"),
+            ),
+        ];
+        let e = no_principal(HttpService::Caldav, &misses);
+        assert!(matches!(e, DavError::Unreached { .. }), "{e}");
+        assert!(e.to_string().contains("Multiple accounts"), "{e}");
+        assert!(!e.to_string().contains("holds a login"), "{e}");
+    }
+
+    #[test]
+    fn a_url_that_answered_keeps_it_a_missing_principal() {
+        let misses = vec![
+            (
+                "https://a.test/dav/".into(),
+                http(401, "https://a.test/dav/"),
+            ),
+            (
+                "https://a.test/.well-known/carddav".into(),
+                http(404, "https://a.test/x"),
+            ),
+        ];
+        assert!(matches!(
+            no_principal(HttpService::Carddav, &misses),
+            DavError::NoPrincipal { .. }
+        ));
+        let answered = vec![("https://a.test/dav/".into(), None)];
+        assert!(matches!(
+            no_principal(HttpService::Carddav, &answered),
+            DavError::NoPrincipal { .. }
+        ));
     }
 
     #[test]

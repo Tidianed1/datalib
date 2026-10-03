@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch the datalib HTTP backend and open a browser at it.
+# Launch the datalib HTTP backend and, from a terminal, open a browser at it.
 # Invoked via `bazelisk run //datalib:serve`.
 set -eo pipefail
 
@@ -67,7 +67,9 @@ HEALTH_URL="$BASE_URL/api/health?token=$DATALIB_TOKEN"
 OPEN_URL="$BASE_URL/?token=$DATALIB_TOKEN"
 
 # Positional data-root arg required by the binary; default to
-# ~/Documents/datalib if not supplied (legacy default).
+# ~/Documents/Datalib/Default, the library the desktop app opens first.
+# Not the Datalib folder itself: the app reads a library there as one
+# to move into Default.
 if [[ $# -ge 1 && -n "$1" ]]; then
   ROOT_ARG="$1"
   case "$ROOT_ARG" in
@@ -75,7 +77,7 @@ if [[ $# -ge 1 && -n "$1" ]]; then
     "~/"*)   ROOT_ARG="$HOME/${ROOT_ARG#\~/}" ;;
   esac
 else
-  ROOT_ARG="$HOME/Documents/datalib"
+  ROOT_ARG="$HOME/Documents/Datalib/Default"
 fi
 echo "data root: $ROOT_ARG"
 
@@ -90,10 +92,11 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
   sleep 0.2
 done
 
-# `DATALIB_NO_OPEN=1` keeps the URL on the terminal instead: a tool that
-# opens the page in its own pane does not want the OS browser stealing
-# the focus every time it restarts the server.
-if [[ -n "${DATALIB_NO_OPEN:-}" ]]; then
+# Open the OS browser only for a person at a terminal: an agent's shell
+# or a preview pane pipes stdout, and a tab popping open there steals
+# the focus from whatever the person is doing. `DATALIB_NO_OPEN=1` keeps
+# the URL on the terminal even when it is one.
+if [[ -n "${DATALIB_NO_OPEN:-}" || ! -t 1 ]]; then
   echo "open $OPEN_URL in your browser"
 else
   case "$(uname -s)" in

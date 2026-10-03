@@ -277,7 +277,9 @@ ERROR: connection to tactical-db.sf.test refused (subspace relay 4 offline)
 
 <details><summary>Tool result: starfleet_db_query</summary>
 
+```
 Signature 7-of-9-alpha registered 2368-11-02. Counter: rotating phaser modulation 257.4 MHz ± 0.6. Effective rounds: 2 before re-adaptation.
+```
 
 </details>
 

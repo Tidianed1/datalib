@@ -22,8 +22,10 @@ use datalib_etl_chat_common::types::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
     NormalizedReaction, UpstreamRef,
 };
+use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{changed_rows, Inputs, RawRange};
+use datalib_handle::Handle;
 use datalib_id::{composite_key, entity_id_str, IdNamespace};
 use datalib_schema::providers::Provider;
 use datalib_time::RecordStampPrecision;
@@ -34,7 +36,8 @@ use crate::typedstream::attributed_body_text;
 
 /// v2: every id carries its row's `created_at` in its leading bits
 ///     (`datalib_id`'s v8 layout).
-pub const RENDER_VERSION: u32 = 3;
+/// v4: the author span carries the author's handle as `data-handle`.
+pub const RENDER_VERSION: u32 = 4;
 
 pub const STAMP_PRECISION: RecordStampPrecision = RecordStampPrecision::Seconds;
 
@@ -90,6 +93,7 @@ fn profile() -> RenderProfile {
         reaction_kind: "Messages Tapback".to_string(),
         chat_entity_kind: ENTITY_KIND_CONVERSATION,
         render_version: RENDER_VERSION,
+        text_format: TextFormat::Plain,
     }
 }
 
@@ -281,15 +285,16 @@ async fn load(
             chat.inputs.read("handle", &handle_id.to_string());
         }
         let from_me: i64 = r.get("is_from_me");
-        let (author_id, author_display) = if from_me == 1 {
-            ("me".to_string(), "Me".to_string())
+        let (author_handle, author_display) = if from_me == 1 {
+            (None, "Me".to_string())
         } else {
             let id = handles
                 .get(&handle_id)
                 .or(chat.identifier.as_ref())
                 .cloned()
                 .unwrap_or_else(|| "?".to_string());
-            (id.clone(), id)
+            // A Messages handle is a phone number or an Apple ID email.
+            (Handle::tel(&id).or_else(|| Handle::email(&id)), id)
         };
         let guid: String = r.get("guid");
         let date_ms = apple_date_ms(r.get("date"));
@@ -325,7 +330,7 @@ async fn load(
         };
         chat.items.push(NormalizedChatItem {
             message_uuid: message_uuid(source_id, &guid, date_ms),
-            author_id,
+            author_handle,
             author_display,
             date_ms,
             text: body_text(r.get("text"), r.get("attributedBody"), &guid),
@@ -339,6 +344,7 @@ async fn load(
             source_ref: Some(UpstreamRef::new(KIND_MESSAGE, guid)),
             is_aside: false,
             unread,
+            recipients: Vec::new(),
             problems: Vec::new(),
         });
     }
@@ -450,6 +456,7 @@ impl ChatBuild {
             .or(self.identifier)
             .unwrap_or_else(|| self.guid.clone());
         NormalizedChat {
+            contacts: Vec::new(),
             inputs: self.inputs.declared(),
             path_prefix: None,
             chat_uuid: chat_uuid(source_id, &self.guid),

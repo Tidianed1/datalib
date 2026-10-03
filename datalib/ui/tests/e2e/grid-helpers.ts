@@ -11,10 +11,23 @@
 import { expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 
 /// The search grid's rows, wherever it is on the page.
+// The containers layout: the tabs down the side, and the cards the
+// selected tab shows (every card in it, however deep). A tab shown once
+// stays mounted, hidden and marked ct-hidden-pane; its cards do not
+// count. (Not `:visible`: a card that draws nothing is zero-high.)
+export const SHOWN_CARDS = ".ct-main .ct-card:not(.ct-hidden-pane .ct-card)";
+export const shownCards = (page: Page) => page.locator(SHOWN_CARDS);
+export const tabLabels = (page: Page) => page.locator(".ct-tab .ct-tab-label");
+// The shown card whose source contains `source`.
+export const cardOf = (page: Page, source: string) =>
+  page.locator(`${SHOWN_CARDS}[data-card-source*=${JSON.stringify(source)}]`);
+// A card's title, in the header it has outside a solidified container.
+export const cardTitle = (card: Locator) => card.locator(".ct-card-title");
+
 export const SEARCH_ROWS = ".grid-box .slick-row";
 
 /// The search grid on its default query, documents only. `/` opens on
-/// the Home card now, so a spec about the grid goes here.
+/// the Dashboard card now, so a spec about the grid goes here.
 export const GRID = "/gridView()";
 
 /// The search grid with its query cleared: every row, the messages
@@ -665,4 +678,35 @@ export async function settle(
   timeout = ROW_SETTLE,
 ): Promise<string> {
   return (await settleRows(page, [id], { [id]: before }, timeout))[id];
+}
+
+/** A document card's rendered body. It is drawn inside the card's
+ *  own frame (`src/cards/docFrame.ts`), so a page-level locator
+ *  does not reach it. `scope` narrows to one card when several are open. */
+export function docBody(scope: Page | Locator): Locator {
+  return scope.frameLocator("iframe.doc-frame").locator("body.chat-body");
+}
+
+/** `selector` in whichever document frame holds it, waiting until one
+ *  does. One locator cannot reach across frames, and each document card
+ *  has its own frame. */
+export async function inDocFrame(page: Page, selector: string, timeout = 10_000): Promise<Locator> {
+  let hit: Locator | null = null;
+  await expect
+    .poll(
+      async () => {
+        for (const f of page.frames()) {
+          if (f === page.mainFrame()) continue;
+          const loc = f.locator(selector);
+          if ((await loc.count().catch(() => 0)) > 0) {
+            hit = loc;
+            return true;
+          }
+        }
+        return false;
+      },
+      { timeout, message: `no document frame holds ${selector}` },
+    )
+    .toBe(true);
+  return hit!;
 }

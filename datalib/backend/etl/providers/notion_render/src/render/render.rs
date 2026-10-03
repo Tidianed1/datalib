@@ -15,6 +15,7 @@ use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::html::{escape_md_block, escape_md_inline};
 use datalib_etl_render::inputs::{Bucket, Buckets};
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -28,7 +29,7 @@ use super::parse::ParsedNotion;
 ///     comment's id carries its `created_time` in its leading bits
 ///     (`datalib_id`'s v8 layout). Every uuid moved; `notion_page_uuid`
 ///     now holds the page's datalib id.
-pub const RENDER_VERSION: u32 = 5;
+pub const RENDER_VERSION: u32 = 6;
 pub const SLUG_MAX_LEN: usize = 60;
 
 static SLUG_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[^a-z0-9]+").unwrap());
@@ -191,13 +192,19 @@ fn properties_table(page: &Value) -> String {
     rows.sort_by(|a, b| a.0.cmp(&b.0));
     let mut out = String::from("| Property | Value |\n| --- | --- |\n");
     for (k, v) in rows {
-        out.push_str(&format!(
-            "| {} | {} |\n",
-            k.replace('|', "\\|"),
-            v.replace('|', "\\|")
-        ));
+        out.push_str(&format!("| {} | {} |\n", table_cell(&k), table_cell(&v)));
     }
     out
+}
+
+/// A property's name or plain value as one table cell, its line breaks
+/// drawn as `<br>` since a real one would end the row.
+fn table_cell(value: &str) -> String {
+    value
+        .lines()
+        .map(escape_md_inline)
+        .collect::<Vec<_>>()
+        .join("<br>")
 }
 
 fn plain(rt: Option<&Value>) -> String {
@@ -313,7 +320,10 @@ fn render_thread(
     // it, so without this the thread opens with no indication of what
     // it is about.
     if let Some(a) = anchor.filter(|a| !a.trim().is_empty()) {
-        out.push_str(&format!("> {}\n\n", a.replace('\n', "\n> ")));
+        out.push_str(&format!(
+            "> {}\n\n",
+            escape_md_block(a).replace('\n', "\n> ")
+        ));
     }
     if members
         .iter()
@@ -339,8 +349,12 @@ fn render_thread(
         out.push_str(&format!(
             "<div id=\"m-{uuid}\" data-section-uuid=\"{uuid}\" class=\"msg msg--notion\">\n\n"
         ));
-        out.push_str(&format!("**{author}** · {when}\n\n"));
-        out.push_str(&plain(c.get("rich_text")));
+        out.push_str(&format!(
+            "**{}** · {}\n\n",
+            escape_md_inline(author),
+            escape_md_inline(when)
+        ));
+        out.push_str(&escape_md_block(&plain(c.get("rich_text"))));
         out.push_str("\n\n</div>\n\n");
     }
     fs::write(&path, out).with_context(|| format!("write {}", path.display()))?;
@@ -415,6 +429,7 @@ pub fn render_notion(
             rows: doc.rows.clone(),
             sections: Vec::new(),
             edges: Vec::new(),
+            contacts: Vec::new(),
             problems: doc.problems.clone(),
         })?;
         summary.buckets.push(Bucket {
@@ -466,6 +481,7 @@ pub fn render_notion(
             rows: doc.rows.clone(),
             sections: Vec::new(),
             edges: Vec::new(),
+            contacts: Vec::new(),
             problems: doc.problems.clone(),
         })?;
         summary.buckets.push(Bucket {
@@ -576,6 +592,38 @@ mod tests {
         let md = fs::read_to_string(p).unwrap();
         assert!(md.contains("> Warp core alignment"), "{md}");
         assert!(md.find("> Warp core alignment") < md.find("Recommend recalibration"));
+    }
+
+    /// A comment, its author, the block it hangs off and a property are
+    /// plain text in Notion's API (our `plain` drops the annotations), so
+    /// none of it may open a tag. The page body, Notion's own markdown,
+    /// is left as Notion wrote it.
+    #[test]
+    fn a_thread_and_properties_in_markup_render_escaped() {
+        const MARKUP: &str = "<script>x</script> & co";
+        let escaped = "&lt;script&gt;x&lt;/script&gt; &amp; co";
+        let d = tempdir().unwrap();
+        let c = json!({"id": "c1", "created_time": "2369-04-15T01:00:00.000Z",
+                       "display_name": {"resolved_name": MARKUP},
+                       "rich_text": [{"plain_text": MARKUP}]});
+        let p = render_thread("notion", "d1", "Handbook", &[&c], Some(MARKUP), d.path()).unwrap();
+        let md = fs::read_to_string(p).unwrap();
+        let (_, body) = md
+            .split_once("---\n\n")
+            .expect("front matter, then the body");
+        assert!(!body.contains("<script>"), "{md}");
+        assert!(body.starts_with(&format!("> {escaped}\n")), "{md}");
+        assert!(body.contains(&format!("**{escaped}** · ")), "{md}");
+        assert!(body.contains(&format!("\n{escaped}\n")), "{md}");
+
+        let page = json!({"id":"p1","properties":{
+            MARKUP: {"type":"rich_text","rich_text":[{"plain_text": "a | b\n<b>c</b>"}]}
+        }});
+        let t = properties_table(&page);
+        assert!(
+            t.contains(&format!("| {escaped} | a \\| b<br>&lt;b&gt;c&lt;/b&gt; |")),
+            "{t}"
+        );
     }
 
     /// `original_content_deleted` is a real upstream signal: the thing

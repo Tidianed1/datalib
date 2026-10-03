@@ -106,6 +106,7 @@ pub fn serve(port: u16) -> Result<()> {
             .route("/search/groups", get(groups_handler))
             .route("/qmd_state", post(qmd_state))
             .route("/docs", get(list_docs))
+            .route("/people", post(people))
             .route("/embedding_map", get(map::handler))
             .route("/embedding_map/matches", get(map::matches_handler))
             .route("/problems", get(problems::handler))
@@ -126,7 +127,7 @@ pub fn serve(port: u16) -> Result<()> {
     })
 }
 
-async fn require_gateway(
+pub(crate) async fn require_gateway(
     State(gate): State<Arc<crate::gate::Gate>>,
     req: axum::extract::Request,
     next: Next,
@@ -914,6 +915,29 @@ async fn qmd_state(
     })
 }
 
+#[derive(Deserialize)]
+struct PeopleBody {
+    handles: Vec<String>,
+}
+
+/// Every source's account of whoever holds each asked-for handle, ranked
+/// (`datalib_unified_index::people`). A handle no source mentions is
+/// simply absent.
+async fn people(
+    State(s): State<Index>,
+    Json(body): Json<PeopleBody>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    match s.repo.people_for_handles(&body.handles).await {
+        Ok(rows) => Ok(Json(serde_json::json!({
+            "people": datalib_unified_index::people::merge_and_rank(rows)
+        }))),
+        Err(e) => {
+            tracing::error!(error = %e, "could not read people by handle");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
 async fn list_docs(State(s): State<Index>) -> Result<Json<Vec<DocRow>>, StatusCode> {
     match s.repo.list_docs(500).await {
         Ok(rows) => Ok(Json(rows)),
@@ -1032,10 +1056,27 @@ async fn asset(
         .first_or_octet_stream()
         .essence_str()
         .to_string();
-    Response::builder()
-        .header(header::CONTENT_TYPE, mime)
-        .body(Body::from(bytes))
+    let mut resp = Response::builder().header(header::CONTENT_TYPE, &mime);
+    if let Some(kind) = document_kind(
+        target_canon
+            .strip_prefix(&parent_canon)
+            .unwrap_or(&target_canon),
+        &mime,
+    ) {
+        resp = resp.header(crate::gate::DOCUMENT_HEADER, kind);
+    }
+    resp.body(Body::from(bytes))
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+/// A plot page under `plots/` is one a time-series renderer wrote from
+/// numbers, and runs its own script; everything else beside a markdown —
+/// `blobs/` above all — is what a sender sent, and is left unnamed so the
+/// gateway serves it inert. `rel` is the resolved path, so `plots/../`
+/// cannot borrow the name.
+fn document_kind(rel: &std::path::Path, mime: &str) -> Option<&'static str> {
+    let first = rel.components().next()?;
+    (first.as_os_str() == "plots" && mime == "text/html").then_some("plot")
 }
 
 /// Strip a leading `---\n…\n---\n` YAML frontmatter block. This is text
@@ -1055,6 +1096,27 @@ fn strip_frontmatter(text: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only a renderer's own plot page may ask the gateway to run its
+    /// script; an attachment named `.html` may not (audit 2026-10-02
+    /// finding 1).
+    #[test]
+    fn only_plot_pages_are_named_documents() {
+        use std::path::Path;
+        assert_eq!(
+            document_kind(Path::new("plots/temperature.html"), "text/html"),
+            Some("plot")
+        );
+        assert_eq!(
+            document_kind(Path::new("blobs/0123abcd.html"), "text/html"),
+            None
+        );
+        assert_eq!(
+            document_kind(Path::new("plots/x.svg"), "image/svg+xml"),
+            None
+        );
+        assert_eq!(document_kind(Path::new("plots.html"), "text/html"), None);
+    }
 
     /// Frontmatter trimming is text handling, not parsing — a body
     /// without it is returned unchanged rather than treated as broken.
@@ -1117,6 +1179,7 @@ mod tests {
                 rows: vec![row],
                 sections: Vec::new(),
                 edges: Vec::new(),
+                contacts: Vec::new(),
                 problems: Vec::new(),
             };
             apply_one(&lock, root, &md).await.unwrap();

@@ -401,7 +401,11 @@ writes the indexes, and by `datalib-applet`, which serves them.
 ## Reference implementation
 
 `datalib/backend/applets` — `datalib-applet`, one subcommand per
-applet (`slack` and `unified_index`), the same shape as `datalib-step`. One
+applet (`slack`, `unified_index` and `datalib_contacts`), the same shape
+as `datalib-step`. `datalib_contacts` is the one that writes: it is the
+only writer of the contacts store under `datalib_curated/`
+(`app_stores.md`), and like `unified_index` it contributes endpoints
+only, which the document view calls. One
 binary rather than one per applet keeps the shared machinery in one
 place and ships one file instead of a growing list; adding an applet is
 a subcommand plus a module, not a new crate and five packaging edits.

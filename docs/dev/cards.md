@@ -2,19 +2,14 @@
 
 The datalib UI is a surface of cards: each card is a piece of
 JavaScript source the user can read (and edit) in the card's header
-bar. The host evaluates that source to produce the card's content.
+bar in edit mode. The host evaluates that source to produce the card's content.
 `datalib/ui/src/cards/types.ts` is the canonical home of every
 shape described here; this doc is the narrative version.
 
-A **layout** is what arranges cards on screen — a stack of miller
-columns, tabs in a sidebar tree, a 2D tree, a tiling window manager —
-selectable from the status bar, and remembered in the browser (see `datalib/ui/src/views/CardsView.vue`). This doc is
-deliberately layout-agnostic: it describes the card contract and how a
-card interacts with whatever layout hosts it. The layouts differ only
-in *where* they put cards and what reshaping furniture they offer;
-those specifics live with each layout (`MillerView.vue`,
-`TabsView.vue`, `TreeView.vue`, `TilingView.vue`). What every layout guarantees a card
-is identical, and is the subject here.
+The **containers layout** arranges cards on screen
+(`datalib/ui/src/views/ContainersView.vue`; § "The containers layout"
+below). Most of this doc is the contract between a card and that host:
+what a card gets, what it can ask for, and what it must not assume.
 
 ## Card source
 
@@ -71,11 +66,14 @@ itself. CSS custom properties (the app's `--datalib-*` theme variables) do
 inherit across the boundary and are the supported way to pick up
 theming. They live in `datalib/ui/src/theme.css`: the colours for
 light and dark, the system font, and every size — row height, control
-height, padding, font sizes — keyed off `<html data-density>`, which
-the status bar's **Compact / Comfortable** switch sets
-(`datalib/ui/src/density.ts`). A card that sizes itself with
-`var(--datalib-font-size)`, `var(--datalib-row-h)` and the rest
-follows that switch without knowing it exists. `--datalib-bg` is a
+height, padding, font sizes. The spacing ones — row and control
+heights, padding, gaps — are drawn from one number,
+`--datalib-density`, which the status bar's **density** sets on `<html>`
+(`datalib/ui/src/density.ts`; the scale is `densityScale.ts`: 0 to 1 in
+eighths). Text keeps one size; the browser's zoom (⌘+ / ⌘−,
+turned on in the desktop app too) makes everything larger. A card that
+sizes itself with `var(--datalib-row-h)`, `var(--datalib-pad)` and the
+rest follows the density without knowing it exists. `--datalib-bg` is a
 card's own background; `--datalib-ground` is the grey the cards sit
 on.
 
@@ -91,7 +89,7 @@ a card must also be `.ce.vue` and listed in the adapter's
 `styleSources` so their CSS lands in the root too (see
 `datalib/ui/src/cards/libs/documentView.ts` for the pattern).
 
-## Titles, icons and dev mode
+## Titles, icons and edit mode
 
 Every card kind describes itself with the same three fields: a
 **title** and **description** for the gallery, and an **icon** the
@@ -105,13 +103,13 @@ so nothing that draws a card knows which kind it is. An icon is a
 glyph name from `cards/icons.ts`, a source's mark in `src/assets/`, or
 a `data:image/…` URL; anything else draws the generic component glyph.
 
-The chrome bar around each card has two faces, switched by the **dev**
-toggle in the status bar (`datalib/ui/src/devMode.ts`, persisted in
+The header around each card has two faces, switched by the **Edit**
+toggle in the status bar (`datalib/ui/src/editMode.ts`, persisted in
 localStorage):
 
-- **Dev mode off** (the default): the bar shows the card's
+- **Edit mode off** (the default): the bar shows the card's
   human-readable **title** — read-only, no code visible.
-- **Dev mode on**: the bar shows the card's source in the editable box
+- **Edit mode on**: the bar shows the card's source in the editable box
   described below (Enter re-runs the card).
 
 The 🤖 agent hand-off button shows in **both** modes, but only on cards
@@ -123,29 +121,31 @@ and `components/AgentHandoffModal.vue`): a step list whose first step
 copies a "wayfinder" prompt, plus a persisted "skip these steps next
 time" opt-out that turns the button into a straight copy.
 
-Card creation is the same gesture in both modes: every layout has an
-"add card" affordance (the miller layout's ＋ after the last column,
-the tabs layout's "New card" under the last tab, the tree layout's
-"+ card" button, the
-tiling layout's ＋ add areas), and it always creates a `galleryView()`
-card — the **new-card gallery**
+Every way to add a card — the ＋ strip at the end of a Columns
+container, the sidebar's "＋ New card", a container panel's Add → Card —
+creates a `galleryView()` card — the **new-card gallery**
 (`datalib/ui/src/cards/libs/galleryView.ts`). It lists, each with a
 short description:
 
-1. the builtins `cards/catalog.ts` offers, `homeView` first and
-   `sourcesView` second;
-2. every titled component in the frontend store, each expanding to its
+1. the composites (`views/composites.ts`), the Dashboard first; picking
+   one replaces the gallery card with a copy of it
+   (`host.becomeComposite`);
+2. the builtins `cards/catalog.ts` offers, `sourcesView` first. A
+   builtin marked `galleryHidden` — a building block such as a
+   Dashboard section — is listed only once the gallery's "Show every
+   view" switch is on (kept in this browser);
+3. every titled component in the frontend store, each expanding to its
    qualified name called with its stored `component_args` — so one
    component appears once per namespace with its own arguments
    (`comp.slack_work.channels("slack_work")`,
    `comp.slack_personal.channels(…)`);
-3. a "build a component with an agent" entry that mints a fresh
+4. a "build a component with an agent" entry that mints a fresh
    component seeded with `agentSeedView` (the in-card hand-off
    instructions) and repoints the card at it.
 
 A builtin in the gallery takes no arguments, so one that needs them
 offers a parameter-less stand-in: `documentView`'s is
-`documentPickerView()`. In dev mode the gallery also shows each entry's
+`documentPickerView()`. In edit mode the gallery also shows each entry's
 source and a note that source can be typed straight into the chrome
 bar. Picking an entry replaces the gallery card with the chosen
 component via `host.setSource`. An agent can rename a component
@@ -227,32 +227,29 @@ type HostCommands = {
   (one source is the common case). The card supplies only the new
   cards' **source** — e.g. the grid card composes
   `documentView("<md>", "<row>")` when a row is clicked — and makes
-  **no assumption about placement**: where the new card lands is
-  entirely the active layout's business (next to the caller, as a
-  child node, as a sibling, …). Structural operations always go
-  through host commands, never the bus.
+  **no assumption about placement**: where the new card lands is the
+  host's business (§ "The containers layout"). Structural operations
+  always go through host commands, never the bus.
 - `hrefFor(...sources)` is the URL `openCards(...sources)` would land
   on, so a card can draw a **real link**: a plain click goes through
   `openCards`, and a modified click, a middle click, the context menu
   and a drag are the browser's — a new tab, a copied link, a bookmark.
   The document card's edge list is the pattern (`onEdgeLinkClick`;
   `isBrowserClick` in `cards/chatLink.ts` is the one rule for which
-  clicks to leave alone). A layout the URL does not describe answers
-  with the chain alone.
-- `close()` closes this card. A layout may close dependents along with
-  it (e.g. a node's subtree) — that's its call, not the card's.
+  clicks to leave alone). The link names the chain alone, which a new
+  window opens as a tab.
+- `close()` closes this card. The host may close more with it (a tab
+  takes the tabs opened from it) — that's its call, not the card's.
 - `setState(state)` replaces this card's persisted state string (see
   below).
 
 ### State strings
 
-A card may persist state so it survives a re-run (and, where the
-layout supports it, a reload). The string is **opaque to the host**:
-the card passes whatever it likes to `setState`, the host round-trips
-it, and the card reads it back as `ctx.initialState`. Setting `""`
-clears it. How long it survives is the layout's choice — a
-URL-backed layout persists it across reloads; an in-memory layout
-keeps it only until the page is gone — so a card must treat
+A card may persist state so it survives a re-run and a reload. The
+string is **opaque to the host**: the card passes whatever it likes to
+`setState`, the host keeps it with the card in the layout it saves, and
+the card reads it back as `ctx.initialState`. Setting `""` clears it. A
+saved layout can be lost or unreadable, so a card must treat
 `initialState` as a best-effort restore, never a guarantee.
 
 The grid card is the reference user
@@ -288,6 +285,74 @@ receiver. It carries no structural operations. The topics:
 Payloads cross card boundaries as `unknown`; subscribers validate the
 shape before acting. Unsubscribe in the card's teardown.
 
+## The containers layout
+
+`ContainersView.vue` hosts every card; the rules are pure functions in
+`containerTree.ts`, tested in `tests/container_tree.test.ts`. The
+layout is a tree of **containers** whose leaves are cards, and each
+container lays out its own children:
+
+- **Tabs** shows one child at a time. The outermost container is always
+  Tabs, drawn as the sidebar: each tab under the tab it was opened
+  from, as in Firefox's Tree Style Tab.
+- **Page** puts children one after another at their natural height and
+  scrolls. A card there is as tall as its content (`ShadowCard`'s
+  `natural`, honoured by `vueCard`).
+- **Split** shares the space side by side or top to bottom (its
+  direction), with dividers to resize.
+- **Columns** puts children side by side at set widths and scrolls
+  sideways; a column that appears is scrolled into view.
+
+**Where an opened card goes.** A container can be **solidified**, which
+holds for everything inside it too. When a card opens cards
+(`openCards`), they land in the nearest container above the opener that
+is not solidified, and that container's layout decides where: Columns
+drop what was right of the opener's column and add the chain; a Split or
+Page insert it after the opener's child; Tabs take it as one new
+tab — a Columns container holding the chain, under the opener's tab —
+so what those cards open lands beside them. The outermost container is
+never solidified, so an open always lands somewhere. A link or the
+toolbar (Logs, Data sources, a search) opens its cards the same way, in
+a new tab holding a Columns container.
+
+**What shows.** Outside edit mode a solidified subtree shows no card
+chrome, so a composite such as the Dashboard (a Page of its five
+section cards) reads as one page; elsewhere each card
+has a header with its title and controls, and a Columns container ends
+in a ＋ strip that adds a card. In edit mode every card shows its edge
+and its source, and each container is a frame coloured by its layout,
+with a folder tab on its top edge that opens its panel (layout,
+Solidified, add a card or container, move, put in a new container, take
+the cards out, rename, save as composite, reset, close). The frame's
+edge is dashed while cards open into it, and a thick solid line once
+it is solidified.
+
+**Names.** A tab or container is named by its first card until the
+person renames it (its panel, or a double-click on a tab's name); a
+card's own `ctx.setTitle` never replaces a name the person gave. The
+page's title names the tab shown.
+
+**Composites.** A composite is a container subtree kept under a name
+(`composites.ts`): the built-in Dashboard, or one a person saved. A
+container made from one can be reset to it.
+
+**Keeping it.** The main window — the first open (`mainWindow.ts`) —
+keeps the tree, and the saved composites, in the library through
+`/api/ui/state/{name}` (`docs/dev/app_stores.md`), not the browser: the
+desktop app's server takes a new port, and so a new origin, each
+launch. Any other window (a card popped out with ↗) keeps its own tree
+in its session storage, so a reload finds its tabs. A browser with
+`datalib-layout-unsaved` set in localStorage does the same in its main
+window; the e2e suite sets it, so specs sharing one library do not
+trade tabs.
+
+**The URL.** A path naming cards (`/code:size:state/…`,
+`router/columns.ts`) is a link: the layout opens those cards as a tab
+and puts the address back to `/`, since what is open is kept in the
+tree. A `/chat/<uuid>` link — the shape every renderer writes into a
+document body — is routed to that document alone (`router/index.ts`).
+The browser's Back and Forward do not step through cards.
+
 ## How a card and its layout interact
 
 Everything a card needs from its surroundings is the `CardCtx`; it
@@ -296,102 +361,51 @@ never reaches for the layout directly. The division of labour:
 - **The card** owns its shadow root, renders into it, persists its own
   opaque state, and asks for new cards / closure through host commands.
 - **The layout** owns placement and chrome. Around each card it draws
-  a header with the source box (Enter re-runs the card, Shift+Enter
-  inserts a newline; committing new source clears the old state
-  string), an ↗ "open this card alone" link — a new browser tab, or in
-  the desktop app a second native window of the app (the shell's
-  `on_new_window` handler in `datalib/tauri/src/main.rs`), so a card
-  can live on another screen — and a ✕ close button. There is no back
-  or forward in the chrome: in the miller layout every `setSource` — a
-  gallery pick, an agent hand-off, a source edit — and every open and
-  close is a browser history entry, and the browser's own Back walks
-  them (the desktop app answers ⌘[ / ⌘] and draws the two buttons in
-  its toolbar). See "The miller layout and the browser" below.
-  Anything past that — resize handles, drag grips, add buttons,
-  dividers, tab bars — is layout-specific furniture, invisible to the
-  card. The layout also decides what `openCards` placement means, what
-  `close` takes with it, and whether `setState` reaches the URL.
+  a header with the card's title (in edit mode, the source box: Enter
+  re-runs the card, Shift+Enter inserts a newline; committing new
+  source clears the old state string), an ↗ "open this card alone"
+  link — a new browser tab, or in the desktop app a second native
+  window of the app (the shell's `on_new_window` handler in
+  `datalib/tauri/src/main.rs`), so a card can live on another screen —
+  and a ✕ close button. Anything past that — resize handles, frames,
+  add strips, tab strips — is layout furniture, invisible to the card.
+  The layout also decides what `openCards` placement means and what
+  `close` takes with it.
 
 **A card, not a modal**, for anything a person reads, keeps open or
 clicks through from — a log, a commit history, a table. It sits in the
-layout beside what opened it, lives in the URL, and survives Back. A
-modal dialog is for a question that has to be answered before anything
-else happens: a confirm, a short form that is submitted or cancelled
-(the source wizard, feedback).
-
-Because the contract is the same everywhere, the same card source runs
-unchanged in any layout, and a layout can be added or changed without
-touching cards. Cards are **not** carried across when the user toggles
-layouts — each layout keeps its own set, all kept alive across toggles
-so switching back doesn't lose them.
-
-## The miller layout and the browser
-
-The miller stack **is the URL** (`router/columns.ts`), and the browser's
-history is the only history. `MillerView` writes it two ways: opening,
-closing or repointing a column is a navigation (`push`), so Back undoes
-it and Forward redoes it; a card's state and a column's width rewrite
-the current entry (`replace`), the way a page's scroll position is not
-somewhere Back returns to. Writes go through one queue — the router
-cancels a navigation another one overtakes, and a grid row click is two
-writes in one tick, the selection then the document. When the URL
-changes under the layout (Back, a link, a hand-edited address) the
-stack is *reconciled*, not rebuilt: a column whose code and state match
-the URL at its position stays mounted, so Back from a document leaves
-the grid beside it as it was, still on the row that opened the
-document. `views/millerStack.ts` holds these decisions as pure
-functions; `document.title` names the stack, newest column first, so a
-tab, a history menu and a bookmark say what it is. A `/chat/<uuid>`
-link — the shape every renderer writes into a document body — is
-routed to that document alone (`router/index.ts`), so the tab a
-modified click opens shows the document. The tree and tiling layouts
-are in memory only and get none of this. Only the layout on screen
-reads or writes the URL; one switched back to puts its own stack back.
-
-## The tabs layout
-
-The layout the app opens on, until the person picks another in the
-status bar (the choice is kept in this browser). Every layout opens a
-new window on `homeView()` (`DEFAULT_SPECS` in `views/millerStack.ts`),
-which the URL writes as `/`. One card at a time, full size, beside a sidebar listing every open
-card as a tree: each tab sits under the tab that opened it, as in
-Firefox's Tree Style Tab. `views/tabTree.ts` holds the decisions as
-pure functions. Each window has a tree of its own
-(`views/tabsWindow.ts`): a window popped out with a tab's or a card's
-↗ starts with that card alone, a stack of its own. The first window
-open is the main one; it also saves its tree to `localStorage`, and
-that is what the next launch restores. The URL names only the
-selected tab, as a one-column stack, so a copied link opens that card
-alone; the history entry also carries the tab's id, so Back finds the
-tab even after its state has moved on. A URL naming a card no tab
-shows opens a new root tab (a miller link of several columns opens
-as a spine).
-
-A card a card opens becomes a new tab under its opener, and stays
-until the person closes it. Closing a tab closes everything under it
-too; right-click → Close, keep children closes the tab alone and hands
-its children to its own parent. A row's ⇤ makes the tab top-level, taking what is under it
-along, and its ↗ opens the tab alone in a new browser tab (a new
-window in the app).
-
-A tab has one name. Its card gives it one (`ctx.setTitle`) and may
-refine it; right-click → Rename, or a double-click on the name, sets
-it to what the person types, and from then on the card's updates are
-ignored. The name lives in the tab tree, not the URL, so a popped-out
-card is named by its card again.
+layout beside what opened it and is kept with the layout. A modal
+dialog is for a question that has to be answered before anything else
+happens: a confirm, a short form that is submitted or cancelled (the
+source wizard, feedback).
 
 ## Prebuilt views
 
 The factories in `ViewLibs` are the public surface card source
 programs against:
 
-- `homeView()` — the card a new window opens on
-  (`cards/HomeCard.ce.vue`): what needs a person (a source whose last
-  sync failed or stopped, a store holding errors or warnings), the
-  library's item count and size on disk, each source's state, and the
-  newest documents by their own timestamps. It reads only
-  `GET /api/manage/rows` and the search; its decisions are
-  `cards/home.ts`.
+- The Dashboard's sections, each a card of its own, which the Dashboard
+  composite — what a new window opens on — lays out as a solidified
+  Page (`cards/libs/dashboardSections.ts`; hidden from the gallery
+  until it shows every view):
+  - `syncStatusView()` — when the library last synced, and Sync now /
+    Stop syncing; "Start your first sync" when its sources never have;
+  - `needsYouView()` — a source whose last sync failed or stopped, or
+    whose store holds errors or warnings, with the fix beside it;
+    nothing at all when nothing needs the person;
+  - `libraryView()` — the library's item count, its size on disk, and
+    a bar of what takes the space;
+  - `sourcesOverviewView()` — each source's state, when it synced, its
+    items and size; "No sources yet." and "Add source" in a library
+    without any;
+  - `latestActivityView()` — the newest documents by their own
+    timestamps.
+
+  Each section is a component (`cards/Dashboard*.ce.vue`) drawing from
+  `cards/useDashboard.ts`, which reads only `GET /api/manage/rows` and
+  the search; their decisions are `cards/dashboard.ts`, their look
+  `cards/dashboardCard.css`. A section card leaves the ground and the
+  space below it to the Page it sits in.
 - `searchView(opts?: { q? })` — "Unified Search (new)", the friendly search
   (`cards/SearchCard.ce.vue`): a box that takes words and filters, a
   "Meaning only" switch that moves the free text into a `qmd_vsearch:`
@@ -421,7 +435,9 @@ programs against:
   opens a fresh card rather than mutating an existing one. Shows
   doc-level outgoing edges and decorates span-level edge sources
   (see [`edges.md`](edges.md)); clicking either opens the destination
-  via `host.openCards`.
+  via `host.openCards`. The body is drawn in a frame whose policy runs
+  no script (`cards/docFrame.ts`). Its links, clicks and selection
+  reach the card as events, and the frame scrolls itself.
 - `documentPickerView()` — parameter-less gallery stand-in for
   `documentView`: lists every rendered document (`/applet/unified_index/docs`) and
   replaces itself with `documentView("<uuid>")` on pick.
@@ -441,7 +457,7 @@ programs against:
   isolates on hover; hovering a point previews it, clicking opens
   `documentView` beside the card. Persists `q`/`by`/`sel`. The pure
   half — colours, view, hit-testing — is `cards/embeddingMap.ts`.
-- `galleryView()` — the new-card gallery (see "Titles, icons and dev mode"
+- `galleryView()` — the new-card gallery (see "Titles, icons and edit mode"
   above); replaces itself with whatever the user picks.
 - `agentSeedView(name)` — the in-card hand-off instructions a freshly
   minted, agent-bound component is seeded with (the gallery's agent
@@ -450,14 +466,14 @@ programs against:
 - `tableView({ url })` — the typed table viewer over any endpoint that
   answers `{columns, rows}` (plus `tree: true` when each row carries a
   `path`). See "Typed tables" below.
-- `sourcesView()` — the Manage screen as a card
-  (`cards/SourcesCard.ce.vue`): the tree of what `config.toml` declares
-  over `GET /api/manage/rows`, drawn by `TableGrid`, with the row
-  actions and the dialogs they open — the wizard, a removal's confirm —
-  teleported to `<body>`. Its header says how the last sync went, the
-  config's notices are strips above the table, its status column reads
-  word first ("Failed · 2 hours ago"), and its rows follow the density
-  switch. Through `host.openCards` it opens beside
+- `sourcesView(opts?: { add? })` — the Manage screen as a card
+  (`cards/SourcesCard.ce.vue`); `add: true` opens it on the add-source
+  form, which is what the Dashboard's "Add source" does. It shows the
+  tree of what `config.toml` declares over `GET /api/manage/rows`,
+  drawn by `TableGrid`, with the row actions and the dialogs they open
+  — the wizard, a removal's confirm — teleported to `<body>`. Its
+  header says how the last sync went, the config's notices are strips above the table, its status column reads
+  word first ("Failed · 2 hours ago"), and its rows follow the density. Through `host.openCards` it opens beside
   itself a `gridView(...)` for Browse or a problems count, a
   `logView(...)` for a step's log or the server's, a `historyView(...)`
   for a row's commit history, a `syncDashboardView(...)` for a group's

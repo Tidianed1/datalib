@@ -450,14 +450,16 @@ export default defineConfig({
   snapshotPathTemplate: "{snapshotDir}/{testFileDir}/{testFileName}-snapshots/{arg}{ext}",
   use: {
     baseURL: BACKEND_URL,
-    // The specs drive the columns layout (`.miller-col-*`, a URL of
-    // several columns); the app opens on tabs. A spec about another
-    // layout picks it with an init script (tabs-rename.spec.ts).
+    // Specs running side by side share a library, so the layout is
+    // neither read from nor written to it (ContainersView's UNSAVED_KEY):
+    // every page starts on the Dashboard plus what its URL names.
+    // containers.spec.ts, about keeping the layout, clears this and has a
+    // library of its own.
     storageState: {
       cookies: [],
       origins: SERVERS.map((s) => ({
         origin: s.url,
-        localStorage: [{ name: "datalib-layout", value: "columns" }],
+        localStorage: [{ name: "datalib-layout-unsaved", value: "1" }],
       })),
     },
     headless: true,
@@ -515,12 +517,14 @@ export default defineConfig({
         /score-sort-order\.spec\.ts/,
         /selected-message-outline\.spec\.ts/,
         /qmd-index-columns\.spec\.ts/,
-        /miller-reveal\.spec\.ts/,
+        /column-reveal\.spec\.ts/,
         /yolink-plots\.spec\.ts/,
         /gallery\.spec\.ts/,
         // The sandboxed DACTAL iframe: an opaque origin loading module
         // scripts, which WebKit and Chromium have disagreed about.
         /dactal-sandbox\.spec\.ts/,
+        // The document frame that runs no script; the desktop app is WebKit.
+        /document-sandbox\.spec\.ts/,
         // /data_sources — the sources card's Pipeline table, and the
         // commit-history grid it opens in a modal.
         /data-sources-grid\.spec\.ts/,

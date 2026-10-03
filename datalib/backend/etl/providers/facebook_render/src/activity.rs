@@ -4,11 +4,12 @@
 
 use std::collections::BTreeMap;
 
-use datalib_etl_chat_common::render::RenderProfile;
+use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{
     NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
 };
 use datalib_etl_facebook::ingest::schema_raw::{COMMENTS_TABLE, REACTIONS_TABLE};
+use datalib_etl_render::html::{escape_md_block, escape_md_inline};
 
 use crate::ids;
 use datalib_etl_render::inputs::Inputs;
@@ -21,11 +22,21 @@ use crate::common::{
 use crate::processor::Owner;
 
 pub fn comments_profile() -> RenderProfile {
-    profile("Facebook Comments", "Facebook Comment", ids::KIND_FEED)
+    profile(
+        "Facebook Comments",
+        "Facebook Comment",
+        ids::KIND_FEED,
+        TextFormat::Markdown,
+    )
 }
 
 pub fn reactions_profile() -> RenderProfile {
-    profile("Facebook Reactions", "Facebook Reaction", ids::KIND_FEED)
+    profile(
+        "Facebook Reactions",
+        "Facebook Reaction",
+        ids::KIND_FEED,
+        TextFormat::Plain,
+    )
 }
 
 pub const COMMENTS_CHAT: &str = "comments";
@@ -46,13 +57,13 @@ pub fn build_comments(comments: &[(String, Value)], owner: &Owner) -> Vec<Normal
             .to_string();
         let mut text = comment
             .and_then(|c| str_field(c, "comment"))
-            .map(strip_mentions)
+            .map(|c| escape_md_block(&strip_mentions(c)))
             .unwrap_or_default();
         if let Some(title) = str_field(v, "title") {
             if !text.is_empty() {
                 text.push_str("\n\n");
             }
-            text.push_str(&format!("*{title}*"));
+            text.push_str(&format!("*{}*", escape_md_inline(title)));
         }
         let attachments: Vec<_> = attachment_entries(v)
             .filter_map(|e| e.get("media"))
@@ -60,14 +71,8 @@ pub fn build_comments(comments: &[(String, Value)], owner: &Owner) -> Vec<Normal
             .collect();
         let date_ms = ts_ms(v, "timestamp");
         let item_id = ids::comment(&owner.source_id, row_id, date_ms);
-        let author_id = if author == owner.name {
-            "me".to_string()
-        } else {
-            author.clone()
-        };
         items.push(chat_item(
             item_id,
-            author_id,
             author,
             date_ms,
             (!text.is_empty()).then_some(text),
@@ -147,7 +152,6 @@ pub fn build_reactions(reactions: &[(String, Value)], owner: &Owner) -> Vec<Norm
                 source_url: r.url.clone(),
                 ..chat_item(
                     item_id,
-                    "me".to_string(),
                     owner.name.clone(),
                     Some(ms),
                     Some(text),
@@ -233,6 +237,7 @@ fn monthly_chat(
     }
     let feed = ids::feed(&owner.source_id, id);
     NormalizedChat {
+        contacts: Vec::new(),
         inputs: inputs.declared(),
         path_prefix: None,
         id: id.to_string(),
@@ -311,7 +316,7 @@ mod tests {
             first.text.as_deref(),
             Some("Enjoy the chair, Will.\n\n*Jean-Luc Picard commented on William Riker's post.*")
         );
-        assert_eq!(first.author_id, "me");
+        assert_eq!(first.author_display, owner().name);
         let second = &chats[0].buckets[1].items[0];
         assert_eq!(second.kind, ItemKind::Attachment);
         assert_eq!(second.attachments[0].ref_id.as_deref(), Some("m/4.png"));

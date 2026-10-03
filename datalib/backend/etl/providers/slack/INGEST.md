@@ -55,7 +55,7 @@ a file download is retried, rate-limited and replayed like an API call.
 what each is keyed by.
 
 The first three are also the whole of `datalib-step probe slack`
-(`src/probe.rs`), which is what the wizard's "Test connection" runs:
+(`src/probe.rs`), which is what the wizard's "Check account" runs:
 it lists every channel the account can see as a `channel` item and
 every DM as a `conversation` item (path = Slack's id, title = what the
 sync will call it), and the `channels` / `dm_conversations` pickers

@@ -144,7 +144,7 @@ conversations.
 A one-time registration, then a browser login. ChatGPT uses a bearer
 access token rather than a cookie, and latchkey can go and fetch it
 for you. The app's Add Data Source wizard does both from its
-**Latchkey auth** button (and **Test connection** then lists the
+**Sign in with browser** button (and **Check account** then lists the
 account's conversations to pick from); by hand it is:
 
 ```sh
@@ -362,16 +362,22 @@ Contacts](#fastmail-contacts) and [Fastmail Calendar](#fastmail-calendar).
 
 Fastmail's CalDAV login is built into latchkey as `fastmail-dav`, and
 takes an app password (Settings → Privacy & Security → Integrations →
-App passwords, with calendar access) — not the OAuth login the mail
-source uses. The wizard asks for it itself (**Paste a credential**:
-your address and the app password); from a terminal it is:
+App passwords) — not the OAuth login the mail source uses. Set its
+Access to **Calendars (CalDAV)** and tick **Read-only access**, so
+Fastmail refuses any change made with it. The combined "DAV
+(CardDAV/CalDAV/WebDAV)" access has no read-only option, so a read-only
+setup takes one app password for calendars and another for
+[contacts](#fastmail-contacts), each stored under its own account name.
+The wizard asks for it itself (**Paste a key**: your address and
+the app password, stored as `you@fastmail.com calendar`); from a
+terminal it is:
 
 ```sh
-latchkey auth set fastmail-dav -u "you@fastmail.com:$(pbpaste)"
+latchkey --account "you@fastmail.com calendar" auth set fastmail-dav -u "you@fastmail.com:$(pbpaste)"
 ```
 
-The `fastmail` table needs nothing else; `calendars` narrows it to the
-calendars you name.
+and name the same account in the source. The `fastmail` table needs
+nothing else; `calendars` narrows it to the calendars you name.
 
 ## Fastmail Contacts
 
@@ -380,17 +386,25 @@ latchkey (`fastmail`). Rendered the way [Contacts](#contacts) says.
 
 The same `fastmail-dav` login as [Fastmail Calendar](#fastmail-calendar):
 an app password (Settings → Privacy & Security → Integrations → App
-passwords, with contacts access), not the OAuth login the mail source
-uses. One app password with both contacts and calendar access serves
-both sources. The wizard's **Paste a credential** form stores it, or
-from a terminal:
+passwords), not the OAuth login the mail source uses. Set its Access to
+**Contacts (CardDAV)** and tick **Read-only access**: Fastmail then
+refuses every change made with it, so the mirror can read your contacts
+but never alter them. An API token will not work here, even a read-only
+one — Fastmail's CardDAV turns them away with a 401.
+
+The wizard's **Paste a key** form stores it under the name in the
+**Fastmail account** box, `you@fastmail.com contacts` unless you type or
+pick another. latchkey
+keeps one credential per name per service, and Fastmail Contacts and
+Fastmail Calendar share the `fastmail-dav` service, so their two app
+passwords need two different names. From a terminal:
 
 ```sh
-latchkey auth set fastmail-dav -u "you@fastmail.com:$(pbpaste)"
+latchkey --account "you@fastmail.com contacts" auth set fastmail-dav -u "you@fastmail.com:$(pbpaste)"
 ```
 
-The `fastmail` table needs nothing else; `addressbooks` narrows it to
-the address books you name.
+and name the same account in the source. The `fastmail` table needs
+nothing else; `addressbooks` narrows it to the address books you name.
 
 ## Garmin
 

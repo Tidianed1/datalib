@@ -16,6 +16,7 @@ mod items;
 mod problems;
 mod queue;
 mod status;
+mod summary;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -297,6 +298,7 @@ pub async fn get_manage_rows(
         applet_errors: &applet_errors,
     }
     .rows();
+    summary::record(&s.root, &rows, record.run.as_ref(), root_storage.root.bytes);
     Json(ManageResponse {
         ok: true,
         error: None,

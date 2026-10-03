@@ -4,7 +4,7 @@
 // the last sync did, notices as strips above the table, and a status
 // column that says its word before its time. Its logic is
 // sourcesCardModel.ts.
-import { computed } from "vue";
+import { computed, onMounted } from "vue";
 import type { Column } from "@slickgrid-universal/common";
 import type { CardCtx } from "./types";
 import type { StatusView } from "@/api";
@@ -14,9 +14,10 @@ import ConfirmDialog from "@/components/ConfirmDialog.vue";
 import { SOURCES_HELP, useSourcesCard, type Row } from "./sourcesCardModel";
 import { formatRelative, formatStamp } from "@/config/timeFormat";
 import { density } from "@/density";
-import { statusTone } from "./home";
+import { statusTone } from "./dashboard";
 
-const props = defineProps<{ ctx: CardCtx }>();
+// `add`: open on the add-source form, as the Dashboard's "Add source" does.
+const props = defineProps<{ ctx: CardCtx; add?: boolean }>();
 
 props.ctx.setTitle("Sources");
 props.ctx.setHelp(SOURCES_HELP);
@@ -100,9 +101,13 @@ const columnOverrides: Record<string, Partial<Column<Row>>> = {
   },
 };
 
-// Rows sized to the density switch; the grid reads its height once, so
-// a switch rebuilds it.
-const rowHeight = computed(() => (density.value === "comfortable" ? 36 : 28));
+onMounted(() => {
+  if (props.add) openAdd();
+});
+
+// Rows sized to the density; the grid reads its height once, so a
+// change rebuilds it.
+const rowHeight = computed(() => Math.round(28 + 8 * density.value));
 </script>
 
 <template>

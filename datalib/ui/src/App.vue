@@ -10,6 +10,7 @@ import NewerRootView from "@/views/NewerRootView.vue";
 import { fetchConfig, type ConfigResponse } from "@/api";
 import { subscribeLive } from "@/live";
 import CommandBox from "@/components/CommandBox.vue";
+import LibraryCrumb from "@/components/LibraryCrumb.vue";
 import { isDesktopApp } from "@/desktop";
 
 // The app window has no browser chrome, so it draws the two buttons a
@@ -19,8 +20,6 @@ const desktop = isDesktopApp();
 // shell's `under_title_bar`): the toolbar is the title bar, so it leaves
 // the window buttons room and its empty areas move the window.
 const underTitleBar = desktop && /Mac/.test(navigator.platform);
-const goBack = () => history.back();
-const goForward = () => history.forward();
 
 // The gate in front of the whole app, for the three states where showing
 // the app would be a lie.
@@ -89,8 +88,8 @@ onUnmounted(() => stop?.());
 
 <template>
   <main class="datalib-shell" data-feedback-root>
-    <!-- The toolbar: back and forward in the desktop app, the name,
-         and the search box. -->
+    <!-- The toolbar: the app and
+         library names, and the search box. -->
     <nav
       v-if="!gate"
       class="datalib-toolbar"
@@ -99,24 +98,10 @@ onUnmounted(() => stop?.());
       data-tauri-drag-region
     >
       <div class="datalib-toolbar-start" data-tauri-drag-region>
-        <template v-if="desktop">
-          <button class="datalib-tool" title="back (⌘[)" aria-label="Back" @click="goBack">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path fill="currentColor" d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z" />
-            </svg>
-          </button>
-          <button class="datalib-tool" title="forward (⌘])" aria-label="Forward" @click="goForward">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path fill="currentColor" d="M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z" />
-            </svg>
-          </button>
-        </template>
-        <div class="datalib-brand" data-tauri-drag-region>Data Liberation ✊</div>
+        <LibraryCrumb :config-path="config?.path ?? null" />
       </div>
-      <div class="datalib-toolbar-center"><CommandBox /></div>
-      <!-- Lightweight sync indicator in the toolbar's flexible space —
-           appearing/disappearing never shifts the page layout. -->
-      <div class="datalib-toolbar-end" data-tauri-drag-region><SyncProgressChrome /></div>
+      <div class="datalib-toolbar-sync" data-tauri-drag-region><SyncProgressChrome /></div>
+      <div class="datalib-toolbar-search"><CommandBox /></div>
     </nav>
 
     <!-- The gates had the shell's padding before the cards went
@@ -153,7 +138,7 @@ onUnmounted(() => stop?.());
 .datalib-shell {
   /* Viewport-pinned flex column: the toolbar takes its natural height
      and the routed view flexes into the rest, so full-height views
-     (MillerView) reach the bottom without guessing the chrome height.
+     (the card layout) reach the bottom without guessing the chrome height.
      min-height (not height) so taller views (sync) still
      scroll the page normally. */
   display: flex;
@@ -179,60 +164,35 @@ onUnmounted(() => stop?.());
   border-bottom: 1px solid var(--datalib-border);
 }
 /* The title bar's height, whatever the density: the window buttons are
-   placed once, when the window opens, at this bar's middle. */
+   placed once, when the window opens, at this bar's middle. So its
+   controls keep their step-0 height too; taller ones crowd a 40px bar. */
 .datalib-toolbar--titlebar {
+  --datalib-control-h: 24px;
   height: 40px;
   padding-left: 92px;
   -webkit-user-select: none;
   user-select: none;
 }
-.datalib-brand {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-left: 6px;
-  font-size: var(--datalib-title-size);
-  font-weight: 600;
-  white-space: nowrap;
-}
-/* The search box centred on the window, whatever sits either side:
-   the two ends share the leftover width equally. */
+/* The search box at the right end. As the window narrows the search
+   box shrinks first, from 440px to its min-width (its far larger
+   flex-shrink leaves it nearly all the shrinking); past that the
+   crumb's library name ellipsizes. The desktop shell's minimum window
+   width (MIN_WINDOW_WIDTH in datalib/tauri/src/main.rs) keeps both in
+   view. */
 .datalib-toolbar-start {
-  flex: 1 1 0;
+  flex: 1 1 auto;
   display: flex;
   align-items: center;
   gap: 4px;
   min-width: 0;
 }
-.datalib-toolbar-center {
-  flex: 0 1 440px;
+.datalib-toolbar-sync {
+  flex: 0 0 auto;
   display: flex;
-  justify-content: center;
 }
-.datalib-toolbar-end {
-  flex: 1 1 0;
+.datalib-toolbar-search {
+  flex: 0 1000 440px;
+  min-width: 180px;
   display: flex;
-  justify-content: flex-end;
-}
-.datalib-tool {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: var(--datalib-control-h);
-  height: var(--datalib-control-h);
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: var(--datalib-radius);
-  background: transparent;
-  color: var(--datalib-fg);
-  cursor: pointer;
-}
-.datalib-tool svg {
-  width: calc(var(--datalib-icon-size) + 4px);
-  height: calc(var(--datalib-icon-size) + 4px);
-}
-.datalib-tool:hover {
-  background: var(--datalib-hover);
-  border-color: var(--datalib-border);
 }
 </style>

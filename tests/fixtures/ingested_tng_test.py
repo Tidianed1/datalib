@@ -947,6 +947,42 @@ class IngestedTngPipelineTest(unittest.TestCase):
             [],
             "every source that rendered must also have measured itself",
         )
+        # Who a handle is, as each source that mentions it says: the
+        # rows a chip reads. One address, three sources, one name — Slack's
+        # through its profile, which ties his Slack user to the address.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT DISTINCT c.source_id || '|' || c.name "
+                "FROM source_contact_handles h JOIN source_contacts c "
+                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
+                "WHERE h.handle = 'email:picard@enterprise.starfleet' ORDER BY 1;",
+            ),
+            [
+                "google-takeout|Jean-Luc Picard",
+                "slack|Jean-Luc Picard",
+                "tng_email|Jean-Luc Picard",
+            ],
+            "the people the index knows by Picard's address",
+        )
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT DISTINCT c.source_id FROM source_contacts c ORDER BY 1;",
+            ),
+            [
+                "facebook",
+                "google-takeout",
+                "linkedin",
+                "signal",
+                "slack",
+                "sms-backup-restore",
+                "tng_contacts",
+                "tng_email",
+                "whatsapp",
+            ],
+            "every source that knows people put them in the index",
+        )
         self.assertEqual(
             self._diff_shape(CONTACTS_DIFF_GROUP),
             {

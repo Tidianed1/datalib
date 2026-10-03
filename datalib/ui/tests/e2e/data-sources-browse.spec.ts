@@ -8,15 +8,16 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import {
-  savedConfig,
-  searchAndSettle,
-  SEARCH_ROWS,
-  TABLE_ROWS,
-  searchHeader,
+  cardOf,
+  expandGroup,
   type GridApi,
   MANAGE_WITH_CONFIG,
-  expandGroup,
   pipelineRow,
+  savedConfig,
+  SEARCH_ROWS,
+  searchAndSettle,
+  searchHeader,
+  TABLE_ROWS,
 } from "./grid-helpers";
 
 const ROWS = TABLE_ROWS;
@@ -103,13 +104,12 @@ test("a source's row opens that source, with its type's columns", async ({ page 
   await openManage(page);
   await browse(page, "slack", "source_id:slack is:document");
 
-  // The card stack IS the URL, which is what makes a browse
-  // bookmarkable and shareable rather than a transient view.
-  await expect(page).toHaveURL(/source_id%3Aslack/);
+  // The browse is a card of its own, on that source's query.
+  await expect(cardOf(page, "source_id:slack")).toBeVisible();
 
   // The card is named for what it holds, not for its query, and keeps
   // that name while the person searches inside it (checked below).
-  const name = page.locator(".miller-col-title").last();
+  const name = page.locator(".ct-main .ct-card-title").last();
   await expect(name).toHaveText(/ documents$/);
 
   // Every row came from this source, and every row is a document: one
@@ -198,7 +198,7 @@ test("a step's row opens its source, as its group's row does", async ({ page }) 
   await step.click();
   await expect(page.locator(SEARCH)).toBeVisible({ timeout: 30_000 });
   await expect(page.locator(SEARCH)).toHaveValue("source_id:slack is:document");
-  await expect(page).toHaveURL(/source_id%3Aslack/);
+  await expect(cardOf(page, "source_id:slack")).toBeVisible();
 });
 
 /// A source that renders nothing has no rows at all — not even the

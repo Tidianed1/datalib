@@ -457,6 +457,7 @@ copy_to_bin(
         "src/cards/ChatBody.ce.vue",
         "src/cards/DocCard.ce.vue",
         "src/cards/chatSections.js",
+        "src/cards/documentBody.css",
     ],
 )
 

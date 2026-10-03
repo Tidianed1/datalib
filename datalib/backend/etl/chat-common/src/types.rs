@@ -78,6 +78,31 @@ pub struct NormalizedReaction {
     pub source_ref: Option<UpstreamRef>,
 }
 
+/// Someone an item was addressed to.
+#[derive(Debug, Clone, Serialize)]
+pub struct Recipient {
+    pub role: RecipientRole,
+    /// As the source showed them: a display name, else the address.
+    pub display: String,
+    pub handle: Option<datalib_handle::Handle>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum RecipientRole {
+    To,
+    Cc,
+}
+
+impl RecipientRole {
+    /// As the recipients line shows it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::To => "To",
+            Self::Cc => "Cc",
+        }
+    }
+}
+
 /// One item in a chat doc — text message, attachment-bearing message,
 /// or system event. The renderer chooses layout based on
 /// `kind` and `attachments`.
@@ -86,9 +111,14 @@ pub struct NormalizedChatItem {
     /// Stable per-item UUID minted by the provider. Used as the section
     /// anchor (`id="m-{uuid}"`) and the message-level grid_row PK.
     pub message_uuid: String,
-    /// Provider-stable identity string. Doesn't have to be
-    /// human-readable.
-    pub author_id: String,
+    /// Who it was addressed to, where the source says: an email's To and
+    /// Cc. Empty for a chat, whose members are the conversation's.
+    pub recipients: Vec<Recipient>,
+    /// Who said it, as an identifier a contact can be linked to — an
+    /// email address, a phone number, a Slack user. `None` where the
+    /// provider has no such identifier for the author (yet), or the
+    /// author is the account itself.
+    pub author_handle: Option<datalib_handle::Handle>,
     /// Pre-resolved author label ("Me", "Will Riker", "+15551234"). The
     /// provider owns the outgoing/incoming rule and any name lookup.
     pub author_display: String,
@@ -314,6 +344,12 @@ pub struct NormalizedChat {
     pub path_prefix: Option<String>,
     /// Buckets sorted by period_key.
     pub buckets: Vec<NormalizedDoc>,
+    /// The provider's own account of people in this chat: what only its
+    /// raw tables know, such as a Slack profile's title and email. Each
+    /// document carries the ones whose handles its authors wrote under,
+    /// merged with what chat-common saw (`people::document_contacts`).
+    #[serde(skip)]
+    pub contacts: Vec<datalib_contact_schema::DatalibContact>,
     /// Every raw row this chat was built from, found or not — what the
     /// processor declares through `RenderCtx::declare_bucket` so a
     /// change to any of them renders this chat again. Empty only for a

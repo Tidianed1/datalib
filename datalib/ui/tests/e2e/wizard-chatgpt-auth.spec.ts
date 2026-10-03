@@ -40,7 +40,7 @@ test("a set-only chatgpt service is shown the token-capture conversion", async (
     connectCalls += 1;
     return route.fulfill({ json: { id: "x", status: "running", output: "" } });
   });
-  await wizard(page).getByRole("button", { name: "Latchkey auth" }).click();
+  await wizard(page).getByRole("button", { name: "Sign in with browser" }).click();
 
   const commands = wizard(page).locator(".wiz-convert pre");
   await expect(commands).toContainText("/opt/datalib/bin/latchkey auth clear chatgpt --all");
@@ -66,7 +66,7 @@ test("the browser login keeps latchkey's saved session", async ({ page }) => {
     connectBody = route.request().postDataJSON();
     return route.fulfill({ json: { id: "a1", status: "running", output: "" } });
   });
-  await wizard(page).getByRole("button", { name: "Latchkey auth" }).click();
+  await wizard(page).getByRole("button", { name: "Sign in with browser" }).click();
 
   await expect.poll(() => connectBody?.account).toBe("");
   await expect.poll(() => connectBody?.ephemeral_browser).toBe(false);

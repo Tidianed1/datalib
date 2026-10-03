@@ -9,7 +9,7 @@
 // round-trip are exercised end to end.
 
 import { test, expect, type Locator, type Page } from "@playwright/test";
-import { menuEntry, stubClipboard } from "./grid-helpers";
+import { menuEntry, shownCards, stubClipboard } from "./grid-helpers";
 
 // The commit playwright.config.ts handed the backends. Node's globals
 // are not in this tsconfig, as in api-token.spec.ts.
@@ -58,7 +58,7 @@ async function scrollLogToStart(dialog: Locator) {
 async function openServerLog(page: Page) {
   await page.goto("/data_sources");
   await page.locator(".cards-statusbar").getByRole("button", { name: "Logs" }).click();
-  const dialog = page.locator(".miller-col").filter({ has: page.locator(".rl-panel") });
+  const dialog = shownCards(page).filter({ has: page.locator(".rl-panel") });
   await expect(dialog).toBeVisible();
   const scope = dialog.getByLabel("Which run or launch");
   const mine = scope.locator("option", { hasText: /this server$/ });
@@ -73,7 +73,7 @@ async function openServerLog(page: Page) {
   await scope.selectOption(value);
   await loaded;
   await expect(dialog.locator(".rl-panel")).toHaveAttribute("aria-busy", "false");
-  await expect(dialog.locator(".miller-col-title")).toHaveText("Server log");
+  await expect(dialog.locator(".ct-card-title")).toHaveText("Server log");
   await expect(dialog.locator(ROWS).first()).toBeVisible({ timeout: 10_000 });
   return dialog;
 }
@@ -205,7 +205,7 @@ test("a long log opens on its newest lines and reads older ones as it is scrolle
 
   await page.goto("/data_sources");
   await page.locator(".cards-statusbar").getByRole("button", { name: "Logs" }).click();
-  const dialog = page.locator(".miller-col").filter({ has: page.locator(".rl-panel") });
+  const dialog = shownCards(page).filter({ has: page.locator(".rl-panel") });
   await dialog.getByLabel("Which run or launch").selectOption(`launch:${id}`);
   const msgs = () => dialog.locator(`${ROWS} .slick-cell[col-id="msg"]`).allTextContents();
 
@@ -311,7 +311,7 @@ test("a selected line opens in full beside the log, and can narrow it", async ({
   const msg = (await first.locator('.slick-cell[col-id="msg"]').textContent())?.trim() ?? "";
   await first.locator('.slick-cell[col-id="msg"]').click();
 
-  const inspector = page.locator(".miller-col").filter({ has: page.locator(".ll") });
+  const inspector = shownCards(page).filter({ has: page.locator(".ll") });
   // The card mounts in a new column after the click; on a loaded runner
   // give it what the first row got above.
   await expect(inspector).toBeVisible({ timeout: 10_000 });
@@ -491,7 +491,9 @@ test("a dragged column width outlives the panel resizing", async ({ page }) => {
   // ran on every resize of the grid used to put every column back.
   const grid = dialog.locator(".rl-grid .slickgrid-container");
   const gridBefore = (await grid.boundingBox())!.width;
-  const edge = (await dialog.locator(".miller-col-resize").boundingBox())!;
+  // A column's edge is the handle right after it in its container.
+  const column = page.locator(".ct-main .ct-child").filter({ has: page.locator(".rl-panel") });
+  const edge = (await column.locator("xpath=following-sibling::*[1]").boundingBox())!;
   const ex = edge.x + edge.width / 2;
   const ey = edge.y + edge.height / 2;
   await page.mouse.move(ex, ey);

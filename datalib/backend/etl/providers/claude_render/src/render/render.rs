@@ -18,7 +18,9 @@ use datalib_etl_chat_common::types::{
     own_stamp_ms, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
     NormalizedDoc, UpstreamRef,
 };
+use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::html::{escape_md_block, escape_md_inline, escape_text, md_code_block};
 use datalib_etl_render::inputs::Inputs;
 
 use super::ids;
@@ -62,6 +64,7 @@ fn profile() -> RenderProfile {
         reaction_kind: "Claude Reaction".to_string(),
         chat_entity_kind: ENTITY_KIND_CONVERSATION,
         render_version: RENDER_VERSION,
+        text_format: TextFormat::Markdown,
     }
 }
 
@@ -86,6 +89,7 @@ fn project_profile() -> RenderProfile {
         // different uuid.
         chat_entity_kind: ids::KIND_PROJECT,
         render_version: RENDER_VERSION,
+        text_format: TextFormat::Markdown,
     }
 }
 
@@ -327,7 +331,7 @@ fn build_chat(
             let body = block_body_md(btype, b.text.as_deref(), &raw_obj);
             items.push(NormalizedChatItem {
                 message_uuid: block_id.uuid.clone(),
-                author_id: btype.to_string(),
+                author_handle: None,
                 author_display: block_author,
                 date_ms: block_ms,
                 text: filter_nonempty(body),
@@ -344,6 +348,7 @@ fn build_chat(
                 )),
                 is_aside: matches!(btype, "tool_use" | "tool_result"),
                 unread: false,
+                recipients: Vec::new(),
                 problems: block_problems,
             });
         }
@@ -360,7 +365,7 @@ fn build_chat(
         };
         items.push(NormalizedChatItem {
             message_uuid: msg_id.uuid.clone(),
-            author_id: sender.to_string(),
+            author_handle: None,
             author_display: author_display.clone(),
             date_ms: msg_ms,
             text: filter_nonempty(body),
@@ -377,6 +382,7 @@ fn build_chat(
             )),
             is_aside: false,
             unread: false,
+            recipients: Vec::new(),
             problems: msg_problems,
         });
     }
@@ -425,6 +431,7 @@ fn build_chat(
             source_ref: None,
             items,
         }],
+        contacts: Vec::new(),
         inputs: inputs.declared(),
     }
 }
@@ -495,7 +502,7 @@ fn build_project_page(
         let doc_id = ids::project_document(source_id, &doc.doc_uuid, ms);
         items.push(NormalizedChatItem {
             message_uuid: doc_id.uuid.clone(),
-            author_id: "project_doc".into(),
+            author_handle: None,
             author_display: label,
             date_ms: ms,
             text: body,
@@ -512,6 +519,7 @@ fn build_project_page(
             )),
             is_aside: false,
             unread: false,
+            recipients: Vec::new(),
             problems: Vec::new(),
         });
     }
@@ -551,6 +559,7 @@ fn build_project_page(
             source_ref: None,
             items,
         }],
+        contacts: Vec::new(),
         inputs: project.inputs.declared(),
     }
 }
@@ -588,7 +597,7 @@ fn project_item(
 ) -> NormalizedChatItem {
     NormalizedChatItem {
         message_uuid: id.uuid,
-        author_id: kind_label.to_string(),
+        author_handle: None,
         author_display: author_display.to_string(),
         date_ms: id.at,
         text: Some(text),
@@ -602,6 +611,7 @@ fn project_item(
         source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
         is_aside: false,
         unread: false,
+        recipients: Vec::new(),
         problems: Vec::new(),
     }
 }
@@ -686,8 +696,8 @@ fn block_body_md(
                 .unwrap_or("tool");
             let msg = raw_obj.get("message").and_then(Value::as_str);
             let summary = match msg {
-                Some(m) => format!("Tool use: {name} — {m}"),
-                None => format!("Tool use: {name}"),
+                Some(m) => format!("Tool use: {} — {}", escape_text(name), escape_text(m)),
+                None => format!("Tool use: {}", escape_text(name)),
             };
             let mut out = vec![
                 format!("<details><summary>{summary}</summary>"),
@@ -712,6 +722,7 @@ fn block_body_md(
                 .get("is_error")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
+            let name = escape_text(name);
             let summary = if is_err {
                 format!("Tool result: {name} (error)")
             } else {
@@ -733,12 +744,13 @@ fn block_body_md(
     lines.join("\n")
 }
 
+/// A tool's output is shown as it came back, in a code block, whether it
+/// is one string or a list of text parts: it is the tool's, and nothing
+/// in it is markup for this page.
 fn render_tool_result_content(content: Option<&Value>, out: &mut Vec<String>) {
     match content {
         Some(Value::String(s)) => {
-            out.push("```".into());
-            out.push(s.trim_end().into());
-            out.push("```".into());
+            out.push(md_code_block("", s.trim_end()));
         }
         Some(Value::Array(items)) => {
             for item in items {
@@ -749,13 +761,8 @@ fn render_tool_result_content(content: Option<&Value>, out: &mut Vec<String>) {
                                 .and_then(Value::as_str)
                                 .is_some_and(|t| !t.is_empty()) =>
                     {
-                        out.push(
-                            m.get("text")
-                                .and_then(Value::as_str)
-                                .unwrap()
-                                .trim_end()
-                                .into(),
-                        );
+                        let text = m.get("text").and_then(Value::as_str).unwrap();
+                        out.push(md_code_block("", text.trim_end()));
                         out.push(String::new());
                     }
                     Value::Object(_) => {
@@ -765,16 +772,11 @@ fn render_tool_result_content(content: Option<&Value>, out: &mut Vec<String>) {
                         out.push(String::new());
                     }
                     other => {
-                        out.push("```".into());
-                        out.push(
-                            match other {
-                                Value::String(s) => s.clone(),
-                                v => v.to_string(),
-                            }
-                            .trim_end()
-                            .into(),
-                        );
-                        out.push("```".into());
+                        let text = match other {
+                            Value::String(s) => s.clone(),
+                            v => v.to_string(),
+                        };
+                        out.push(md_code_block("", text.trim_end()));
                         out.push(String::new());
                     }
                 }
@@ -823,12 +825,19 @@ fn attachment_meta(at: &AttachmentRow) -> (Option<&str>, Option<&str>, bool) {
 /// Render a Claude `attachments[]` text item inline (extracted upload
 /// text; the binary is not retained).
 fn render_extracted_attachment(label: &str, extracted: Option<&str>) -> String {
-    let header_label = if label.is_empty() { "(unnamed)" } else { label };
+    let header_label = if label.is_empty() {
+        "(unnamed)".to_string()
+    } else {
+        escape_md_inline(label)
+    };
     let body = extracted.unwrap_or("").trim();
     if body.is_empty() {
         return format!("**[attachment: {header_label}]** *(no extracted content)*");
     }
-    let quoted: String = body.lines().map(|l| format!("> {l}\n")).collect();
+    let quoted: String = escape_md_block(body)
+        .lines()
+        .map(|l| format!("> {l}\n"))
+        .collect();
     format!("**[attachment: {header_label}]**\n{quoted}")
 }
 
@@ -878,5 +887,46 @@ mod project_doc_tests {
     fn zero_ceiling_still_names_the_document() {
         let out = clamp_doc_text("anything", Some(0));
         assert!(out.contains("showing 0 of 8 bytes"), "got {out:?}");
+    }
+}
+
+#[cfg(test)]
+mod escaping_tests {
+    use super::*;
+    use serde_json::json;
+
+    const MARKUP: &str = "<script>x</script> & co";
+
+    /// A tool's name, its output and an upload's text came from the tool
+    /// or the file, not from the page: none of it may open a tag.
+    #[test]
+    fn tool_traffic_in_markup_renders_escaped() {
+        let used = json!({"name": MARKUP, "message": MARKUP, "input": {}});
+        let md = block_body_md("tool_use", None, used.as_object().unwrap());
+        assert!(
+            md.starts_with(
+                "<details><summary>Tool use: &lt;script&gt;x&lt;/script&gt; &amp; co — \
+                 &lt;script&gt;x&lt;/script&gt; &amp; co</summary>"
+            ),
+            "{md}"
+        );
+
+        let result = json!({
+            "name": MARKUP,
+            "content": [{"type": "text", "text": "```\n</details>\n```"}],
+        });
+        let md = block_body_md("tool_result", None, result.as_object().unwrap());
+        assert!(md.contains("Tool result: &lt;script&gt;"), "{md}");
+        assert!(
+            md.contains("````\n```\n</details>\n```\n````"),
+            "the output stays inside its own fence: {md}"
+        );
+
+        let md = render_extracted_attachment(MARKUP, Some(MARKUP));
+        assert_eq!(
+            md,
+            "**[attachment: &lt;script&gt;x&lt;/script&gt; &amp; co]**\n\
+             > &lt;script&gt;x&lt;/script&gt; &amp; co\n"
+        );
     }
 }

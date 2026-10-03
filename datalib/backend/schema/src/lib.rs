@@ -49,6 +49,14 @@ pub mod diff_status {
     include!("diff_status.rs");
 }
 
+pub mod source_contacts {
+    include!("source_contacts.rs");
+}
+
+pub mod source_contact_handles {
+    include!("source_contact_handles.rs");
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

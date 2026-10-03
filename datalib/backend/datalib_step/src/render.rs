@@ -1005,6 +1005,7 @@ mod plan_tests {
                     rows: vec![row],
                     sections: Vec::new(),
                     edges: Vec::new(),
+                    contacts: Vec::new(),
                     problems: Vec::new(),
                 },
             )
@@ -1232,6 +1233,7 @@ mod stale_tree_tests {
                     rows: vec![row],
                     sections: Vec::new(),
                     edges: Vec::new(),
+                    contacts: Vec::new(),
                     problems: Vec::new(),
                 },
             )
