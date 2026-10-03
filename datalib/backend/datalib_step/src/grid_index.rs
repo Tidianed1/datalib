@@ -103,6 +103,21 @@ pub async fn run(
         .context("grid_index head")?;
     pool.close().await;
 
+    // Every other source is sealed by now; this one is still a failure,
+    // and the Manage row should say so.
+    if !summary.sources_failed.is_empty() {
+        let failed: Vec<String> = summary
+            .sources_failed
+            .iter()
+            .map(|(source, why)| format!("{source}: {why}"))
+            .collect();
+        anyhow::bail!(
+            "indexed every other source, but could not read {}:\n{}",
+            summary.sources_failed.len(),
+            failed.join("\n")
+        );
+    }
+
     // The dolt commit hash is a faithful content version: HEAD only
     // advances when rows actually changed. Without doltlite
     // (stock-sqlite dev builds) there is no hash and we report nothing,

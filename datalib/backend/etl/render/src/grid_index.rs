@@ -25,7 +25,7 @@ use datalib_etl::stop::StopFlag;
 use datalib_schema::edges::{EdgeRow, DDL as EDGES_DDL};
 use datalib_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL, INDEXES as GRID_ROWS_INDEXES};
 use datalib_schema::markdowns::DDL as MARKDOWNS_TABLE_DDL;
-use datalib_schema::problems::{ProblemRow, DDL as PROBLEMS_DDL};
+use datalib_schema::problems::{ProblemRow, Severity, DDL as PROBLEMS_DDL};
 use datalib_schema::source_cursors::{SourceCursorRow, DDL as SOURCE_CURSORS_DDL};
 use serde::Serialize;
 use sqlx::sqlite::SqlitePool;
@@ -252,6 +252,10 @@ pub struct GridIndexSummary {
     /// Sources whose render store this build could not read, left as the
     /// index already had them.
     pub sources_unreadable: Vec<String>,
+    /// Sources whose read failed for any other reason, with the error.
+    /// Also left as the index had them; the step fails on them once
+    /// every other source is sealed.
+    pub sources_failed: Vec<(String, String)>,
 }
 
 /// Whole-index counts by severity, for the step's report.
@@ -309,22 +313,23 @@ fn written_in_another_shape(e: &anyhow::Error) -> bool {
     })
 }
 
-/// The warning a source whose render store could not be read is filed
-/// under. The next pass that reads the store replaces the source's
-/// problems wholesale, which is what clears it.
-fn unreadable_store_problem(source_id: &str, now: &datalib_time::StoredStamp) -> ProblemRow {
-    use datalib_schema::problems::{Outcome, Problem, Reason, Scope, Severity, Stage};
+/// What a source whose render store could not be read is filed under.
+/// The next pass that reads the store replaces the source's problems
+/// wholesale, which is what clears it.
+fn unreadable_store_problem(
+    source_id: &str,
+    now: &datalib_time::StoredStamp,
+    why: &str,
+    severity: datalib_schema::problems::Severity,
+) -> ProblemRow {
+    use datalib_schema::problems::{Outcome, Problem, Reason, Scope, Stage};
     let mut row = ProblemRow::new(
         source_id,
         Stage::Render,
         Scope::Entity("render_store"),
         None,
         Outcome::Dropped,
-        Problem::record(
-            Reason::RenderFailed,
-            "its render store is in an older shape; sync this source to re-render it",
-        )
-        .severity(Severity::Warning),
+        Problem::record(Reason::RenderFailed, why).severity(severity),
         None,
     );
     row.first_seen_at_utc = now.utc.clone();
@@ -332,6 +337,8 @@ fn unreadable_store_problem(source_id: &str, now: &datalib_time::StoredStamp) ->
     row.tz_offset = now.tz_offset.clone();
     row
 }
+
+const OLDER_SHAPE: &str = "its render store is in an older shape; sync this source to re-render it";
 
 async fn record_unreadable_store(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
@@ -678,16 +685,28 @@ pub async fn build_grid_index_for(
         if stopped_before(stop, &stanza) {
             break;
         }
-        let read = read_source(
+        let read = match read_source(
             &stanza,
             &rendered_root,
             out_dir,
             cursors.get(&stanza).map(String::as_str),
             indexed.get(&stanza),
             &mut pass,
-        )?;
-        let Some(read) = read else {
-            continue;
+        ) {
+            Ok(Some(read)) => read,
+            Ok(None) => continue,
+            // One source's store must not keep every other source out of
+            // the index.
+            Err(e) => {
+                let why = format!("{e:#}");
+                tracing::error!(
+                    source = %stanza,
+                    error = %why,
+                    "could not read this render store; indexing the other \
+                     sources and leaving this one as it was"
+                );
+                SourceRead::Failed(why)
+            }
         };
         if stopped_before(stop, &stanza) {
             break;
@@ -719,6 +738,7 @@ pub async fn build_grid_index_for(
         sources_changed = pass.sources_changed,
         documents_changed = pass.documents_changed,
         unreadable = summary.sources_unreadable.len(),
+        failed = summary.sources_failed.len(),
         "read the render stores"
     );
     Ok(summary)
@@ -750,6 +770,9 @@ enum SourceRead {
     /// Written in a shape this build cannot read. Its rows and cursor stay
     /// as the index has them.
     Unreadable,
+    /// The read failed; the error, for the source's problem row. Its rows
+    /// and cursor stay as the index has them.
+    Failed(String),
     Read {
         docs: Vec<RenderedMarkdown>,
         /// Documents the index holds for this source that the store no
@@ -898,10 +921,17 @@ async fn apply_source(
     let res = async {
         let (docs, removed, problems, head) = match read {
             SourceRead::Unreadable => {
+                let row = unreadable_store_problem(stanza, now, OLDER_SHAPE, Severity::Warning);
                 let mut guard = write_lock.acquire().await?;
-                record_unreadable_store(guard.conn(), &unreadable_store_problem(stanza, now))
-                    .await?;
+                record_unreadable_store(guard.conn(), &row).await?;
                 summary.sources_unreadable.push(stanza.to_string());
+                return Ok(true);
+            }
+            SourceRead::Failed(why) => {
+                let row = unreadable_store_problem(stanza, now, &why, Severity::Error);
+                let mut guard = write_lock.acquire().await?;
+                record_unreadable_store(guard.conn(), &row).await?;
+                summary.sources_failed.push((stanza.to_string(), why));
                 return Ok(true);
             }
             SourceRead::Read {
@@ -2346,6 +2376,68 @@ mod source_cursor_tests {
                 .await
                 .unwrap();
         assert_eq!(warnings, 0, "the warning goes once the store reads");
+    }
+
+    /// One source whose diff failed stopped the whole pass, so a source
+    /// added after it never reached the grid. It must cost only itself:
+    /// the others are indexed, its rows stay, and an error names it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_store_that_fails_to_read_costs_only_its_own_source() {
+        let td = tempdir().unwrap();
+        let root = td.path();
+        let pool = index_pool(root).await;
+        // "broken" sorts first, so a pass that stops on it reaches nothing.
+        let sources = ["broken".to_string(), "fresh".to_string()];
+        render(
+            root,
+            "broken",
+            &[doc(root, "broken", "md-b", "broken body")],
+        );
+        build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
+            .await
+            .unwrap();
+
+        render(root, "fresh", &[doc(root, "fresh", "md-f", "fresh body")]);
+        let store = crate::indexed_markdown::path_for(&rendered_root(root, "broken"));
+        std::fs::write(&store, b"not a doltlite store").unwrap();
+        let s = build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
+            .await
+            .expect("the other sources are indexed");
+        assert_eq!(
+            s.sources_failed
+                .iter()
+                .map(|(id, _)| id.as_str())
+                .collect::<Vec<_>>(),
+            ["broken"]
+        );
+        assert_eq!(
+            index_row_count(&pool).await,
+            2,
+            "fresh's document lands and broken's stays"
+        );
+        let severity: String =
+            sqlx::query_scalar("SELECT severity FROM problems WHERE source_id = 'broken'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(severity, "error");
+
+        std::fs::remove_file(&store).unwrap();
+        render(
+            root,
+            "broken",
+            &[doc(root, "broken", "md-b", "broken body")],
+        );
+        let s = build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
+            .await
+            .unwrap();
+        assert!(s.sources_failed.is_empty());
+        let errors: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM problems WHERE source_id = 'broken'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(errors, 0, "the error goes once the store reads");
     }
 
     async fn index_row_count(pool: &SqlitePool) -> i64 {
