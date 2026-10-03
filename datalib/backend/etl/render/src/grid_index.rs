@@ -2507,6 +2507,66 @@ mod source_cursor_tests {
         assert_eq!(errors, 0, "the error goes once the store reads");
     }
 
+    /// Put a source's store back in the shape a build before
+    /// `source_contacts` wrote: the table is not there.
+    async fn without_source_contacts(root: &Path, source: &str) {
+        let path = crate::indexed_markdown::path_for(&rendered_root(root, source));
+        let writer = datalib_etl::doltlite_raw::open_derived(
+            &path,
+            &[],
+            datalib_etl::doltlite_raw::StoreKind::Render,
+        )
+        .await
+        .unwrap();
+        sqlx::query("DROP TABLE source_contacts")
+            .execute(&writer)
+            .await
+            .unwrap();
+        datalib_etl::doltlite_raw::commit_run(&writer, "a build before source_contacts")
+            .await
+            .unwrap();
+        writer.close().await;
+    }
+
+    /// A store last rendered by a build that had no `source_contacts`
+    /// failed the diff with "no such table: dolt_diff_source_contacts",
+    /// and its render step, up to date, never re-rendered it. A table the
+    /// store does not have holds no changes; the diff must say so, and
+    /// still see the table once a re-render adds it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_store_without_a_newer_table_still_diffs() {
+        let td = tempdir().unwrap();
+        let root = td.path();
+        let pool = index_pool(root).await;
+        let sources = ["old".to_string()];
+        render(root, "old", &[doc(root, "old", "md-1", "one")]);
+        without_source_contacts(root, "old").await;
+        build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
+            .await
+            .unwrap();
+
+        let s = build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
+            .await
+            .expect("an unchanged store diffs to nothing");
+        assert_eq!(s.markdowns_total, 0, "nothing changed, so nothing is read");
+        assert!(s.sources_failed.is_empty(), "{:?}", s.sources_failed);
+
+        render(
+            root,
+            "old",
+            &[
+                doc(root, "old", "md-1", "one"),
+                doc(root, "old", "md-2", "two"),
+            ],
+        );
+        let s = build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
+            .await
+            .expect("a diff across the commit that adds the table");
+        assert!(s.sources_failed.is_empty(), "{:?}", s.sources_failed);
+        assert_eq!(s.markdowns_total, 1, "only the new document is read");
+        assert_eq!(index_row_count(&pool).await, 2);
+    }
+
     async fn index_row_count(pool: &SqlitePool) -> i64 {
         sqlx::query_scalar("SELECT COUNT(*) FROM grid_rows")
             .fetch_one(pool)

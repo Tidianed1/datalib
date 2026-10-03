@@ -959,6 +959,8 @@ impl IndexedMarkdownStore {
         cursor: Option<&str>,
         pin: &datalib_etl::pin::Pin,
     ) -> Result<datalib_etl::doltlite_raw::DiffScan> {
+        let has_contacts = blocking(has_table(&self.pool, "source_contacts"))?;
+        let bucket_query = changed_documents_query(has_contacts);
         blocking(datalib_etl::doltlite_raw::scan_buckets(
             &self.pool,
             cursor,
@@ -971,27 +973,7 @@ impl IndexedMarkdownStore {
                 // every rendered doc; by the time rows reach here that
                 // fan-out has already happened, on the render side.
                 global_fanout_tables: &[],
-                bucket_query: "
-                    SELECT DISTINCT markdown_uuid FROM (
-                        SELECT coalesce(to_markdown_uuid, from_markdown_uuid) AS markdown_uuid
-                          FROM dolt_diff_markdowns
-                         WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
-                        UNION
-                        SELECT coalesce(to_markdown_uuid, from_markdown_uuid) AS markdown_uuid
-                          FROM dolt_diff_grid_rows
-                         WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
-                        UNION
-                        SELECT coalesce(to_src_markdown_uuid, from_src_markdown_uuid)
-                                 AS markdown_uuid
-                          FROM dolt_diff_edges
-                         WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
-                        UNION
-                        SELECT coalesce(to_markdown_uuid, from_markdown_uuid) AS markdown_uuid
-                          FROM dolt_diff_source_contacts
-                         WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
-                    )
-                    WHERE markdown_uuid IS NOT NULL
-                ",
+                bucket_query: &bucket_query,
             },
         ))
     }
@@ -1056,7 +1038,7 @@ impl IndexedMarkdownStore {
             )
             .await
             .context("read edges")?;
-            let mut contacts_by_doc =
+            let mut contacts_by_doc = if has_table(&self.pool, "source_contacts").await? {
                 group_by_document::<datalib_schema::source_contacts::SourceContactRow>(
                     &self.pool,
                     "SELECT * FROM source_contacts \
@@ -1066,7 +1048,10 @@ impl IndexedMarkdownStore {
                     &wanted,
                 )
                 .await
-                .context("read source contacts")?;
+                .context("read source contacts")?
+            } else {
+                HashMap::new()
+            };
             let mut out = Vec::with_capacity(mds.len());
             for md in mds {
                 let rows = rows_by_doc.remove(&md.markdown_uuid).unwrap_or_default();
@@ -1170,6 +1155,45 @@ impl IndexedMarkdownStore {
     pub fn close(self) {
         blocking(self.pool.close());
     }
+}
+
+/// A table a newer build added is missing from a store an older build
+/// last rendered, until its source renders again. That build wrote no
+/// rows of it, so the readers take a missing table as an empty one.
+async fn has_table(pool: &SqlitePool, table: &str) -> Result<bool> {
+    let n: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?")
+            .bind(table)
+            .fetch_one(pool)
+            .await
+            .with_context(|| format!("look for table {table}"))?;
+    Ok(n > 0)
+}
+
+/// The documents whose rows changed between the two bound commits.
+fn changed_documents_query(has_contacts: bool) -> String {
+    let mut parts = vec![
+        "SELECT coalesce(to_markdown_uuid, from_markdown_uuid) AS markdown_uuid \
+           FROM dolt_diff_markdowns \
+          WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'",
+        "SELECT coalesce(to_markdown_uuid, from_markdown_uuid) AS markdown_uuid \
+           FROM dolt_diff_grid_rows \
+          WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'",
+        "SELECT coalesce(to_src_markdown_uuid, from_src_markdown_uuid) AS markdown_uuid \
+           FROM dolt_diff_edges \
+          WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'",
+    ];
+    if has_contacts {
+        parts.push(
+            "SELECT coalesce(to_markdown_uuid, from_markdown_uuid) AS markdown_uuid \
+               FROM dolt_diff_source_contacts \
+              WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'",
+        );
+    }
+    format!(
+        "SELECT DISTINCT markdown_uuid FROM ({}) WHERE markdown_uuid IS NOT NULL",
+        parts.join(" UNION ")
+    )
 }
 
 #[cfg(test)]
