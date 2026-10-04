@@ -62,8 +62,9 @@ place — and most of it was written by other people. Three things follow:
   content. And remember that an agentic harness sends what it reads to a
   model provider: ask yourself whether the people who wrote you those
   messages would be fine with that.
-- **Terms of service.** The Claude.ai, ChatGPT, and Garmin sources talk to the
-  same undocumented web APIs your browser does, using your own session.
+- **Terms of service.** The Claude.ai, ChatGPT and Garmin sources talk
+  to the same undocumented APIs those services' own apps use, signed in
+  as you.
   It is your data, but check the terms of the services you use, and know
   that those APIs can change without notice.
 
@@ -146,16 +147,22 @@ language you like. `datalib-dag` arranges those programs into a graph
 executable that speaks a small NDJSON protocol can be a step — see
 [`docs/dev/step_protocol.md`](docs/dev/step_protocol.md).
 
-**The upper layer is the batteries.** For each source above, several pre-made
-processing steps:
-* `ingest`: brings the raw data in
-* `render_markdown`: turn raw JSON or sqlite into readable markdown
-* `qmd_index` (fix the name): ingest the markdown in [qmd](https://github.com/tobi/qmd)'s indexing store.
-* `qmd_vector_index`: Optionally enable semantic search on this data (slow)
+**The upper layer is the batteries.** Each source above comes with
+ready-made steps:
 
-There's also a universal search powered by a unified tabular projection
-of this data called `grid_rows` and the indices.
-A local web UI, also shipped as a Tauri desktop app, can manage data sources, syncs, run searches and browses the results.
+- `ingest` brings the raw data in.
+- `render_markdown` turns the raw records into readable markdown (most
+  sources have one).
+- `keyword_index` adds that markdown to a keyword search index, built
+  with [qmd](https://github.com/tobi/qmd).
+- `embed` adds semantic search, which matches on meaning rather than
+  words. It is slow, so you can turn it off per source.
+
+Across all the sources, `grid_index` builds one SQL table of every
+message and document (`grid_rows`), and a single search box reads it
+together with the qmd index. A local web UI, also shipped as a desktop
+app (Tauri), manages your sources and syncs, searches, and browses the
+results.
 
 **The stores are [doltlite](https://github.com/dolthub/doltlite)**:
 SQLite's engine over a versioned, content-addressed file format, so a
@@ -187,7 +194,7 @@ Two mechanisms carry it here:
 
 ## What we are aiming for
 
-Near term, we want to be able ingest and understand many data sources:
+Near term, we want to be able to ingest and understand many data sources:
 
 - **Big tent** — popular and unpopular sources alike, discovering each
   one's schema rather than forcing it into ours.
