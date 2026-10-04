@@ -267,6 +267,13 @@ fn refused(e: &anyhow::Error) -> bool {
     )
 }
 
+fn interrupted(e: &anyhow::Error) -> bool {
+    matches!(
+        e.downcast_ref::<SlackError>(),
+        Some(SlackError::Interrupted(_))
+    )
+}
+
 fn listing_problem(name: &str, e: &anyhow::Error) -> RunProblem {
     problem_for(name, format!("{e:#}"), refused(e))
 }
@@ -670,8 +677,8 @@ impl Adjustments {
         matches!((api_latest, stored), (Some(api), Some(s)) if s >= api)
     }
 
-    fn run_satisfied_config(run_ok: bool, channel_failures: usize) -> bool {
-        run_ok && channel_failures == 0
+    fn run_satisfied_config(run_ok: bool, walks_cut_short: usize) -> bool {
+        run_ok && walks_cut_short == 0
     }
 
     fn plan(prev: Option<&Value>, inputs: &ScopeInputs) -> Self {
@@ -830,6 +837,7 @@ async fn export_channel(
     channel_oldest_ts: Option<&str>,
     adjust: &Adjustments,
     latest_reply_by_thread: &std::collections::HashMap<(String, String), String>,
+    retry_threads: &HashSet<String>,
     now: &DateTime<Utc>,
     download_blobs: bool,
     blob_size_limit_bytes: Option<u64>,
@@ -849,6 +857,7 @@ async fn export_channel(
         channel_oldest_ts,
         adjust,
         latest_reply_by_thread,
+        retry_threads,
         now,
         download_blobs,
         blob_size_limit_bytes,
@@ -876,6 +885,7 @@ async fn walk_channel(
     channel_oldest_ts: Option<&str>,
     adjust: &Adjustments,
     latest_reply_by_thread: &std::collections::HashMap<(String, String), String>,
+    retry_threads: &HashSet<String>,
     now: &DateTime<Utc>,
     download_blobs: bool,
     blob_size_limit_bytes: Option<u64>,
@@ -1046,21 +1056,35 @@ async fn walk_channel(
         bar.expect(replies_to_fetch);
     }
 
-    for m in &collected {
-        let Some(ts) = m.get("ts").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let reply_count = m.get("reply_count").and_then(|v| v.as_i64()).unwrap_or(0);
-        if reply_count <= 0 {
-            continue;
-        }
-        let api_latest = m.get("latest_reply").and_then(|v| v.as_str());
-        let stored = latest_reply_by_thread.get(&(channel_id.to_string(), ts.to_string()));
-        if adjust.thread_up_to_date(api_latest, stored.map(String::as_str)) {
-            continue;
-        }
+    // A thread whose replies failed on an earlier run is asked again
+    // whether or not this walk listed its root: a root past the refresh
+    // window would otherwise never be looked at, and its problem would
+    // stand for good.
+    let listed_roots: HashSet<&str> = collected
+        .iter()
+        .filter_map(|m| m.get("ts").and_then(|v| v.as_str()))
+        .collect();
+    let unlisted_retries = retry_threads
+        .iter()
+        .filter(|ts| !listed_roots.contains(ts.as_str()))
+        .map(String::as_str);
+    let due = collected
+        .iter()
+        .filter_map(|m| {
+            let ts = m.get("ts").and_then(|v| v.as_str())?;
+            let reply_count = m.get("reply_count").and_then(|v| v.as_i64()).unwrap_or(0);
+            if reply_count <= 0 {
+                return None;
+            }
+            let api_latest = m.get("latest_reply").and_then(|v| v.as_str());
+            let stored = latest_reply_by_thread.get(&(channel_id.to_string(), ts.to_string()));
+            let up_to_date = adjust.thread_up_to_date(api_latest, stored.map(String::as_str));
+            (!up_to_date || retry_threads.contains(ts)).then_some(ts)
+        })
+        .chain(unlisted_retries);
+    for ts in due {
         let before = totals.replies;
-        paginate_replies(
+        let fetched = paginate_replies(
             db,
             team_id,
             channel_id,
@@ -1072,7 +1096,16 @@ async fn walk_channel(
             blake3_by_file,
             latchkey,
         )
-        .await?;
+        .await;
+        match fetched {
+            Ok(()) => {}
+            Err(e) if interrupted(&e) => return Err(e),
+            // One thread costs that thread: the rest of the channel is
+            // still worth having, and the caller records it.
+            Err(e) => totals
+                .failed_threads
+                .push((ts.to_string(), format!("{e:#}"))),
+        }
         let fetched = totals.replies.saturating_sub(before) as u64;
         bar.did(fetched);
         let media_downloaded = totals.media.get("downloaded").copied().unwrap_or(0);
@@ -1093,6 +1126,8 @@ struct ChannelTotals {
     /// re-walked. See `RawDb::prune_history_window`.
     pruned: usize,
     media: BTreeMap<String, usize>,
+    /// `(root ts, error)` of each thread whose replies could not be read.
+    failed_threads: Vec<(String, String)>,
 }
 
 /// Pass A of the per-channel export: walk `conversations.history`
@@ -1483,6 +1518,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let t_scan = std::time::Instant::now();
     let channel_ts_bounds = db.ts_bounds_by_channel().await?;
     let latest_reply_map = db.latest_reply_by_thread().await?;
+    let threads_to_retry = db.threads_that_failed().await?;
+    let no_threads = HashSet::new();
     // Run-scoped `(file_id → blake3)` cache: loaded once up-front so
     // the per-file dedupe check inside `download_one_file` is a
     // HashMap hit instead of a SQLite round trip per file.
@@ -1506,23 +1543,30 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         media: BTreeMap::new(),
         account: AccountTotals::default(),
     };
-    // Channels whose export errored. A per-channel failure is warned and
-    // stepped over so one bad channel can't sink the sync, which means
-    // the work future can return `Ok` on a run that did NOT cover
+    // Channels and threads whose walk errored. Each is a `problems` row
+    // and is stepped over, so one bad channel can't sink the sync, which
+    // means the work future can return `Ok` on a run that did NOT cover
     // everything the config asked for — see `run_satisfied_config`.
-    let mut channel_failures: usize = 0;
+    let mut walks_cut_short: usize = 0;
+    // What this run could not do as a whole: replaces the last run's rows
+    // once the run gets to the end.
+    let mut run_problems: Vec<RunProblem> = Vec::new();
 
     let work = async {
         // The step's own handle: setup only names what it is doing.
         let setup = opts.progress.clone();
         setup.set_message("starting");
         let t_setup = std::time::Instant::now();
+        // Without the workspace's identity nothing below can be keyed:
+        // the one failure that fails the run.
         let (team_id, self_user_id) = fetch_self(&db, &setup, &opts.latchkey).await?;
         // Users before channels: a DM is titled after its counterpart,
         // so the DM progress labels need the user directory to already
-        // be mirrored.
-        fetch_users(&db, &setup, &opts.latchkey).await?;
-        let listed = fetch_channels(
+        // be mirrored. A listing that fails leaves the stored one.
+        if let Err(e) = fetch_users(&db, &setup, &opts.latchkey).await {
+            run_problems.push(listing_problem(M_USERS, &e));
+        }
+        let listed = match fetch_channels(
             &db,
             opts.members_only,
             opts.channels.is_some(),
@@ -1530,7 +1574,22 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             &setup,
             &opts.latchkey,
         )
-        .await?;
+        .await
+        {
+            Ok(listed) => listed,
+            // The channels an earlier listing stored are still worth
+            // walking; with none stored there is nothing to do at all.
+            Err(e) => {
+                let stored = db
+                    .channels_for_fetch(opts.members_only, opts.channels.is_some(), opts.dms)
+                    .await?;
+                if stored.is_empty() {
+                    return Err(e.context("no channels are stored from an earlier listing"));
+                }
+                run_problems.push(listing_problem(M_CHANNELS, &e));
+                stored
+            }
+        };
         // Only loaded when DMs are in play — it names them, and for a
         // channels-only run it is a whole table scan nothing would read.
         let user_labels: BTreeMap<String, String> = if opts.dms {
@@ -1590,11 +1649,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             let (account, problems) =
                 fetch_account_state(&db, &targets, &opts.control.stop, &setup, &opts.latchkey)
                     .await?;
-            // A stop may have cut the bookmarks short; the last run's
-            // rows stand until a run gets through them.
-            if !opts.control.stop.requested() {
-                download_problems::report_run(db.pool(), &problems).await;
-            }
+            run_problems.extend(problems);
             if let Some(sealer) = opts.sealer.as_ref() {
                 sealer
                     .wrote(
@@ -1647,6 +1702,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 channel_ts_bounds.get(cid).map(|b| b.oldest.as_str()),
                 &adjust,
                 &latest_reply_map,
+                threads_to_retry.get(cid).unwrap_or(&no_threads),
                 &now,
                 opts.media,
                 opts.blob_size_limit_bytes,
@@ -1666,6 +1722,13 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 "finished one channel",
             );
             bar.did(1);
+            walks_cut_short += totals.failed_threads.len();
+            // Before the seal below, so the channel publishes with them.
+            if !opts.control.stop.requested() {
+                for (ts, err) in &totals.failed_threads {
+                    db.record_thread_failure(&team_id, cid, ts, err).await?;
+                }
+            }
             match result {
                 Ok(()) => {
                     let written = (totals.messages + totals.replies + totals.pruned) as u64;
@@ -1687,8 +1750,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     }
                 }
                 Err(e) => {
-                    channel_failures += 1;
-                    warn!(event = "slack_channel_failed", channel = %name, error = %e, "a channel could not be walked");
+                    walks_cut_short += 1;
+                    run_problems.push(listing_problem(&format!("{M_HISTORY} {name}"), &e));
                 }
             }
         }
@@ -1710,6 +1773,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             .await;
         }
         bar.finish();
+        // A stop may have cut any listing short; the last run's rows
+        // stand until a run gets through them.
+        if !opts.control.stop.requested() {
+            download_problems::report_run(db.pool(), &run_problems).await;
+        }
         Ok::<(), anyhow::Error>(())
     };
 
@@ -1727,7 +1795,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         db.pool(),
         SCOPE_CONFIG_KEY,
         &scope_cfg,
-        Adjustments::run_satisfied_config(walked_everything, channel_failures),
+        Adjustments::run_satisfied_config(walked_everything, walks_cut_short),
     )
     .await;
     run.finish(&result, &grand).await;
