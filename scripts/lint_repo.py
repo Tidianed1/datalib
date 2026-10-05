@@ -105,6 +105,10 @@ ALLOWED_NO_SANDBOX: dict[str, str] = {
     "datalib/ui:e2e_test": (
         "shells out to host pnpm + reuses ~/Library/Caches/ms-playwright"
     ),
+    "datalib/ui:e2e_auth_test": (
+        "manual; reuses ~/Library/Caches/ms-playwright and the host's browser, "
+        "which latchkey's own ensure-browser finds"
+    ),
     # Applet coverage starts real applet processes and proxies to them
     # over loopback. The store semantics they sit on top of are unit
     # tested hermetically in datalib/backend/http/src/frontend.rs.

@@ -166,7 +166,7 @@ impl RawDb {
     /// `sync-collection` REPORT. Called only after every contact in
     /// the response has been upserted, so an interrupted batch
     /// doesn't poison the cursor.
-    pub async fn set_sync_token(&self, addressbook_id: &str, token: &str) -> Result<()> {
+    pub async fn set_sync_token(&self, addressbook_id: &str, token: Option<&str>) -> Result<()> {
         sqlx::query("UPDATE addressbooks SET sync_token = ? WHERE id = ?")
             .bind(token)
             .bind(addressbook_id)
@@ -447,6 +447,16 @@ impl RawDb {
             }
         }
         Ok(out)
+    }
+
+    pub async fn contact_hrefs(&self, addressbook_id: &str) -> Result<Vec<String>> {
+        sqlx::query_scalar(
+            "SELECT href FROM contacts WHERE addressbook_id = ? AND href IS NOT NULL",
+        )
+        .bind(addressbook_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("select contact hrefs")
     }
 
     pub async fn contact_etags_by_href(

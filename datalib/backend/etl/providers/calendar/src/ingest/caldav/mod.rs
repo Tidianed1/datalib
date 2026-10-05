@@ -4,20 +4,19 @@
 
 pub mod dav;
 
-use std::collections::HashSet;
-
 use anyhow::{Context, Result};
 use datalib_etl::control::DownloadControl;
+use datalib_etl::dav::sync::{CollectionSync, Page};
 use datalib_etl::download_problems::{self, RecordProblem, RunProblem};
 use datalib_etl::http::LatchkeySettings;
 use datalib_etl::progress::Progress;
-use tracing::{info, warn};
+use tracing::info;
 
 use super::db::RawDb;
 use super::schema_raw::{AccountRow, CalendarRow, IcsObjectRow};
 use super::{select_calendars, FetchSummary, Window};
 use crate::ical;
-use dav::{DavError, DavResponse, Multistatus};
+use dav::{CalendarProps, Multistatus};
 
 pub struct FetchOptions {
     /// The store this run writes into, opened and closed by the caller.
@@ -31,13 +30,6 @@ pub struct FetchOptions {
     pub progress: Progress,
     pub control: DownloadControl,
 }
-
-/// How many resources one `calendar-multiget` names.
-const MULTIGET_BATCH: usize = 100;
-
-/// How many truncated `sync-collection` replies one calendar follows
-/// before giving up on this run; the token taken so far is kept.
-const MAX_SYNC_ROUNDS: usize = 50;
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = &opts.db;
@@ -86,16 +78,26 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         let label = cal.row.display_name.as_deref().unwrap_or(&cal.row.id);
         opts.progress
             .set_message(&format!("syncing calendar {label}"));
-        let synced = match &opts.window {
-            Some(w) => list_window(db, cal, w, lk, &mut summary, &mut record_problems).await,
-            None => sync_calendar(db, cal, lk, &mut summary, &mut record_problems).await,
-        };
-        if let Err(e) = synced {
-            summary.errors += 1;
-            run_problems.push(RunProblem::listing(
-                &format!("calendar {label}"),
-                format!("{e:#}"),
-            ));
+        let synced = sync_calendar(
+            db,
+            cal,
+            opts.window.as_ref(),
+            lk,
+            &mut summary,
+            &mut record_problems,
+        )
+        .await;
+        let listing = format!("calendar {label}");
+        match synced {
+            Ok(None) => {}
+            Ok(Some(cut_short)) => run_problems.push(RunProblem::listing(
+                &listing,
+                format!("{cut_short}; nothing was deleted"),
+            )),
+            Err(e) => {
+                summary.errors += 1;
+                run_problems.push(RunProblem::listing(&listing, format!("{e:#}")));
+            }
         }
     }
     download_problems::report_run(db.pool(), &run_problems).await;
@@ -228,172 +230,79 @@ fn last_segment(href: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Keeps one calendar in step: with `sync-collection` from its stored
+/// token, or with `calendar-query` over the window, or whole where the
+/// server has no `sync-collection`. Returns why the listing stopped
+/// short, if it did; then nothing it did not name is deleted.
 async fn sync_calendar(
     db: &RawDb,
     cal: &Calendar,
+    window: Option<&Window>,
     lk: &LatchkeySettings,
     summary: &mut FetchSummary,
     problems: &mut Vec<RecordProblem>,
-) -> Result<()> {
+) -> Result<Option<String>> {
     let id = &cal.row.id;
-    let mut token = db.sync_token(id).await?.unwrap_or_default();
-    let full = token.is_empty();
-    let mut listed: HashSet<String> = HashSet::new();
-    for _ in 0..MAX_SYNC_ROUNDS {
-        summary.requests += 1;
-        let ms = match dav::report(&cal.url, "1", &dav::body_sync_collection(&token), lk).await {
-            Ok(ms) => ms,
-            // A token the server no longer honours: RFC 6578 answers 403
-            // with `valid-sync-token`, some servers 409 or 410. Start over.
-            Err(DavError::Http {
-                status: 403 | 409 | 410,
-                ..
-            }) if !token.is_empty() => {
-                warn!(event = "caldav_sync_token_refused", calendar = %id, "the server refused the stored sync token; listing the calendar whole");
-                db.set_sync_token(id, None).await?;
-                return Box::pin(sync_calendar(db, cal, lk, summary, problems)).await;
-            }
-            Err(DavError::Http {
-                status: 403 | 405 | 501,
-                ..
-            }) => return list_whole(db, cal, lk, summary, problems).await,
-            Err(e) => return Err(anyhow::anyhow!("sync-collection REPORT: {e}")),
-        };
-        let own = cal.url.trim_end_matches('/');
-        let truncated = ms.responses.iter().any(|r| {
-            r.status == Some(507)
-                && dav::absolutize(&cal.url, &r.href)
-                    .is_some_and(|u| u.trim_end_matches('/') == own)
-        });
-        let resources: Vec<DavResponse> = ms
-            .responses
-            .into_iter()
-            .filter(|r| r.status != Some(507))
-            .collect();
-        listed.extend(
-            resources
-                .iter()
-                .filter(|r| !matches!(r.status, Some(404 | 410)))
-                .map(|r| r.href.clone()),
-        );
-        apply(db, cal, lk, resources, summary, problems).await?;
-        let Some(next) = ms.sync_token else {
-            anyhow::bail!("sync-collection reply carried no sync-token");
-        };
-        let moved = next != token;
-        token = next;
-        db.set_sync_token(id, Some(&token)).await?;
-        if !truncated || !moved {
-            break;
-        }
-    }
-    if full {
-        // A whole listing is the calendar as it is now: anything stored
-        // that it did not name was deleted while no token was held.
-        drop_unlisted(db, id, &listed, summary).await?;
+    let mut sync = match window {
+        Some(w) => CollectionSync::query(&dav::KIND, &cal.url, dav::body_query_window(w), lk),
+        None => CollectionSync::new(
+            &dav::KIND,
+            &cal.url,
+            db.sync_token(id).await?,
+            Some(dav::BODY_QUERY_ALL_EVENTS.to_string()),
+            lk,
+        ),
+    };
+    let listed = store_pages(db, cal, &mut sync, summary, problems).await;
+    summary.requests += sync.requests();
+    listed?;
+    let outcome = sync.finish();
+    let stored = db.ics_hrefs(id).await?;
+    let gone: Vec<String> = outcome
+        .unlisted(stored.keys())
+        .into_iter()
+        .filter_map(|href| stored.get(href).cloned())
+        .collect();
+    summary.events_deleted += gone.len();
+    db.delete_ics_uids(id, &gone).await?;
+    Ok(outcome.cut_short().map(str::to_string))
+}
+
+async fn store_pages(
+    db: &RawDb,
+    cal: &Calendar,
+    sync: &mut CollectionSync<'_>,
+    summary: &mut FetchSummary,
+    problems: &mut Vec<RecordProblem>,
+) -> Result<()> {
+    while let Some(page) = sync.next_page::<CalendarProps>().await? {
+        let token = page.token.clone();
+        apply(db, cal, page, summary, problems).await?;
+        db.set_sync_token(&cal.row.id, token.as_deref()).await?;
     }
     Ok(())
 }
 
-/// A windowed calendar: every event with some part in the window, each
-/// series trimmed to the changed occurrences inside it
-/// (`limit-recurrence-set`), listed whole every run. `sync-collection`
-/// has no time bound, so no token is kept either.
-async fn list_window(
-    db: &RawDb,
-    cal: &Calendar,
-    window: &Window,
-    lk: &LatchkeySettings,
-    summary: &mut FetchSummary,
-    problems: &mut Vec<RecordProblem>,
-) -> Result<()> {
-    summary.requests += 1;
-    let ms = dav::report(&cal.url, "1", &dav::body_query_window(window), lk)
-        .await
-        .map_err(|e| anyhow::anyhow!("calendar-query REPORT: {e}"))?;
-    let listed: HashSet<String> = ms.responses.iter().map(|r| r.href.clone()).collect();
-    apply(db, cal, lk, ms.responses, summary, problems).await?;
-    drop_unlisted(db, &cal.row.id, &listed, summary).await?;
-    db.set_sync_token(&cal.row.id, None).await
-}
-
-/// For a server with no `sync-collection`: list every event, every run.
-async fn list_whole(
-    db: &RawDb,
-    cal: &Calendar,
-    lk: &LatchkeySettings,
-    summary: &mut FetchSummary,
-    problems: &mut Vec<RecordProblem>,
-) -> Result<()> {
-    warn!(event = "caldav_sync_collection_unsupported", calendar = %cal.row.id, "the server does not support sync-collection; listing the calendar whole");
-    summary.requests += 1;
-    let ms = dav::report(&cal.url, "1", dav::BODY_QUERY_ALL_EVENTS, lk)
-        .await
-        .map_err(|e| anyhow::anyhow!("calendar-query REPORT: {e}"))?;
-    let listed: HashSet<String> = ms.responses.iter().map(|r| r.href.clone()).collect();
-    apply(db, cal, lk, ms.responses, summary, problems).await?;
-    drop_unlisted(db, &cal.row.id, &listed, summary).await
-}
-
-async fn drop_unlisted(
-    db: &RawDb,
-    calendar_id: &str,
-    listed: &HashSet<String>,
-    summary: &mut FetchSummary,
-) -> Result<()> {
-    let gone: Vec<String> = db
-        .ics_hrefs(calendar_id)
-        .await?
-        .into_iter()
-        .filter(|(href, _)| !listed.contains(href))
-        .map(|(_, uid)| uid)
-        .collect();
-    summary.events_deleted += gone.len();
-    db.delete_ics_uids(calendar_id, &gone).await
-}
-
-/// Store what a listing changed and drop what it deleted. A resource
-/// named without its data is fetched with `calendar-multiget`.
+/// Store what one page changed and drop what it deleted.
 async fn apply(
     db: &RawDb,
     cal: &Calendar,
-    lk: &LatchkeySettings,
-    resources: Vec<DavResponse>,
+    page: Page<CalendarProps>,
     summary: &mut FetchSummary,
     problems: &mut Vec<RecordProblem>,
 ) -> Result<()> {
     let id = &cal.row.id;
     let stored = db.ics_hrefs(id).await?;
-    let mut deleted: Vec<String> = Vec::new();
-    let mut with_data: Vec<DavResponse> = Vec::new();
-    let mut without_data: Vec<String> = Vec::new();
-    for r in resources {
-        if matches!(r.status, Some(404 | 410)) {
-            deleted.extend(stored.get(&r.href).cloned());
-        } else if r.href.trim_end_matches('/')
-            == cal.row.href.as_deref().unwrap_or("").trim_end_matches('/')
-        {
-            // The collection itself, which some servers list first.
-        } else if r.props.calendar_data.is_some() {
-            with_data.push(r);
-        } else {
-            without_data.push(r.href);
-        }
+    for href in &page.unfetched {
+        summary.errors += 1;
+        problems.push(RecordProblem::new(
+            "ics_objects",
+            href,
+            "the calendar listed this object, but did not return it when asked",
+        ));
     }
-    for chunk in without_data.chunks(MULTIGET_BATCH) {
-        summary.requests += 1;
-        let ms = dav::report(&cal.url, "1", &dav::body_multiget(chunk), lk)
-            .await
-            .map_err(|e| anyhow::anyhow!("calendar-multiget REPORT: {e}"))?;
-        with_data.extend(
-            ms.responses
-                .into_iter()
-                .filter(|r| r.props.calendar_data.is_some()),
-        );
-    }
-
-    let mut rows: Vec<IcsObjectRow> = Vec::with_capacity(with_data.len());
-    for r in &with_data {
+    let mut rows: Vec<IcsObjectRow> = Vec::with_capacity(page.changed.len());
+    for r in &page.changed {
         let data = r.props.calendar_data.as_deref().unwrap_or_default();
         let Some(uid) = ical::first_event_uid(data) else {
             summary.errors += 1;
@@ -417,14 +326,18 @@ async fn apply(
         ));
     }
     db.upsert_ics_objects(&rows).await?;
+    let deleted: Vec<String> = page
+        .deleted
+        .iter()
+        .filter_map(|href| stored.get(href).cloned())
+        .collect();
     summary.events_deleted += deleted.len();
-    db.delete_ics_uids(id, &deleted).await?;
-    Ok(())
+    db.delete_ics_uids(id, &deleted).await
 }
 
 #[cfg(test)]
 mod tests {
-    use super::dav::CalendarProps;
+    use super::dav::{CalendarProps, DavResponse};
     use super::*;
 
     #[test]

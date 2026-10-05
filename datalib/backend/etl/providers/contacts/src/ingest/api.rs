@@ -2,10 +2,9 @@
 //! requests and the `multistatus` walk are [`datalib_etl::dav`]'s), and
 //! the vCard helpers the ingest and render sides share.
 
-use std::collections::HashMap;
-
 use quick_xml::events::BytesStart;
 
+use datalib_etl::dav::sync::{CollectionKind, ObjectProps};
 use datalib_etl::dav::{self as webdav, DavProps};
 use datalib_etl::http::{HttpService, LatchkeySettings};
 
@@ -16,6 +15,16 @@ pub use datalib_etl::dav::DavError;
 /// host; this value is just what shows up in playback fixtures +
 /// telemetry events.
 pub const HTTP_SERVICE: HttpService = HttpService::Carddav;
+
+/// RFC 6578 has `sync-collection` sent at Depth 0, and every CardDAV
+/// REPORT here goes the same way.
+pub const KIND: CollectionKind = CollectionKind {
+    service: HTTP_SERVICE,
+    ns_decl: r#"xmlns:card="urn:ietf:params:xml:ns:carddav""#,
+    data_prop: "card:address-data",
+    multiget: "card:addressbook-multiget",
+    report_depth: "0",
+};
 
 pub type DavResponse = webdav::DavResponse<ContactProps>;
 pub type Multistatus = webdav::Multistatus<ContactProps>;
@@ -65,6 +74,12 @@ impl DavProps for ContactProps {
     }
 }
 
+impl ObjectProps for ContactProps {
+    fn data(&self) -> Option<&str> {
+        self.vcard.as_deref()
+    }
+}
+
 /// PROPFIND body asking for `addressbook-home-set` on a principal
 /// URL. Depth `0`.
 pub const BODY_ADDRESSBOOK_HOME_SET: &str = r#"<?xml version="1.0" encoding="utf-8"?>
@@ -89,11 +104,7 @@ pub const BODY_LIST_ADDRESSBOOKS: &str = r#"<?xml version="1.0" encoding="utf-8"
 "#;
 
 pub fn body_sync_collection(prev_token: &str) -> String {
-    webdav::body_sync_collection(
-        prev_token,
-        r#"xmlns:card="urn:ietf:params:xml:ns:carddav""#,
-        "card:address-data",
-    )
+    KIND.body_sync_collection(prev_token)
 }
 
 pub async fn propfind(
@@ -103,15 +114,6 @@ pub async fn propfind(
     latchkey: &LatchkeySettings,
 ) -> Result<Multistatus, DavError> {
     webdav::propfind(HTTP_SERVICE, url, depth, body, latchkey).await
-}
-
-/// A REPORT at Depth `0`, as RFC 6578 has `sync-collection` sent.
-pub async fn report(
-    url: &str,
-    body: &str,
-    latchkey: &LatchkeySettings,
-) -> Result<Multistatus, DavError> {
-    webdav::report(HTTP_SERVICE, url, "0", body, latchkey).await
 }
 
 // vCard utility helpers
@@ -379,34 +381,6 @@ fn unfold_vcard_lines(vcard: &str) -> String {
     out
 }
 
-/// (`href` → (etag, vcard)) extracted from a multistatus the way
-/// sync-collection / multiget returns it. Skips responses whose
-/// own status says deleted (404 / 410) — those land in
-/// [`deleted_hrefs`] instead.
-pub fn changed_contacts(ms: &Multistatus) -> HashMap<String, (Option<String>, String)> {
-    let mut out = HashMap::new();
-    for r in &ms.responses {
-        if matches!(r.status, Some(404 | 410)) {
-            continue;
-        }
-        if let Some(v) = &r.props.vcard {
-            out.insert(r.href.clone(), (r.props.etag.clone(), v.clone()));
-        }
-    }
-    out
-}
-
-/// hrefs the server reported as gone (404 / 410) on a
-/// sync-collection response. The caller drops them from the local
-/// store via [`super::db::RawDb::delete_contact`].
-pub fn deleted_hrefs(ms: &Multistatus) -> Vec<String> {
-    ms.responses
-        .iter()
-        .filter(|r| matches!(r.status, Some(404 | 410)))
-        .map(|r| r.href.clone())
-        .collect()
-}
-
 // Tests
 
 #[cfg(test)]
@@ -415,6 +389,12 @@ mod tests {
 
     fn parse(body: &str) -> Multistatus {
         webdav::parse_multistatus(body).unwrap()
+    }
+
+    /// `(etag, vcard)` of the response for `href`.
+    fn card_at<'m>(ms: &'m Multistatus, href: &str) -> Option<(Option<&'m str>, &'m str)> {
+        let r = ms.responses.iter().find(|r| r.href == href)?;
+        Some((r.props.etag.as_deref(), r.props.vcard.as_deref()?))
     }
 
     /// A grouped property (`item1.EMAIL`) is the same property. Every
@@ -546,18 +526,23 @@ END:VCARD&#13;
             ms.sync_token.as_deref(),
             Some("http://example.com/sync/4242")
         );
-        let changed = changed_contacts(&ms);
-        assert_eq!(changed.len(), 1);
-        let (etag, vcard) = changed
-            .get("/dav/addressbooks/user/u%40example.com/Default/abc.vcf")
-            .unwrap();
-        assert_eq!(etag.as_deref(), Some("\"v1\""));
+        let (etag, vcard) = card_at(
+            &ms,
+            "/dav/addressbooks/user/u%40example.com/Default/abc.vcf",
+        )
+        .unwrap();
+        assert_eq!(etag, Some("\"v1\""));
         assert!(vcard.contains("UID:abc"));
         assert_eq!(vcard_uid(vcard).as_deref(), Some("abc"), "{vcard:?}");
-        let deleted = deleted_hrefs(&ms);
+        let deleted: Vec<&str> = ms
+            .responses
+            .iter()
+            .filter(|r| r.status == Some(404))
+            .map(|r| r.href.as_str())
+            .collect();
         assert_eq!(
             deleted,
-            vec!["/dav/addressbooks/user/u%40example.com/Default/gone.vcf".to_string()]
+            vec!["/dav/addressbooks/user/u%40example.com/Default/gone.vcf"]
         );
     }
 
@@ -670,11 +655,12 @@ END:VCARD&#13;
 
         let ms = parse(SYNC_COLLECTION_FASTMAIL);
         assert_eq!(ms.sync_token.as_deref(), Some("data:,1780602923-240"));
-        let changed = changed_contacts(&ms);
-        let (etag, vcard) = changed
-            .get("/dav/addressbooks/user/picard@enterprise.test/Default/riker.vcf")
-            .expect("the CDATA vCard is kept");
-        assert_eq!(etag.as_deref(), Some("\"35513e3f\""));
+        let (etag, vcard) = card_at(
+            &ms,
+            "/dav/addressbooks/user/picard@enterprise.test/Default/riker.vcf",
+        )
+        .expect("the CDATA vCard is kept");
+        assert_eq!(etag, Some("\"35513e3f\""));
         assert_eq!(
             vcard,
             "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:riker-1\r\nFN:William Riker\r\nEND:VCARD\r\n"
