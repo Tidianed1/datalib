@@ -1,8 +1,10 @@
 //! A page that refetches on every `log` frame feeds itself: its request
 //! is a log line, the line is the next frame. The server counts the hops
 //! (`loop_guard`) and warns once a chain is long enough to be a loop.
-//! Played here with the real watcher, the real log writer and the real
-//! router; the page is this test. One test, because the subscriber it
+//! Played here with the watch, the real log writer and the real router;
+//! the page is this test. The watch is fed (`watch::spawn_fed`): the test
+//! says when a file moved, so the chain is counted without depending on
+//! when the OS would have said so. One test, because the subscriber it
 //! installs is the process's only one.
 
 use axum::body::Body;
@@ -10,7 +12,7 @@ use axum::http::{Request, StatusCode};
 use datalib_core::app_store::AppStore;
 use datalib_http::applets::AppletRegistry;
 use datalib_http::loop_guard::{CAUSE_HEADER, LOOP_AT, TARGET};
-use datalib_http::watch::{RootEvent, RootFrame, Table};
+use datalib_http::watch::{Feed, RootEvent, RootFrame, Table, Timing};
 use datalib_http::{router, ApiToken, AppState};
 use datalib_runs::ProcessLogWriter;
 use std::path::Path;
@@ -21,9 +23,8 @@ use tower::ServiceExt;
 
 const TEST_TOKEN: &str = "feedback-loop-test-token";
 
-/// A hang guard on hearing a file move, not a wait: with the disk busy
-/// enough, fseventsd has held events back for over 10s.
-const HEARD_WITHIN: Duration = Duration::from_secs(60);
+/// A hang guard, not a wait: the watch is fed, so nothing waits on the OS.
+const HEARD_WITHIN: Duration = Duration::from_secs(10);
 
 async fn state(root: &Path, root_tx: broadcast::Sender<RootFrame>) -> AppState {
     let root = Arc::new(root.to_path_buf());
@@ -72,6 +73,7 @@ async fn refetch_on_log_frames(
     state: &AppState,
     root: &Path,
     log: &ProcessLogWriter,
+    feed: &Feed,
     rx: &mut broadcast::Receiver<RootFrame>,
     hops: usize,
     echo: bool,
@@ -80,7 +82,7 @@ async fn refetch_on_log_frames(
     get(state, "/api/health", None).await;
     let mut seen = Vec::new();
     for _ in 0..hops {
-        let frame = settle(root, log, rx)
+        let frame = settle(root, log, feed, rx)
             .await
             .pop()
             .expect("the request's own line should come back as a log frame");
@@ -99,22 +101,25 @@ async fn loop_warnings(state: &AppState) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// Commit every line logged so far, then take every frame the commits
-/// caused; the `log` ones are returned, oldest first. The watch takes
-/// filesystem events in the order they happened, so once a write of the
-/// test's own under `system/frontend/` comes back, whatever an earlier
-/// commit would report has been reported; a burst is sent whole, so what
-/// came with it is already queued. Each barrier is a new file, so one
-/// barrier is never ended by another's leftovers.
+/// Commit every line logged so far, tell the watch the run store moved,
+/// then take every frame that caused; the `log` ones are returned,
+/// oldest first. The watch takes moves in the order it is fed, so once a
+/// write of the test's own under `system/frontend/` comes back, the run
+/// store's has been reported; a burst is sent whole, so what came with
+/// it is already queued.
 async fn settle(
     root: &Path,
     log: &ProcessLogWriter,
+    feed: &Feed,
     rx: &mut broadcast::Receiver<RootFrame>,
 ) -> Vec<RootFrame> {
     static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     log.flush().await;
-    std::fs::write(root.join(format!("system/frontend/barrier-{n}.js")), "").unwrap();
+    feed.moved(&root.join("system/runs/runs.sqlite"));
+    let barrier = root.join(format!("system/frontend/barrier-{n}.js"));
+    std::fs::write(&barrier, "").unwrap();
+    feed.moved(&barrier);
     let is_log = |f: &RootFrame| f.event == (RootEvent::TableChanged { table: Table::Log });
     let mut logs = Vec::new();
     let barrier = async {
@@ -149,28 +154,26 @@ async fn a_page_refetching_on_its_own_echo_is_warned_about_once_the_chain_is_a_l
     let log = datalib_http::logging::init(root).expect("the store opens in a temp dir");
     let (tx, mut rx) = broadcast::channel(256);
     let state = state(root, tx.clone()).await;
-    tokio::time::timeout(
-        HEARD_WITHIN,
-        datalib_http::watch::spawn(root.to_path_buf(), tx).wait(),
-    )
-    .await
-    .expect("the watch never reported ready");
+    let (ready, feed) = datalib_http::watch::spawn_fed(root.to_path_buf(), tx, Timing::default());
+    tokio::time::timeout(HEARD_WITHIN, ready.wait())
+        .await
+        .expect("the watch never reported ready");
     // The boot lines `init` just wrote are not a page's doing; let them
     // land before the page starts.
-    settle(root, &log, &mut rx).await;
+    settle(root, &log, &feed, &mut rx).await;
 
     // A page that does not echo: every frame is one hop from a fetch
     // nothing caused, so the chain never grows.
     let hops = LOOP_AT as usize + 3;
-    let seen = refetch_on_log_frames(&state, root, &log, &mut rx, hops, false).await;
+    let seen = refetch_on_log_frames(&state, root, &log, &feed, &mut rx, hops, false).await;
     assert!(seen.iter().all(|c| *c == Some(1)), "{seen:?}");
     log.flush().await;
     assert!(loop_warnings(&state).await.is_empty());
     // After the read: its own request is a line too.
-    settle(root, &log, &mut rx).await;
+    settle(root, &log, &feed, &mut rx).await;
 
     // The same page echoing: each hop is one longer than the last.
-    let seen = refetch_on_log_frames(&state, root, &log, &mut rx, hops, true).await;
+    let seen = refetch_on_log_frames(&state, root, &log, &feed, &mut rx, hops, true).await;
     let expected: Vec<Option<u32>> = (1..=hops as u32).map(Some).collect();
     assert_eq!(seen, expected);
     log.flush().await;
