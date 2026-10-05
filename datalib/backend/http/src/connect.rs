@@ -14,6 +14,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use strum::{EnumString, IntoStaticStr, VariantArray};
 use tokio::process::Command;
 
 use datalib_probe::issue::{classify, IssueKind};
@@ -93,6 +94,54 @@ pub struct ServiceInfo {
     /// ([`crate::plugins`]). The wizard says so before anything is
     /// written.
     pub installs_plugin: Option<String>,
+    /// Who names the account a browser login adds.
+    pub account_naming: AccountNaming,
+}
+
+/// Who names the account a browser login adds. `docs/dev/latchkey.md`
+/// §"Accounts: who names them" has the rules this stands for.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    EnumString,
+    IntoStaticStr,
+    VariantArray,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum AccountNaming {
+    /// The login reports who signed in and stores under that; latchkey
+    /// accepts `--account` only for an account it already holds. Every
+    /// built-in service and plugin datalib signs in to with a browser.
+    Service,
+    /// `--account` decides, a new name included: a service registered
+    /// with `latchkey services register`, which has no identity to
+    /// report.
+    Chosen,
+}
+
+impl AccountNaming {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+    /// `None` for a spelling this build does not know.
+    pub fn parse(s: &str) -> Option<Self> {
+        s.parse().ok()
+    }
+    /// From the `type` `latchkey services info` reports, which stands in
+    /// for the rule until latchkey reports it (imbue-ai/latchkey#169). A
+    /// plugin reports `built-in`.
+    fn of_service_type(service_type: Option<&str>) -> Self {
+        match service_type {
+            Some("user-registered") => AccountNaming::Chosen,
+            _ => AccountNaming::Service,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -143,6 +192,10 @@ pub async fn get_service(
                 gateway,
                 error: if unknown { None } else { Some(message) },
                 installs_plugin: None,
+                // Not registered yet: the wizard registers it, and a
+                // registered service names nothing. Unreachable latchkey:
+                // nothing to go on, and the box stays free to type in.
+                account_naming: AccountNaming::Chosen,
             }))
         }
     }
@@ -168,6 +221,8 @@ fn plugin_service_info(service: &str, gateway: Option<&str>) -> Option<ServiceIn
         error: None,
         issue: None,
         installs_plugin: Some(dir.display().to_string()),
+        // Garmin's names its own; `plugins::tests` checks it still does.
+        account_naming: AccountNaming::Service,
     })
 }
 
@@ -246,6 +301,7 @@ fn parse_service_info(service: &str, v: &Value) -> ServiceInfo {
         error: None,
         issue: None,
         installs_plugin: None,
+        account_naming: AccountNaming::of_service_type(v.get("type").and_then(Value::as_str)),
     }
 }
 
@@ -1047,6 +1103,7 @@ mod tests {
         });
         let info = parse_service_info("google-gmail", &v);
         assert_eq!(info.service, "google-gmail");
+        assert_eq!(info.account_naming, AccountNaming::Service);
         assert_eq!(info.auth_options, vec!["browser", "set"]);
         assert_eq!(info.accounts.len(), 1);
         assert_eq!(info.accounts[0].account, "thad@imbue.com");
@@ -1088,6 +1145,26 @@ mod tests {
                 "Authorization: Bearer ro-token"
             ]
         );
+    }
+
+    /// A service the wizard registered names no accounts, so the name in
+    /// the box is the one a browser login stores under.
+    #[test]
+    fn a_registered_service_lets_the_person_name_the_account() {
+        let v = json!({ "type": "user-registered", "authOptions": ["browser", "set"] });
+        assert_eq!(
+            parse_service_info("claude-ai", &v).account_naming,
+            AccountNaming::Chosen
+        );
+    }
+
+    #[test]
+    fn strum_and_serde_spell_account_naming_the_same() {
+        for naming in AccountNaming::VARIANTS {
+            let json = serde_json::to_string(naming).unwrap();
+            assert_eq!(json, format!("\"{}\"", naming.as_str()));
+            assert_eq!(AccountNaming::parse(naming.as_str()), Some(*naming));
+        }
     }
 
     /// A plugin's credential from files is stored with `set-nocurl`,

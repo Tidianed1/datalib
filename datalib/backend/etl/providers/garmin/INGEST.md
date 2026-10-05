@@ -30,11 +30,8 @@ URLs exist.
 Every request goes through `latchkey curl`, like any other latchkey
 source. The `garmin` service is not built into latchkey: it comes from
 [latchkey-garmin](https://github.com/imbue-ai/latchkey-garmin), a
-plugin datalib vendors under `third-party/latchkey-garmin/` and writes
-into `<latchkey dir>/plugins/garmin/` the first time someone signs in to
-Garmin from the wizard (`datalib/backend/http/src/plugins.rs`). A copy
-already there without datalib's stamp is the person's own and is left
-alone.
+plugin datalib vendors and installs on the first Garmin sign-in
+([`docs/dev/latchkey.md`](../../../../../docs/dev/latchkey.md#three-kinds-of-service)).
 
 The plugin stores the year-long OAuth1 token and mints the hourly
 bearer from it with an OAuth1-signed exchange whenever latchkey finds

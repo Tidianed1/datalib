@@ -167,12 +167,10 @@ latchkey-backed provider shares:
 account = "you@gmail.com"
 ```
 
-Name it only when `google-gmail` holds more than one credential —
-latchkey keys by `(service, account)` and requires the selector once
-there are two, which is the normal case for work + personal. Omitting it
-means "the only stored account"; it is deliberately *not* a
-pick-the-first fallback, so with two stored and none named latchkey
-fails the request as ambiguous rather than mirroring the wrong mailbox.
+Name it once `google-gmail` holds more than one credential, which is
+the normal case for work + personal: with two stored and none named,
+latchkey refuses the request rather than mirroring the wrong mailbox
+([`latchkey.md`](latchkey.md#accounts-who-names-them)).
 
 The setting reaches the wire as `HttpRequest::latchkey`. It is
 deliberately **not** part of `fixture_key` (`datalib_etl::http`): which

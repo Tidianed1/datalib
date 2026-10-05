@@ -50,6 +50,7 @@ import {
 } from "@/config/sourceSteps";
 import { FailureError } from "@/apiError";
 import {
+  type AccountNaming,
   type Failure,
   type ConnectPhase,
   type ProbeItem,
@@ -71,6 +72,7 @@ import {
   suggestedAccount,
 } from "@/config/credentialShape";
 import { ingestReach } from "@/config/ingestMethods";
+import { loginAccount, nameLeftToService } from "@/config/accountNaming";
 import { isDesktopApp, pickPath } from "@/desktop";
 import {
   BYTE_UNITS,
@@ -551,6 +553,23 @@ const accountsFailure = ref<Failure | null>(null);
 /// Where signing in will install the latchkey plugin this service comes
 /// from, while latchkey lacks it.
 const installsPlugin = ref<string | null>(null);
+/// Who names the account a browser login adds: the service, from who
+/// signed in, or the person, in the box.
+const accountNaming = ref<AccountNaming>("chosen");
+const storedNames = computed(() => (accounts.value ?? []).map((a) => a.account));
+/// The box names an account latchkey holds for a service that names its
+/// own, so signing in refreshes it rather than adding one.
+const signsInAgainAs = computed(() =>
+  accountNaming.value === "service" && accountValue.value
+    ? loginAccount("service", storedNames.value, accountValue.value)
+    : "",
+);
+const accountHelp = computed(() =>
+  accountNaming.value === "service"
+    ? `${chosen.value?.label ?? "The service"} names each account itself when you sign in. ` +
+      "Pick one latchkey holds, or sign in to add another."
+    : accountField.value?.help,
+);
 
 async function loadAccounts() {
   const name = service.value;
@@ -566,6 +585,7 @@ async function loadAccounts() {
     latchkeyCli.value = info.cli;
     gateway.value = info.gateway;
     installsPlugin.value = info.installs_plugin;
+    accountNaming.value = info.account_naming;
     accountsFailure.value = info.error
       ? { issue: info.issue ?? "unknown", detail: info.error }
       : null;
@@ -789,7 +809,7 @@ async function connectViaLatchkey() {
     const ephemeral = chosen.value?.credentialRegister?.login_flow === "cookie-capture";
     const started = await startLatchkeyConnect(
       name,
-      accountValue.value,
+      loginAccount(accountNaming.value, storedNames.value, accountValue.value),
       wouldRegister.value,
       ephemeral,
     );
@@ -809,12 +829,9 @@ async function connectViaLatchkey() {
         // The point of connecting was to add an account; showing the
         // stale list would hide the one just added.
         await loadAccounts();
-        // Follow the login rather than the box. `--account` is ignored
-        // when latchkey stores (imbue-ai/latchkey#148): an OAuth login
-        // files under the address actually signed in with, so signing
-        // in as a second Fastmail address is how a second account comes
-        // to exist — and the form has to name that one, or the config
-        // points at a credential that isn't there.
+        // Follow the login rather than the box: a service that names
+        // its own accounts files the credential under whoever signed
+        // in, and the config has to name that one.
         const landed = status.account;
         const field = accountField.value;
         if (landed && field) values.value[field.target] = landed;
@@ -1196,10 +1213,12 @@ function submit() {
               :model-value="accountValue"
               :options="accountOptions"
               :label="accountField.label"
-              placeholder="you@example.com"
+              :placeholder="
+                accountNaming === 'service' ? 'named when you sign in' : 'you@example.com'
+              "
               @update:model-value="chooseAccount"
             />
-            <small v-if="accountField.help" class="wiz-help">{{ accountField.help }}</small>
+            <small v-if="accountHelp" class="wiz-help wiz-account-help">{{ accountHelp }}</small>
             <small v-if="accounts && accounts.length === 0 && !accountsFailure" class="wiz-help">
               latchkey has no <code>{{ service }}</code> credential stored yet.
               {{ canConnect ? "Connect below." : "" }}
@@ -1252,6 +1271,13 @@ function submit() {
                   >For less, use <b>Paste a key</b>.</template
                 >
               </p>
+              <p
+                v-if="nameLeftToService(accountNaming, storedNames, accountValue)"
+                class="wiz-help wiz-name-left"
+              >
+                {{ chosen.label }} names the new account itself, so
+                <code>{{ accountValue }}</code> is replaced by the name it reports.
+              </p>
               <p v-if="chosen.credentialConnectWarning" class="wiz-help">
                 {{ chosen.credentialConnectWarning }}
               </p>
@@ -1264,7 +1290,9 @@ function submit() {
                 >
                   {{
                     connect.state !== "running"
-                      ? "Sign in with browser"
+                      ? signsInAgainAs
+                        ? `Sign in again as ${signsInAgainAs}`
+                        : "Sign in with browser"
                       : connect.phase === "downloading_browser"
                         ? "Getting a browser…"
                         : "Waiting for the browser…"

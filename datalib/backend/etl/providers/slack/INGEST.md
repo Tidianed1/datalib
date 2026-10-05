@@ -13,10 +13,9 @@ by its upstream Slack identifier — a message and a thread by
 
 ## Auth
 
-The downloader does not handle Slack tokens directly. It shells out to
-[`latchkey curl`](https://github.com/imbue-ai/latchkey), which signs
-requests using a token stored in the host keyring under the `slack`
-service. `latchkey` must be on `PATH` for the binary to run.
+The downloader does not handle Slack tokens directly. It runs
+`latchkey curl`, which puts the token latchkey holds for the `slack`
+service on each request ([`docs/dev/latchkey.md`](../../../../../docs/dev/latchkey.md)).
 
 Required Slack OAuth scopes (user token):
 
