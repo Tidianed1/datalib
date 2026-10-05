@@ -1539,9 +1539,10 @@ async fn download_one_file(file_obj: &Value) -> Result<(Vec<u8>, Option<String>)
             let effective_mime = header_mime.as_deref().or(mime);
             Ok((resp.body, effective_mime.map(String::from)))
         }
-        Ok(resp) => Err(format!("GET {url} -> HTTP {}", resp.status)),
-        // Its message carries the tape's path on this machine.
-        Err(HttpError::PlaybackMiss(_)) => Err(format!("GET {url}: no recorded response")),
+        Ok(resp) => Err(format!("HTTP {}: GET {url}", resp.status)),
+        // Its message carries the tape's path on this machine. The reason
+        // leads: the sample is cut at 80 characters.
+        Err(HttpError::PlaybackMiss(_)) => Err(format!("no recorded response: GET {url}")),
         Err(e) => Err(e.to_string()),
     }
 }

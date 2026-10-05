@@ -305,13 +305,17 @@ impl Scan {
         };
         vec![crate::download_problems::RunProblem::listing(
             name,
+            // The path first, and short: the sample is cut at 80 characters.
             format!(
-                "{} entries under {} could not be read, so no file's records \
-                 were deleted this run; first: {}: {}",
+                "{}: {} ({} unreadable under {}; nothing was deleted this run)",
+                first
+                    .path
+                    .strip_prefix(&self.root)
+                    .unwrap_or(&first.path)
+                    .display(),
+                first.error,
                 self.errors.len(),
                 self.root_as_given.display(),
-                first.path.display(),
-                first.error,
             ),
         )]
     }

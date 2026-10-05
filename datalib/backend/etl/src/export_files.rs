@@ -111,12 +111,12 @@ impl ExportFiles {
         };
         vec![RunProblem::listing(
             "files",
+            // The path first, and short: the sample is cut at 80 characters.
             format!(
-                "{} entries under {} could not be read, so nothing the export may have \
-                 dropped was deleted this run; first: {}: {error}",
+                "{}: {error} ({} unreadable under {}; nothing was deleted this run)",
+                path.strip_prefix(&self.root).unwrap_or(path).display(),
                 self.errors.len(),
                 self.root.display(),
-                path.display(),
             ),
         )]
     }

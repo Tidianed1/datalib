@@ -321,7 +321,7 @@ async fn a_failed_attachment_says_why_and_lands_on_a_later_run() {
         acct.problems().await,
         [(
             "claude_attachments:c-a1#f-1".to_string(),
-            "GET https://claude.ai/api/files/f-1/preview: no recorded response".to_string()
+            "no recorded response: GET https://claude.ai/api/files/f-1/preview".to_string()
         )]
     );
 

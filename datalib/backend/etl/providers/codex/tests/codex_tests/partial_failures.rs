@@ -141,7 +141,11 @@ async fn what_a_run_could_not_read_is_a_row_until_it_reads() {
         rows[0].1,
         "1 line could not be used; first: line 2, not JSON"
     );
-    assert!(rows[1].1.starts_with("1 entries under"), "{}", rows[1].1);
+    assert!(
+        rows[1].1.starts_with("2364/04/11/dead.jsonl: "),
+        "the unreadable path leads, relative to the tree: {}",
+        rows[1].1
+    );
 
     std::fs::remove_file(&dead).unwrap();
     std::fs::write(&bad, format!("{meta}\n{meta}\n")).unwrap();

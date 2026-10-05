@@ -111,10 +111,10 @@ MAX_STAMP_MS = (1 << 48) - 1
 # reason, rule) and nothing else, which is why they can be written down.
 # The columns are `_problems()`'s, `|`-joined by the doltlite shell.
 #
-# Two are what the fixture's own gaps look like once a download records
+# Three are what the fixture's own gaps look like once a download records
 # what it could not fetch instead of only logging it: an attachment
-# whose bytes the claude fixture never had, and the facebook video that
-# is deliberately absent from the export. The third is the one record
+# whose bytes the claude fixture never had, the facebook video that is
+# deliberately absent from the export, and the PDF built to be corrupt. The third is the one record
 # built to fail: conversation `c0000006`'s reply carries
 # `created_at = "stardate 47988.1"`, which the claude renderer records as
 # a nulled `created_at` on that message.
@@ -133,18 +133,27 @@ CLAUDE_ATTACHMENT_WITHOUT_BYTES = (
     "|error|fetch|entity"
     "|claude_attachments:c0000004-1701-4d00-8000-00000000c004"
     "#f0000001-1701-4d00-8000-0000000f0001"
-    "|||fetch_failed|no bytes"
+    # The conversation's grid row: the problem shows on its document.
+    "|00000000-0000-89b3-8bed-0eecc97d45ce"
+    "||fetch_failed|no recorded response: GET https://claude.ai/api/fake/files/f0000001-1701-4d00-80…"
 )
 FACEBOOK_VIDEO_NOT_IN_EXPORT = (
-    "22997b9d-2f29-5ffc-a555-7ab9b876a337"
-    "|error|fetch|entity"
+    "1c9f7753-ba2d-5a9e-8fbb-b9b6a0d5ad13"
+    "|warning|fetch|entity"
     "|media_blobs:459de207-00ca-5ade-a05e-095a6835da4d"
     "#your_facebook_activity/posts/media/videos/600000000000001.mp4"
-    "|||fetch_failed|media file not in the export"
+    "|||not_found|media file not in the export: No such file or directory (os error 2)"
+)
+PDF_THAT_WILL_NOT_IDENTIFY = (
+    "7b765789-41e7-536c-9392-2facf510901a"
+    "|error|fetch|entity"
+    "|record:pdf_paths:holodeck/corrupt.pdf"
+    "|||fetch_failed|classify: Invalid PDF structure"
 )
 EXPECTED_PROBLEMS = {
     "claude-api": [POISONED_PROBLEM, CLAUDE_ATTACHMENT_WITHOUT_BYTES],
     "facebook": [FACEBOOK_VIDEO_NOT_IN_EXPORT],
+    "tng_pdfs": [PDF_THAT_WILL_NOT_IDENTIFY],
 }
 
 
