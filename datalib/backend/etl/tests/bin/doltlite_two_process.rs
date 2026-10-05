@@ -288,6 +288,12 @@ async fn history(args: &Args) -> Result<Value> {
 async fn one_pinned_pass(reader: &doltlite_raw::Reader, cursor: Option<&str>) -> Result<String> {
     let pool = reader.pool();
     let pin = reader.pin();
+    // `grid_index` asks a render store's shape before it reads anything.
+    anyhow::ensure!(
+        datalib_store_meta::read(pool).await?.is_some(),
+        "no _datalib_meta at {}",
+        pin.commit()
+    );
     let _rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM entities")
         .fetch_one(pool)
         .await?;

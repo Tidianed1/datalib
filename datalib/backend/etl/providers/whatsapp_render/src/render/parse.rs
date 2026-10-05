@@ -13,6 +13,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{self, BlobBundle};
+use datalib_etl::doltlite_raw::table_exists;
 use datalib_etl::periodize::Period;
 use datalib_etl_chat_common::types::UpstreamRef;
 use datalib_etl_chat_common::{
@@ -553,18 +554,6 @@ async fn load_jids(pool: &SqlitePool) -> Result<HashMap<i64, String>> {
         .collect())
 }
 
-/// Older msgstore versions have neither of the two LID tables. Absent is
-/// "nothing to map", not a failed render.
-async fn has_table(pool: &SqlitePool, table: &str) -> Result<bool> {
-    let n: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?")
-            .bind(table)
-            .fetch_one(pool)
-            .await
-            .with_context(|| format!("probe for {table}"))?;
-    Ok(n > 0)
-}
-
 /// Who a JID is. A `…@lid` (linked id) is an opaque number;
 /// `lid_display_name` may name it and `jid_map` may say which phone
 /// number it stands for. Neither table is total — the measured backup
@@ -595,7 +584,9 @@ impl JidNames {
         for (rowid, jid) in jids {
             out.row_id.entry(jid.clone()).or_insert(*rowid);
         }
-        if has_table(pool, "lid_display_name").await? {
+        // Older msgstore versions have neither LID table, and a backup may
+        // come without wa.db: absent is "nothing to map", not a failed render.
+        if table_exists(pool, "lid_display_name").await? {
             let rows = sqlx::query("SELECT lid_row_id, display_name FROM lid_display_name")
                 .fetch_all(pool)
                 .await
@@ -609,7 +600,7 @@ impl JidNames {
                 }
             }
         }
-        if has_table(pool, "wa_db_contacts").await? {
+        if table_exists(pool, "wa_db_contacts").await? {
             out.has_contacts = true;
             let rows: Vec<(String, String)> =
                 sqlx::query_as("SELECT jid, rows FROM wa_db_contacts")
@@ -635,7 +626,7 @@ impl JidNames {
                 }
             }
         }
-        if has_table(pool, "jid_map").await? {
+        if table_exists(pool, "jid_map").await? {
             let rows = sqlx::query("SELECT lid_row_id, jid_row_id FROM jid_map")
                 .fetch_all(pool)
                 .await
