@@ -8,7 +8,14 @@ export type World = Awaited<ReturnType<typeof startWorld>>;
 /// `startWorld`'s options (harness.mjs), except that a gateway is asked
 /// for by what to seed its store with (`latchkey` argv lists) and
 /// started here.
-export type WorldOptions = { browser?: boolean; runtime?: boolean; gatewaySeed?: string[][] };
+export type WorldOptions = {
+  browser?: "found" | "download" | "none";
+  runtime?: boolean;
+  offline?: boolean;
+  gatewaySeed?: string[][];
+  /// Configure the gateway, then stop it before the test runs.
+  gatewayDown?: boolean;
+};
 
 export const test = base.extend<{ internet: Internet; world: World; worldOptions: WorldOptions }>({
   worldOptions: [{}, { option: true }],
@@ -18,9 +25,11 @@ export const test = base.extend<{ internet: Internet; world: World; worldOptions
     await internet.close();
   },
   world: async ({ internet, worldOptions }, use, testInfo) => {
-    const { gatewaySeed, ...options } = worldOptions;
-    const gateway = gatewaySeed ? await startGateway(internet, { seed: gatewaySeed }) : null;
+    const { gatewaySeed, gatewayDown, ...options } = worldOptions;
+    const gateway =
+      gatewaySeed || gatewayDown ? await startGateway(internet, { seed: gatewaySeed ?? [] }) : null;
     const world = await startWorld(internet, { ...options, gateway });
+    if (gatewayDown) await gateway?.stop();
     await use(world);
     await world.stop();
     await gateway?.stop();

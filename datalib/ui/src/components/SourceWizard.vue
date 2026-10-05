@@ -48,13 +48,17 @@ import {
   type QmdIndexing,
   type SourceSteps,
 } from "@/config/sourceSteps";
+import { FailureError } from "@/apiError";
 import {
+  type Failure,
+  type ConnectPhase,
   type ProbeItem,
   type ProbeItemKind,
   type ProbeProgress,
   type ProbeReport,
   type StoredAccount,
 } from "@/api";
+import { type SignInWhere } from "@/config/issues";
 import { countOf, loadingText } from "@/config/probeProgress";
 import { useApi } from "@/cards/cardApi";
 import AccountCombo, { type AccountOption } from "@/components/AccountCombo.vue";
@@ -76,6 +80,7 @@ import {
   splitBytes,
   type ByteUnit,
 } from "@/config/byteSize";
+import IssueNote from "@/components/IssueNote.vue";
 import ProbeItemPicker from "@/components/ProbeItemPicker.vue";
 import { PATH_GLYPHS, STATUS_GLYPHS } from "@/config/glyphs";
 import { copyToClipboard } from "@/clipboard";
@@ -560,15 +565,16 @@ const latchkeyCli = ref("latchkey");
 /// them are on the gateway's side, and latchkey refuses every command
 /// the login button would run — so the button is not offered at all.
 const gateway = ref<string | null>(null);
-/// Why the account list is empty, when latchkey could not be asked.
-/// Shown as a note, not an error — the field is still typable.
-const accountsError = ref<string | null>(null);
+/// Why latchkey could not be asked, when it could not — shown at the
+/// top of the Connection section for every source, since without the
+/// answer it offers no way to sign in at all.
+const accountsFailure = ref<Failure | null>(null);
 
 async function loadAccounts() {
   const name = service.value;
   if (!name) return;
   accounts.value = null;
-  accountsError.value = null;
+  accountsFailure.value = null;
   try {
     const info = await latchkeyService(name);
     accounts.value = info.accounts;
@@ -577,12 +583,14 @@ async function loadAccounts() {
     serviceRegistered.value = info.registered;
     latchkeyCli.value = info.cli;
     gateway.value = info.gateway;
-    accountsError.value = info.error;
+    accountsFailure.value = info.error
+      ? { issue: info.issue ?? "unknown", detail: info.error }
+      : null;
     if (!signInTab.value || !signInWays.value.includes(signInTab.value))
       chooseSignIn(signInWays.value[0] ?? null);
   } catch (e) {
     accounts.value = [];
-    accountsError.value = String(e);
+    accountsFailure.value = toFailure(e);
   }
 }
 
@@ -634,7 +642,11 @@ const pasteSecret = ref("");
 /// named an account when the paste form opened. Until then the field
 /// follows the pasted username, since that is what it is stored under.
 const accountChosen = ref(false);
-const paste = ref<{ state: "idle" | "saving" | "ok" | "failed"; message: string }>({
+const paste = ref<{
+  state: "idle" | "saving" | "ok" | "failed";
+  message: string;
+  failure?: Failure;
+}>({
   state: "idle",
   message: "",
 });
@@ -706,7 +718,7 @@ async function savePasted() {
   try {
     await setLatchkeyCredential(name, account, credential);
   } catch (e) {
-    paste.value = { state: "failed", message: String(e) };
+    paste.value = { state: "failed", message: "", failure: toFailure(e) };
     return;
   }
   pasteSecret.value = "";
@@ -743,7 +755,11 @@ const conversionCommands = computed(() => {
   ].join("\n");
 });
 
-const connect = ref<{ state: "idle" | "running" | "ok" | "failed"; message: string }>({
+const connect = ref<{
+  state: "idle" | "running" | "ok" | "failed";
+  message: string;
+  failure?: Failure;
+}>({
   state: "idle",
   message: "",
 });
@@ -754,6 +770,14 @@ let closed = false;
 onUnmounted(() => {
   closed = true;
 });
+
+/// What a running login says it is waiting on.
+const CONNECT_PHASE_TEXT: Record<ConnectPhase, string> = {
+  preparing: "Getting the sign-in ready…",
+  downloading_browser:
+    "Getting a browser for the sign-in — a one-time download that can take a few minutes…",
+  signing_in: "A browser window should open. Finish the login there.",
+};
 
 async function connectViaLatchkey() {
   const name = service.value;
@@ -784,7 +808,10 @@ async function connectViaLatchkey() {
       await new Promise((r) => setTimeout(r, 1500));
       if (closed) return;
       const status = await latchkeyConnectStatus(started.id);
-      if (status.status === "running") continue;
+      if (status.status === "running") {
+        connect.value = { state: "running", message: CONNECT_PHASE_TEXT[status.phase] };
+        continue;
+      }
       if (status.status === "ok") {
         // The point of connecting was to add an account; showing the
         // stale list would hide the one just added.
@@ -810,13 +837,17 @@ async function connectViaLatchkey() {
       } else {
         connect.value = {
           state: "failed",
-          message: status.output || "The login did not complete.",
+          message: "",
+          failure: {
+            issue: status.issue ?? "unknown",
+            detail: status.output || "The login did not complete.",
+          },
         };
       }
       return;
     }
   } catch (e) {
-    connect.value = { state: "failed", message: String(e) };
+    connect.value = { state: "failed", message: "", failure: toFailure(e) };
   }
 }
 
@@ -855,11 +886,11 @@ const accountValue = computed(() =>
 // reach; each picker's "Load" asks for its own list, which can take a
 // while on a big account, so it says how far it has got.
 
-type Outcome = { state: "idle" | "running" | "ok" | "failed"; message: string };
+type Outcome = { state: "idle" | "running" | "ok" | "failed"; failure: Failure | null };
 
 const check = ref<Outcome & { report: ProbeReport | null }>({
   state: "idle",
-  message: "",
+  failure: null,
   report: null,
 });
 
@@ -871,7 +902,7 @@ type ListLoad = Outcome & {
 
 const IDLE_LIST: ListLoad = {
   state: "idle",
-  message: "",
+  failure: null,
   report: null,
   progress: null,
   startedAt: 0,
@@ -887,7 +918,7 @@ function listLoad(noun: ProbeNoun): ListLoad {
 /// Forget what was checked and loaded: the credentials it was done
 /// with have just changed.
 function resetProbes() {
-  check.value = { state: "idle", message: "", report: null };
+  check.value = { state: "idle", failure: null, report: null };
   lists.value = {};
 }
 
@@ -898,12 +929,12 @@ async function checkConnection() {
   const entry = chosen.value;
   const params = probeParams.value;
   if (!entry || !params || check.value.state === "running") return;
-  check.value = { state: "running", message: "", report: null };
+  check.value = { state: "running", failure: null, report: null };
   try {
     const report = await runProbe(entry.type, params, null);
-    check.value = { state: "ok", message: "", report };
+    check.value = { state: "ok", failure: null, report };
   } catch (e) {
-    check.value = { state: "failed", message: probeFailure(e), report: null };
+    check.value = { state: "failed", failure: toFailure(e), report: null };
   }
 }
 
@@ -920,7 +951,7 @@ async function loadList(noun: ProbeNoun) {
     });
     lists.value[noun] = { ...listLoad(noun), state: "ok", report };
   } catch (e) {
-    lists.value[noun] = { ...listLoad(noun), state: "failed", message: probeFailure(e) };
+    lists.value[noun] = { ...listLoad(noun), state: "failed", failure: toFailure(e) };
   }
 }
 
@@ -952,30 +983,18 @@ function loadingLine(noun: ProbeNoun): string {
   return loadingText(probeNoun(noun), load.progress, (now.value - load.startedAt) / 1000);
 }
 
-/// A probe failure as something to read. What arrives is the step's own
-/// stderr — one `error: ` line per link in its cause chain, and for a
-/// credential problem a numbered setup recipe after them — wrapped in a
-/// JS `Error`. Strip the two layers of prefix that add nothing; the
-/// lines themselves are the message, and the template keeps them.
-function probeFailure(e: unknown): string {
-  const raw = e instanceof Error ? e.message : String(e);
-  return raw
-    .split("\n")
-    .map((line) => line.replace(/^\s*error:\s*/, ""))
-    .join("\n")
-    .trim();
+/// Any failure as the wizard shows one: a classified one as it came,
+/// anything else (a dropped connection to this server) as its text.
+function toFailure(e: unknown): Failure {
+  if (e instanceof FailureError) return e.failure;
+  return { issue: "unknown", detail: e instanceof Error ? e.message : String(e) };
 }
 
-/// A failure in one line, which is the part that says what went wrong.
-/// Everything after it is how to fix it.
-function failureHeadline(message: string): string {
-  return message.split("\n")[0] ?? "";
-}
-/// The rest, kept as written: it is a numbered recipe with commands in
-/// it, and reflowing it into a paragraph is what made it unreadable.
-function failureDetail(message: string): string {
-  return message.split("\n").slice(1).join("\n").trim();
-}
+/// Where this dialog can get a credential into latchkey from, which is
+/// what a failure's advice points at.
+const signInWhere = computed<SignInWhere>(() =>
+  gateway.value ? "gateway" : canConnect.value || canPaste.value ? "here" : "terminal",
+);
 
 /// Which of a report's item kinds each `probe:` noun takes. A render
 /// filter matches only what emails are filed in, never a Gmail flag,
@@ -1163,6 +1182,20 @@ function submit() {
             Credentials are held by latchkey, under its
             <code>{{ service }}</code> service — datalib never stores them itself.
           </p>
+          <!-- Every way to sign in below comes from latchkey's answer, so
+               while it is asked the section says so, and when it cannot
+               be asked the section says why — for every source, not only
+               the ones with an account picker. -->
+          <p v-if="accounts === null" class="wiz-help wiz-conn-asking" role="status">
+            Asking latchkey how you can sign in…
+          </p>
+          <IssueNote
+            v-if="accountsFailure"
+            class="wiz-conn-note wiz-accounts-failed"
+            :failure="accountsFailure"
+            :service="chosen.label"
+            :where="signInWhere"
+          />
 
           <div v-if="accountField" class="wiz-field">
             <span class="wiz-label">{{ accountField.label }}</span>
@@ -1174,13 +1207,9 @@ function submit() {
               @update:model-value="chooseAccount"
             />
             <small v-if="accountField.help" class="wiz-help">{{ accountField.help }}</small>
-            <small v-if="accounts && accounts.length === 0 && !accountsError" class="wiz-help">
+            <small v-if="accounts && accounts.length === 0 && !accountsFailure" class="wiz-help">
               latchkey has no <code>{{ service }}</code> credential stored yet.
               {{ canConnect ? "Connect below." : "" }}
-            </small>
-            <small v-if="accountsError" class="wiz-help">
-              Couldn’t ask latchkey which accounts it holds ({{ accountsError }}). Type the account
-              name — the sync uses latchkey directly and is unaffected by this.
             </small>
           </div>
 
@@ -1239,7 +1268,14 @@ function submit() {
                   }}
                 </button>
               </div>
-              <p v-if="connect.state !== 'idle'" class="wiz-help">
+              <IssueNote
+                v-if="connect.state === 'failed' && connect.failure"
+                class="wiz-connect-failed"
+                :failure="connect.failure"
+                :service="chosen.label"
+                :where="signInWhere"
+              />
+              <p v-else-if="connect.state !== 'idle'" class="wiz-help wiz-connect-status">
                 {{ connect.message }}
               </p>
               <!-- What the button says on a service that has no browser
@@ -1336,11 +1372,13 @@ function submit() {
                   {{ paste.state === "saving" ? "Storing…" : "Store in latchkey" }}
                 </button>
               </div>
-              <p
-                v-if="paste.message"
-                class="wiz-help"
-                :class="{ 'wiz-error': paste.state === 'failed' }"
-              >
+              <IssueNote
+                v-if="paste.state === 'failed' && paste.failure"
+                :failure="paste.failure"
+                :service="chosen.label"
+                :where="signInWhere"
+              />
+              <p v-else-if="paste.message" class="wiz-help">
                 {{ paste.message }}
               </p>
               <p class="wiz-help">
@@ -1362,28 +1400,13 @@ function submit() {
           <!-- The verdict is a mark before the words — the Manage
                screen's own tick and "!", in its colours — so the eye
                gets the answer before reading what it was. -->
-          <div
-            v-if="check.state === 'failed'"
-            class="wiz-conn-note wiz-probe-note wiz-probe-failed"
-          >
-            <p class="wiz-error wiz-probe-headline">
-              <svg class="wiz-probe-mark" viewBox="0 0 24 24" role="img" aria-label="Failed">
-                <path :d="STATUS_GLYPHS.failed" fill="currentColor" />
-              </svg>
-              {{ failureHeadline(check.message) }}
-            </p>
-            <!-- The usual cause is a sign-in that expired, and the fix
-                 is the button above rather than the terminal command
-                 the probe's own recipe names. -->
-            <p v-if="canConnect" class="wiz-help">
-              If the sign-in has expired, sign in again on the <b>Web login</b> tab, then press
-              <b>Check connection</b>.
-            </p>
-            <details v-if="failureDetail(check.message)">
-              <summary class="wiz-help">How to fix it</summary>
-              <pre class="wiz-probe-detail">{{ failureDetail(check.message) }}</pre>
-            </details>
-          </div>
+          <IssueNote
+            v-if="check.state === 'failed' && check.failure"
+            class="wiz-conn-note wiz-probe-failed"
+            :failure="check.failure"
+            :service="chosen.label"
+            :where="signInWhere"
+          />
           <p
             v-else-if="check.state === 'ok' && check.report"
             class="wiz-help wiz-conn-note wiz-probe-note wiz-probe-ok"
@@ -1648,15 +1671,13 @@ function submit() {
                     >{{ note }}</span
                   >
                 </small>
-                <div v-else-if="listLoad(f.probe).state === 'failed'" class="wiz-load-failed">
-                  <small class="wiz-error">{{ failureHeadline(listLoad(f.probe).message) }}</small>
-                  <details v-if="failureDetail(listLoad(f.probe).message)">
-                    <summary class="wiz-help">How to fix it</summary>
-                    <pre class="wiz-probe-detail">{{
-                      failureDetail(listLoad(f.probe).message)
-                    }}</pre>
-                  </details>
-                </div>
+                <IssueNote
+                  v-else-if="listLoad(f.probe).state === 'failed' && listLoad(f.probe).failure"
+                  class="wiz-load-failed"
+                  :failure="listLoad(f.probe).failure!"
+                  :service="chosen.label"
+                  :where="signInWhere"
+                />
               </div>
               <!-- The picker is an *addition* to the box above, never
                    a replacement: a list needs credentials that may not
@@ -1945,9 +1966,6 @@ function submit() {
 .wiz-permanent {
   color: var(--datalib-error-fg);
 }
-.wiz-probe-headline {
-  margin: 0 0 4px;
-}
 .wiz-probe-mark {
   width: 14px;
   height: 14px;
@@ -1956,9 +1974,6 @@ function submit() {
 }
 .wiz-probe-ok .wiz-probe-mark {
   color: var(--datalib-log-ok);
-}
-.wiz-probe-failed .wiz-probe-mark {
-  color: var(--datalib-log-error);
 }
 .wiz-probe-aside {
   display: block;
@@ -1978,8 +1993,7 @@ function submit() {
   font-size: var(--datalib-font-size-small);
   line-height: 1.5;
 }
-.wiz-probe-note details > summary,
-.wiz-load-failed details > summary {
+.wiz-probe-note details > summary {
   cursor: pointer;
 }
 /* A picker's own "Load" row: the button, or while it runs a bar and a

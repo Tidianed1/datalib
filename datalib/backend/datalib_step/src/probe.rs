@@ -64,9 +64,24 @@ pub async fn run(
     }
 }
 
+/// How a probe treats a failed request: it reports it. A check is
+/// something a person is waiting on and can press again, so the sync's
+/// patience — backing off for minutes through a 503 or a dropped
+/// network — would only hold the dialog up.
+fn one_attempt() -> std::sync::Arc<datalib_etl::retry::RetryGuard> {
+    datalib_etl::retry::RetryGuard::new(
+        std::time::Duration::from_secs(30),
+        1,
+        std::time::Duration::from_secs(1),
+        std::time::Duration::from_secs(1),
+        datalib_etl::stop::StopFlag::default(),
+    )
+}
+
 /// The `probe` subcommand end to end: read the params file, run the
-/// provider's probe, and write the answer where the caller reads it.
-/// Never returns on failure.
+/// provider's probe, and write the answer where the caller reads it —
+/// the report on stdout, or on failure `{"failure": {issue, detail}}`
+/// there and the error chain on stderr. Never returns.
 #[allow(clippy::disallowed_macros)]
 pub async fn run_cli(
     source_type: &str,
@@ -87,7 +102,8 @@ pub async fn run_cli(
             })?),
         };
         let params = crate::source::read_params(params_file)?;
-        run(source_type, &params, ask, &|p| eprintln!("{}", p.line())).await
+        let progress = |p: datalib_probe::ProbeProgress| eprintln!("{}", p.line());
+        datalib_etl::retry::scope(one_attempt(), run(source_type, &params, ask, &progress)).await
     }
     .await;
     match report {
@@ -96,9 +112,13 @@ pub async fn run_cli(
             std::process::exit(0)
         }
         Err(e) => {
-            for cause in e.chain() {
+            let chain: Vec<String> = e.chain().map(|c| c.to_string()).collect();
+            for cause in &chain {
                 eprintln!("error: {cause}");
             }
+            let gateway = std::env::var_os("LATCHKEY_GATEWAY").is_some_and(|g| !g.is_empty());
+            let failure = datalib_probe::issue::Failure::from_text(chain.join("\n"), gateway);
+            println!("{}", serde_json::json!({ "failure": failure }));
             std::process::exit(1)
         }
     }

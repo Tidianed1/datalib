@@ -643,7 +643,8 @@ upstream (block types, MIME types), free-form display text
 | a log line's severity and pipe | `LogLevel`, `Stream` | `app_schema/src/runs/log.rs` |
 | what the loop made of a step (`steps.state`) | `StateKind` | `dag/src/supervisor/tick.rs` |
 | how a sync request ended | `RequestOutcome` | `dag/src/supervisor/store.rs` |
-| a browser-login attempt | `ConnectState` | `http/src/connect.rs` |
+| a browser-login attempt, and what it is doing | `ConnectState`, `ConnectPhase` | `http/src/connect.rs` |
+| what kind of trouble a sign-in or probe ran into | `IssueKind` | `probe/src/issue.rs` (`datalib_probe`) |
 | a probe the wizard polls | `ProbeState` | `http/src/probe.rs` |
 | the list a picker loads | `ProbeList` | `probe/src/lib.rs` (`datalib_probe`) |
 | the `grid_rows.provider` tag | `Provider` | `schema/src/providers.rs` |

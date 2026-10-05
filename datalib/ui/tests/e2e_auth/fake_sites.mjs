@@ -1,8 +1,8 @@
 // The third-party sites a sign-in reaches, faked in made-up TNG data:
 // a login page that hands out a credential, and the few read-only
-// endpoints each provider's "Check account" probe calls. Only what the
-// probes read is here; the shapes are the providers' own (see each
-// provider's `probe.rs`). A handler gets the request and returns
+// endpoints each provider's probe calls. Only what the probes read is
+// here; the shapes are the providers' own (see each provider's
+// `probe.rs`). A handler gets the request and returns, or resolves to,
 // `{status?, json? | html? | text?, headers?}`.
 
 /// The credential each site accepts. Specs paste these, or expect a

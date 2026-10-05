@@ -13,13 +13,14 @@ use axum::{
     http::StatusCode,
     Json,
 };
+use datalib_probe::issue::Failure;
 use datalib_probe::{ProbeList, ProbeProgress};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Command;
 
-use crate::connect::{err, error_chain, scrub, tail, validated_type};
+use crate::connect::{err, error_chain, latchkey_gateway, scrub, tail, validated_type};
 use crate::AppState;
 
 /// A probe that has not answered by now is not going to.
@@ -60,8 +61,9 @@ pub struct ProbeStatus {
     pub progress: Option<ProbeProgress>,
     /// The `ProbeReport`, once `Ok`.
     pub report: Option<Value>,
-    /// What the step printed on failure: its error chain.
-    pub error: Option<String>,
+    /// What went wrong, once `Failed`: its kind, and the step's error
+    /// chain for the details.
+    pub failure: Option<Failure>,
 }
 
 type Slot = Arc<Mutex<ProbeStatus>>;
@@ -123,7 +125,7 @@ pub async fn start_probe(
         status: ProbeState::Running,
         progress: None,
         report: None,
-        error: None,
+        failure: None,
     };
     let slot = Arc::new(Mutex::new(status.clone()));
     jobs()
@@ -172,7 +174,10 @@ async fn run(mut child: tokio::process::Child, slot: &Slot, source_type: &str) {
             let _ = child.kill().await;
             return fail(
                 slot,
-                "the probe did not answer within two minutes".to_string(),
+                Failure::from_text(
+                    "the probe did not answer within two minutes".to_string(),
+                    latchkey_gateway().is_some(),
+                ),
             );
         }
     };
@@ -186,7 +191,10 @@ async fn run(mut child: tokio::process::Child, slot: &Slot, source_type: &str) {
             "probe failed: {}",
             scrub(&error_chain(&stderr))
         );
-        return fail(slot, tail(&stderr));
+        return fail(
+            slot,
+            failure_from(&stdout, &stderr, latchkey_gateway().is_some()),
+        );
     }
     match serde_json::from_str::<Value>(&stdout) {
         Ok(report) => {
@@ -196,15 +204,46 @@ async fn run(mut child: tokio::process::Child, slot: &Slot, source_type: &str) {
         }
         Err(e) => fail(
             slot,
-            format!("the probe printed something that isn't JSON: {e}"),
+            Failure {
+                issue: datalib_probe::issue::IssueKind::Unknown,
+                detail: format!("the probe printed something that isn't JSON: {e}"),
+            },
         ),
     }
 }
 
-fn fail(slot: &Slot, error: String) {
+fn fail(slot: &Slot, failure: Failure) {
     let mut slot = slot.lock().expect("probe slot mutex");
     slot.status = ProbeState::Failed;
-    slot.error = Some(error);
+    slot.failure = Some(failure);
+}
+
+/// What a failed probe said went wrong: the `{"failure": …}` the step
+/// prints, or — from a step that crashed before it could — its error
+/// lines read the same way. Never the raw stderr tail: that is where
+/// the step's log records go, and one would become the headline.
+fn failure_from(stdout: &str, stderr: &str, gateway: bool) -> Failure {
+    let printed = stdout.lines().rev().find_map(|line| {
+        serde_json::from_str::<Value>(line)
+            .ok()?
+            .get("failure")
+            .and_then(|f| serde_json::from_value::<Failure>(f.clone()).ok())
+    });
+    printed.unwrap_or_else(|| {
+        let chain: Vec<&str> = stderr
+            .lines()
+            .filter_map(|l| l.strip_prefix("error: "))
+            .collect();
+        let detail = if chain.is_empty() {
+            // No chain at all: what the step printed that is not a log
+            // record, which for a crash is the panic.
+            let rest: Vec<&str> = stderr.lines().filter(|l| !l.starts_with('{')).collect();
+            tail(&rest.join("\n"))
+        } else {
+            chain.join("\n")
+        };
+        Failure::from_text(detail, gateway)
+    })
 }
 
 pub async fn probe_status(
@@ -224,4 +263,31 @@ pub async fn probe_status(
         jobs().lock().expect("probe jobs mutex").remove(&id);
     }
     Ok(Json(status))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datalib_probe::issue::IssueKind;
+
+    #[test]
+    fn the_steps_own_failure_is_taken_as_printed() {
+        let stdout = r#"{"failure":{"issue":"rejected","detail":"auth.test: ok=false"}}"#;
+        let f = failure_from(stdout, "error: auth.test: ok=false\n", false);
+        assert_eq!(f.issue, IssueKind::Rejected);
+        assert_eq!(f.detail, "auth.test: ok=false");
+    }
+
+    /// A step that died before printing its failure: its error lines
+    /// are read, and the log records around them are not the detail.
+    #[test]
+    fn without_one_the_error_lines_are_read_and_the_log_is_left_out() {
+        let stderr = concat!(
+            r#"{"level":"WARN","fields":{"message":"HTTP 429 from slack"}}"#,
+            "\nerror: auth.test: HTTP 429\n"
+        );
+        let f = failure_from("", stderr, false);
+        assert_eq!(f.issue, IssueKind::RateLimited);
+        assert_eq!(f.detail, "auth.test: HTTP 429");
+    }
 }

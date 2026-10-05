@@ -81,19 +81,40 @@ test("ChatGPT: a token-capture login, then Check connection and Load", async ({
   );
 });
 
-test.describe("with no browser to find", () => {
-  test.use({ worldOptions: { browser: false } });
+test.describe("with no browser on the machine", () => {
+  test.use({ worldOptions: { browser: "download" } });
 
-  test("the wizard offers to fetch one, rather than naming a command", async ({ page }) => {
-    // Fails today: the failure is a paragraph that ends in a terminal
-    // command (`… ensure-browser`), on a screen whose job is to run it.
-    test.fail();
+  /// The person pressed "Sign in with browser"; fetching one is what
+  /// they asked for, so the wizard does it and says so while it runs.
+  test("the wizard fetches one and says so", async ({ page, world }) => {
     await pickTile(page, TILE.claude);
     await wizard(page).getByRole("button", { name: "Sign in with browser" }).click();
-    const message = wizard(page).locator(".wiz-tabpanel p.wiz-help").last();
-    await expect(message).toContainText("no browser");
-    expectGlanceable(await message.textContent(), "the login failure");
-    await expect(message).not.toContainText("ensure-browser");
-    await expect(wizard(page).getByRole("button", { name: /download/i })).toBeVisible();
+    await expect(wizard(page).locator(".wiz-connect-status")).toContainText(
+      "Getting a browser for the sign-in",
+    );
+    world.releaseDownload();
+    await expect(wizard(page)).toContainText("Connected.", LOGIN);
+    const looks = world
+      .latchkeyRuns()
+      .filter((r) => subcommand(r) === "ensure-browser")
+      .map((r) => r.args.at(-1));
+    expect(looks).toEqual([
+      "existing-config,system-browser,existing-playwright-browser",
+      "download-playwright-browser",
+    ]);
+  });
+});
+
+test.describe("with no browser, and none to be had", () => {
+  test.use({ worldOptions: { browser: "none" } });
+
+  test("the login says so in a sentence", async ({ page }) => {
+    await pickTile(page, TILE.claude);
+    await wizard(page).getByRole("button", { name: "Sign in with browser" }).click();
+    const failed = wizard(page).locator(".wiz-connect-failed");
+    await expect(failed).toHaveAttribute("data-issue", "no_browser", LOGIN);
+    const headline = await failed.locator(".issue-headline").textContent();
+    expectGlanceable(headline, "the login failure");
+    expect(headline).not.toContain("ensure-browser");
   });
 });
