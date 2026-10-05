@@ -192,7 +192,7 @@ async fn fetch_attachments(
             Ok(resp) => format!("HTTP {}", resp.status),
             Err(e @ datalib_etl::http::HttpError::GaveUp { .. }) => {
                 db.flush_attachments(&acc).await?;
-                return Err(anyhow::anyhow!("notion: {e}"));
+                return Err(RunEnded::gave_up(e.to_string()).into());
             }
             Err(e) => e.to_string(),
         };
@@ -208,10 +208,64 @@ async fn fetch_attachments(
     Ok(gone)
 }
 
-/// The run ends here, failed: a refused credential or a retry guard that
-/// gave up would fail every request left.
+/// The walk ends here: a refused credential or a retry guard that gave
+/// up would fail every request left. Raised from deep in a page and
+/// caught by the walk, which keeps what it already stored (see
+/// [`WalkState::ended`]).
+#[derive(Debug, thiserror::Error)]
+#[error("{reason}")]
+pub struct RunEnded {
+    pub reason: String,
+    pub unauthorized: bool,
+}
+
+impl RunEnded {
+    fn gave_up(reason: String) -> Self {
+        Self {
+            reason,
+            unauthorized: false,
+        }
+    }
+
+    /// The one row a walk that ended early leaves: what was fetched is
+    /// kept, and the rest is fetched next run.
+    fn problem(&self) -> RunProblem {
+        if self.unauthorized {
+            RunProblem::phase(
+                "credential",
+                format!(
+                    "Notion refused the credential part-way through, so the run stopped; \
+                     what it fetched before is kept: {}",
+                    self.reason
+                ),
+            )
+        } else {
+            RunProblem::phase(
+                "rate_limit",
+                format!(
+                    "the retry guard gave up on Notion, so the run stopped; the rest is \
+                     fetched next run: {}",
+                    self.reason
+                ),
+            )
+        }
+    }
+}
+
 fn run_over(e: NotionOfficialError) -> anyhow::Error {
-    anyhow::anyhow!("notion: {e}")
+    RunEnded {
+        unauthorized: matches!(e, NotionOfficialError::Unauthorized(_)),
+        reason: e.to_string(),
+    }
+    .into()
+}
+
+/// Takes a walk's error: one that ends the run is kept on `state` and the
+/// walk returns as if done; anything else is the step's failure.
+fn end_walk(e: anyhow::Error, state: &mut WalkState) -> Result<()> {
+    let ended = e.downcast::<RunEnded>()?;
+    state.ended.get_or_insert(ended);
+    Ok(())
 }
 
 /// Map each slot back to the live signed URL it came from, so the bytes
@@ -404,9 +458,8 @@ async fn search_since(
     loop {
         let resp = match client.search(cursor.as_deref(), false).await {
             Ok(resp) => resp,
-            Err(e) if cursor.is_none() || e.ends_the_run() => {
-                return Err(anyhow::anyhow!("notion search: {e}"))
-            }
+            Err(e) if e.ends_the_run() => return Err(run_over(e)),
+            Err(e) if cursor.is_none() => return Err(anyhow::anyhow!("notion search: {e}")),
             Err(e) => {
                 return Ok(SearchPass {
                     ids,
@@ -475,6 +528,7 @@ async fn search_since(
     })
 }
 
+#[derive(Default)]
 struct SearchPass {
     /// The page ids to mirror.
     ids: Vec<String>,
@@ -499,6 +553,15 @@ pub struct WalkState {
     pub retry: HashSet<String>,
     /// Pages whose object would not fetch this run, and why.
     pub unreadable: HashMap<String, NotionOfficialError>,
+    /// Why the walk stopped before its end, when it did. Nothing past
+    /// that point was asked for, so the resume cursor stays and the
+    /// retry sets are left for the next run.
+    pub ended: Option<RunEnded>,
+    /// The credential may not read comments (403): an integration
+    /// without the capability. Asked once a run, not once a page.
+    pub comments_forbidden: Option<String>,
+    /// Whether any page's comments were asked for this run.
+    pub comments_asked: bool,
 }
 
 /// Plain text of a block, whatever its type carries rich text under.
@@ -828,12 +891,16 @@ async fn mirror_page(
 
     // ── comments ─────────────────────────────────────────────────────
     let mut comments: Vec<Value> = Vec::new();
-    if opts.comments {
+    if opts.comments && state.comments_forbidden.is_none() {
+        state.comments_asked = true;
         match fetch_all_comments(client, pid).await {
             Ok(c) => comments = c,
             Err(_) if stop.requested() => return Ok(Vec::new()),
             Err(e) if e.ends_the_run() => return Err(run_over(e)),
             Err(NotionOfficialError::NotFound(_)) => {}
+            // The credential may not read comments at all; no page is
+            // the worse for it, and none is asked again this run.
+            Err(NotionOfficialError::Forbidden(d)) => state.comments_forbidden = Some(d),
             // The page itself is stored, so this is a warning on it, and
             // it keeps the page among the ones fetched again.
             Err(e) => db.record_page_error(pid, &format!("comments: {e}")).await?,
@@ -948,7 +1015,13 @@ async fn bfs_drain(
         // can't know the upstream value without fetching the page.
         // Skip-on-unchanged for those will land when we add cursored
         // search; for now every queued page is fetched.
-        let children = mirror_page(client, db, opts, &pid, origin, state, summary).await?;
+        let children = match mirror_page(client, db, opts, &pid, origin, state, summary).await {
+            Ok(children) => children,
+            Err(e) => {
+                end_walk(e, state)?;
+                break;
+            }
+        };
         if !single_page {
             for cid in children {
                 if queued.insert(cid.clone()) {
@@ -985,7 +1058,13 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         anchors: db.known_anchor_ids().await?,
         retry: db.pages_to_refetch(opts.attachments).await?,
         unreadable: HashMap::new(),
+        ended: None,
+        comments_forbidden: None,
+        comments_asked: false,
     };
+    // Carried forward when no page's comments are asked this run, which
+    // says nothing either way about whether they may be read.
+    let comments_refused = db.run_problem_sample("listing:comments").await?;
 
     // Run the actual work. We capture the result so we can always stamp
     // the sync_runs row with finish status — even on error.
@@ -1014,7 +1093,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 true,
             )
             .await?;
-            return Ok::<(), anyhow::Error>(());
+            return refused_from_the_start(&state_walk, &summary).map_or(Ok(()), Err);
         }
 
         if let Some(single) = opts.page.as_deref() {
@@ -1035,7 +1114,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 true,
             )
             .await?;
-            return Ok(());
+            return refused_from_the_start(&state_walk, &summary).map_or(Ok(()), Err);
         }
 
         let mut run_problems: Vec<RunProblem> = Vec::new();
@@ -1059,7 +1138,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             );
             let pass = match search_since(&official, since.as_deref(), opts.max_pages).await {
                 Err(_) if opts.control.stop.requested() => return Ok(()),
-                pass => pass?,
+                Ok(pass) => pass,
+                Err(e) => {
+                    end_walk(e, &mut state_walk)?;
+                    SearchPass::default()
+                }
             };
             summary.discovered = pass.ids.len();
             tracing::info!(
@@ -1110,7 +1193,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                         pass.ids.len()
                     ),
                 )),
-                (None, Some(mark)) if !opts.control.stop.requested() => {
+                (None, Some(mark))
+                    if !opts.control.stop.requested() && state_walk.ended.is_none() =>
+                {
                     datalib_etl::doltlite_raw::upsert_scope_state(db.pool(), SEARCH_SCOPE, &mark)
                         .await?;
                     datalib_etl::scope_config::store(
@@ -1154,18 +1239,37 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             config_problems = roots_upstream_lacks(&roots, &state_walk.unreadable);
         }
 
-        retry_failed_users(
-            &official,
-            &db,
-            &opts.control.stop,
-            &mut state_walk,
-            &mut summary,
-        )
-        .await?;
+        if state_walk.ended.is_none() {
+            if let Err(e) = retry_failed_users(
+                &official,
+                &db,
+                &opts.control.stop,
+                &mut state_walk,
+                &mut summary,
+            )
+            .await
+            {
+                end_walk(e, &mut state_walk)?;
+            }
+        }
+        if let Some(e) = refused_from_the_start(&state_walk, &summary) {
+            return Err(e);
+        }
+        if let Some(d) = &state_walk.comments_forbidden {
+            run_problems.push(comments_forbidden(d));
+        } else if let (false, Some(said)) = (state_walk.comments_asked, &comments_refused) {
+            run_problems.push(RunProblem::forbidden("comments", said.clone()));
+        }
+        if let Some(ended) = &state_walk.ended {
+            run_problems.push(ended.problem());
+        }
         // A stop may have cut any of it short; the last run's rows
-        // stand until a run gets through.
+        // stand until a run gets through. A walk that ended early did not
+        // reach every configured root, so their rows stand too.
         if !opts.control.stop.requested() {
-            download_problems::report(db.pool(), &config_problems).await;
+            if state_walk.ended.is_none() {
+                download_problems::report(db.pool(), &config_problems).await;
+            }
             download_problems::report_run(db.pool(), &run_problems).await;
         }
         Ok(())
@@ -1201,6 +1305,24 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     run.finish(&result, &summary).await;
     result?;
     Ok(summary)
+}
+
+/// The credential was refused before the run fetched anything, so there
+/// is nothing to keep: the step fails.
+fn refused_from_the_start(state: &WalkState, summary: &FetchSummary) -> Option<anyhow::Error> {
+    let ended = state.ended.as_ref().filter(|e| e.unauthorized)?;
+    let fetched = summary.new_pages + summary.upd_pages + summary.skipped_pages;
+    (fetched == 0).then(|| anyhow::anyhow!("notion: {}", ended.reason))
+}
+
+fn comments_forbidden(detail: &str) -> RunProblem {
+    RunProblem::forbidden(
+        "comments",
+        format!(
+            "this credential may not read comments (give the integration the read-comments \
+             capability), so none were mirrored: {detail}"
+        ),
+    )
 }
 
 /// The configured roots Notion says it does not have, or will not show

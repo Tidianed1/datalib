@@ -93,7 +93,10 @@ async fn run(tape: &Path, store: &Path, roots: &[&str]) -> anyhow::Result<FetchS
         ..FetchOptions::new(db.clone())
     })
     .await;
-    db.commit_all("test").await.unwrap();
+    // As the step does: only a run that returns Ok is committed.
+    if summary.is_ok() {
+        db.commit_all("test").await.unwrap();
+    }
     db.close().await;
     summary
 }
@@ -372,15 +375,48 @@ async fn a_body_that_will_not_come_is_not_fetched_every_run() {
     db.close().await;
 }
 
-/// Once the retry guard gave up, every page left failed one request at a
-/// time and each became a row, instead of the run ending.
+async fn stored_pages(store: &Path) -> Vec<String> {
+    let db = RawDb::open(store).await.unwrap();
+    let mut ids: Vec<String> = db
+        .load_pages()
+        .await
+        .unwrap()
+        .iter()
+        .map(|p| p["id"].as_str().unwrap().to_string())
+        .collect();
+    db.close().await;
+    ids.sort();
+    ids
+}
+
+async fn resume_cursor(store: &Path) -> std::collections::HashMap<String, String> {
+    let db = RawDb::open(store).await.unwrap();
+    let cursor = datalib_etl::doltlite_raw::load_scope_state(db.pool())
+        .await
+        .unwrap();
+    db.close().await;
+    cursor
+}
+
+/// When the retry guard gave up, the run failed, and a failed run is not
+/// committed: every page it had already fetched was thrown away.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_retry_guard_that_gives_up_ends_the_run() {
+async fn a_retry_guard_that_gives_up_keeps_what_it_fetched() {
     let d = tempdir().unwrap();
     let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
+    let earlier = "2026-08-01T00:00:00.000Z";
     serve_page(&tape, BRIDGE, EDITED, "");
     serve_status(&tape, &format!("{BASE}/pages/{SICKBAY}"), 503);
-    serve_status(&tape, &format!("{BASE}/pages/{HOLODECK}"), 503);
+    serve_search(
+        &tape,
+        None,
+        json!([
+            page(BRIDGE, EDITED),
+            page(SICKBAY, earlier),
+            page(HOLODECK, earlier)
+        ]),
+        None,
+    );
     let tick = std::time::Duration::from_millis(1);
     let guard = datalib_etl::retry::RetryGuard::new(
         std::time::Duration::from_secs(3600),
@@ -390,24 +426,94 @@ async fn a_retry_guard_that_gives_up_ends_the_run() {
         datalib_etl::stop::StopFlag::default(),
     );
 
-    let err = datalib_etl::retry::scope(guard, run(&tape, &store, &[BRIDGE, SICKBAY, HOLODECK]))
+    datalib_etl::retry::scope(guard, run(&tape, &store, &[]))
         .await
-        .unwrap_err();
-    assert!(format!("{err:#}").contains("gave up"), "{err:#}");
+        .unwrap();
+    assert_eq!(stored_pages(&store).await, vec![BRIDGE.to_string()]);
+    assert_eq!(
+        problems(&store).await,
+        vec![row("phase:rate_limit", "error")]
+    );
+    assert!(resume_cursor(&store).await.is_empty(), "the cursor moved");
+
+    serve_page(&tape, SICKBAY, earlier, "");
+    serve_page(&tape, HOLODECK, earlier, "");
+    run(&tape, &store, &[]).await.unwrap();
+    assert_eq!(
+        stored_pages(&store).await,
+        vec![
+            BRIDGE.to_string(),
+            SICKBAY.to_string(),
+            HOLODECK.to_string()
+        ]
+    );
     assert!(problems(&store).await.is_empty());
+    assert!(!resume_cursor(&store).await.is_empty());
 }
 
-/// A refused credential is the whole run's failure, not one row per page.
+/// A credential refused on the first request leaves nothing to keep, and
+/// fails the run.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_refused_credential_fails_the_run() {
+async fn a_credential_refused_from_the_start_fails_the_run() {
+    let d = tempdir().unwrap();
+    let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
+    serve_status(&tape, &format!("{BASE}/pages/{BRIDGE}"), 401);
+
+    let err = run(&tape, &store, &[BRIDGE]).await.unwrap_err();
+    assert!(format!("{err:#}").contains("401"), "{err:#}");
+}
+
+/// A credential refused part-way through ends the run, as one row, and
+/// keeps the pages fetched before it rather than one row per page left.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_credential_refused_part_way_keeps_what_it_fetched() {
     let d = tempdir().unwrap();
     let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
     serve_page(&tape, BRIDGE, EDITED, "");
     serve_status(&tape, &format!("{BASE}/pages/{SICKBAY}"), 401);
 
-    let err = run(&tape, &store, &[BRIDGE, SICKBAY]).await.unwrap_err();
-    assert!(format!("{err:#}").contains("401"), "{err:#}");
-    assert!(problems(&store).await.is_empty());
+    run(&tape, &store, &[BRIDGE, SICKBAY, HOLODECK])
+        .await
+        .unwrap();
+    assert_eq!(stored_pages(&store).await, vec![BRIDGE.to_string()]);
+    assert_eq!(
+        problems(&store).await,
+        vec![row("phase:credential", "error")]
+    );
+}
+
+/// A credential that may not read comments (403) made every page a failure,
+/// so every run fetched every page again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn comments_the_credential_may_not_read_are_one_row() {
+    let d = tempdir().unwrap();
+    let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
+    for id in [BRIDGE, SICKBAY] {
+        serve_object(&tape, id, EDITED);
+        serve_body(&tape, id, "Captain's log.\n", false);
+        serve_status(
+            &tape,
+            &format!("{BASE}/comments?block_id={id}&page_size={PAGE_SIZE}"),
+            403,
+        );
+    }
+
+    let first = run(&tape, &store, &[BRIDGE, SICKBAY]).await.unwrap();
+    assert_eq!(first.new_pages, 2);
+    // Two objects, two bodies, and comments asked once.
+    assert_eq!(first.official_requests, 5);
+    assert_eq!(
+        problems(&store).await,
+        vec![row("listing:comments", "warning")]
+    );
+
+    let second = run(&tape, &store, &[BRIDGE, SICKBAY]).await.unwrap();
+    assert_eq!(second.skipped_pages, 2);
+    assert_eq!(second.official_requests, 2, "only the two page objects");
+    assert_eq!(
+        problems(&store).await,
+        vec![row("listing:comments", "warning")]
+    );
 }
 
 /// A search that failed past its first page failed the whole step, and
