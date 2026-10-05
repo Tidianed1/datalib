@@ -946,6 +946,13 @@ mod tests {
         .unwrap();
         let archive = e.root.join("archive1");
         std::fs::set_permissions(&archive, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // Root reads a mode-000 folder (CI's container runs as root), so
+        // there is nothing to test there.
+        if std::fs::read_dir(&archive).is_ok() {
+            std::fs::set_permissions(&archive, std::fs::Permissions::from_mode(0o755)).unwrap();
+            e.db.close().await;
+            return;
+        }
         let s = fetch(opts(&e, kitchen(&e))).await;
         std::fs::set_permissions(&archive, std::fs::Permissions::from_mode(0o755)).unwrap();
         let s = s.unwrap();
