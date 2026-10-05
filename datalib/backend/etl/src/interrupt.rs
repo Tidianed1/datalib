@@ -45,8 +45,18 @@ struct Cut {
     killed: tokio::sync::Notify,
 }
 
-tokio::task_local! {
-    static CUT: Arc<Cut>;
+/// The cut in force. One for the process, not one per task: a download
+/// that spawns its requests onto other tasks must still be counted and
+/// cut. So, like the playback root, only one [`run`] may be under way at
+/// a time.
+static CUT: std::sync::Mutex<Option<Arc<Cut>>> = std::sync::Mutex::new(None);
+
+fn cut_in_force() -> Option<Arc<Cut>> {
+    CUT.lock().unwrap_or_else(|p| p.into_inner()).clone()
+}
+
+fn set_cut(cut: Option<Arc<Cut>>) {
+    *CUT.lock().unwrap_or_else(|p| p.into_inner()) = cut;
 }
 
 /// What a replayed request should do in place of answering.
@@ -57,7 +67,7 @@ pub(crate) enum Strike {
 /// Called where a replayed request is about to be served. Counts it, and
 /// at the chosen request cuts the run off. A no-op outside [`run`].
 pub(crate) async fn before_request() -> Option<Strike> {
-    let cut = CUT.try_with(|c| c.clone()).ok()?;
+    let cut = cut_in_force()?;
     let n = cut.served.fetch_add(1, Ordering::SeqCst) + 1;
     if cut.at != Some(n) {
         return None;
@@ -83,7 +93,8 @@ pub struct Ran<T> {
 }
 
 /// Run `download`, counting its replayed requests, and cut it off at the
-/// `at`-th. `stop` must be the flag the download itself reads.
+/// `at`-th. `stop` must be the flag the download itself reads. A killed
+/// download is dropped, which aborts the tasks it spawned and holds.
 pub async fn run<T>(
     at: Option<u64>,
     how: How,
@@ -97,11 +108,13 @@ pub async fn run<T>(
         served: AtomicU64::new(0),
         killed: tokio::sync::Notify::new(),
     });
+    set_cut(Some(cut.clone()));
     let finished = tokio::select! {
         biased;
         _ = cut.killed.notified() => None,
-        out = CUT.scope(cut.clone(), download) => Some(out),
+        out = download => Some(out),
     };
+    set_cut(None);
     Ran {
         finished,
         requests: cut.served.load(Ordering::SeqCst),
