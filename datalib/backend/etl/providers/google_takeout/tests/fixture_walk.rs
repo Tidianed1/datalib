@@ -120,7 +120,7 @@ async fn youtube_subscriptions_handles_quoted_titles() {
 #[tokio::test(flavor = "multi_thread")]
 async fn youtube_watch_history_parses_cells_and_timestamps() {
     let (_work, summary, db_path) = run_all().await;
-    assert_eq!(summary.youtube_watch_history, 2);
+    assert_eq!(summary.youtube_watch_history, 3);
     let db = RawDb::open(&db_path).await.unwrap();
     // video_id promoted column populated for each row.
     let count: i64 =
@@ -128,7 +128,7 @@ async fn youtube_watch_history_parses_cells_and_timestamps() {
             .fetch_one(db.pool())
             .await
             .unwrap();
-    assert_eq!(count, 2);
+    assert_eq!(count, 3);
     let when: Option<String> = sqlx::query_scalar(
         "SELECT when_ts FROM youtube_watch_history WHERE video_id = 'trekS01E01'",
     )
@@ -138,6 +138,31 @@ async fn youtube_watch_history_parses_cells_and_timestamps() {
     // Parsed PDT-relative; the rfc3339 wallclock is the local 11:48
     // turned into a -07:00 offset.
     assert!(when.unwrap().starts_with("2026-06-04T11:48:37"));
+}
+
+/// The fixture's third entry has a multi-byte character just where the
+/// timestamp look-back starts, which once panicked the whole ingest.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_multibyte_char_before_the_timestamp_lands_with_it() {
+    let html = std::fs::read_to_string(fixture_root().join(WATCH_HISTORY)).unwrap();
+    let cell = ingest::mdl_html::iter_cells(&html)
+        .find(|c| c.contains("trekS04E02"))
+        .unwrap();
+    let text = ingest::mdl_html::strip_tags(cell);
+    assert!(
+        !text.is_char_boundary(text.find(" AM ").unwrap() - 30),
+        "the fixture must put the look-back inside the 'ü'"
+    );
+
+    let (_work, _summary, db_path) = run_all().await;
+    let db = RawDb::open(&db_path).await.unwrap();
+    let when: Option<String> = sqlx::query_scalar(
+        "SELECT when_ts FROM youtube_watch_history WHERE video_id = 'trekS04E02'",
+    )
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+    assert!(when.unwrap().starts_with("2026-06-06T09:00:00"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -483,12 +508,12 @@ async fn a_subscription_dropped_from_a_newer_export_is_gone() {
 async fn a_watch_dropped_from_a_newer_export_is_gone() {
     let e = Export::new();
     e.sync().await;
-    assert_eq!(e.count("youtube_watch_history").await, 2);
+    assert_eq!(e.count("youtube_watch_history").await, 3);
 
     e.rewrite(WATCH_HISTORY, drop_first_cell);
     let s = e.sync().await;
     assert_eq!(s.removed, 1, "{s:?}");
-    assert_eq!(e.count("youtube_watch_history").await, 1);
+    assert_eq!(e.count("youtube_watch_history").await, 2);
 }
 
 /// The dropped cell is the one with the attachment, so its CAS edge must
@@ -535,7 +560,7 @@ async fn a_missing_single_file_feed_deletes_nothing() {
     assert_eq!(e.count("maps_reviews").await, 2);
     assert_eq!(e.count("maps_saved_places").await, 2);
     assert_eq!(e.count("youtube_subscriptions").await, 3);
-    assert_eq!(e.count("youtube_watch_history").await, 2);
+    assert_eq!(e.count("youtube_watch_history").await, 3);
     assert_eq!(e.count("gemini_activity").await, 2);
 }
 
@@ -606,3 +631,5 @@ async fn a_product_that_returns_smaller_loses_what_it_dropped() {
     assert_eq!(e.count("chat_messages").await, 0);
     assert_eq!(e.count("chat_groups").await, 1);
 }
+
+// ── one entry the parser trips on costs only itself ─────────────────
