@@ -27,7 +27,8 @@ use datalib_schema::providers::Provider;
 /// id carries its stamp in its leading bits (`datalib_id`'s v8 layout).
 /// Every uuid moved, `chat_uuid` among them.
 /// v11: the author span carries the author's handle as `data-handle`.
-pub const RENDER_VERSION: u32 = 11;
+/// v12: a `+1` number without ten digits after the 1 has no handle.
+pub const RENDER_VERSION: u32 = 12;
 
 const SOURCE_LABEL: &str = "WhatsApp";
 

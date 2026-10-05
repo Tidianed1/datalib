@@ -2,7 +2,7 @@
 //! that the same person reached two ways reads the same.
 //!
 //! A handle is `<kind>:<value>` — `email:riker@enterprise.org`,
-//! `tel:+15551234`, `slack:T01/U02`. Where a native id *is* an email
+//! `tel:+12025550123`, `slack:T01/U02`. Where a native id *is* an email
 //! address or a phone number it becomes one of those, not a per-app kind,
 //! so one link covers every app that reaches a person by that number.
 //! Renders write handles into the markdown (`data-handle`) and the
@@ -82,7 +82,14 @@ impl Handle {
             }
         }
         // E.164 allows at most 15 digits; fewer than 7 is a short code.
-        let plausible = (7..=15).contains(&digits.len()) && !digits.starts_with('0');
+        // Under country code 1 (NANP) every number has ten digits after
+        // the 1, so anything shorter is a short code someone put `+1` on.
+        let nanp = digits.starts_with('1');
+        let plausible = if nanp {
+            digits.len() == 11
+        } else {
+            (7..=15).contains(&digits.len()) && !digits.starts_with('0')
+        };
         plausible.then(|| Self::of(HandleKind::Tel, &format!("+{digits}")))
     }
 
@@ -187,6 +194,9 @@ mod tests {
             "+1555012345678901",
             "+1 555 CALL NOW",
             "+0555012345",
+            "+1123456",
+            "+1 555 012 345",
+            "+1 202 555 01234",
         ] {
             assert_eq!(Handle::tel(bad), None, "{bad:?}");
         }
