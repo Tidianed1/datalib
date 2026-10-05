@@ -91,6 +91,21 @@ impl Account {
         write_fixture(&self.playback, req, &resp).unwrap();
     }
 
+    /// A 200 whose body is not a listing page.
+    fn answer_with(&self, req: &HttpRequest, body: &Value) {
+        let resp = HttpResponse {
+            status: 200,
+            headers: Default::default(),
+            body: serde_json::to_vec(body).unwrap(),
+            duration_ms: 0,
+        };
+        write_fixture(&self.playback, req, &resp).unwrap();
+    }
+
+    async fn stored_conversations(&self) -> usize {
+        self.query("SELECT id, id FROM conversations").await.len()
+    }
+
     fn forget(&self, req: &HttpRequest) {
         let path = self
             .playback
@@ -121,7 +136,10 @@ impl Account {
             }),
         )
         .await;
-        db.commit_all("test").await.unwrap();
+        // As the processor does: a failed run commits nothing.
+        if s.is_ok() {
+            db.commit_all("test").await.unwrap();
+        }
         db.close().await;
         std::env::remove_var(PLAYBACK_ENV);
         s
@@ -152,6 +170,8 @@ async fn part_of_a_sync_that_fails_is_a_problem_row() {
     a_rate_limit_is_a_phase_row_until_the_rest_is_fetched().await;
     a_failed_listing_page_keeps_the_pages_before_it_and_prunes_nothing().await;
     a_first_listing_page_that_fails_with_nothing_stored_fails_the_step().await;
+    a_first_page_that_is_not_a_listing_prunes_nothing().await;
+    a_later_page_that_is_not_a_listing_prunes_nothing().await;
     a_named_conversation_that_fails_costs_only_itself().await;
     a_pruned_conversation_takes_its_problem_with_it().await;
     a_failed_attachment_says_why_and_is_tried_again_while_unchanged().await;
@@ -224,6 +244,62 @@ async fn a_first_listing_page_that_fails_with_nothing_stored_fails_the_step() {
     acct.forget(&listing_page(0));
     let err = acct.run(&[]).await.expect_err("nothing to fall back on");
     assert!(format!("{err:#}").contains("list conversations"), "{err:#}");
+}
+
+/// A 200 with no `items` read as an empty final page, so the walk was
+/// "complete" with nothing listed and the prune deleted the whole mirror.
+async fn a_first_page_that_is_not_a_listing_prunes_nothing() {
+    let convs = [
+        conversation("c-picard", 3.0),
+        conversation("c-riker", 2.0),
+        conversation("c-data", 1.0),
+    ];
+    let acct = Account::new(&convs);
+    acct.run(&[]).await.unwrap();
+    assert_eq!(acct.stored_conversations().await, 3);
+
+    for body in [
+        json!({"detail": "subspace interference"}),
+        json!({"items": "none", "total": 0}),
+    ] {
+        acct.answer_with(&listing_page(0), &body);
+        let s = acct.run(&[]).await.expect("the store still has the rest");
+        assert_eq!(s.pruned, 0, "{body}: not a listing, so not a census");
+        assert_eq!(acct.stored_conversations().await, 3, "{body}");
+        let problems = acct.problems().await;
+        assert_eq!(problems.len(), 1, "{body}: {problems:?}");
+        assert_eq!(problems[0].0, "listing:conversations");
+        assert!(
+            problems[0].1.contains("no `items` array"),
+            "{body}: {problems:?}"
+        );
+    }
+
+    acct.list(&convs);
+    acct.run(&[]).await.unwrap();
+    assert_eq!(acct.keys().await, Vec::<String>::new());
+    assert_eq!(acct.stored_conversations().await, 3);
+}
+
+/// The same reshaped 200 on a later page pruned everything past the
+/// pages already read.
+async fn a_later_page_that_is_not_a_listing_prunes_nothing() {
+    let convs: Vec<Value> = (0..101)
+        .map(|i| conversation(&format!("c-{i:03}"), 1000.0 - i as f64))
+        .collect();
+    let acct = Account::new(&convs);
+    acct.run(&[]).await.unwrap();
+
+    acct.answer_with(&listing_page(100), &json!({}));
+    let s = acct.run(&[]).await.unwrap();
+    assert_eq!(s.listing, 100, "page 1 is kept: {s:?}");
+    assert_eq!(s.pruned, 0, "{s:?}");
+    assert_eq!(acct.stored_conversations().await, 101);
+    assert_eq!(acct.keys().await, ["listing:conversations"]);
+
+    acct.list(&convs);
+    acct.run(&[]).await.unwrap();
+    assert_eq!(acct.keys().await, Vec::<String>::new());
 }
 
 /// One named conversation that would not fetch used to fail the step and

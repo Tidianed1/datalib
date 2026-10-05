@@ -132,10 +132,18 @@ back on.
   and every run tries again any `.eml` it does not hold. One over
   `blob_size_limit_bytes` is a warning (`over_size_limit`), not a
   failure.
-- Some download failures end the blobs phase with an error: a refused
+- Some download failures stop the `.eml` phase early: a refused
   credential (401/403), a retry loop that gave up, or twenty failures in
   a row. Any of these would fail every remaining `.eml` the same way.
-  What the run had sealed before is kept; the rest is downloaded again.
+  The run stops asking, records one `phase:eml_download` row that says
+  why, how many it downloaded and how many are left, and still succeeds,
+  so everything it downloaded is kept. The next run downloads the rest,
+  and the row clears once a run gets through the phase. The step does
+  not fail here, because the emails themselves are already stored by
+  the time the `.eml` phase runs.
+- The `.eml` bodies are written as they arrive, every 32 MB or 256
+  downloads, and each write is a point where the run may seal. A run
+  that is killed keeps what it had sealed.
 
 **Gmail API.**
 

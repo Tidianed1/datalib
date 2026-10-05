@@ -1,8 +1,8 @@
 //! When part of a Fastmail (JMAP) sync fails: a listing or a phase that
 //! did not answer is a `problems` row and the rest of the run goes on; a
-//! download the server refused ends the run, keeping what landed; and
-//! each row clears only once the thing it is about is tried again and
-//! works.
+//! download the server refused ends the `.eml` phase, keeping what
+//! landed; and each row clears only once the thing it is about is tried
+//! again and works.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -105,28 +105,136 @@ async fn a_thread_that_did_not_answer_is_asked_for_again() {
 }
 
 /// A refused credential fails every download after it the same way, so
-/// it ends the run rather than writing one failure per `.eml`. The run
-/// fails, so what it wrote since its last seal goes with it: here, with
-/// no seal, all of it, and the next run downloads it again.
+/// it ends the phase rather than writing one failure per `.eml`. The
+/// refusal was once the run's error, and a failed run commits nothing:
+/// every body the run had downloaded went with it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_refused_download_ends_the_run_and_keeps_what_was_sealed() {
+async fn a_refused_download_stops_the_phase_and_keeps_what_downloaded() {
+    let m = Mirror::new();
+    let tape = Tape::new(&m.playback);
+    let mail: [(&str, &[&str]); 3] = [("M1", &["MB1"]), ("M2", &["MB1"]), ("M3", &["MB1"])];
+    tape.account(&[("MB1", "Inbox")], &mail);
+    tape.blob("M2", status(401));
+    let first = run(&m, |o| o.blob_download_concurrency = Some(1))
+        .await
+        .expect("a refused download keeps the run's work");
+    assert_eq!(first.blobs_downloaded, 1, "{first:?}");
+    assert_eq!(blobs(&m).await, [("M1".to_string(), true)]);
+    assert_eq!(problems(&m).await, [row("phase:eml_download", "error")]);
+    let said = sample(&m, "phase:eml_download").await;
+    assert!(
+        said.starts_with("the server refused the credential (HTTP 401); 1 downloaded, 2 left"),
+        "{said}"
+    );
+
+    tape.account(&[("MB1", "Inbox")], &mail);
+    let second = run(&m, |_| {}).await.expect("second run");
+    assert_eq!(second.blobs_downloaded, 2, "{second:?}");
+    assert_eq!(
+        blobs(&m).await,
+        ["M1", "M2", "M3"].map(|id| (id.to_string(), true))
+    );
+    assert!(problems(&m).await.is_empty(), "{:?}", problems(&m).await);
+}
+
+/// Twenty downloads failing in a row end the phase the same way: the
+/// bodies before them are kept, each failure keeps its own row, and the
+/// bodies the phase never asked for are downloaded by the next run.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_run_of_failed_downloads_stops_the_phase_and_keeps_what_downloaded() {
+    let m = Mirror::new();
+    let tape = Tape::new(&m.playback);
+    let ids: Vec<String> = (1..=25).map(|n| format!("M{n:02}")).collect();
+    let mail: Vec<(&str, &[&str])> = ids.iter().map(|id| (id.as_str(), &["MB1"][..])).collect();
+    tape.account(&[("MB1", "Inbox")], &mail);
+    for id in &ids[3..23] {
+        tape.blob(id, status(404));
+    }
+    let first = run(&m, |o| o.blob_download_concurrency = Some(1))
+        .await
+        .expect("a spent failure budget keeps the run's work");
+    assert_eq!(first.blobs_downloaded, 3, "{first:?}");
+    let stored = blobs(&m).await;
+    assert_eq!(
+        stored.iter().filter(|(_, landed)| *landed).count(),
+        3,
+        "{stored:?}"
+    );
+    assert_eq!(stored.len(), 23, "the last two were never asked for");
+    let found = problems(&m).await;
+    assert!(
+        found.contains(&row("phase:eml_download", "error")),
+        "{found:?}"
+    );
+    assert_eq!(found.len(), 21, "one row per failed .eml, and the phase's");
+    let said = sample(&m, "phase:eml_download").await;
+    assert!(
+        said.starts_with("20 .eml downloads failed in a row; 3 downloaded, 22 left"),
+        "{said}"
+    );
+
+    tape.account(&[("MB1", "Inbox")], &mail);
+    let second = run(&m, |_| {}).await.expect("second run");
+    assert_eq!(second.blobs_downloaded, 22, "{second:?}");
+    assert!(blobs(&m).await.iter().all(|(_, landed)| *landed));
+    assert!(problems(&m).await.is_empty(), "{:?}", problems(&m).await);
+}
+
+/// Every body once waited in memory for one write at the end of the
+/// phase, so a kill lost them all and no seal could publish any. With
+/// the bound at one byte each body is its own write, and each write is
+/// a point the run may seal at: some commit holds part of the bodies.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bodies_are_written_and_sealed_as_they_land() {
     let m = Mirror::new();
     let tape = Tape::new(&m.playback);
     tape.account(
         &[("MB1", "Inbox")],
         &[("M1", &["MB1"]), ("M2", &["MB1"]), ("M3", &["MB1"])],
     );
-    tape.blob("M2", status(401));
-    let err = run(&m, |o| o.blob_download_concurrency = Some(1))
-        .await
-        .expect_err("a refused download ends the run");
-    assert!(format!("{err:#}").contains("HTTP 401"), "{err:#}");
-    assert_eq!(
-        blobs(&m).await,
-        [],
-        "a failed run commits nothing it wrote since its last seal"
+    m.run_sealing(|db, sealer| {
+        let mut opts = FetchOptions::new(db);
+        opts.hostname = HOST.to_string();
+        opts.full_resync = true;
+        opts.sealer = Some(sealer);
+        opts.blob_download_concurrency = Some(1);
+        opts.blob_flush_bytes = Some(1);
+        datalib_etl_email::ingest::fetch(opts)
+    })
+    .await
+    .expect("run");
+
+    let held = m
+        .read(|db: RawDb| async move {
+            let commits: Vec<String> = sqlx::query_scalar("SELECT commit_hash FROM dolt_log")
+                .fetch_all(db.pool())
+                .await
+                .unwrap();
+            let mut held = Vec::new();
+            for commit in commits {
+                // Audited for `AssertSqlSafe`: `commit` is a hash doltlite
+                // just listed, and the table function takes a literal. The
+                // store's first commit predates the table.
+                let n: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                    "SELECT count(*) FROM dolt_at_email_blobs('{commit}') \
+                     WHERE blake3 IS NOT NULL"
+                )))
+                .fetch_one(db.pool())
+                .await
+                .unwrap_or(0);
+                held.push(n);
+            }
+            held
+        })
+        .await;
+    assert!(
+        held.contains(&3),
+        "the run's end holds every body: {held:?}"
     );
-    assert!(problems(&m).await.is_empty(), "{:?}", problems(&m).await);
+    assert!(
+        held.contains(&1) && held.contains(&2),
+        "no commit holds only part of the bodies, so none was sealed mid-phase: {held:?}"
+    );
 }
 
 /// An `.eml` over `blob_size_limit_bytes` was turned away on purpose: a
@@ -199,6 +307,17 @@ async fn problems(m: &Mirror) -> Vec<(String, String)> {
     m.read(|db: RawDb| async move {
         sqlx::query_as("SELECT scope_key, severity FROM problems ORDER BY scope_key")
             .fetch_all(db.pool())
+            .await
+            .unwrap()
+    })
+    .await
+}
+
+async fn sample(m: &Mirror, key: &'static str) -> String {
+    m.read(|db: RawDb| async move {
+        sqlx::query_scalar("SELECT sample FROM problems WHERE scope_key = ?")
+            .bind(key)
+            .fetch_one(db.pool())
             .await
             .unwrap()
     })

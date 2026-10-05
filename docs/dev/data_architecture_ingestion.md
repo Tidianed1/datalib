@@ -396,7 +396,7 @@ therefore what it can see:
 | `google_takeout` Chat, Maps photos | the export's scan, and each re-read `messages.json` | a gone file's user, group, messages or photo; messages a re-read file dropped. A missing `Google Chat/` or photos folder deletes nothing |
 | `google_takeout` Maps reviews and saved places, YouTube, Gemini | each re-read file, which is the feed's whole table | records the file no longer lists, and a Gemini activity's attachment edges. A missing file deletes nothing, and so does one in a layout the reader does not know (no list, or entries none of which it could read): that fails the feed as a `phase:` problem |
 | `email` (mbox), `sms_backup_restore`, `google_takeout` Voice | a read of every file, whenever one was removed or rewritten | records no file holds any more. Nothing is deleted when the walk or any file's read failed, or when Takeout's `Voice/` is missing |
-| `slack` | the trailing `refresh_window_days` re-walk, and each `conversations.replies` thread | messages inside the walked range; replies on a re-fetched thread |
+| `slack` | the trailing `refresh_window_days` re-walk, and each `conversations.replies` thread | top-level messages inside the walked range, each with its thread's replies; replies on a re-fetched thread |
 | `github` / `gitlab` | every PR's / MR's whole child list, per fetch | deleted comments, reviews, discussions |
 | `claude` (`api`) | `/chat_conversations`, one org at a time | that org's conversations |
 | `chatgpt` | `/conversations`, when the walk reached `total` | conversations |

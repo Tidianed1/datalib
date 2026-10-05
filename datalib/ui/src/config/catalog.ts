@@ -288,7 +288,8 @@ export const CATALOG: CatalogEntry[] = [
         label: "Edit-catcher window (days)",
         help:
           "Re-query the trailing N days of channels that already have history, to pick up " +
-          "edits and reactions. NOT a range bound — it only adds work. Leave empty for none.",
+          "edits, reactions and deletions. NOT a range bound — it only adds work. Leave empty " +
+          "for 30; 0 turns it off.",
       },
     ],
   },
