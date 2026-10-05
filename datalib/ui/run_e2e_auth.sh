@@ -60,6 +60,8 @@ DATALIB_STEP_BIN="$(need_runfile "$DATALIB_TEST_AUTH_STEP_BIN_RLOC" -x)"
 export DATALIB_HTTP_BIN DATALIB_STEP_BIN
 DATALIB_TEST_AUTH_CURL_ROUTER="$(need_runfile "$DATALIB_TEST_AUTH_ROUTER_RLOC" -x)"
 export DATALIB_TEST_AUTH_CURL_ROUTER
+DATALIB_TEST_AUTH_GARMIN_PLUGIN="$(dirname "$(need_runfile "$DATALIB_TEST_AUTH_GARMIN_PLUGIN_RLOC" -f)")"
+export DATALIB_TEST_AUTH_GARMIN_PLUGIN
 
 # The runtime the release ships — Node, qmd, latchkey — staged the way
 # the dev launchers stage it, then with its `node` swapped for the

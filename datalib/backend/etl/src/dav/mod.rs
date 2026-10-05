@@ -236,7 +236,6 @@ pub fn http_request(
         timeout: Duration::from_secs(180),
         bypass_latchkey: false,
         latchkey: latchkey.clone(),
-        bearer: None,
     }
 }
 

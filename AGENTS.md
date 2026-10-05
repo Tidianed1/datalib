@@ -394,7 +394,9 @@ dependency:
   format (`whatsapp-backup/src/key.rs`, `signal-backup/proto/`), never
   a source of code.
 - **Say where it came from.** Ported MIT/BSD code names the project and
-  its copyright line in the file header (`garmin/src/login.rs`).
+  its copyright line in the file header. Vendored code keeps its
+  `LICENSE` and a README naming the upstream commit
+  (`third-party/latchkey-garmin/`).
 
 ## Git: prefer merges over rebases
 

@@ -408,19 +408,16 @@ nothing else; `addressbooks` narrows it to the address books you name.
 
 ## Garmin
 
-`type = "garmin"` — Garmin Connect's API, with its own login rather
-than latchkey (`api`). Mirrors per-day health metrics (sleep, heart
+`type = "garmin"` — Garmin Connect's API through latchkey (`api`). Mirrors per-day health metrics (sleep, heart
 rate, stress, body battery, HRV, SpO₂, …), weigh-ins, activities with
 their original FIT files, devices, records, gear, badges, workouts and
 goals; the weigh-ins render as one page with an interactive plot.
 
-Garmin's API wants a bearer minted by a signed request that latchkey
-cannot make, so the provider signs in on its own. Run
-`datalib-step login garmin` once — it asks for your Garmin email,
-password and the MFA code Garmin emails you, and writes a token that
-lasts about a year under `~/.garth` (a token from the `garth` Python
-tool works too). Then add the source from the wizard or from the
-`all_sources.toml` example; `since` says how far back to mirror. The
+latchkey reaches Garmin through its Garmin plugin, which the Add a
+source dialog installs into `~/.latchkey/plugins/garmin` the first time
+you sign in there. Sign in with the browser, or import a token folder
+the `garth` Python tool wrote (`~/.garth`). The sign-in lasts about a
+year. `since` says how far back to mirror. The
 first sync makes one request per metric per day since `since`, so a
 long history takes a while; later syncs re-read only the trailing week.
 

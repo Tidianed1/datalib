@@ -963,8 +963,7 @@ def _source_config(
         source["fswalk"] = {"path": str(input_path)}
     elif type_str == "garmin":
         # `since` is the spec's; the walk's `today` is the pipeline's
-        # `--now`, which the spec matches too. The token dir is never
-        # read under playback.
+        # `--now`, which the spec matches too.
         source["api"] = {"since": "2369-04-01"}
     else:
         source["api"] = {}

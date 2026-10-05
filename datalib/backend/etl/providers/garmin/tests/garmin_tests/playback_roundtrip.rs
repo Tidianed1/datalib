@@ -10,7 +10,6 @@ use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::progress::{Progress, ProgressSink};
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl::synthesize::Synthesizer;
-use datalib_etl_garmin::auth::Credentials;
 use datalib_etl_garmin::ingest::{db_path_for, fetch, FetchOptions, FetchSummary, RawDb};
 use datalib_etl_garmin::synthesize::GarminSynth;
 use datalib_etl_garmin_config::{GarminApi, DAILY_METRICS};
@@ -32,7 +31,7 @@ async fn run_with(raw: &Path, api: &GarminApi, progress: Progress) -> FetchSumma
     let db = RawDb::open(&db_path_for(raw)).await.unwrap();
     let summary = fetch(FetchOptions {
         db: db.clone(),
-        creds: Credentials::fixed("playback"),
+        latchkey: Default::default(),
         api: api.clone(),
         today: chrono::NaiveDate::from_ymd_opt(2369, 4, 15).unwrap(),
         progress,
