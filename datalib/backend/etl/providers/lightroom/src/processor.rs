@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
-use datalib_etl::download_problems;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl::raw_layout;
 use datalib_etl_lightroom_config::LightroomConfig;
@@ -85,10 +84,7 @@ impl DataProcessor for LightroomIngest {
             ctx.name,
         )
         .await?;
-        // Every run, so a backup that is placed or removed stops being a
-        // problem.
-        download_problems::report_records(&pool, &run.problems).await;
-        download_problems::report_run(&pool, &run.run_problems).await;
+        run.report(&pool).await;
         let summary = run.summary();
         session.finish(ctx, summary).await
     }

@@ -104,8 +104,7 @@ impl Fixture {
         )
         .await;
         if let Ok(run) = &run {
-            datalib_etl::download_problems::report_records(&pool, &run.problems).await;
-            datalib_etl::download_problems::report_run(&pool, &run.run_problems).await;
+            run.report(&pool).await;
             dr::commit_run(&pool, &format!("download lightroom: {}", run.summary())).await?;
         }
         pool.close().await;
@@ -514,6 +513,109 @@ async fn a_folder_with_no_backups_fails_the_run() {
     std::fs::create_dir(f.backups().join("not a backup")).unwrap();
     let err = f.sync(&options()).await.unwrap_err().to_string();
     assert!(err.contains("found no Lightroom backups"), "{err}");
+}
+
+async fn problem_keys(f: &Fixture) -> Vec<String> {
+    let pool = f.read().await;
+    let keys = sqlx::query_scalar("SELECT scope_key FROM problems ORDER BY scope_key")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+    keys
+}
+
+/// A backup that will not mirror is a problem on that backup, the ones
+/// around it still land, and HEAD ends on the newest that did. The next
+/// sync tries it again, and once it mirrors the problem goes.
+#[tokio::test]
+async fn a_backup_that_will_not_mirror_holds_up_no_other() -> Result<()> {
+    let f = Fixture::new();
+    f.backup(
+        "2021-03-01 0900",
+        "TngCatalog.lrcat",
+        Some("TngCatalog.zip"),
+        &[],
+    )
+    .await;
+    f.backup(
+        "2022-06-15 1400",
+        "TngCatalog.lrcat",
+        Some("TngCatalog.zip"),
+        &[RERATE],
+    )
+    .await;
+    let newest = f.backups().join("2023-01-02 0800");
+    std::fs::create_dir(&newest)?;
+    std::fs::write(newest.join("TngCatalog.zip"), b"a zip the Borg got to")?;
+
+    let run = f.sync(&options()).await?;
+    assert_eq!(run.mirrored, ["2021-03-01 0900", "2022-06-15 1400"]);
+    assert_eq!(
+        problem_keys(&f).await,
+        ["record:lightroom_snapshots:2023-01-02 0800"],
+        "one row, though HEAD's turn would have tried it again"
+    );
+    let pool = f.read().await;
+    assert_eq!(rating_of_picard(&pool).await, Some(1), "HEAD is 2022");
+    pool.close().await;
+
+    f.backup(
+        "2023-01-02 0800",
+        "TngCatalog.lrcat",
+        Some("TngCatalog.zip"),
+        &[RERATE, KEYWORD],
+    )
+    .await;
+    let run = f.sync(&options()).await?;
+    assert_eq!(run.mirrored, ["2023-01-02 0800"]);
+    assert_eq!(problem_keys(&f).await, Vec::<String>::new());
+    Ok(())
+}
+
+/// A stopped run's problems are not the whole truth, so the last run's
+/// stand.
+#[tokio::test]
+async fn a_stopped_run_leaves_the_last_runs_problems() -> Result<()> {
+    let f = Fixture::new();
+    f.backup(
+        "2021-03-01 0900",
+        "TngCatalog.lrcat",
+        Some("TngCatalog.zip"),
+        &[],
+    )
+    .await;
+    let bad = f.backups().join("2022-06-15 1400");
+    std::fs::create_dir(&bad)?;
+    std::fs::write(bad.join("TngCatalog.zip"), b"not a zip")?;
+    f.sync(&options()).await?;
+    let before = problem_keys(&f).await;
+    assert_eq!(before, ["record:lightroom_snapshots:2022-06-15 1400"]);
+
+    let pool = mirror::open_mirror(&f.store()).await?;
+    let cache = FingerprintCache::open(&f.dir.path().join("fingerprints.sqlite")).await?;
+    let stop = StopFlag::new();
+    stop.request();
+    let backups = f.backups();
+    let run = sync::run(
+        &pool,
+        &cache,
+        sync::Inputs {
+            backups: Some(&backups),
+            catalog: None,
+        },
+        &options(),
+        &Progress::noop(),
+        &stop,
+        "lightroom",
+    )
+    .await?;
+    assert!(run.stopped);
+    run.report(&pool).await;
+    dr::commit_run(&pool, "stopped").await?;
+    pool.close().await;
+    assert_eq!(problem_keys(&f).await, before);
+    Ok(())
 }
 
 async fn table_exists(pool: &SqlitePool, name: &str) -> bool {

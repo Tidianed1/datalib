@@ -7,11 +7,12 @@
 
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
+use datalib_problems::{Outcome, Problem, Reason};
 use serde::Serialize;
 use sqlx::{Sqlite, SqlitePool, Transaction};
-use tracing::warn;
 
+use datalib_etl::download_problems::{self, RecordProblem, RunProblem};
 use datalib_etl::file_checkpoint;
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan::{self, ScannedFile};
@@ -41,6 +42,9 @@ pub struct SessionTree {
     /// rows keep: `""` when there is one tree, the directory's name when
     /// there are several.
     pub rel_prefix: String,
+    /// Whether the agent may simply not have made this directory, so its
+    /// absence is nothing to report.
+    pub optional: bool,
 }
 
 /// What one session file held, as far as the run's summary cares.
@@ -48,6 +52,37 @@ pub struct SessionCounts {
     pub records: usize,
     pub malformed_lines: usize,
     pub is_subagent: bool,
+    /// [`SkippedLines::summary`]: what the file's problem row says.
+    pub skipped: Option<String>,
+}
+
+/// The lines of one session file a parser stepped over.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct SkippedLines {
+    count: usize,
+    first: Option<(usize, &'static str)>,
+    last: Option<usize>,
+}
+
+impl SkippedLines {
+    pub fn skip(&mut self, line_no: usize, why: &'static str) {
+        self.count += 1;
+        self.first.get_or_insert((line_no, why));
+        self.last = Some(line_no);
+    }
+
+    /// `None` when nothing but the file's last line was skipped: a
+    /// session open right now has a half-written last line, and the read
+    /// after the agent finishes it keeps it.
+    pub fn summary(&self, last_line_no: usize) -> Option<String> {
+        let torn = usize::from(self.last == Some(last_line_no));
+        let count = self.count - torn;
+        let (line, why) = self.first.filter(|_| count > 0)?;
+        let noun = if count == 1 { "line" } else { "lines" };
+        Some(format!(
+            "{count} {noun} could not be used; first: line {line}, {why}"
+        ))
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -84,17 +119,53 @@ impl FetchSummary {
     }
 }
 
+type FileProblem = (Outcome, Problem);
+
 /// The files a run read, to stamp as read in the transaction that
-/// writes their rows.
-pub struct ReadFiles(Vec<(String, ScannedFile)>);
+/// writes their rows, and what the run could not read.
+pub struct ReadFiles {
+    read: Vec<(String, ScannedFile, Option<FileProblem>)>,
+    walk_problems: Vec<RunProblem>,
+    unreadable: Vec<RecordProblem>,
+}
 
 impl ReadFiles {
     pub async fn stamp(&self, tx: &mut Transaction<'_, Sqlite>) -> Result<()> {
-        for (scope, f) in &self.0 {
-            file_checkpoint::record_file(tx, scope, f).await?;
+        for (scope, f, problem) in &self.read {
+            file_checkpoint::record_file_with_problem(tx, scope, f, problem.clone()).await?;
         }
         Ok(())
     }
+
+    /// Once the rows are committed. Every run walks every tree and
+    /// re-reads every file it could not read before, so each set
+    /// replaces the last run's whole.
+    pub async fn report(&self, pool: &SqlitePool) {
+        download_problems::report_run(pool, &self.walk_problems).await;
+        download_problems::report_records(pool, &self.unreadable).await;
+    }
+}
+
+/// What a file's stamp says it could not use: lines its parser stepped
+/// over, and bytes that were not UTF-8, read as U+FFFD so one stray byte
+/// costs its line's text rather than the whole file.
+fn file_problem(lossy: bool, skipped: Option<String>) -> Option<FileProblem> {
+    let outcome = if skipped.is_some() {
+        Outcome::Dropped
+    } else {
+        Outcome::Nulled
+    };
+    let detail: Vec<String> = lossy
+        .then(|| "bytes that are not UTF-8 were replaced".to_string())
+        .into_iter()
+        .chain(skipped)
+        .collect();
+    (!detail.is_empty()).then(|| {
+        (
+            outcome,
+            Problem::record(Reason::Undeserializable, &detail.join("; ")),
+        )
+    })
 }
 
 /// Hand every changed `.jsonl` under `trees` to `read`, with the path the
@@ -104,6 +175,10 @@ impl ReadFiles {
 /// A file that could not be read is left unstamped, so the next run
 /// tries it again. One that was read is stamped whether or not it was a
 /// session: a file that names no session will not start naming one.
+///
+/// A tree that is not a directory fails the run only when nothing has
+/// been read from any tree yet; otherwise what is stored stands and the
+/// tree is a `listing:` problem.
 pub async fn read_changed(
     pool: &SqlitePool,
     cache: &FingerprintCache,
@@ -113,35 +188,58 @@ pub async fn read_changed(
     mut read: impl FnMut(&str, &str) -> Option<SessionCounts>,
 ) -> Result<(FetchSummary, ReadFiles)> {
     let mut summary = FetchSummary::default();
-    let mut done = Vec::new();
+    let mut out = ReadFiles {
+        read: Vec::new(),
+        walk_problems: Vec::new(),
+        unreadable: Vec::new(),
+    };
+    let mut missing = Vec::new();
+    let mut stored = 0;
     for tree in trees {
+        if !tree.root.is_dir() && tree.optional {
+            continue;
+        }
+        let prev = file_checkpoint::load_cursor(pool, &tree.scope).await?;
+        stored += prev.len();
         if !tree.root.is_dir() {
+            missing.push(tree);
             continue;
         }
         let scan = fsscan::scan(cache, &tree.root, &fsscan::ScanOptions::default(), |p| {
             p.extension().is_some_and(|e| e == "jsonl")
         })
         .await?;
-        let prev = file_checkpoint::load_cursor(pool, &tree.scope).await?;
+        out.walk_problems.extend(scan.walk_problems_as(&tree.scope));
         let changes = scan.changes_since(&prev);
         summary.files += scan.files.len();
 
         for f in changes.needs_reading() {
-            let text = match std::fs::read_to_string(&f.path) {
-                Ok(t) => t,
+            let rel_path = format!("{}{}", tree.rel_prefix, f.rel);
+            let bytes = match std::fs::read(&f.path) {
+                Ok(b) => b,
                 Err(e) => {
-                    warn!(event = "session_file_unreadable", provider, path = %f.path.display(), error = %e, "a session file could not be read");
                     summary.unreadable += 1;
+                    out.unreadable.push(RecordProblem::new(
+                        "transcripts",
+                        &rel_path,
+                        e.to_string(),
+                    ));
                     continue;
                 }
             };
+            let text = String::from_utf8_lossy(&bytes);
+            let lossy = matches!(text, std::borrow::Cow::Owned(_));
             summary.files_read += 1;
-            done.push((tree.scope.clone(), f.clone()));
-            let rel_path = format!("{}{}", tree.rel_prefix, f.rel);
             let Some(counts) = read(&rel_path, &text) else {
                 summary.not_transcripts += 1;
+                out.read.push((tree.scope.clone(), f.clone(), None));
                 continue;
             };
+            out.read.push((
+                tree.scope.clone(),
+                f.clone(),
+                file_problem(lossy, counts.skipped),
+            ));
             summary.transcripts += 1;
             summary.records += counts.records;
             summary.malformed_lines += counts.malformed_lines;
@@ -154,5 +252,19 @@ pub async fn read_changed(
             ));
         }
     }
-    Ok((summary, ReadFiles(done)))
+    if let Some(first) = missing.first() {
+        if stored == 0 && summary.files == 0 {
+            bail!("{} is not a directory", first.root.display());
+        }
+    }
+    for tree in missing {
+        out.walk_problems.push(RunProblem::listing(
+            &tree.scope,
+            format!(
+                "{} is not a directory; what was read from it before is kept",
+                tree.root.display()
+            ),
+        ));
+    }
+    Ok((summary, out))
 }

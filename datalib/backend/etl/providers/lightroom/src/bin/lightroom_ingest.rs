@@ -8,7 +8,6 @@ use std::time::Instant;
 use anyhow::Result;
 use clap::Parser;
 use datalib_etl::doltlite_raw as dr;
-use datalib_etl::download_problems;
 use datalib_etl::fingerprint_cache::{self, FingerprintCache};
 use datalib_etl::progress::{Progress, TracingSink};
 use datalib_etl::stop::StopFlag;
@@ -126,8 +125,7 @@ async fn main() -> Result<()> {
         "lightroom",
     )
     .await?;
-    download_problems::report_records(&pool, &run.problems).await;
-    download_problems::report_run(&pool, &run.run_problems).await;
+    run.report(&pool).await;
     let summary = run.summary();
     let commit = dr::commit_run(&pool, &format!("download lightroom: {summary}")).await?;
     pool.close().await;

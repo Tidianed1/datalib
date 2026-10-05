@@ -388,15 +388,29 @@ to the present.
   for the comparison; earlier commits keep the filters they were made
   with.
 - **A folder with no backups fails the run**, as does one that cannot
-  be read (a backup drive that is not mounted).
+  be read (a backup drive that is not mounted). An entry inside it the
+  walk could not read is a `listing:backups` row (`listing:catalog` for
+  the live catalog's folder), and the rest is mirrored.
+- **A backup that will not mirror is a problem on that backup**, keyed
+  `record:lightroom_snapshots:<entry name>` — a zip that will not open,
+  a catalog that is not one — and the backups after it are still
+  mirrored. It is not in `lightroom_snapshots`, so every sync tries it
+  again, replaying it like a late backup once it mirrors, and HEAD ends
+  on the newest backup that did mirror. The exception is a failure
+  after the mirror engine has emptied the mirror's tables: committing
+  anything on top of that would publish half a catalog, so that fails
+  the run, and the next run's open discards the half-written state.
+- **A stopped run records no problems**, so the last complete run's
+  stand.
 
 A zip is unpacked into a temporary directory for the length of its
 mirror, so a run needs free space for one catalog at a time; the
 unpacked copy is read without a snapshot, since nothing else has it
 open. `tests/backups_folder.rs` covers the order, the dates, the
 messages, the ledger, a late older backup, the filter change, the live
-catalog on top, the unchanged catalog left unread and backups known by
-their bytes, against zipped copies of the TNG catalog.
+catalog on top, the unchanged catalog left unread, backups known by
+their bytes, a backup that will not mirror and a stopped run, against
+zipped copies of the TNG catalog.
 
 ## Store size and `gc`
 

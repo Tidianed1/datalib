@@ -46,6 +46,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         root: opts.input_path.clone(),
         scope: CURSOR_SCOPE.to_string(),
         rel_prefix: String::new(),
+        optional: false,
     }];
     let mut transcript_rows: Vec<TranscriptRow> = Vec::new();
     let mut record_rows: Vec<RecordRow> = Vec::new();
@@ -62,6 +63,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 records: parsed.records.len(),
                 malformed_lines: parsed.stats.malformed,
                 is_subagent: parsed.agent_id.is_some(),
+                skipped: parsed.skipped.clone(),
             })
         },
     )
@@ -72,6 +74,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     bulk_upsert_entity_in_tx(&mut tx, &record_rows).await?;
     read.stamp(&mut tx).await?;
     tx.commit().await.context("commit claude_code tx")?;
+    read.report(db.pool()).await;
     Ok(summary)
 }
 
