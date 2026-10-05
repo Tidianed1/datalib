@@ -643,7 +643,16 @@ pub async fn open_curated(
     kind: StoreKind,
     ladder: &[Migration],
 ) -> Result<SqlitePool> {
-    open_inner(db_path, ddl, &[], false, kind, OnSchemaBreak::Refuse, ladder).await
+    open_inner(
+        db_path,
+        ddl,
+        &[],
+        false,
+        kind,
+        OnSchemaBreak::Refuse,
+        ladder,
+    )
+    .await
 }
 
 /// [`open`] with the policy said rather than taken from the process.
