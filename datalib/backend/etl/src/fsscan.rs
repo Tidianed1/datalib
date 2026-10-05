@@ -310,6 +310,36 @@ impl Scan {
                 })
     }
 
+    /// [`Self::could_not_see`] as a value that outlives the scan, for
+    /// [`RunProblems::records_tried_all_but`](crate::run_problems::RunProblems::records_tried_all_but):
+    /// the paths this walk has no verdict on.
+    pub fn unseen(&self) -> impl Fn(&str) -> bool + Send + Sync + 'static {
+        let blind: Vec<Option<String>> = self
+            .errors
+            .iter()
+            .map(|e| {
+                e.path
+                    .strip_prefix(&self.root)
+                    .ok()
+                    .map(|dir| dir.to_string_lossy().into_owned())
+            })
+            .collect();
+        // Only a walk with errors has anything it could not see, so only
+        // then is the list of what it did see worth holding.
+        let seen: std::collections::HashSet<String> = if blind.is_empty() {
+            Default::default()
+        } else {
+            self.files.iter().map(|f| f.rel.clone()).collect()
+        };
+        move |rel: &str| {
+            !seen.contains(rel)
+                && blind.iter().any(|dir| match dir {
+                    Some(dir) => dir.is_empty() || dir == rel || is_under(rel, dir),
+                    None => true,
+                })
+        }
+    }
+
     /// The run problem a walk with errors leaves, for
     /// [`crate::download_problems::report_run`]: the files it reports gone
     /// keep their records until a walk completes. Empty for a clean walk,

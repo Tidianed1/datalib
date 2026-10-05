@@ -149,6 +149,35 @@ pub async fn report_unstored(pool: &SqlitePool, table: &str, collections: &[Stri
     download_problems::report_records(pool, &problems).await;
 }
 
+/// Every object of `collections` that could not be stored, as this run's
+/// record problems on `table`: the whole set, so one that stores this
+/// time loses its row.
+pub async fn collect_unstored(
+    pool: &SqlitePool,
+    problems: &crate::run_problems::RunProblems,
+    table: &str,
+    collections: &[String],
+) {
+    let rows: Result<Vec<(String, String, String)>, _> =
+        sqlx::query_as("SELECT collection, href, detail FROM dav_unstored ORDER BY href")
+            .fetch_all(pool)
+            .await;
+    match rows {
+        Ok(rows) => {
+            problems.records_failed(
+                rows.into_iter()
+                    .filter(|(collection, _, _)| collections.contains(collection))
+                    .map(|(_, href, detail)| RecordProblem::new(table, &href, detail)),
+            );
+            problems.records_tried_all(table);
+        }
+        Err(e) => tracing::warn!(
+            error = %e,
+            "dav: could not read the unstored objects; the Manage row will not show them"
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

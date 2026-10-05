@@ -15,9 +15,10 @@ use datalib_etl::blob_cas::{cas_path_for, load_blake3_index, BlobCas, CasEdgeAcc
 use datalib_etl::bulk::BulkUpsertable as _;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw::{self as dr};
-use datalib_etl::download_problems::{self, RunProblem};
+use datalib_etl::download_problems::RunProblem;
 use datalib_etl::export_files::ExportFiles;
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_macros::RawStoreHandle;
 use datalib_problems::Reason;
@@ -146,6 +147,11 @@ pub struct FetchSummary {
 type Tables = BTreeMap<String, BTreeMap<String, Value>>;
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| read_export(opts, found)).await
+}
+
+async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = opts.db.clone();
 
     let mut summary = FetchSummary::default();
@@ -207,9 +213,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         )
         .await?;
     }
-    if !opts.control.stop.requested() {
-        download_problems::report_run(db.pool(), &problems).await;
-    }
+    found.extend(problems);
     Ok(summary)
 }
 

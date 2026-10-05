@@ -529,6 +529,229 @@ async fn replace_prefixed(
     Ok(())
 }
 
+/// One row to write: its sweep key, what became of the thing, and why.
+pub(crate) type Row = (String, datalib_problems::Outcome, datalib_problems::Problem);
+
+pub(crate) fn config_rows(problems: &[DownloadProblem]) -> Vec<Row> {
+    use datalib_problems::{Outcome, Problem, Reason, Severity};
+    problems
+        .iter()
+        .map(|p| {
+            let reason = match p.reason {
+                ProblemReason::NotFound => Reason::NotFound,
+                ProblemReason::Forbidden => Reason::Forbidden,
+            };
+            (
+                format!("{CONFIG_PREFIX}{}:{}", p.setting, p.value),
+                Outcome::Dropped,
+                Problem::field(&p.setting, reason, &p.detail).severity(Severity::Warning),
+            )
+        })
+        .collect()
+}
+
+pub(crate) fn run_rows(problems: &[RunProblem]) -> Vec<Row> {
+    use datalib_problems::{Outcome, Problem, Reason, Severity};
+    problems
+        .iter()
+        .map(|p| {
+            let problem = if p.forbidden {
+                Problem::record(Reason::Forbidden, &p.detail).severity(Severity::Warning)
+            } else {
+                Problem::record(Reason::FetchFailed, &p.detail).severity(Severity::Error)
+            };
+            (p.key(), Outcome::Dropped, problem)
+        })
+        .collect()
+}
+
+pub(crate) fn run_prefixes() -> Vec<String> {
+    RunProblemKind::VARIANTS
+        .iter()
+        .map(|k| k.key_prefix())
+        .collect()
+}
+
+pub(crate) fn record_rows(problems: &[RecordProblem]) -> Vec<Row> {
+    use datalib_problems::{Outcome, Problem, Reason, Severity};
+    problems
+        .iter()
+        .map(|p| {
+            (
+                p.key(),
+                Outcome::Dropped,
+                Problem::record(Reason::FetchFailed, &p.detail).severity(Severity::Error),
+            )
+        })
+        .collect()
+}
+
+pub(crate) fn record_prefix(table: &str) -> String {
+    format!("{RECORD_PREFIX}{table}:")
+}
+
+pub(crate) fn skipped_rows(part: &str, skipped: &[SkippedRecord]) -> Vec<Row> {
+    skipped
+        .iter()
+        .map(|s| {
+            let hash = blake3::hash(s.entry.as_bytes()).to_hex();
+            (
+                format!("{}{}", skipped_prefix(part), &hash[..16]),
+                datalib_problems::Outcome::Dropped,
+                s.problem.clone(),
+            )
+        })
+        .collect()
+}
+
+pub(crate) fn skipped_prefix(part: &str) -> String {
+    format!("{SKIPPED_PREFIX}{part}:")
+}
+
+pub(crate) fn silent_rows(silent: &[SilentEntry]) -> Vec<Row> {
+    use datalib_problems::{Outcome, Problem, Reason, Severity};
+    silent
+        .iter()
+        .map(|s| {
+            (
+                format!("{SILENT_PREFIX}{}", s.name),
+                Outcome::Ok,
+                Problem::record(Reason::Silent, &s.detail).severity(Severity::Warning),
+            )
+        })
+        .collect()
+}
+
+pub(crate) const CONFIG_SWEEP: &str = CONFIG_PREFIX;
+pub(crate) const SILENT_SWEEP: &str = SILENT_PREFIX;
+
+/// The rows a run has a verdict on: every entity-scoped row whose key
+/// starts with `prefix`, less the ones `keep` says the run did not try
+/// again (it is given the key with the prefix taken off).
+pub(crate) struct Sweep<'a> {
+    pub prefix: String,
+    pub keep: Option<&'a (dyn Fn(&str) -> bool + Send + Sync)>,
+}
+
+/// SQLite's default bound-parameter limit is far above this; one
+/// statement per chunk keeps a big sweep from being one statement per row.
+const KEY_CHUNK: usize = 500;
+
+/// Delete what `sweeps` cover, then write `rows`, in one transaction. A
+/// key that was there before keeps its `first_seen_at_utc`, so the screen
+/// can say how long something has been failing; two rows on one key keep
+/// the first, since the key is the row's identity.
+pub(crate) async fn apply(
+    pool: &sqlx::SqlitePool,
+    sweeps: &[Sweep<'_>],
+    rows: Vec<Row>,
+) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+    use datalib_problems::{ProblemRow, Scope, ScopeKind, Stage};
+    use datalib_table::BulkUpsertable as _;
+    use std::collections::{HashMap, HashSet};
+
+    let mut seen = HashSet::new();
+    let rows: Vec<Row> = rows
+        .into_iter()
+        .filter(|(key, _, _)| seen.insert(key.clone()))
+        .collect();
+
+    let mut tx = pool.begin().await.context("begin")?;
+    let mut first_seen: HashMap<String, String> = HashMap::new();
+    let mut gone: Vec<String> = Vec::new();
+    for sweep in sweeps {
+        // `INSTR(x, ?) = 1` rather than `LIKE`: `_` in a value is a
+        // wildcard to LIKE.
+        let earlier: Vec<(String, String)> = sqlx::query_as(
+            "SELECT scope_key, first_seen_at_utc FROM problems \
+             WHERE scope_kind = ? AND INSTR(scope_key, ?) = 1",
+        )
+        .bind(ScopeKind::Entity.as_str())
+        .bind(&sweep.prefix)
+        .fetch_all(&mut *tx)
+        .await
+        .with_context(|| format!("read the last run's {} problems", sweep.prefix))?;
+        for (key, first) in earlier {
+            let kept = sweep
+                .keep
+                .is_some_and(|keep| keep(key.strip_prefix(sweep.prefix.as_str()).unwrap_or(&key)));
+            if !kept {
+                gone.push(key.clone());
+            }
+            first_seen.insert(key, first);
+        }
+    }
+    let unswept: Vec<&str> = rows
+        .iter()
+        .map(|(key, _, _)| key.as_str())
+        .filter(|key| !first_seen.contains_key(*key))
+        .collect();
+    for chunk in unswept.chunks(KEY_CHUNK) {
+        // Audited: only `?` placeholders are built, one per key; every
+        // key is bound.
+        let sql = format!(
+            "SELECT scope_key, first_seen_at_utc FROM problems \
+             WHERE scope_kind = ? AND scope_key IN ({})",
+            vec!["?"; chunk.len()].join(",")
+        );
+        let mut q = sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(sql))
+            .bind(ScopeKind::Entity.as_str());
+        for key in chunk {
+            q = q.bind(*key);
+        }
+        let earlier = q
+            .fetch_all(&mut *tx)
+            .await
+            .context("read the rows this run writes again")?;
+        gone.extend(earlier.iter().map(|(key, _)| key.clone()));
+        first_seen.extend(earlier);
+    }
+    for chunk in gone.chunks(KEY_CHUNK) {
+        // Audited: as above.
+        let sql = format!(
+            "DELETE FROM problems WHERE scope_kind = ? AND scope_key IN ({})",
+            vec!["?"; chunk.len()].join(",")
+        );
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(ScopeKind::Entity.as_str());
+        for key in chunk {
+            q = q.bind(key);
+        }
+        q.execute(&mut *tx)
+            .await
+            .context("clear the rows this run has a verdict on")?;
+    }
+    let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
+    let mut stored = Vec::with_capacity(rows.len());
+    for (key, outcome, problem) in &rows {
+        let row = ProblemRow {
+            first_seen_at_utc: first_seen.get(key).cloned().unwrap_or_else(|| now.clone()),
+            last_seen_at_utc: now.clone(),
+            tz_offset: Some(tz_offset.clone()),
+            ..ProblemRow::new(
+                "",
+                Stage::Fetch,
+                Scope::Entity(key),
+                None,
+                *outcome,
+                problem.clone(),
+                None,
+            )
+        };
+        let sql = crate::bulk::insert_sql::<ProblemRow>();
+        // Audited: `sql` is built from `ProblemRow`'s associated consts,
+        // never from row data; all values bound.
+        row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("record {key}"))?;
+        stored.push(row);
+    }
+    tx.commit().await.context("commit")?;
+    datalib_problems::note_recorded(&stored);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

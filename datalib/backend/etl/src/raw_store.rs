@@ -113,6 +113,30 @@ impl RawStoreSession {
         }
     }
 
+    /// Run a download's `body` against this session's store and end the
+    /// session whichever way the body returns, so no path leaves a pool
+    /// open. `Ok(summary)` is the run's last seal. `Err` commits nothing:
+    /// what the run wrote since its last seal the next writer's `open`
+    /// discards, which is why a download that can still keep what it
+    /// fetched records a problem and returns `Ok`
+    /// (docs/dev/data_architecture_ingestion.md §"Error handling").
+    pub async fn run<Fut>(
+        self,
+        ctx: &RunCtx<'_>,
+        body: impl FnOnce(Sealer) -> Fut,
+    ) -> Result<String>
+    where
+        Fut: std::future::Future<Output = Result<String>>,
+    {
+        match body(self.sealer()).await {
+            Ok(summary) => self.finish(ctx, summary).await,
+            Err(e) => {
+                self.state.close_all().await;
+                Err(e)
+            }
+        }
+    }
+
     /// Clean-completion finish: the run's last seal, then `close()` every
     /// store so render can re-open them. The summary comes back with
     /// `commit=<hash>` appended when the entity store moved.

@@ -129,6 +129,32 @@ impl<'a> RunCtx<'a> {
         crate::raw_store::RawStoreSession::open_with_blobs(pool, cas_pool, entity_path, self).await
     }
 
+    /// Run a download against its doltlite store: `body` gets the
+    /// [`Sealer`](crate::raw_store::Sealer) for its own batch boundaries
+    /// and returns the run's summary. The store, and `cas_pool` when the
+    /// source keeps a blob CAS, are committed and closed on `Ok` and
+    /// closed uncommitted on `Err`; see
+    /// [`RawStoreSession::run`](crate::raw_store::RawStoreSession::run).
+    pub async fn run_store<Fut>(
+        &self,
+        pool: sqlx::sqlite::SqlitePool,
+        cas_pool: Option<sqlx::sqlite::SqlitePool>,
+        body: impl FnOnce(crate::raw_store::Sealer) -> Fut,
+    ) -> Result<String>
+    where
+        Fut: std::future::Future<Output = Result<String>>,
+    {
+        crate::raw_store::RawStoreSession::open_with_blobs(
+            pool,
+            cas_pool,
+            std::path::PathBuf::new(),
+            self,
+        )
+        .await
+        .run(self, body)
+        .await
+    }
+
     pub fn metrics(&self) -> Arc<DownloadMetrics> {
         self.metrics.clone()
     }
