@@ -1545,7 +1545,7 @@ fn builtin_lock(function: Option<&str>) -> Option<&'static str> {
 pub const BUILTIN_STORE_SHAPES: &[(&str, &str)] = &[
     (
         "render_markdown",
-        "4a46754dcdf58a959648d01865acdb99eebe18f044da5bcbf69498db00f95f56",
+        "69a91964156700920e458c7b3f988a8250b73cb971111700ace62b1ed2d99cab",
     ),
     (
         "grid_index",

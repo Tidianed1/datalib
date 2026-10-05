@@ -123,6 +123,9 @@ impl LastWanted {
 struct Live {
     invocation: String,
     consumed: Consumed,
+    /// The shape of the store it writes, under the definition it started
+    /// with: what its success records.
+    store_shape: Option<String>,
     /// Taken when the loop tells it to stop: what ends then was asked to.
     stop: Option<watch::Sender<bool>>,
 }
@@ -168,12 +171,11 @@ struct Mailbox<'a> {
     stopped: Vec<String>,
 }
 
-/// An open request as the loop holds it: its row's id, the tick's view
-/// of it, and the steps it wants.
+/// An open request as the loop holds it: its row's id and the tick's
+/// view of it.
 struct Open {
     id: String,
     request: Request,
-    scope: Vec<bool>,
 }
 
 /// A request for every source, served until it closes: what a test that
@@ -364,8 +366,8 @@ impl Runner {
                         for r in o.request.roots.iter_mut() {
                             *r = to_new[r];
                         }
-                        o.scope = downstream_of(graph, &o.request.roots);
-                        for (slot, &s) in slots.iter_mut().zip(&o.scope) {
+                        let reached = downstream_of(graph, &o.request.roots);
+                        for (slot, s) in slots.iter_mut().zip(reached) {
                             slot.ever_in_scope |= s;
                         }
                     }
@@ -409,6 +411,11 @@ impl Runner {
                 turned_off: turned_off.keys().copied().collect(),
             };
             let t = tick(&shape, &intent, &facts);
+            for scope in &t.scopes {
+                for (slot, &wanted) in slots.iter_mut().zip(scope) {
+                    slot.ever_in_scope |= wanted;
+                }
+            }
             for (slot, &st) in slots.iter_mut().zip(&t.states) {
                 match LastWanted::of(graph, st) {
                     LastWanted::Unwanted => {}
@@ -501,7 +508,7 @@ impl Runner {
                 }
                 open.iter()
                     .enumerate()
-                    .filter(|(r, o)| !closing.contains(r) && o.scope[i])
+                    .filter(|(r, _)| !closing.contains(r) && t.scopes[*r][i])
                     .map(|(_, o)| o.id.clone())
                     .collect()
             });
@@ -529,6 +536,7 @@ impl Runner {
                 slots[i].live = Some(Live {
                     invocation: invocation.id,
                     consumed: start.consumed,
+                    store_shape: graph.steps[i].store_shape.clone(),
                     stop: Some(stop),
                 });
                 let run = graph.steps[i].run.clone();
@@ -701,8 +709,7 @@ impl Runner {
         slots: &mut [Slot],
     ) -> Result<()> {
         let mut admit = |id: String, roots: Vec<usize>, open: &mut Vec<Open>| {
-            let scope = downstream_of(graph, &roots);
-            for (slot, &reached) in slots.iter_mut().zip(&scope) {
+            for (slot, reached) in slots.iter_mut().zip(downstream_of(graph, &roots)) {
                 slot.ever_in_scope |= reached;
             }
             *seq += 1;
@@ -712,7 +719,6 @@ impl Runner {
                     roots,
                     opened: Seq(*seq),
                 },
-                scope,
             });
         };
         let Mailbox {
@@ -1051,7 +1057,9 @@ impl Runner {
                 entry.version = Some(v);
                 entry.succeeded = true;
                 entry.fingerprint = fingerprint.clone();
+                entry.store_shape = live.store_shape.clone();
                 facts.steps[i].last_success = Some(consumed.clone());
+                facts.steps[i].success_shape = live.store_shape.clone();
                 Ended {
                     status: StepStatus::Succeeded {
                         changed: moved as usize,
@@ -1247,6 +1255,7 @@ fn shape_of(graph: &Graph, slots: &BTreeMap<String, usize>) -> Shape {
             reads: graph.deps_in_order(i).collect(),
             fingerprint: graph.fingerprints[i].clone(),
             pins_reads: spec.reads_pinned,
+            store_shape: spec.store_shape.clone(),
             locks: super::locks::held_by(spec)
                 .iter()
                 .map(|(name, hold)| (lock_ix(name), *hold))
@@ -1288,6 +1297,9 @@ fn facts_of(graph: &Graph, state: &Record) -> Facts {
             last_attempt: None,
             running: None,
             streams_output: graph.steps[i].streams_output,
+            success_shape: recorded(i)
+                .filter(|s| s.succeeded)
+                .and_then(|s| s.store_shape.clone()),
         })
         .collect();
     Facts { sinks, steps }
@@ -1758,6 +1770,76 @@ mod tests {
         );
         let record = crate::supervisor::record::recorded(root.path()).await;
         assert_eq!(record.steps["a/raw"].fingerprint, edited);
+    }
+
+    /// A step that counts its runs and writes its tree.
+    fn counted(id: &str, inputs: &[&str], runs: Arc<AtomicU32>, shape: Option<&str>) -> StepSpec {
+        let mut spec = StepSpec::new(
+            id,
+            StepRun::in_process(move |ctx: StepCtx| {
+                let runs = runs.clone();
+                async move {
+                    runs.fetch_add(1, Ordering::SeqCst);
+                    let dir = ctx.path_str(&ctx.step_id);
+                    std::fs::create_dir_all(&dir).unwrap();
+                    std::fs::write(dir.join("f"), "x").unwrap();
+                    Ok(StepOutcome::default())
+                }
+            }),
+        );
+        for i in inputs {
+            spec = spec.input(i);
+        }
+        spec.store_shape = shape.map(str::to_string);
+        spec
+    }
+
+    /// #993: a build that moved the render store's shape, then a sync of
+    /// `a` alone. The index read `b`'s render store in the old shape,
+    /// because nothing asked for `b`'s render. It must run first, without
+    /// `b`'s download, and its record must name the shape it wrote.
+    #[tokio::test]
+    async fn a_sync_of_one_source_re_renders_another_whose_store_is_in_an_old_shape() {
+        let root = tempfile::tempdir().unwrap();
+        let b_raw = Arc::new(AtomicU32::new(0));
+        let b_render = Arc::new(AtomicU32::new(0));
+        let build = |shape: &str| {
+            Graph::build(vec![
+                counted("a/raw", &[], Arc::default(), None),
+                counted("a/render", &["a/raw"], Arc::default(), Some(shape)),
+                counted("b/raw", &[], b_raw.clone(), None),
+                counted("b/render", &["b/raw"], b_render.clone(), Some(shape)),
+                counted(
+                    "index/grid",
+                    &["a/render", "b/render"],
+                    Arc::default(),
+                    None,
+                ),
+            ])
+            .unwrap()
+        };
+        Runner::new(root.path())
+            .run_roots(&build("shape-1"), &["a/raw", "b/raw"])
+            .await
+            .unwrap();
+        assert_eq!(b_render.load(Ordering::SeqCst), 1);
+
+        Runner::new(root.path())
+            .run_roots(&build("shape-2"), &["a/raw"])
+            .await
+            .unwrap();
+        assert_eq!(b_render.load(Ordering::SeqCst), 2, "pulled into a's sync");
+        assert_eq!(b_raw.load(Ordering::SeqCst), 1, "its download was not");
+        let record = crate::supervisor::record::recorded(root.path()).await;
+        assert_eq!(
+            record.steps["b/render"].store_shape.as_deref(),
+            Some("shape-2")
+        );
+        assert_eq!(
+            record.steps["index/grid"].reads.get("b/render"),
+            record.steps["b/render"].version.as_ref(),
+            "the index read b's render after it ran"
+        );
     }
 
     /// A step's record as the loop last saved it, once `ready` holds.
