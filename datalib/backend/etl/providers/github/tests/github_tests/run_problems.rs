@@ -7,12 +7,15 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use datalib_etl::event_store::{diff_and_save, make_record};
 use datalib_etl::http::{fixture_key, HttpRequest, HttpService, PLAYBACK_ENV};
 use datalib_etl::progress::{Progress, ProgressSink};
+use datalib_etl::retry::RetryGuard;
+use datalib_etl::stop::StopFlag;
 use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::Synthesizer;
+use datalib_etl::synthesize::{json_response, write_fixture, Synthesizer};
 use datalib_etl_github::ingest::{
     block_on_load_all, db_path_for, fetch, search_url, FetchOptions, FetchSummary, RawDb, BASE,
     DEFAULT_SCOPES, ENTITY_PR, ENTITY_SELF,
@@ -182,7 +185,7 @@ async fn a_search_that_fails_is_a_problem_until_it_lists() {
 
 /// Raises the stop flag when the run announces how many PRs it will
 /// fetch: after discovery, before the first fetch.
-struct StopBeforeFetching(datalib_etl::stop::StopFlag);
+struct StopBeforeFetching(StopFlag);
 
 impl ProgressSink for StopBeforeFetching {
     fn set_length(&self, _total: Option<u64>) {
@@ -227,19 +230,93 @@ async fn a_stopped_run_moves_no_cursor_and_clears_nothing() {
     );
 }
 
-/// `max_prs` fetches part of what the searches listed; the cursors stay
-/// put so a later run still sees the rest.
+/// `max_prs` fetches part of what the searches listed. The rest is owed
+/// — a warning on each — and later runs fetch it first, so a run of
+/// capped syncs gets through everything, though no later search lists
+/// it again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_capped_run_moves_no_cursor() {
+async fn capped_runs_fetch_everything_in_turn() {
+    let d = tempdir().unwrap();
+    let out = d.path().join("out");
+    let pb = tape(&d.path().join("one"), &[1, 2, 3]);
+    let capped = |o: FetchOptions| FetchOptions {
+        max_prs: Some(1),
+        ..o
+    };
+    let owed = |n: u32| row(&format!("pull_requests:{REPO}#{n}"), "warning");
+
+    run(&out, &pb, capped).await.unwrap();
+    assert_eq!(stored_prs(&out), [1]);
+    run(&out, &pb, capped).await.unwrap();
+    assert_eq!(stored_prs(&out), [1, 2]);
+    assert_eq!(problems(&out).await, [owed(3)]);
+    run(&out, &pb, capped).await.unwrap();
+    assert_eq!(stored_prs(&out), [1, 2, 3]);
+    assert_eq!(problems(&out).await, []);
+}
+
+/// A PR GitHub answers 404 for — its repository deleted, or out of this
+/// credential's reach — is gone, not failing: its failure and its row
+/// go, and no later run asks for it again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pr_that_is_gone_stops_being_retried() {
     let d = tempdir().unwrap();
     let out = d.path().join("out");
     let pb = tape(&d.path().join("one"), &[1, 2]);
-    run(&out, &pb, |o| FetchOptions {
-        max_prs: Some(1),
-        ..o
-    })
-    .await
+    let pr2 = format!("{BASE}/repos/{REPO}/pulls/2");
+    fs::remove_file(tape_of(&pb, &pr2)).unwrap();
+    run(&out, &pb, |o| o).await.unwrap();
+    assert_eq!(
+        problems(&out).await,
+        [row(&format!("pull_requests:{REPO}#2"), "error")]
+    );
+
+    let pb = tape(&d.path().join("two"), &[1, 2]);
+    let mut not_found = json_response(&json!({"message": "Not Found"}));
+    not_found.status = 404;
+    write_fixture(
+        &pb,
+        &HttpRequest::get(HttpService::Github, &pr2),
+        &not_found,
+    )
     .unwrap();
+    run(&out, &pb, |o| o).await.unwrap();
     assert_eq!(stored_prs(&out), [1]);
+    assert_eq!(problems(&out).await, []);
+    assert_eq!(
+        query(
+            &out,
+            "SELECT id, last_error FROM pull_requests_bookkeeping WHERE last_error IS NOT NULL"
+        )
+        .await,
+        [],
+        "nothing is left to retry"
+    );
+}
+
+/// When the shared retry loop gives up, the run ends there: the PRs
+/// after it are not each tried and failed, and nothing is recorded
+/// against them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_give_up_ends_the_run() {
+    let d = tempdir().unwrap();
+    let out = d.path().join("out");
+    let pb = tape(&d.path().join("one"), &[1, 2, 3]);
+    let mut unavailable = json_response(&json!({"message": "Service Unavailable"}));
+    unavailable.status = 503;
+    write_fixture(
+        &pb,
+        &HttpRequest::get(HttpService::Github, format!("{BASE}/repos/{REPO}/pulls/2")),
+        &unavailable,
+    )
+    .unwrap();
+    // One failed request spends the whole budget.
+    let quick = Duration::from_millis(1);
+    let guard = RetryGuard::new(Duration::from_secs(3600), 1, quick, quick, StopFlag::new());
+    let result = datalib_etl::retry::scope(guard, run(&out, &pb, |o| o)).await;
+
+    assert!(result.is_err(), "a give-up fails the step");
+    assert_eq!(stored_prs(&out), [1]);
+    assert_eq!(problems(&out).await, [], "PR 3 was never asked for");
     assert_eq!(cursors(&out).await, []);
 }

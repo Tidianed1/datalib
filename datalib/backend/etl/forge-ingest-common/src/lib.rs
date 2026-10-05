@@ -89,19 +89,39 @@ pub trait Forge: Sync {
         Ok(HashMap::new())
     }
 
-    /// Fetch one change request and everything under it. Returns what
-    /// it could not do, one line each — empty when it got all of it.
-    /// `Err` is for the store.
+    /// Fetch one change request and everything under it. `Err` is for
+    /// the store, or a give-up of the shared retry loop.
     async fn fetch_one(
         &self,
         client: &ForgeClient,
         cr: &Listed,
         summary: &mut Self::Summary,
-    ) -> Result<Vec<String>>;
+    ) -> Result<Fetched>;
 
     fn record_skipped(&self, _summary: &mut Self::Summary) {}
 
     fn record_requests(&self, summary: &mut Self::Summary, requests: u64);
+}
+
+/// What fetching one change request came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Fetched {
+    Whole,
+    /// What it could not do, one line each.
+    Short(Vec<String>),
+    /// The forge says it is not there: a deleted repository, or one this
+    /// credential no longer reaches. A deletion, not a failure.
+    Gone,
+}
+
+impl Fetched {
+    pub fn from_shortfalls(lines: Vec<String>) -> Self {
+        if lines.is_empty() {
+            Fetched::Whole
+        } else {
+            Fetched::Short(lines)
+        }
+    }
 }
 
 /// What one sync is asked to do.
@@ -111,7 +131,8 @@ pub struct SyncOptions<'a> {
     /// On a non-empty store, only look again at change requests updated
     /// in the last N days; 0 is unbounded.
     pub refresh_window_days: u32,
-    /// Safety cap on how many are fetched (`None` = unbounded).
+    /// Cap on how many are fetched in one run (`None` = unbounded). The
+    /// rest are recorded as skipped, and later runs fetch them first.
     pub max_items: Option<usize>,
     /// Change requests named directly. When any are, discovery is
     /// skipped and only these are fetched.
@@ -148,10 +169,10 @@ pub async fn sync<F: Forge>(
 
     let mut summary = F::Summary::default();
 
-    // `Ok(true)` when the run covered everything the config asks:
-    // every scope searched and every change request it listed fetched.
-    // Only then has it satisfied `refresh_window_days`; see
-    // `scope_config`.
+    // `Ok(true)` when the run covered everything the config asks: every
+    // scope searched, and every change request it listed either fetched
+    // or recorded as owed. Only then has it satisfied
+    // `refresh_window_days`; see `scope_config`.
     let work = async {
         let (me, _) = client.get(&forge.self_url()).await?;
         if !me.is_object() {
@@ -172,7 +193,7 @@ pub async fn sync<F: Forge>(
                     full,
                     prior_scope_cfg.as_ref(),
                 )
-                .await,
+                .await?,
             )
         } else {
             None
@@ -191,11 +212,6 @@ pub async fn sync<F: Forge>(
                 })
                 .collect(),
         };
-        let cut = opts.max_items.is_some_and(|cap| keys.len() > cap);
-        let keys: Vec<Listed> = keys
-            .into_iter()
-            .take(opts.max_items.unwrap_or(usize::MAX))
-            .collect();
         tracing::info!(count = keys.len(), "{}s to fetch", F::ITEM);
 
         // One scan of what is held, so the per-item comparison is O(1).
@@ -208,6 +224,9 @@ pub async fn sync<F: Forge>(
             forge.stored_updated_at().await?
         };
 
+        let cap = opts.max_items.unwrap_or(usize::MAX);
+        let mut fetched = 0usize;
+        let mut owed: Vec<String> = Vec::new();
         opts.progress.set_length(Some(keys.len() as u64));
         for cr in &keys {
             if opts.stop.requested() {
@@ -216,27 +235,36 @@ pub async fn sync<F: Forge>(
             opts.progress.inc(1);
             opts.progress
                 .set_message(&format!("{}{}{}", cr.container, F::SIGIL, cr.number));
+            let key = forge.item_key(&cr.container, cr.number);
             let unchanged = !cr.updated_at.is_empty()
                 && stored.get(&(cr.container.clone(), cr.number)) == Some(&cr.updated_at);
             if unchanged {
                 forge.record_skipped(&mut summary);
-            } else {
-                let shortfalls = forge.fetch_one(client, cr, &mut summary).await?;
-                // After a stop every request fails at once; that is not
-                // something the change request did.
-                if !shortfalls.is_empty() && !opts.stop.requested() {
-                    let detail = shortfalls.join("; ");
-                    tracing::warn!(
-                        container = %cr.container, number = cr.number, detail,
-                        "{} not fetched whole", F::ITEM,
+                continue;
+            }
+            if fetched == cap {
+                owed.push(key);
+                continue;
+            }
+            fetched += 1;
+            let outcome = forge.fetch_one(client, cr, &mut summary).await?;
+            // After a stop every request fails at once; that is not
+            // something the change request did.
+            if opts.stop.requested() {
+                break;
+            }
+            match outcome {
+                Fetched::Whole => {}
+                Fetched::Short(lines) => {
+                    record_failure(pool, F::ITEM_TABLE, &key, &lines.join("; ")).await?
+                }
+                Fetched::Gone => {
+                    tracing::info!(
+                        id = key,
+                        "{} is gone upstream; keeping what is stored",
+                        F::ITEM
                     );
-                    record_failure(
-                        pool,
-                        F::ITEM_TABLE,
-                        &forge.item_key(&cr.container, cr.number),
-                        &detail,
-                    )
-                    .await?;
+                    forget_failure(pool, F::ITEM_TABLE, &key).await?;
                 }
             }
             if opts.sleep_between > Duration::ZERO {
@@ -253,22 +281,27 @@ pub async fn sync<F: Forge>(
         let Some(found) = discovery else {
             return Ok(false);
         };
-        // A capped run fetched only part of what it listed; moving its
-        // cursors would skip the rest for good.
-        if !cut {
-            for (scope, at) in &found.new_state {
-                datalib_etl::doltlite_raw::upsert_scope_state(pool, scope, at).await?;
-            }
+        // What the cap left is owed before the cursors move past it: the
+        // next run retries it like a failure.
+        record_owed(
+            pool,
+            F::ITEM_TABLE,
+            &owed,
+            &format!("over this run's cap of {cap} {}s", F::ITEM),
+        )
+        .await?;
+        for (scope, at) in &found.new_state {
+            datalib_etl::doltlite_raw::upsert_scope_state(pool, scope, at).await?;
         }
         datalib_etl::download_problems::report_run(pool, &found.problems).await;
-        Ok::<bool, anyhow::Error>(found.problems.is_empty() && !cut)
+        Ok::<bool, anyhow::Error>(found.problems.is_empty())
     };
 
     let result = work.await;
     forge.record_requests(&mut summary, client.request_count());
     // Record the config only once this run has actually satisfied it. A
-    // skipped scope, a cut, a stop or a targets-only run leaves the
-    // prior blob in place so the next run re-plans the widening.
+    // skipped scope, a stop or a targets-only run leaves the prior blob
+    // in place so the next run re-plans the widening.
     datalib_etl::scope_config::store_if_satisfied(
         pool,
         F::SCOPE_CONFIG_KEY,
@@ -281,33 +314,38 @@ pub async fn sync<F: Forge>(
     Ok(summary)
 }
 
-/// The listing plus every change request an earlier run could not
-/// fetch whole, which no listing may name again once the cursor has
-/// moved past it. A retried one is fetched whatever its listed
-/// `updated_at` says: the stored copy is the incomplete one.
-fn with_retries(mut keys: Vec<Listed>, failed: Vec<(String, u32)>) -> Vec<Listed> {
+/// Every change request an earlier run failed on or left over its cap,
+/// then the listing. A retried one goes first, so a capped run works
+/// through what it owes before what is new, and is fetched whatever its
+/// listed `updated_at` says: the stored copy is the incomplete one.
+fn with_retries(keys: Vec<Listed>, failed: Vec<(String, u32)>) -> Vec<Listed> {
     let failed: HashSet<(String, u32)> = failed.into_iter().collect();
-    for cr in &mut keys {
-        if failed.contains(&(cr.container.clone(), cr.number)) {
-            cr.updated_at.clear();
-        }
-    }
-    let listed: HashSet<(String, u32)> = keys
+    let (mut retried, mut fresh): (Vec<Listed>, Vec<Listed>) = keys
+        .into_iter()
+        .partition(|cr| failed.contains(&(cr.container.clone(), cr.number)));
+    let listed: HashSet<(String, u32)> = retried
         .iter()
         .map(|cr| (cr.container.clone(), cr.number))
         .collect();
-    keys.extend(failed.into_iter().filter(|key| !listed.contains(key)).map(
+    for cr in &mut retried {
+        cr.updated_at.clear();
+    }
+    retried.extend(failed.into_iter().filter(|key| !listed.contains(key)).map(
         |(container, number)| Listed {
             container,
             number,
             updated_at: String::new(),
         },
     ));
-    keys.sort_by(|a, b| (&a.container, a.number).cmp(&(&b.container, b.number)));
-    keys
+    let by_key = |a: &Listed, b: &Listed| (&a.container, a.number).cmp(&(&b.container, b.number));
+    retried.sort_by(by_key);
+    fresh.sort_by(by_key);
+    retried.extend(fresh);
+    retried
 }
 
-/// The change requests whose last fetch failed. Read from the sidecar
+/// The change requests whose last fetch failed or was left over a cap.
+/// Read from the sidecar
 /// alone: a change request that never fetched has no data row, because
 /// its table's promoted columns cannot be null.
 async fn failed_items<F: Forge>(forge: &F) -> Result<Vec<(String, u32)>> {
@@ -345,6 +383,59 @@ async fn record_failure(pool: &SqlitePool, table: &str, id: &str, detail: &str) 
     tx.commit().await.context("commit the failure record")
 }
 
+async fn record_owed(pool: &SqlitePool, table: &str, ids: &[String], detail: &str) -> Result<()> {
+    use anyhow::Context as _;
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let mut tx = pool.begin().await.context("begin the owed records")?;
+    for id in ids {
+        datalib_etl::doltlite_raw::record_object_skipped(
+            &mut tx,
+            table,
+            id,
+            datalib_problems::Reason::OverSizeLimit,
+            detail,
+        )
+        .await?;
+    }
+    tx.commit().await.context("commit the owed records")
+}
+
+/// A change request upstream no longer has stops being retried: its
+/// failure and its problem row go. A copy the store holds stays, as
+/// the last one there was.
+async fn forget_failure(pool: &SqlitePool, table: &str, id: &str) -> Result<()> {
+    use anyhow::Context as _;
+    use datalib_problems::{ScopeKind, Stage};
+    let mut tx = pool.begin().await.context("begin forgetting a failure")?;
+    let never_stored = format!(
+        "DELETE FROM {table}_bookkeeping WHERE id = ? AND NOT EXISTS (SELECT 1 FROM {table} WHERE id = ?)"
+    );
+    let stored = format!("UPDATE {table}_bookkeeping SET last_error = NULL WHERE id = ?");
+    // Audited: `table` is a `&'static str` constant of the provider; the
+    // id is bound.
+    sqlx::query(sqlx::AssertSqlSafe(never_stored))
+        .bind(id)
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .with_context(|| format!("forget the sidecar of {table}:{id}"))?;
+    sqlx::query(sqlx::AssertSqlSafe(stored))
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .with_context(|| format!("clear the failure of {table}:{id}"))?;
+    sqlx::query("DELETE FROM problems WHERE scope_kind = ? AND scope_key = ? AND stage = ?")
+        .bind(ScopeKind::Entity.as_str())
+        .bind(format!("{table}:{id}"))
+        .bind(Stage::Fetch.as_str())
+        .execute(&mut *tx)
+        .await
+        .with_context(|| format!("forget the fetch problem of {table}:{id}"))?;
+    tx.commit().await.context("commit forgetting a failure")
+}
+
 /// What one discovery pass found.
 struct Discovery {
     /// Unique by `(container, number)`, sorted by it, each with the
@@ -366,7 +457,7 @@ async fn discover<F: Forge>(
     state: &HashMap<String, String>,
     full: bool,
     prior: Option<&Value>,
-) -> Discovery {
+) -> Result<Discovery> {
     let mut newest: HashMap<(String, u32), String> = HashMap::new();
     let mut new_state: HashMap<String, String> = HashMap::new();
     let mut problems: Vec<RunProblem> = Vec::new();
@@ -387,10 +478,12 @@ async fn discover<F: Forge>(
         let results = match forge.search(client, scope, me, since.as_deref()).await {
             Ok(v) => v,
             Err(e) => {
+                let forge_error = e.downcast_ref::<ForgeError>();
+                if forge_error.is_some_and(ForgeError::gave_up) {
+                    return Err(e);
+                }
                 let name = format!("search {scope}");
-                let refused = e
-                    .downcast_ref::<ForgeError>()
-                    .is_some_and(ForgeError::refused);
+                let refused = forge_error.is_some_and(ForgeError::refused);
                 problems.push(if refused {
                     RunProblem::forbidden(&name, format!("{e:#}"))
                 } else {
@@ -420,36 +513,44 @@ async fn discover<F: Forge>(
         })
         .collect();
     keys.sort_by(|a, b| (&a.container, a.number).cmp(&(&b.container, b.number)));
-    Discovery {
+    Ok(Discovery {
         keys,
         new_state,
         problems,
-    }
+    })
 }
 
-/// A change request's own record, or why there is none to store.
-pub async fn get_change_request(client: &ForgeClient, url: &str) -> Result<Value, String> {
+/// A change request's own record, or what [`Forge::fetch_one`] comes to
+/// without one. `Err` when the shared retry loop gave up: no request
+/// after this one will fare better, so the run ends.
+pub async fn get_change_request(client: &ForgeClient, url: &str) -> Result<Result<Value, Fetched>> {
     match client.get(url).await {
-        Ok((v, _)) if v.is_object() => Ok(v),
-        Ok(_) => Err(format!("{url} returned something other than an object")),
-        Err(e) => Err(e.to_string()),
+        Ok((v, _)) if v.is_object() => Ok(Ok(v)),
+        Ok(_) => Ok(Err(Fetched::Short(vec![format!(
+            "{url} returned something other than an object"
+        )]))),
+        Err(e) if e.gave_up() => Err(e.into()),
+        Err(e) if e.gone() => Ok(Err(Fetched::Gone)),
+        Err(e) => Ok(Err(Fetched::Short(vec![e.to_string()]))),
     }
 }
 
 /// Walk a change request's whole list of one kind of child, or say why
 /// it could not. An empty list from a failed request is
 /// indistinguishable from "all deleted", and pruning on it would wipe
-/// every comment the change request has: on `Err` the caller neither
-/// stores nor prunes, and reports the line.
+/// every comment the change request has: on an inner `Err` the caller
+/// neither stores nor prunes, and reports the line. The outer `Err` is a
+/// give-up of the shared retry loop, which ends the run.
 pub async fn walk_children(
     client: &ForgeClient,
     url: &str,
     what: &str,
-) -> Result<Vec<Value>, String> {
-    client
-        .paginate(url)
-        .await
-        .map_err(|e| format!("could not list its {what}: {e}"))
+) -> Result<Result<Vec<Value>, String>> {
+    match client.paginate(url).await {
+        Ok(children) => Ok(Ok(children)),
+        Err(e) if e.gave_up() => Err(e.into()),
+        Err(e) => Ok(Err(format!("could not list its {what}: {e}"))),
+    }
 }
 
 /// Delete `table`'s rows under one change request that its fresh,
@@ -528,6 +629,8 @@ mod tests {
     /// A change request whose discussions would not list was stored
     /// whole otherwise, so its listed `updated_at` matches the store and
     /// the skip would step over it forever: the retry must clear it.
+    /// Retries go first, so a capped run pays off what it owes before
+    /// it takes on more.
     #[test]
     fn a_failed_one_is_fetched_whether_or_not_the_listing_names_it() {
         let keys = vec![
@@ -542,8 +645,8 @@ mod tests {
             with_retries(keys, failed),
             vec![
                 listed("starfleet/defiant", 74205, ""),
-                listed("starfleet/enterprise", 1, "2369-04-14T00:00:00Z"),
                 listed("starfleet/enterprise", 2, ""),
+                listed("starfleet/enterprise", 1, "2369-04-14T00:00:00Z"),
             ]
         );
     }

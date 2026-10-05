@@ -27,7 +27,9 @@ Unlike GitHub, a listed MR whose `updated_at` matches the stored one is
 skipped. So an MR is stored only once its discussions listed, or
 failed for a reason other than a stop: one stored while a stop cut its
 discussions short would be skipped until it next changes. An MR whose
-last fetch failed is fetched whatever its `updated_at` says.
+last fetch failed is fetched whatever its `updated_at` says. `max_mrs`
+is GitHub's `max_prs`: it counts the MRs fetched, not the unchanged
+ones skipped.
 
 ## Auth
 

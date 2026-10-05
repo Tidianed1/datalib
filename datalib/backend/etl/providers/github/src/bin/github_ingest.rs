@@ -31,7 +31,7 @@ struct Args {
     #[arg(long, default_value_t = 30)]
     refresh_window_days: u32,
 
-    /// Safety cap on PR count.
+    /// Most PRs to fetch this run; the rest are left to later runs.
     #[arg(long)]
     max_prs: Option<usize>,
 

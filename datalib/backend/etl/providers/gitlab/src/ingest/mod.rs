@@ -17,7 +17,7 @@ use datalib_etl::bulk::BulkUpsertable;
 use datalib_etl::http::{default_retryability, HttpService, LatchkeySettings};
 use datalib_etl::stop::StopFlag;
 use datalib_etl_forge_ingest_common::{
-    get_change_request, sync, walk_children, Forge, ForgeClient, Listed, SyncOptions,
+    get_change_request, sync, walk_children, Fetched, Forge, ForgeClient, Listed, SyncOptions,
 };
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
@@ -178,40 +178,40 @@ impl Forge for Gitlab<'_> {
         client: &ForgeClient,
         cr: &Listed,
         summary: &mut FetchSummary,
-    ) -> Result<Vec<String>> {
+    ) -> Result<Fetched> {
         let (proj, iid) = (cr.container.as_str(), cr.number);
         let pid = urlencoding::encode(proj);
         let mr_url = format!("{BASE}/projects/{pid}/merge_requests/{iid}");
-        let mr_data = match get_change_request(client, &mr_url).await {
+        let mr_data = match get_change_request(client, &mr_url).await? {
             Ok(v) => v,
-            Err(e) => return Ok(vec![e]),
+            Err(miss) => return Ok(miss),
         };
         // The endpoint returns this MR's *whole* discussion list, so a
         // discussion we hold that it did not mention was deleted on
         // GitLab.
         let disc_url =
             format!("{BASE}/projects/{pid}/merge_requests/{iid}/discussions?per_page={PER_PAGE}");
-        let discussions = walk_children(client, &disc_url, "discussions").await;
+        let discussions = walk_children(client, &disc_url, "discussions").await?;
         // The MR's stored `updated_at` is what lets the next run skip
         // it. A stop cut its discussions short; storing it now would
         // skip them until the MR next changes.
-        if discussions.is_err() && self.stop.requested() {
-            return Ok(Vec::new());
+        if let (Err(e), true) = (&discussions, self.stop.requested()) {
+            return Ok(Fetched::Short(vec![e.clone()]));
         }
         self.db.upsert_merge_request(proj, iid, &mr_data).await?;
         summary.new_mrs += 1;
         let discussions = match discussions {
             Ok(d) => d,
-            Err(e) => return Ok(vec![e]),
+            Err(e) => return Ok(Fetched::Short(vec![e])),
         };
         let without_id = discussions
             .iter()
             .filter(|d| d.get("id").and_then(|v| v.as_str()).is_none())
             .count();
         if without_id > 0 {
-            return Ok(vec![format!(
+            return Ok(Fetched::Short(vec![format!(
                 "{without_id} of its discussions came back without an id"
-            )]);
+            )]));
         }
         self.db.upsert_discussions(proj, iid, &discussions).await?;
         summary.new_discussions += discussions.len();
@@ -219,7 +219,7 @@ impl Forge for Gitlab<'_> {
             .db
             .prune_mr_discussions(proj, iid, &discussions)
             .await?;
-        Ok(Vec::new())
+        Ok(Fetched::Whole)
     }
 
     fn record_skipped(&self, summary: &mut FetchSummary) {

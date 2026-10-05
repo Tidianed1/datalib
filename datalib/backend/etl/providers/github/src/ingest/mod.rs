@@ -16,7 +16,7 @@ use datalib_etl::http::{
     default_retryability, HttpResponse, HttpService, LatchkeySettings, Retryability,
 };
 use datalib_etl_forge_ingest_common::{
-    get_change_request, sync, walk_children, Forge, ForgeClient, Listed, SyncOptions,
+    get_change_request, sync, walk_children, Fetched, Forge, ForgeClient, Listed, SyncOptions,
 };
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
@@ -57,7 +57,8 @@ pub struct FetchOptions {
     pub scopes: Vec<String>,
     /// On a non-empty store, only refetch PRs updated in the last N days.
     pub refresh_window_days: u32,
-    /// Safety cap on PR count (`None` = unbounded). Smoke-test convenience.
+    /// Most PRs to fetch this run (`None` = unbounded); the rest are owed
+    /// to later runs.
     pub max_prs: Option<usize>,
     /// Explicit PR targets. When non-empty, discovery is skipped and
     /// only these PRs are fetched. Each entry is `(repo_full_name,
@@ -188,12 +189,12 @@ impl Forge for Github<'_> {
         client: &ForgeClient,
         cr: &Listed,
         summary: &mut FetchSummary,
-    ) -> Result<Vec<String>> {
+    ) -> Result<Fetched> {
         let (repo, num) = (cr.container.as_str(), cr.number);
         let pr_url = format!("{BASE}/repos/{repo}/pulls/{num}");
-        let pr_data = match get_change_request(client, &pr_url).await {
+        let pr_data = match get_change_request(client, &pr_url).await? {
             Ok(v) => v,
-            Err(e) => return Ok(vec![e]),
+            Err(miss) => return Ok(miss),
         };
         self.db.upsert_pull_request(repo, num, &pr_data).await?;
         summary.new_prs += 1;
@@ -204,7 +205,7 @@ impl Forge for Github<'_> {
         let mut shortfalls = Vec::new();
         for child in CHILDREN {
             let url = format!("{BASE}/repos/{repo}/{}", (child.path)(num));
-            let listed = match walk_children(client, &url, child.what).await {
+            let listed = match walk_children(client, &url, child.what).await? {
                 Ok(listed) => listed,
                 Err(e) => {
                     shortfalls.push(e);
@@ -234,7 +235,7 @@ impl Forge for Github<'_> {
                 .prune_pr_children(child.table, repo, num, &keep)
                 .await?;
         }
-        Ok(shortfalls)
+        Ok(Fetched::from_shortfalls(shortfalls))
     }
 
     fn record_requests(&self, summary: &mut FetchSummary, requests: u64) {
