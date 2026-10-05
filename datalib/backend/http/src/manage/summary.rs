@@ -55,11 +55,9 @@ pub fn record(root: &Path, rows: &[ManageRow], run: Option<&DagRunInfo>, bytes: 
     if previous.as_ref() == Some(&next) {
         return;
     }
-    let tmp = path.with_extension("json.tmp");
     let written = serde_json::to_vec_pretty(&next)
         .map_err(std::io::Error::other)
-        .and_then(|bytes| std::fs::write(&tmp, bytes))
-        .and_then(|()| std::fs::rename(&tmp, &path));
+        .and_then(|bytes| datalib_runtime::atomic::write(&path, &bytes));
     if let Err(e) = written {
         tracing::warn!("could not write {}: {e}", path.display());
     }

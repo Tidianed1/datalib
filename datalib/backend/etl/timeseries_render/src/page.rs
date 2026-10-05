@@ -10,10 +10,11 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
-use datalib_etl::title::Title;
+use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{escape_md_inline, md_code_span};
 use datalib_etl_render::processor::RenderCtx;
+use datalib_etl_render::title::Title;
 use datalib_id::{entity_id_str, IdNamespace};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
@@ -21,7 +22,7 @@ use datalib_schema::providers::Provider;
 
 use crate::plot::{standalone_html, Trace};
 use crate::series::{by_device, earliest_ts_ms, latest_ts_ms, Series};
-use crate::text::{human_gap, iso, median_gap, short, short_ts, thousands, yaml_safe};
+use crate::text::{human_gap, iso, median_gap, short, short_ts, thousands};
 use crate::units::{series_label, spec_in, MetricSpec, Quantity};
 
 const KIND_PAGE: &str = "timeseries";
@@ -355,12 +356,12 @@ fn render_markdown(
     let _ = writeln!(out, "markdown_uuid: {m_uuid}");
     let _ = writeln!(out, "source_id: {source_id}");
     let _ = writeln!(out, "provider: {}", profile.tag);
-    let _ = writeln!(out, "title: {}", yaml_safe(&title));
+    let _ = writeln!(out, "title: {}", yaml_scalar(&title));
     if let Some(ts) = earliest.and_then(iso) {
-        let _ = writeln!(out, "created_at: {}", yaml_safe(&ts));
+        let _ = writeln!(out, "created_at: {}", yaml_scalar(&ts));
     }
     if let Some(ts) = latest.and_then(iso) {
-        let _ = writeln!(out, "modified_at: {}", yaml_safe(&ts));
+        let _ = writeln!(out, "modified_at: {}", yaml_scalar(&ts));
     }
     out.push_str("---\n\n");
 

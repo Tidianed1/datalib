@@ -353,11 +353,11 @@ async fn tng_fixture_render_to_markdown_files() -> Result<()> {
     // minted from — is the chat's `external_id`, and the Beeper
     // workspace is its `project`.
     assert!(
-        march.contains("external_id: !tng-data:ba_TNG.local-signal.localhost"),
+        march.contains("external_id: \"!tng-data:ba_TNG.local-signal.localhost\""),
         "{march}"
     );
     assert!(
-        march.contains("project: tng-picard-account-uuid"),
+        march.contains("project: \"tng-picard-account-uuid\""),
         "{march}"
     );
 

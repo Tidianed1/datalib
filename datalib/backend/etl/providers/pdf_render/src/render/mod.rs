@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use datalib_etl::progress::Progress;
+use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{escape_html_outside_code, escape_md_inline};
 use datalib_etl_render::inputs::{Bucket, Buckets, Input, RawRange};
@@ -203,22 +204,22 @@ fn render_one(
     let mut body = String::new();
     body.push_str("---\n");
     body.push_str(&format!("provider: {}\n", grid_rows::PROVIDER));
-    body.push_str(&format!("blake3: {}\n", yaml_str(&t.blake3)));
-    body.push_str(&format!("title: {}\n", yaml_str(&title)));
+    body.push_str(&format!("blake3: {}\n", yaml_scalar(&t.blake3)));
+    body.push_str(&format!("title: {}\n", yaml_scalar(&title)));
     if let Some(a) = &t.author {
-        body.push_str(&format!("author: {}\n", yaml_str(a)));
+        body.push_str(&format!("author: {}\n", yaml_scalar(a)));
     }
     body.push_str(&format!("page_count: {}\n", t.page_count));
-    body.push_str(&format!("pdf_type: {}\n", yaml_str(&t.pdf_type)));
-    body.push_str(&format!("source_path: {}\n", yaml_str(&t.rel_path)));
+    body.push_str(&format!("pdf_type: {}\n", yaml_scalar(&t.pdf_type)));
+    body.push_str(&format!("source_path: {}\n", yaml_scalar(&t.rel_path)));
     if t.copy_count > 1 {
         body.push_str(&format!("copies: {}\n", t.copy_count));
     }
     if let Some(c) = &t.doc_created_at {
-        body.push_str(&format!("created_at: {}\n", yaml_str(c)));
+        body.push_str(&format!("created_at: {}\n", yaml_scalar(c)));
     }
     if let Some(m) = &t.doc_modified_at {
-        body.push_str(&format!("modified_at: {}\n", yaml_str(m)));
+        body.push_str(&format!("modified_at: {}\n", yaml_scalar(m)));
     }
     body.push_str("---\n\n");
     let doc_stamp =
@@ -299,10 +300,6 @@ fn pages_markdown(
     (body, page_rows)
 }
 
-fn yaml_str(s: &str) -> String {
-    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,12 +357,6 @@ mod tests {
         let md_path = md_path_for(&out_dir, "abc123");
         let from_md_path = md_path.strip_prefix(root).unwrap().to_string_lossy();
         assert_eq!(from_md_path, doc_qmd_path_rel("tng_pdfs", "abc123"));
-    }
-
-    #[test]
-    fn yaml_quoting_escapes_quotes_and_backslashes() {
-        assert_eq!(yaml_str(r#"a"b"#), r#""a\"b""#);
-        assert_eq!(yaml_str(r"a\b"), r#""a\\b""#);
     }
 }
 

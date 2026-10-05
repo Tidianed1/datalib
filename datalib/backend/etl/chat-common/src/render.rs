@@ -22,7 +22,7 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// `datalib_step`'s render step checks that every version stored on
 /// disk is one its processors declare, so this must not be mixed into
 /// the stored value.
-pub const LAYOUT_VERSION: u32 = 7;
+pub const LAYOUT_VERSION: u32 = 8;
 
 /// What every chat-common provider declares through
 /// `RenderProcessor::render_params`, merged with its own knobs: the
@@ -46,17 +46,18 @@ use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::periodize::Period;
 use datalib_etl::progress::Progress;
-use datalib_etl::title::Title;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::message::{timestamp_html, MessageHeader};
 use datalib_etl_render::section::{join, msg_div_open_with, Section};
+use datalib_etl_render::title::Title;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::{Outcome, ProblemRow, Scope, Stage};
 use datalib_schema::providers::Provider;
 
 use crate::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
+use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::html::{
-    escape_attr, escape_md_block, escape_md_inline, escape_text, md_code_span,
+    escape_attr, escape_md_block, escape_md_inline, escape_text, md_code_span, md_link_dest,
 };
 
 /// What a provider's [`NormalizedChatItem::text`] is: what a person
@@ -374,24 +375,24 @@ fn render_markdown(
     };
     let mut s = String::with_capacity(1024);
     s.push_str("---\n");
-    s.push_str(&format!("title: \"{}\"\n", title.replace('"', "\\\"")));
+    s.push_str(&format!("title: {}\n", yaml_scalar(&title)));
     s.push_str(&format!("provider: {}\n", profile.provider));
-    s.push_str(&format!("source_label: \"{}\"\n", profile.source_label));
+    s.push_str(&format!(
+        "source_label: {}\n",
+        yaml_scalar(&profile.source_label)
+    ));
     s.push_str(&format!("chat_uuid: {}\n", chat.chat_uuid));
     s.push_str(&format!("markdown_uuid: {}\n", doc.markdown_uuid));
     s.push_str(&format!("period: {}\n", doc.period_key));
-    s.push_str(&format!(
-        "display: \"{}\"\n",
-        chat.display.replace('"', "\\\"")
-    ));
+    s.push_str(&format!("display: {}\n", yaml_scalar(&chat.display)));
     if let Some(a) = &chat.account {
-        s.push_str(&format!("account: {a}\n"));
+        s.push_str(&format!("account: {}\n", yaml_scalar(a)));
     }
     if let Some(p) = &chat.project {
-        s.push_str(&format!("project: {p}\n"));
+        s.push_str(&format!("project: {}\n", yaml_scalar(p)));
     }
     if let Some(e) = &chat.external_id {
-        s.push_str(&format!("external_id: {e}\n"));
+        s.push_str(&format!("external_id: {}\n", yaml_scalar(e)));
     }
     s.push_str(&format!("item_count: {}\n", message_count(doc)));
     s.push_str("---\n\n");
@@ -686,7 +687,7 @@ fn render_attachment(s: &mut String, att: &crate::types::NormalizedAttachment) {
     s.push('\n');
     match &att.rel_path {
         Some(rel) if att.is_image() => {
-            s.push_str(&format!("![{label}]({rel})\n"));
+            s.push_str(&format!("![{label}]({})\n", md_link_dest(rel)));
         }
         // Inline HTML5 players so audio/video attachments play straight
         // from the markdown viewer (which already passes raw HTML through
@@ -694,18 +695,23 @@ fn render_attachment(s: &mut String, att: &crate::types::NormalizedAttachment) {
         // underneath is a fallback for renderers that strip media tags.
         Some(rel) if is_audio => {
             s.push_str(&format!(
-                "<audio controls src=\"{src}\"></audio>\n\n{kind_marker} [{label}]({rel}) — {size}\n",
+                "<audio controls src=\"{src}\"></audio>\n\n{kind_marker} [{label}]({dest}) — {size}\n",
                 src = escape_attr(rel),
+                dest = md_link_dest(rel),
             ));
         }
         Some(rel) if is_video => {
             s.push_str(&format!(
-                "<video controls src=\"{src}\"></video>\n\n{kind_marker} [{label}]({rel}) — {size}\n",
+                "<video controls src=\"{src}\"></video>\n\n{kind_marker} [{label}]({dest}) — {size}\n",
                 src = escape_attr(rel),
+                dest = md_link_dest(rel),
             ));
         }
         Some(rel) => {
-            s.push_str(&format!("{kind_marker} [{label}]({rel}) — {size}\n"));
+            s.push_str(&format!(
+                "{kind_marker} [{label}]({dest}) — {size}\n",
+                dest = md_link_dest(rel)
+            ));
         }
         None => {
             s.push_str(&format!("{kind_marker} *[{label} (not yet fetched)]*\n",));
@@ -1975,5 +1981,44 @@ mod tests {
              <span class=\"msg-recipient\" data-handle=\"email:q@continuum.org\">&lt;Q&gt;</span></div>"
         );
         assert_eq!(recipients_line(&[]), None);
+    }
+
+    /// The recipients line is an HTML block; a blank line in a name
+    /// ended it, and markdown read the rest of the name (#992).
+    #[test]
+    fn a_recipient_with_a_blank_line_in_the_name_stays_in_the_line() {
+        use crate::types::{Recipient, RecipientRole};
+        let line = recipients_line(&[Recipient {
+            role: RecipientRole::To,
+            display: "Worf\n\n[x](https://e.test)".to_string(),
+            handle: None,
+        }])
+        .unwrap();
+        assert!(!line.contains('\n'), "{line}");
+    }
+
+    /// A front-matter value from upstream cannot end its line, or the
+    /// block, whatever it holds (#992).
+    #[test]
+    fn front_matter_values_stay_on_their_lines() {
+        let mut chat = mk_chat();
+        chat.display = "a\n---\nb".into();
+        chat.account = Some("acct\ntitle: forged".into());
+        chat.project = Some("p: q".into());
+        chat.external_id = Some("e\n\n".into());
+        let sections = render_markdown(&test_profile(), &chat, &chat.buckets[0], "t\n---");
+        let front = &sections[0].md;
+        let lines: Vec<&str> = front.lines().collect();
+        let close = lines[1..].iter().position(|l| *l == "---").expect("closes") + 1;
+        for line in &lines[1..close] {
+            assert!(
+                line.split_once(": ").is_some_and(|(k, _)| !k.contains(' ')),
+                "{front}"
+            );
+        }
+        assert!(
+            lines[close + 1..].iter().all(|l| !l.starts_with("title:")),
+            "{front}"
+        );
     }
 }

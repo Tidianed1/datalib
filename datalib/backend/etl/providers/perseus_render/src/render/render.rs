@@ -11,6 +11,7 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 
 use datalib_etl::layout::render_markdown_root;
 use datalib_etl::progress::Progress;
+use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{escape_md_block, escape_md_inline};
 use datalib_schema::edges::EdgeRow;
@@ -297,12 +298,13 @@ fn render_book_md(book: &Book) -> String {
          work: {WORK_TITLE}\n\
          work_urn: {WORK_URN}\n\
          book: {book_n}\n\
-         title: {title}\n\
+         title: {quoted_title}\n\
          ---\n\
          \n\
          # {title}\n\
          \n",
-        book_n = book.n,
+        book_n = yaml_scalar(&book.n),
+        quoted_title = yaml_scalar(&title),
     )
 }
 
@@ -321,17 +323,18 @@ fn render_chapter_md(
          edition: {edition_id}\n\
          book: {book_n}\n\
          chapter: {ch_n}\n\
-         title: {title}\n\
+         title: {quoted_title}\n\
          language: {lang}\n\
          ---\n\
          \n\
          # {heading}\n\
          \n",
         heading = escape_md_inline(&title),
-        edition_id = edition.id,
-        book_n = chapter.book_n,
-        ch_n = chapter.n,
-        lang = edition.lang,
+        quoted_title = yaml_scalar(&title),
+        edition_id = yaml_scalar(&edition.id),
+        book_n = yaml_scalar(&chapter.book_n),
+        ch_n = yaml_scalar(&chapter.n),
+        lang = yaml_scalar(&edition.lang),
     );
     let aligned = alignments.is_aligned(&edition.id);
     for sec in &chapter.sections {

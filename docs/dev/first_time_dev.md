@@ -129,9 +129,10 @@ specific ports with `DATALIB_PORT` (Vite) and `DATALIB_BIND`
 The data root is the positional arg to `bazelisk run //datalib:dev` (or
 `:serve`), else `~/Documents/Datalib/Default`, the library the desktop
 app opens first (not the `Datalib` folder itself, which the app reads
-as a library to move into `Default`). It is the *directory*, not the
-config file: `datalib-http` takes it as a required positional and reads
-`<root>/config.toml` from inside it.
+as a library to move into `Default`); `dev_library_root` in
+`datalib/dev_lib.sh` is where both launchers decide it. It is the
+*directory*, not the config file: `datalib-http` takes it as a required
+positional and reads `<root>/config.toml` from inside it.
 
 The backend starts even if the root is missing — `/api/health` reports
 `root_exists: false` and the search grid shows zero rows. (`/api/health`
