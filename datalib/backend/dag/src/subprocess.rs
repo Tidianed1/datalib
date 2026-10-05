@@ -407,33 +407,63 @@ pub(crate) async fn run_subprocess(
 /// The part of a step's stderr that belongs in its error message. Every
 /// line is already in the run store; the message is what a person reads
 /// on the Manage row's hover, so it keeps only what they could not guess
-/// from "it failed": plain lines (a panic, a shell's complaint) and the
-/// message of a structured warn/error line. A structured info line — the
-/// bulk of a tracing stream — is dropped, JSON envelope and all.
+/// from "it failed", and says the cause first: a panic, or the step's own
+/// error lines. After it come the warnings and plain lines that led up to
+/// it. A structured info line — the bulk of a tracing stream — is
+/// dropped, and so is the per-record `problems_recorded` summary, which
+/// says what happened to records rather than why the step ended.
 #[derive(Default)]
 struct ErrorTail {
-    lines: Vec<String>,
+    cause: Vec<String>,
+    context: Vec<String>,
+    in_panic: bool,
 }
 
 impl ErrorTail {
     const KEEP: usize = 8;
 
     fn consider(&mut self, event: &Event, raw: &str) {
-        let Event::Log { level, msg, .. } = event else {
+        let Event::Log {
+            level, msg, fields, ..
+        } = event
+        else {
             return;
         };
         let structured = msg != raw;
-        if structured && *level == LogLevel::Info {
+        if structured {
+            self.in_panic = false;
+        }
+        let about_records = fields
+            .as_ref()
+            .and_then(|f| f.get("event"))
+            .and_then(|e| e.as_str())
+            == Some("problems_recorded");
+        if msg.trim().is_empty()
+            || msg.starts_with("note: run with `RUST_BACKTRACE")
+            || about_records
+            || (structured && *level == LogLevel::Info)
+        {
             return;
         }
-        if self.lines.len() == Self::KEEP {
-            self.lines.remove(0);
+        if !structured && msg.starts_with("thread '") && msg.contains(" panicked at ") {
+            self.in_panic = true;
         }
-        self.lines.push(msg.clone());
+        let cause = self.in_panic || (structured && *level == LogLevel::Error);
+        let keep = if cause {
+            &mut self.cause
+        } else {
+            &mut self.context
+        };
+        if keep.len() == Self::KEEP {
+            keep.remove(0);
+        }
+        keep.push(msg.clone());
     }
 
     fn join(&self) -> String {
-        self.lines.join("\n")
+        let mut lines = self.cause.clone();
+        lines.extend(self.context.iter().cloned());
+        lines.join("\n")
     }
 }
 
@@ -1408,8 +1438,57 @@ mod tests {
             let line = format!("line {i}");
             tail.consider(&unwrap_line("s", Stream::Stderr, &line), &line);
         }
-        assert_eq!(tail.lines.len(), ErrorTail::KEEP);
-        assert_eq!(tail.lines.last().map(String::as_str), Some("line 15"));
+        assert_eq!(tail.context.len(), ErrorTail::KEEP);
+        assert_eq!(tail.context.last().map(String::as_str), Some("line 15"));
+    }
+
+    /// A Takeout ingest once failed with four warnings first and its
+    /// panic last, under Rust's backtrace hint, so the hover read as the
+    /// warnings. The cause leads; the hint, the blank line and the step's
+    /// summary of its problems rows are not part of it.
+    #[test]
+    fn error_tail_puts_the_panic_first() {
+        let mut tail = ErrorTail::default();
+        let warn =
+            r#"{"level":"WARN","fields":{"message":"an entry was skipped"},"target":"takeout"}"#;
+        let recorded = r#"{"level":"ERROR","fields":{"message":"records were lost; each is a problems row","event":"problems_recorded","count":3},"target":"datalib_problems::recorded"}"#;
+        let lines = [
+            warn,
+            warn,
+            recorded,
+            "",
+            "thread 'main' (15274739) panicked at src/ingest/mdl_html.rs:89:23:",
+            "start byte index 48 is not a char boundary",
+            "note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace",
+        ];
+        for line in lines {
+            tail.consider(&unwrap_line("s", Stream::Stderr, line), line);
+        }
+        assert_eq!(
+            tail.join(),
+            "thread 'main' (15274739) panicked at src/ingest/mdl_html.rs:89:23:\n\
+             start byte index 48 is not a char boundary\n\
+             an entry was skipped\n\
+             an entry was skipped"
+        );
+    }
+
+    /// `datalib-step` ends a failed run with its error chain at `error`;
+    /// that is the cause, ahead of any warning before it.
+    #[test]
+    fn error_tail_puts_the_error_chain_first() {
+        let mut tail = ErrorTail::default();
+        for line in [
+            r#"{"level":"WARN","fields":{"message":"429 from upstream; backing off"},"target":"http"}"#,
+            r#"{"level":"ERROR","fields":{"message":"error: fetch the inbox"},"target":"datalib_step"}"#,
+            r#"{"level":"ERROR","fields":{"message":"caused by: HTTP 401"},"target":"datalib_step"}"#,
+        ] {
+            tail.consider(&unwrap_line("s", Stream::Stderr, line), line);
+        }
+        assert_eq!(
+            tail.join(),
+            "error: fetch the inbox\ncaused by: HTTP 401\n429 from upstream; backing off"
+        );
     }
 
     /// A step that answers SIGINT with a `cancelled` outcome is told
