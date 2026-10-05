@@ -3,12 +3,21 @@
 
 use quick_xml::events::BytesStart;
 
+use datalib_etl::dav::sync::{CollectionKind, ObjectProps};
 use datalib_etl::dav::{self as webdav, DavProps};
 use datalib_etl::http::{HttpMethod, HttpRequest, HttpService, LatchkeySettings};
 
 pub use datalib_etl::dav::{absolutize, origin, DavError, BODY_CURRENT_USER_PRINCIPAL};
 
 pub const HTTP_SERVICE: HttpService = HttpService::Caldav;
+
+pub const KIND: CollectionKind = CollectionKind {
+    service: HTTP_SERVICE,
+    ns_decl: r#"xmlns:C="urn:ietf:params:xml:ns:caldav""#,
+    data_prop: "C:calendar-data",
+    multiget: "C:calendar-multiget",
+    report_depth: "1",
+};
 
 pub type DavResponse = webdav::DavResponse<CalendarProps>;
 pub type Multistatus = webdav::Multistatus<CalendarProps>;
@@ -66,6 +75,12 @@ impl DavProps for CalendarProps {
     }
 }
 
+impl ObjectProps for CalendarProps {
+    fn data(&self) -> Option<&str> {
+        self.calendar_data.as_deref()
+    }
+}
+
 pub const BODY_PRINCIPAL: &str = r#"<?xml version="1.0" encoding="utf-8"?>
 <propfind xmlns="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
   <prop>
@@ -89,11 +104,7 @@ pub const BODY_LIST_CALENDARS: &str = r#"<?xml version="1.0" encoding="utf-8"?>
 "#;
 
 pub fn body_sync_collection(prev_token: &str) -> String {
-    webdav::body_sync_collection(
-        prev_token,
-        r#"xmlns:C="urn:ietf:params:xml:ns:caldav""#,
-        "C:calendar-data",
-    )
+    KIND.body_sync_collection(prev_token)
 }
 
 /// RFC 4791 `calendar-query` for every event: the listing a server that
@@ -147,25 +158,6 @@ pub fn body_query_window(window: &super::super::Window) -> String {
     )
 }
 
-/// RFC 4791 `calendar-multiget`, for the resources a listing named
-/// without their data.
-pub fn body_multiget(hrefs: &[String]) -> String {
-    let hrefs: String = hrefs
-        .iter()
-        .map(|h| format!("  <href>{}</href>\n", webdav::escape_xml(h)))
-        .collect();
-    format!(
-        r#"<?xml version="1.0" encoding="utf-8"?>
-<C:calendar-multiget xmlns="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
-  <prop>
-    <getetag/>
-    <C:calendar-data/>
-  </prop>
-{hrefs}</C:calendar-multiget>
-"#
-    )
-}
-
 pub async fn propfind(
     url: &str,
     depth: &str,
@@ -173,15 +165,6 @@ pub async fn propfind(
     latchkey: &LatchkeySettings,
 ) -> Result<Multistatus, DavError> {
     webdav::propfind(HTTP_SERVICE, url, depth, body, latchkey).await
-}
-
-pub async fn report(
-    url: &str,
-    depth: &str,
-    body: &str,
-    latchkey: &LatchkeySettings,
-) -> Result<Multistatus, DavError> {
-    webdav::report(HTTP_SERVICE, url, depth, body, latchkey).await
 }
 
 pub fn http_request(
