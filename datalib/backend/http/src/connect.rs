@@ -475,30 +475,8 @@ pub async fn start_connect(
         }
         slot.lock().expect("connect slot mutex").phase = ConnectPhase::SigningIn;
 
-        let login =
-            || tokio::time::timeout(CONNECT_TIMEOUT, latchkey_output_env(&args, &login_env));
-        let mut outcome = login().await;
-
-        // latchkey's `auth browser` *refreshes* an account; it will not
-        // create one, and refuses a name it has never seen. Seeding it
-        // is the whole remedy — the login overwrites the placeholder —
-        // so do that rather than handing the person a command. Only on
-        // that exact refusal: any other failure is its own problem.
-        let refused_unknown_account = !account.is_empty()
-            && matches!(&outcome, Ok(Err(e)) if e.to_string().contains("No credentials stored for account"));
-        if refused_unknown_account {
-            if let Err(e) = latchkey_output(&seed_args(&service, &account)).await {
-                fail(&slot, &service, tail(&e.to_string()));
-                return;
-            }
-            outcome = login().await;
-            // A placeholder outliving a login that never finished is a
-            // stored credential that cannot work, and it would make the
-            // account look connected in every account list.
-            if !matches!(outcome, Ok(Ok(_))) {
-                let _ = latchkey_output(&clear_args(&service, &account)).await;
-            }
-        }
+        let outcome =
+            tokio::time::timeout(CONNECT_TIMEOUT, latchkey_output_env(&args, &login_env)).await;
 
         match outcome {
             Ok(Ok(output)) => succeed(&slot, &service, stored_account(&output), tail(&output)),
@@ -548,32 +526,6 @@ fn succeed(
     slot.status = ConnectState::Ok;
     slot.account = account;
     slot.output = output;
-}
-
-/// The placeholder that brings a named account into existence so the
-/// browser login has something to refresh. Never used as a credential:
-/// the login overwrites it, and a login that does not finish has it
-/// cleared again.
-fn seed_args(service: &str, account: &str) -> Vec<String> {
-    vec![
-        "--account".to_string(),
-        account.to_string(),
-        "auth".to_string(),
-        "set".to_string(),
-        service.to_string(),
-        "-H".to_string(),
-        "X-Datalib-Placeholder: pending-browser-login".to_string(),
-    ]
-}
-
-fn clear_args(service: &str, account: &str) -> Vec<String> {
-    vec![
-        "--account".to_string(),
-        account.to_string(),
-        "auth".to_string(),
-        "clear".to_string(),
-        service.to_string(),
-    ]
 }
 
 /// `ensure-browser`, restricted to the sources that use a browser

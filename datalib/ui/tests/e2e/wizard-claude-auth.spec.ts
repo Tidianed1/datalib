@@ -82,25 +82,16 @@ test("the auth button is offered even when the service can't do it yet", async (
   await expect(wizard(page)).toContainText("latchkey auth set claude-ai");
 });
 
-/// Naming an account is hidden *for Claude*, because latchkey cannot
-/// honour it here: a
-/// browser login accepts `--account`, reports success, and files the
-/// credential under the unnamed default anyway
-/// (imbue-ai/latchkey#148). Offering a picker whose value the login
-/// ignores is how a config comes to name an account whose credential
-/// lives somewhere else — a sync that fails later, far from the cause.
-///
-/// Scoped to services we register with a cookie capture, which is where
-/// the login has no identity to learn. `wizard-email.spec.ts` holds the
-/// other side: Fastmail and Gmail are built-in OAuth, their logins do
-/// file under the address signed in with, and their picker stays.
-test("no account picker, and the login runs as latchkey's default", async ({ page }) => {
+/// Claude has an account box like every other latchkey source: a
+/// browser login stores under the name in it (imbue-ai/latchkey#148,
+/// which filed every login under the unnamed default, is fixed), so a
+/// second claude.ai account is a second name.
+test("the login runs as the account named in the box", async ({ page }) => {
   await openClaude(page, WITH_BROWSER);
 
-  await expect(
-    wizard(page).locator('.wiz-field:has(> .wiz-label:text-is("Claude account"))'),
-  ).toHaveCount(0);
-  await expect(wizard(page).getByRole("combobox", { name: "Claude account" })).toHaveCount(0);
+  const box = wizard(page).getByRole("combobox", { name: "Claude account" });
+  await expect(box).toBeVisible();
+  await box.fill("riker@enterprise.gov");
 
   let connectBody: { account?: string; ephemeral_browser?: boolean } | null = null;
   await page.route("**/api/latchkey/claude-ai/connect", (route) => {
@@ -108,10 +99,7 @@ test("no account picker, and the login runs as latchkey's default", async ({ pag
     return route.fulfill({ json: { id: "a1", status: "running", output: "" } });
   });
   await wizard(page).getByRole("button", { name: "Sign in with browser" }).click();
-
-  // Empty means "latchkey's own default", which is addressed by sending
-  // no `--account` at all.
-  await expect.poll(() => connectBody?.account).toBe("");
+  await expect.poll(() => connectBody?.account).toBe("riker@enterprise.gov");
 
   // And the login must not reuse latchkey's saved session: a cookie
   // capture reads the `Set-Cookie` of a sign-in that then never
@@ -120,12 +108,9 @@ test("no account picker, and the login runs as latchkey's default", async ({ pag
   await expect.poll(() => connectBody?.ephemeral_browser).toBe(true);
 });
 
-/// The other half of "always the default": with nothing to type an
-/// account into, nothing writes one, so the step names no identity and
-/// latchkey uses its own. `source_steps.test.ts` covers the converse —
-/// the params plumbing still carries an account when one is in the
-/// values, which is what makes this hidden rather than removed.
-test("a new source writes no account at all", async ({ page }) => {
+/// Left empty, the box means latchkey's unnamed default, which is
+/// addressed by naming no account at all.
+test("an empty account box writes no account at all", async ({ page }) => {
   await openClaude(page, WITH_BROWSER);
   await wizard(page).getByText("Review the TOML this writes").click();
   await expect(wizard(page).locator(".wiz-review pre")).not.toContainText("latchkey_settings");
