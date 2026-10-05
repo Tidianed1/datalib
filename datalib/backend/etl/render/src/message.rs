@@ -7,14 +7,15 @@
 use datalib_handle::Handle;
 use datalib_time::IsoOffsetTimestamp;
 
-use crate::html::{escape_attr, escape_text};
+use crate::html::{escape_attr, escape_md_inline};
 
 /// One message header, rendered as a `## ` line whose parts are tagged
 /// for the frontend.
 #[derive(Debug, Clone, Default)]
 pub struct MessageHeader<'a> {
     /// Who said it, as a reader should see it ("Me", "Will Riker",
-    /// "@jlpicard"). HTML-escaped at render time.
+    /// "@jlpicard"). Plain text: the span sits on a markdown line, so it
+    /// is escaped as markdown and HTML both.
     pub author: &'a str,
     /// Who said it, as an identifier: written as `data-handle` on the
     /// author span, where the UI turns it into a contact chip. The text
@@ -49,7 +50,7 @@ impl MessageHeader<'_> {
             });
             s.push_str(&format!(
                 "<span class=\"msg-author\"{handle}>{}</span> ",
-                escape_text(self.author),
+                escape_md_inline(self.author),
             ));
         }
         s.push_str(&timestamp_html(self.date_ms));
@@ -125,6 +126,27 @@ mod tests {
         assert!(
             s.contains("<span class=\"msg-ts\">(no timestamp)</span>"),
             "{s}"
+        );
+    }
+
+    /// markdown-it parses the text between the span's tags as markdown,
+    /// so an HTML escape alone let a sender named `[x](url)` become a
+    /// link (#992).
+    #[test]
+    fn an_author_named_in_markdown_is_not_a_link() {
+        let h = MessageHeader {
+            author: "[x](https://e.test) ![](https://t.test/i.png) `a|b`",
+            date_ms: None,
+            source_url: None,
+            handle: None,
+        };
+        assert!(
+            h.render().starts_with(
+                "## <span class=\"msg-author\">\\[x\\](https://e.test) \
+                 !\\[\\](https://t.test/i.png) \\`a\\|b\\`</span> "
+            ),
+            "{}",
+            h.render()
         );
     }
 

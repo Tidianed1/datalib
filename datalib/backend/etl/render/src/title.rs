@@ -2,13 +2,14 @@
 
 use std::fmt::Write;
 
+use crate::html::{escape_attr, escape_text};
+
 /// One title block. Pushed onto the rendered markdown body by every
 /// provider in lieu of an open-coded `# {title}` line.
 #[derive(Debug, Clone)]
 pub struct Title<'a> {
-    /// Display text. Plain string; HTML-escaped at render time so
-    /// titles with `<` / `>` / `&` survive markdown-it's html-passthrough
-    /// mode.
+    /// Display text, plain. The heading is a raw HTML block, so it is
+    /// escaped as text between tags.
     pub text: &'a str,
     /// Stable id for the rendered markdown. The Vue side wires up a
     /// "Copy page ID" button against this; omitted when `None`. For
@@ -78,10 +79,10 @@ impl<'a> Title<'a> {
             write!(out, " title=\"{}\"", escape_attr(&whole)).expect("write to String");
         }
         out.push('>');
-        out.push_str(&escape_html(&shown));
+        out.push_str(&escape_text(&shown));
         if let Some(suffix) = self.suffix {
             out.push(' ');
-            out.push_str(&escape_html(suffix));
+            out.push_str(&escape_text(suffix));
         }
         if let Some(url) = self.source_url {
             write!(
@@ -94,33 +95,6 @@ impl<'a> Title<'a> {
         out.push_str("</h1>\n\n");
         out
     }
-}
-
-fn escape_html(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '&' => out.push_str("&amp;"),
-            _ => out.push(c),
-        }
-    }
-    out
-}
-
-fn escape_attr(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("&quot;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '&' => out.push_str("&amp;"),
-            _ => out.push(c),
-        }
-    }
-    out
 }
 
 #[cfg(test)]
@@ -237,6 +211,23 @@ mod tests {
             t.render(),
             "<h1 class=\"page-title\">&lt;script&gt;alert('x')&lt;/script&gt; &amp; more</h1>\n\n",
         );
+    }
+
+    /// The heading is an HTML block, which a blank line ends; markdown
+    /// would then read the rest of the title (#992).
+    #[test]
+    fn a_blank_line_in_the_title_stays_inside_the_heading() {
+        let long = format!("{}\n\n[x](https://e.test)", "word ".repeat(30));
+        let s = Title {
+            text: &long,
+            markdown_uuid: None,
+            suffix: Some("(a\n\nb)"),
+            source_url: None,
+        }
+        .render();
+        let heading = s.strip_suffix("\n\n").expect("ends with a blank line");
+        assert!(!heading.contains('\n'), "{s}");
+        assert!(heading.contains("&#10;&#10;"), "{s}");
     }
 
     #[test]

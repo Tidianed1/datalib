@@ -179,7 +179,8 @@ fn without_block_marks(line: &str) -> &str {
 }
 
 /// The rendered bodies carry escaped HTML (`&lt;br&gt;`) as well as real
-/// tags; decoding first lets one pass strip both. `&amp;` goes last so
+/// tags, and the line breaks and indents an escape writes as references;
+/// decoding first lets one pass strip both. `&amp;` goes last so
 /// `&amp;lt;` stays the text `&lt;`. Backslash escapes wait for
 /// [`without_emphasis`], so an escaped `*` is not read as emphasis.
 fn unescaped(line: &str) -> String {
@@ -188,6 +189,10 @@ fn unescaped(line: &str) -> String {
         .replace("&quot;", "\"")
         .replace("&#39;", "'")
         .replace("&nbsp;", " ")
+        .replace("&#10;", " ")
+        .replace("&#13;", " ")
+        .replace("&#32;", " ")
+        .replace("&#9;", " ")
         .replace("&amp;", "&")
 }
 
@@ -476,6 +481,17 @@ mod tests {
         assert_eq!(
             text("Join the briefing\n* * *\n-::~:~::~:~:~::-\nBridge, 0900 -- sharp..."),
             "Join the briefing Bridge, 0900 -- sharp..."
+        );
+    }
+
+    /// A line break inside an HTML block, or an indent that would open a
+    /// code block, is written as a character reference and reads as a
+    /// space; a typed reference stays as typed.
+    #[test]
+    fn a_whitespace_reference_is_a_space() {
+        assert_eq!(
+            text("<summary>Tool use: a&#10;&#10;b</summary>\n&#32;   code &amp;#10;"),
+            "Tool use: a b code &#10;"
         );
     }
 

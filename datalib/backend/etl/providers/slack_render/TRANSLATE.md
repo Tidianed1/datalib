@@ -37,7 +37,12 @@ is `{channel_id}#{thread_ts}` and its link is the thread's permalink.
   entities in running text, so a `<b>` someone typed shows as typed;
   they are decoded inside code, which markdown shows literally, and in
   the `&gt;` that opens a Slack quote. A thread's title decodes them all:
-  it is plain text, and `Title` escapes it.
+  it is plain text, and `Title` escapes it;
+- markdown's own syntax, which Slack shows as typed, is escaped outside
+  code and outside the `<…>` constructs: `[`, `]`, `|`, a backslash
+  before punctuation, and a line's opening `#`, `- `, `1. `, `---` or
+  four-space indent. A name from the users or channels table, or a
+  mention's own label, is escaped as text on a markdown line.
 
 ## Unread messages
 

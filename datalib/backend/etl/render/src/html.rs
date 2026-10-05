@@ -7,11 +7,15 @@
 //! markup (a Notion page, an email's HTML part) does not. Which helper
 //! is a question of where the text lands:
 //!
-//! - between raw HTML tags, in an HTML block: [`escape_text`];
+//! - between raw HTML tags, in an HTML block: [`escape_text`] (between
+//!   tags on a markdown line, like the message header's author span,
+//!   markdown still applies: [`escape_md_inline`]);
 //! - in a double-quoted attribute: [`escape_attr`];
 //! - on one markdown line — a list item, a table cell, link text, a
 //!   heading, a paragraph: [`escape_md_inline`];
 //! - a multi-line plain-text body: [`escape_md_block`];
+//! - text in another markup that must not open markdown's own
+//!   constructs (Slack's mrkdwn): [`escape_md_syntax`];
 //! - markdown another tool built from plain text without escaping it:
 //!   [`escape_html_outside_code`];
 //! - a link destination: [`md_link_dest`];
@@ -20,8 +24,9 @@
 //! Here rather than in `datalib_etl`: that crate sits upstream of ~130
 //! test targets, and only the render side writes markup.
 
-/// Escape text that lands between tags. `&` first, or the escapes
-/// this function just wrote get escaped again.
+/// Escape text that lands between tags. A line break becomes a
+/// character reference: in an HTML block a blank line ends the block and
+/// markdown resumes, so the text must not carry one.
 pub fn escape_text(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -30,7 +35,8 @@ pub fn escape_text(s: &str) -> String {
     out
 }
 
-/// Escape a value going inside a double-quoted attribute.
+/// Escape a value going inside a double-quoted attribute; a line break
+/// becomes a character reference, as in [`escape_text`].
 pub fn escape_attr(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -57,16 +63,55 @@ pub fn escape_md_inline(s: &str) -> String {
 
 /// Multi-line plain text — a note, a description, a text message — as
 /// markdown that reads as typed. Each line is HTML-escaped, and a line
-/// that would open a heading, a fence, a list or a quote, or underline
-/// the line above into a heading, has that marker escaped. Line breaks
-/// are kept as they are. Inline emphasis (`*really*`) is left to render
-/// as emphasis, which is what a person typing it meant; links and
-/// images are escaped, so a sender cannot dress text up as a link.
+/// that would open a heading, a fence, a list, a quote, a table or a code
+/// block, or underline the line above into a heading, has that marker
+/// escaped. Line breaks are kept, as `\n`: markdown reads a lone `\r` as
+/// one too. Inline emphasis (`*really*`) is left to render as emphasis,
+/// which is what a person typing it meant; links and images are escaped,
+/// so a sender cannot dress text up as a link.
 pub fn escape_md_block(s: &str) -> String {
     s.split('\n')
+        .flat_map(|line| line.strip_suffix('\r').unwrap_or(line).split('\r'))
         .map(|line| escape_md_line(line, false))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Text written in another markup — Slack's mrkdwn — with markdown's
+/// own syntax escaped, so only that markup's constructs survive: links
+/// and images (`[`, `]`), table cells (`|`), backslash escapes, and
+/// whatever would open a block at the start of a line, which the first
+/// line is only when `starts_line`. HTML entities, `*`, `_`, `~` and
+/// backticks are the other markup's and left alone.
+pub fn escape_md_syntax(text: &str, starts_line: bool) -> String {
+    let mut out = String::with_capacity(text.len() + 8);
+    for (n, line) in text.split('\n').enumerate() {
+        if n > 0 {
+            out.push('\n');
+        }
+        let at_line_start = n > 0 || starts_line;
+        let body = if at_line_start {
+            line.trim_start()
+        } else {
+            line
+        };
+        push_indent(&mut out, &line[..line.len() - body.len()], body);
+        let marker = block_marker_at(body).filter(|_| at_line_start);
+        let chars: Vec<(usize, char)> = body.char_indices().collect();
+        for (k, &(i, c)) in chars.iter().enumerate() {
+            let next = chars.get(k + 1).map(|&(_, c)| c);
+            let syntax = match c {
+                '[' | ']' | '|' => true,
+                '\\' => next.is_none_or(|n| n.is_ascii_punctuation()),
+                _ => false,
+            };
+            if syntax || Some(i) == marker {
+                out.push('\\');
+            }
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// A URL as a markdown link destination. One that markdown would read
@@ -107,9 +152,13 @@ pub fn md_code_span(s: &str) -> String {
         .max()
         .unwrap_or(0);
     let fence = "`".repeat(longest_run + 1);
-    // A space each side keeps a leading or trailing backtick from
-    // joining the fence; markdown strips one space from each end.
-    if longest_run > 0 {
+    // Markdown strips one space from each end when both ends have one,
+    // so a space added each side keeps a leading or trailing backtick
+    // from joining the fence, and text that starts and ends with a space
+    // keeps both.
+    let spaced =
+        one_line.starts_with(' ') && one_line.ends_with(' ') && !one_line.trim().is_empty();
+    if longest_run > 0 || spaced {
         format!("{fence} {one_line} {fence}")
     } else {
         format!("{fence}{one_line}{fence}")
@@ -237,20 +286,22 @@ fn push_html_escaped(out: &mut String, c: char) {
         '&' => out.push_str("&amp;"),
         '<' => out.push_str("&lt;"),
         '>' => out.push_str("&gt;"),
+        '\n' => out.push_str("&#10;"),
+        '\r' => out.push_str("&#13;"),
         _ => out.push(c),
     }
 }
 
 /// One line of plain text. `all_inline` escapes every inline marker
 /// (for a name or a title, which has no emphasis to keep); otherwise
-/// only the ones that make links, images, code and strikethrough.
+/// only the ones that make links, images, code, tables and strikethrough.
 fn escape_md_line(line: &str, all_inline: bool) -> String {
     let body = line.trim_start();
     let indent = &line[..line.len() - body.len()];
     let block_marker_at = block_marker_at(body);
     let chars: Vec<(usize, char)> = body.char_indices().collect();
     let mut out = String::with_capacity(line.len() + 8);
-    out.push_str(indent);
+    push_indent(&mut out, indent, body);
     for (n, &(i, c)) in chars.iter().enumerate() {
         let prev = n.checked_sub(1).map(|p| chars[p].1);
         let next = chars.get(n + 1).map(|&(_, c)| c);
@@ -261,7 +312,9 @@ fn escape_md_line(line: &str, all_inline: bool) -> String {
             '\\' => next.is_none_or(|n| n.is_ascii_punctuation()),
             // Strikethrough takes two.
             '~' => prev == Some('~') || next == Some('~'),
-            '*' | '|' => all_inline,
+            // A pipe is a table cell in a block as much as on a line.
+            '|' => true,
+            '*' => all_inline,
             // Between two letters or digits an underscore cannot open or
             // close emphasis: `snake_case`, `:robot_face:`.
             '_' => all_inline && !(is_word(prev) && is_word(next)),
@@ -275,6 +328,32 @@ fn escape_md_line(line: &str, all_inline: bool) -> String {
         }
     }
     out
+}
+
+/// Four columns of indent open a code block. Written as a reference, the
+/// first of them is text rather than indent, and shows the same.
+fn push_indent(out: &mut String, indent: &str, body: &str) {
+    match indent.chars().next() {
+        Some(first @ (' ' | '\t')) if !body.is_empty() && indent_columns(indent) >= 4 => {
+            out.push_str(if first == ' ' { "&#32;" } else { "&#9;" });
+            out.push_str(&indent[1..]);
+        }
+        _ => out.push_str(indent),
+    }
+}
+
+/// How far markdown reads a run of spaces and tabs as indenting a line:
+/// a tab reaches the next multiple of four.
+fn indent_columns(indent: &str) -> usize {
+    let mut columns = 0;
+    for c in indent.chars() {
+        match c {
+            ' ' => columns += 1,
+            '\t' => columns += 4 - columns % 4,
+            _ => break,
+        }
+    }
+    columns
 }
 
 fn is_word(c: Option<char>) -> bool {
@@ -293,13 +372,18 @@ fn block_marker_at(body: &str) -> Option<usize> {
             .next()
             .is_none_or(|c| c == ' ' || c == '\t')
     };
-    let only = |mark: char| body.trim_end().chars().all(|c| c == mark || c == ' ');
+    let only = |mark: char| {
+        body.trim_end()
+            .chars()
+            .all(|c| c == mark || c == ' ' || c == '\t')
+    };
     let hashes = body.len() - body.trim_start_matches('#').len();
     let digits = body.bytes().take_while(u8::is_ascii_digit).count();
     match first {
         '#' if hashes <= 6 && ends_marker(hashes) => Some(0),
         '-' | '+' | '*' if ends_marker(1) || only(first) => Some(0),
         '=' if only('=') => Some(0),
+        '_' if only('_') => Some(0),
         '0'..='9'
             if digits <= 9
                 && matches!(body.as_bytes().get(digits), Some(b'.' | b')'))
@@ -424,5 +508,80 @@ mod tests {
     fn a_code_span_outlasts_the_backticks_inside_it() {
         assert_eq!(md_code_span("<id>"), "`<id>`");
         assert_eq!(md_code_span("a`b"), "`` a`b ``");
+        // Markdown strips one space from each end when both have one.
+        assert_eq!(md_code_span(" a "), "`  a  `");
+        assert_eq!(md_code_span("  "), "`  `");
+    }
+
+    /// A blank line ends an HTML block, so text between tags carries
+    /// its line breaks as references (#992).
+    #[test]
+    fn text_between_tags_carries_no_line_break() {
+        assert_eq!(escape_text("a\n\n<b>"), "a&#10;&#10;&lt;b&gt;");
+        assert_eq!(escape_attr("a\r\nb"), "a&#13;&#10;b");
+    }
+
+    /// Each of these opened a block the text did not ask for: markdown
+    /// reads a lone `\r` as a line break, four columns of indent as code,
+    /// `___` as a rule and a `-|-` row as a table's.
+    #[test]
+    fn a_block_opens_nothing_markdown_reads_into_it() {
+        assert_eq!(escape_md_block("a\r- b\r\nc"), "a\n\\- b\nc");
+        assert_eq!(escape_md_block("a\n\n    code"), "a\n\n&#32;   code");
+        assert_eq!(escape_md_block("\tcode"), "&#9;code");
+        assert_eq!(escape_md_block("  not code\n    "), "  not code\n    ");
+        assert_eq!(escape_md_block("___\n_ _ _"), "\\___\n\\_ _ _");
+        assert_eq!(escape_md_block("a|b\n-|-"), "a\\|b\n-\\|-");
+        assert_eq!(escape_md_block("-\t-\t-"), "\\-\t-\t-");
+    }
+
+    /// The grid's Contents cell (`plain_text`) reads an escaped string
+    /// back as it was typed. Strings are drawn from markdown's
+    /// punctuation, less what `plain_text` drops on purpose whatever the
+    /// escaping: anything shaped like a tag, a run of punctuation with no
+    /// word in it (a divider), a bare `(http…)`, and runs of whitespace,
+    /// which it reads as one space. Emphasis is a block's to keep, so a
+    /// block's strings have no `*` or `_`.
+    #[test]
+    fn plain_text_reads_an_escaped_string_as_typed() {
+        const PUNCT: &[char] = &[
+            '[', ']', '(', ')', '!', '#', '-', '+', '=', '|', '\\', '~', '`', '*', '_', ':', '/',
+            '.', '&', ';', '"', '\'', '{', '}', '%', '$', '1',
+        ];
+        let plain = |md: &str| datalib_schema::plain_text::plain_text(md, usize::MAX);
+        let mut seed: u64 = 0x1701_d00d_5eed_cafe;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let mut failures = Vec::new();
+        for _ in 0..5000 {
+            let words: Vec<String> = (0..1 + next() % 4)
+                .map(|_| {
+                    let mut w = String::from(if next() % 2 == 0 { "a" } else { "bm" });
+                    for _ in 0..next() % 6 {
+                        w.push(PUNCT[(next() % PUNCT.len() as u64) as usize]);
+                    }
+                    w
+                })
+                .collect();
+            let typed = words.join(" ");
+            if plain(&escape_md_inline(&typed)) != typed {
+                failures.push(("inline", typed.clone(), escape_md_inline(&typed)));
+            }
+            let block: String = words
+                .join("\n")
+                .chars()
+                .filter(|c| !matches!(c, '*' | '_'))
+                .collect();
+            let squashed = block.split_whitespace().collect::<Vec<_>>().join(" ");
+            if plain(&escape_md_block(&block)) != squashed {
+                failures.push(("block", block.clone(), escape_md_block(&block)));
+            }
+        }
+        failures.truncate(10);
+        assert!(failures.is_empty(), "{failures:#?}");
     }
 }
