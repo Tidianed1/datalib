@@ -150,10 +150,11 @@ few very large pages, which is why the cap is per page.
 
 ## When part of a sync fails
 
-The step fails only when it can do nothing: the first page of search
-results does not come back, the store will not take a write, or every
-page it tried failed (almost always the credential). Anything smaller is
-a `problems` row, and the rest of the run goes on.
+The step fails only when it can do nothing: the credential is refused
+(401), the shared retry guard gives up on the service (every request
+after would give up too), the first page of search results does not come
+back, the store will not take a write, or every page it tried failed.
+Anything smaller is a `problems` row, and the rest of the run goes on.
 
 | what failed | its row | what clears it |
 |---|---|---|
@@ -178,11 +179,21 @@ signed URL lives only in the response that named it. A failed user is
 asked for again at the end of every run. The follow-up cap is left out:
 fetching the page again gets the same body.
 
+**A 404 is a deletion, not a failure.** Notion answers it for a page
+deleted or no longer shared with the credential. The ingest deletes
+nothing (see "Deletions"), so a page the store holds stays as it was;
+what goes is its failure rows and the reasons it was in the retry set,
+and a stub that never fetched goes whole (`RawDb::retire_page`). A body
+that answers 404 is marked current at the page's `last_edited_time`, so
+it is asked for again only once the page is edited; a user that answers
+404 loses its failure, an attachment its failed edge, and comments read
+as none. A configured root that answers 404 is still a `config:` row.
+
 A search cut short holds the resume cursor where it was, so the next run
 reads that window again. A page that failed does not hold it: it is in
 the retry set. A page fetched again only to fail again does not count
-toward "every page failed", or one page deleted upstream would fail every
-steady-state run.
+toward "every page failed", so one page a 5xx keeps failing does not fail
+every steady-state run.
 
 The body is stored last, after the attachments, comments and users: a
 stop part-way through a page leaves its stored body behind its stored

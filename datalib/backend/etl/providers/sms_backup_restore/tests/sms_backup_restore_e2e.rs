@@ -298,7 +298,11 @@ fn a_walk_error_deletes_nothing() -> Result<()> {
     })
 }
 
-async fn fetch_dir(db: &RawDb, input: &std::path::Path, cache: &std::path::Path) -> Result<()> {
+async fn fetch_dir(
+    db: &RawDb,
+    input: &std::path::Path,
+    cache: &std::path::Path,
+) -> Result<ingest::FetchSummary> {
     ingest::fetch(FetchOptions {
         db: db.clone(),
         input_path: input.to_path_buf(),
@@ -306,8 +310,7 @@ async fn fetch_dir(db: &RawDb, input: &std::path::Path, cache: &std::path::Path)
         progress: Progress::noop(),
         control: Default::default(),
     })
-    .await?;
-    Ok(())
+    .await
 }
 
 async fn problems(db: &RawDb) -> Result<Vec<(String, String)>> {
@@ -319,7 +322,8 @@ async fn problems(db: &RawDb) -> Result<Vec<(String, String)>> {
 }
 
 /// A backup file that would not parse was a log line and a count; the
-/// rest of the export landed with nothing naming the file it lacked.
+/// rest of the export landed with nothing naming the file it lacked. Its
+/// row stands, without the file being read again, until it changes.
 #[test]
 fn a_file_that_will_not_parse_is_a_problem_until_it_does() -> Result<()> {
     let tmp = tempfile::tempdir()?;
@@ -344,14 +348,20 @@ fn a_file_that_will_not_parse_is_a_problem_until_it_does() -> Result<()> {
         .build()?;
     rt.block_on(async {
         let db = RawDb::open(&db_path_for(&raw_dir)).await?;
+        let unparsed = vec![(
+            "file:sms_backup_restore/xml:sms-2369040112000.xml".to_string(),
+            "error".to_string(),
+        )];
         fetch_dir(&db, &input, &cache).await?;
+        assert_eq!(problems(&db).await?, unparsed);
+
+        let quiet = fetch_dir(&db, &input, &cache).await?;
         assert_eq!(
-            problems(&db).await?,
-            vec![(
-                "listing:file sms-2369040112000.xml".to_string(),
-                "error".to_string()
-            )]
+            (quiet.files, quiet.parse_errors),
+            (0, 0),
+            "a file that will not parse is not read again until it changes"
         );
+        assert_eq!(problems(&db).await?, unparsed);
 
         fs::copy(fixture_root().join("sms-2369041512000.xml"), &broken)?;
         fetch_dir(&db, &input, &cache).await?;
@@ -404,6 +414,62 @@ fn an_mms_part_that_will_not_decode_is_a_problem_until_it_does() -> Result<()> {
         let gif = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
         fs::write(&path, mms(gif))?;
         fetch_dir(&db, &input, &cache).await?;
+        assert!(problems(&db).await?.is_empty());
+        db.close().await;
+        Ok::<_, anyhow::Error>(())
+    })
+}
+
+/// A run that held deletions back stamped the rewritten file anyway, so
+/// the next run saw nothing rewritten, read only the new file, deleted
+/// nothing, and cleared the held-back row: what left the rewritten file
+/// was never deleted.
+#[test]
+fn deletions_held_back_are_made_once_every_file_reads() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let raw_dir = tmp.path().join("raw");
+    let input = tmp.path().join("input");
+    fs::create_dir_all(&raw_dir)?;
+    fs::create_dir_all(&input)?;
+    let sms = input.join("sms-2369041512000.xml");
+    fs::copy(fixture_root().join("sms-2369041512000.xml"), &sms)?;
+    let cache = tmp.path().join("fpcache.sqlite");
+    let messages = |db: &RawDb| {
+        let pool = db.pool().clone();
+        async move {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM sms_messages")
+                .fetch_one(&pool)
+                .await
+        }
+    };
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?;
+    rt.block_on(async {
+        let db = RawDb::open(&db_path_for(&raw_dir)).await?;
+        fetch_dir(&db, &input, &cache).await?;
+        assert_eq!(messages(&db).await?, 6);
+
+        // One message leaves the backup, and a new file will not parse.
+        let xml = fs::read_to_string(&sms)?;
+        let first = xml.find("<sms ").expect("an <sms> element");
+        let end = first + xml[first..].find("/>").expect("self-closing <sms>") + 2;
+        fs::write(&sms, format!("{}{}", &xml[..first], &xml[end..]))?;
+        let broken = input.join("sms-2369040112000.xml");
+        fs::write(&broken, r#"<smses count="1"><sms address=+1701 /></smses>"#)?;
+        let held = fetch_dir(&db, &input, &cache).await?;
+        assert_eq!(held.removed, 0);
+        assert!(problems(&db)
+            .await?
+            .iter()
+            .any(|(k, _)| k == "listing:removed_records"));
+
+        fs::write(&broken, r#"<smses count="0"></smses>"#)?;
+        let caught_up = fetch_dir(&db, &input, &cache).await?;
+        assert_eq!(caught_up.removed, 1);
+        assert_eq!(messages(&db).await?, 5);
         assert!(problems(&db).await?.is_empty());
         db.close().await;
         Ok::<_, anyhow::Error>(())

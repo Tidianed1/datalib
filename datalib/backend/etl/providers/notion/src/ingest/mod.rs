@@ -154,7 +154,8 @@ fn host_is_notion(url: &str) -> bool {
 ///
 /// A slot whose edge already carries a `blake3` is skipped: signatures
 /// rotate, bytes don't. A failed fetch is an edge with no bytes and a
-/// `problems` row, and never fails the run.
+/// `problems` row; a 404 is a file gone upstream, not a failure. Returns
+/// the slots that are gone.
 async fn fetch_attachments(
     db: &RawDb,
     page_id: &str,
@@ -162,7 +163,8 @@ async fn fetch_attachments(
     signed: &HashMap<String, String>,
     stop: &StopFlag,
     summary: &mut FetchSummary,
-) -> Result<()> {
+) -> Result<HashSet<String>> {
+    let mut gone: HashSet<String> = HashSet::new();
     let mut acc = CasEdgeAccumulator::new();
     for slot in slots {
         if db.blob_exists(slot).await? {
@@ -183,7 +185,15 @@ async fn fetch_attachments(
                 summary.new_blobs += 1;
                 continue;
             }
+            Ok(resp) if matches!(resp.status, 404 | 410) => {
+                gone.insert(slot.clone());
+                continue;
+            }
             Ok(resp) => format!("HTTP {}", resp.status),
+            Err(e @ datalib_etl::http::HttpError::GaveUp { .. }) => {
+                db.flush_attachments(&acc).await?;
+                return Err(anyhow::anyhow!("notion: {e}"));
+            }
             Err(e) => e.to_string(),
         };
         // The transport refuses every request once a stop is asked for;
@@ -191,11 +201,17 @@ async fn fetch_attachments(
         if stop.requested() {
             break;
         }
-        tracing::warn!(slot = %slot, error = %failure, "attachment fetch failed");
         acc.add_failed(page_id, slot, failure);
         summary.failed_blobs += 1;
     }
-    db.flush_attachments(&acc).await
+    db.flush_attachments(&acc).await?;
+    Ok(gone)
+}
+
+/// The run ends here, failed: a refused credential or a retry guard that
+/// gave up would fail every request left.
+fn run_over(e: NotionOfficialError) -> anyhow::Error {
+    anyhow::anyhow!("notion: {e}")
 }
 
 /// Map each slot back to the live signed URL it came from, so the bytes
@@ -253,7 +269,10 @@ fn comment_parent(c: &Value) -> Option<(String, String)> {
 }
 
 #[tracing::instrument(skip(client), fields(page_id, pages, comments))]
-async fn fetch_all_comments(client: &NotionOfficialClient, page_id: &str) -> Result<Vec<Value>> {
+async fn fetch_all_comments(
+    client: &NotionOfficialClient,
+    page_id: &str,
+) -> Result<Vec<Value>, NotionOfficialError> {
     let mut out: Vec<Value> = Vec::new();
     let mut cursor: Option<String> = None;
     loop {
@@ -305,7 +324,7 @@ async fn fill_holes(
     client: &NotionOfficialClient,
     body: &mut markdown::PageBody,
     summary: &mut FetchSummary,
-) -> Holes {
+) -> Result<Holes> {
     let mut holes = Holes::default();
     let todo: Vec<String> = body
         .fetchable_holes()
@@ -313,7 +332,7 @@ async fn fill_holes(
         .take(MAX_HOLE_FOLLOWUPS)
         .collect();
     if todo.is_empty() {
-        return holes;
+        return Ok(holes);
     }
     let total_fetchable = body.fetchable_holes().count();
     if total_fetchable > MAX_HOLE_FOLLOWUPS {
@@ -336,10 +355,13 @@ async fn fill_holes(
                 }
                 summary.hole_followups += 1;
             }
+            Err(e) if e.ends_the_run() => return Err(run_over(e)),
+            // The block went since the body was read.
+            Err(NotionOfficialError::NotFound(_)) => {}
             Err(e) => holes.failed.push((id, e.to_string())),
         }
     }
-    holes
+    Ok(holes)
 }
 
 /// Scope the search resume cursor is stored under. One workspace per
@@ -382,7 +404,9 @@ async fn search_since(
     loop {
         let resp = match client.search(cursor.as_deref(), false).await {
             Ok(resp) => resp,
-            Err(e) if cursor.is_none() => return Err(anyhow::anyhow!("notion search: {e}")),
+            Err(e) if cursor.is_none() || e.ends_the_run() => {
+                return Err(anyhow::anyhow!("notion search: {e}"))
+            }
             Err(e) => {
                 return Ok(SearchPass {
                     ids,
@@ -572,6 +596,7 @@ async fn resolve_people_and_anchors(
                 summary.anchors_resolved += 1;
                 state.anchors.insert(bid);
             }
+            Err(e) if e.ends_the_run() => return Err(run_over(e)),
             Err(e) => {
                 // The commented block can be gone upstream — comments
                 // carry `original_content_deleted` for exactly that.
@@ -602,10 +627,9 @@ async fn resolve_user(
             summary.users_resolved += 1;
         }
         Err(_) if stop.requested() => return Ok(()),
-        Err(e) => {
-            tracing::warn!(user = %id, error = %e, "user fetch failed");
-            db.record_fetch_error("users", id, &e.to_string()).await?;
-        }
+        Err(e) if e.ends_the_run() => return Err(run_over(e)),
+        Err(NotionOfficialError::NotFound(_)) => db.forget_user(id).await?,
+        Err(e) => db.record_fetch_error("users", id, &e.to_string()).await?,
     }
     state.users.insert(id.to_string());
     Ok(())
@@ -654,10 +678,15 @@ async fn mirror_page(
     let page = match client.get_page(pid).await {
         Ok(p) => p,
         Err(_) if stop.requested() => return Ok(Vec::new()),
+        Err(e) if e.ends_the_run() => return Err(run_over(e)),
+        // Deleted, or no longer shared: gone, not failed.
+        Err(e @ NotionOfficialError::NotFound(_)) => {
+            db.retire_page(pid).await?;
+            state.unreadable.insert(pid.to_string(), e);
+            return Ok(Vec::new());
+        }
         Err(e) => {
-            let msg = format!("{e}");
-            tracing::warn!(page = pid, error = %msg, "page fetch failed; recording");
-            db.record_page_error(pid, &msg).await?;
+            db.record_page_error(pid, &e.to_string()).await?;
             if state.retry.contains(pid) {
                 summary.failed_retries += 1;
             } else {
@@ -734,7 +763,7 @@ async fn mirror_page(
         Ok(resp) => {
             let mut body = markdown::parse(&resp);
             let holes = if body.truncated {
-                fill_holes(client, &mut body, summary).await
+                fill_holes(client, &mut body, summary).await?
             } else {
                 Holes::default()
             };
@@ -760,14 +789,17 @@ async fn mirror_page(
                 .iter()
                 .map(|u| u.block_id.as_str())
                 .collect();
-            if opts.attachments && !slots.is_empty() {
-                fetch_attachments(db, pid, &slots, &signed, stop, summary).await?;
-            }
+            let gone = if opts.attachments && !slots.is_empty() {
+                fetch_attachments(db, pid, &slots, &signed, stop, summary).await?
+            } else {
+                HashSet::new()
+            };
             // A body missing a subtree may be missing a link too.
-            if holes.followed_all() {
-                db.forget_failed_attachments(pid, &slots.iter().cloned().collect())
-                    .await?;
-            }
+            let complete = holes.followed_all();
+            db.forget_failed_attachments(pid, |slot| {
+                !gone.contains(slot) && (!complete || slots.iter().any(|s| s == slot))
+            })
+            .await?;
             fetched_body = Some((
                 db::PageMarkdownUpsert {
                     id: pid.to_string(),
@@ -782,8 +814,12 @@ async fn mirror_page(
             children = body.child_pages;
         }
         Err(_) if stop.requested() => return Ok(Vec::new()),
+        Err(e) if e.ends_the_run() => return Err(run_over(e)),
+        // Asked for again only once the page is edited.
+        Err(NotionOfficialError::NotFound(_)) => {
+            db.settle_body(pid, last_edited.as_deref()).await?
+        }
         Err(e) => {
-            tracing::warn!(page = pid, error = %e, "markdown fetch failed; page object kept");
             db.record_fetch_error("page_markdown", pid, &e.to_string())
                 .await?;
             summary.failed_bodies += 1;
@@ -796,6 +832,8 @@ async fn mirror_page(
         match fetch_all_comments(client, pid).await {
             Ok(c) => comments = c,
             Err(_) if stop.requested() => return Ok(Vec::new()),
+            Err(e) if e.ends_the_run() => return Err(run_over(e)),
+            Err(NotionOfficialError::NotFound(_)) => {}
             // The page itself is stored, so this is a warning on it, and
             // it keeps the page among the ones fetched again.
             Err(e) => db.record_page_error(pid, &format!("comments: {e}")).await?,
@@ -1180,7 +1218,9 @@ fn roots_upstream_lacks(
                 format!("Notion has no page by that id that this credential can see: {d}"),
             )),
             NotionOfficialError::Forbidden(d) => Some(DownloadProblem::forbidden("roots", raw, d)),
-            NotionOfficialError::Permanent(_) => None,
+            NotionOfficialError::Permanent(_)
+            | NotionOfficialError::Unauthorized(_)
+            | NotionOfficialError::GaveUp(_) => None,
         })
         .collect()
 }

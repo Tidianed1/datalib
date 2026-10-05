@@ -455,6 +455,15 @@ fn chat_item(
 }
 
 async fn fetch_once(snapshot_root: &Path, store: &Path, cache: &Path) -> Result<()> {
+    fetch_with(snapshot_root, store, cache, DownloadControl::default()).await
+}
+
+async fn fetch_with(
+    snapshot_root: &Path,
+    store: &Path,
+    cache: &Path,
+    control: DownloadControl,
+) -> Result<()> {
     unsafe {
         std::env::set_var("SIGNAL_BACKUP_PASSPHRASE", FIXTURE_AEP);
     }
@@ -466,7 +475,7 @@ async fn fetch_once(snapshot_root: &Path, store: &Path, cache: &Path) -> Result<
         files_root: None,
         aep_env_var: None,
         progress: Progress::noop(),
-        control: DownloadControl::default(),
+        control,
     })
     .await;
     datalib_etl::store_handle::RawStoreHandle::commit_all(&db, "test download").await?;
@@ -569,5 +578,112 @@ async fn what_a_backup_does_not_hold_is_a_problem() -> Result<()> {
     write_frames(&snapshots, "signal-backup-2364-04-10-12-00-00", &crew)?;
     fetch_once(&snapshots, &store, &cache).await?;
     assert_eq!(problems(&store).await?, expected[..1].to_vec());
+    Ok(())
+}
+
+/// A newer backup that no longer locates an attachment wrote its edge
+/// again with no bytes and a ref of its own, so the bytes the older
+/// backup decrypted were no longer reachable from the message.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_newer_backup_without_the_bytes_keeps_the_older_copy() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let snapshots = tmp.path().join("snapshots");
+    let store = tmp.path().join("raw").join("signal");
+    let cache = tmp.path().join("fingerprints.sqlite");
+    let (media_name, plaintext_hash) = write_test_attachment(&snapshots.join("files"))?;
+
+    let message = |att: backup::MessageAttachment| {
+        let mut frame = chat_item(100, 1, 12442118940000, "Make it so.", true);
+        if let Some(backup::frame::Item::ChatItem(ci)) = frame.item.as_mut() {
+            if let Some(backup::chat_item::Item::StandardMessage(sm)) = ci.item.as_mut() {
+                sm.attachments.push(att);
+            }
+        }
+        frame
+    };
+    let crew = [
+        recipient_self(1, "Jean-Luc Picard"),
+        recipient_contact(2, "Will Riker", 17015550101),
+        chat_frame(100, 2),
+    ];
+    let mut with_bytes = crew.to_vec();
+    with_bytes.push(message(png_attachment(&plaintext_hash)));
+    write_frames(&snapshots, "signal-backup-2364-04-09-12-00-00", &with_bytes)?;
+    fetch_once(&snapshots, &store, &cache).await?;
+
+    let mut without = crew.to_vec();
+    without.push(message(backup::MessageAttachment {
+        pointer: Some(backup::FilePointer {
+            file_name: Some("delta-shield.png".into()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }));
+    write_frames(&snapshots, "signal-backup-2364-04-10-12-00-00", &without)?;
+    fetch_once(&snapshots, &store, &cache).await?;
+
+    let item = ingest::schema_raw::chat_item_id_recipe("100", "1", 12442118940000);
+    let edge = format!("{item}#0");
+    let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(&store)).await?;
+    let (ref_id, blake3): (String, Option<String>) =
+        sqlx::query_as("SELECT ref_id, blake3 FROM chat_item_attachments WHERE id = ?")
+            .bind(&edge)
+            .fetch_one(db.pool())
+            .await?;
+    db.close().await;
+    assert_eq!(ref_id, media_name);
+    assert_eq!(
+        blake3.as_deref(),
+        Some(datalib_etl::blob_cas::blake3_hex(TINY_PNG).as_str())
+    );
+    assert_eq!(
+        problems(&store).await?,
+        vec![(
+            format!("chat_item_attachments:{edge}"),
+            "warning".to_string()
+        )]
+    );
+    Ok(())
+}
+
+/// A stopped run still read every frame and stamped the snapshot, but
+/// skipped the report, so a frame that did not decode was never said:
+/// the next run takes the already-ingested shortcut.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stopped_run_still_reports_what_did_not_decode() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let snapshots = tmp.path().join("snapshots");
+    let store = tmp.path().join("raw").join("signal");
+    let cache = tmp.path().join("fingerprints.sqlite");
+    let mut too_deep = backup::ChatItem {
+        chat_id: 100,
+        author_id: 2,
+        date_sent: 12442118460000,
+        ..Default::default()
+    };
+    for _ in 0..120 {
+        too_deep = backup::ChatItem {
+            revisions: vec![too_deep],
+            ..Default::default()
+        };
+    }
+    let frames = [
+        recipient_self(1, "Jean-Luc Picard"),
+        recipient_contact(2, "Will Riker", 17015550101),
+        chat_frame(100, 2),
+        backup::Frame {
+            item: Some(backup::frame::Item::ChatItem(too_deep)),
+        },
+    ];
+    write_frames(&snapshots, "signal-backup-2364-04-09-12-00-00", &frames)?;
+
+    let control = DownloadControl::default();
+    control.stop.request();
+    fetch_with(&snapshots, &store, &cache, control).await?;
+    fetch_once(&snapshots, &store, &cache).await?;
+    assert_eq!(
+        problems(&store).await?,
+        vec![("phase:frames".to_string(), "error".to_string())]
+    );
     Ok(())
 }

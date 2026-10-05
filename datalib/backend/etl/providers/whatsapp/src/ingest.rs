@@ -359,26 +359,29 @@ async fn mirror_media_files(
         .into_iter()
         .collect();
 
-    let mut unreadable: Vec<RecordProblem> = Vec::new();
+    // `(hash, problem)`: a copy of the same bytes elsewhere may still read.
+    let mut unreadable: Vec<(String, RecordProblem)> = Vec::new();
     let mut staged: HashSet<String> = HashSet::new();
     let mut pending: Vec<(String, Vec<u8>, Option<String>)> = Vec::new();
     let mut pending_bytes: u64 = 0;
     for f in &scan.files {
         let hex = fsscan::hex(&f.blake3);
-        if known.contains(&hex) || !staged.insert(hex.clone()) {
+        if known.contains(&hex) || staged.contains(&hex) {
             continue;
         }
         let bytes = match std::fs::read(&f.path) {
             Ok(b) => b,
             Err(e) => {
-                unreadable.push(RecordProblem::new(
+                let problem = RecordProblem::new(
                     WA_MEDIA_FILES,
                     &format!("{MEDIA_DIR}/{}", f.rel),
                     e.to_string(),
-                ));
+                );
+                unreadable.push((hex, problem));
                 continue;
             }
         };
+        staged.insert(hex.clone());
         pending_bytes += bytes.len() as u64;
         pending.push((hex, bytes, mime_from_ext(&f.path)));
         if pending_bytes >= PUT_BATCH_BYTES {
@@ -391,7 +394,11 @@ async fn mirror_media_files(
 
     Ok(MediaProblems {
         walk: scan.walk_problems_as("media"),
-        unreadable,
+        unreadable: unreadable
+            .into_iter()
+            .filter(|(hex, _)| !staged.contains(hex))
+            .map(|(_, problem)| problem)
+            .collect(),
     })
 }
 
@@ -630,6 +637,60 @@ mod tests {
         .await
         .expect("ingest beside msgstore");
         assert!(problems(&db).await.is_empty());
+        db.close().await;
+    }
+
+    /// One unreadable copy of a file kept a readable copy of the same bytes
+    /// from being read, so the bytes never reached the CAS.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_unreadable_copy_does_not_block_a_readable_one() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let backup_dir = tmp.path().join("WhatsApp");
+        write_media(&backup_dir, "WhatsApp Images/IMG-0001.jpg", b"tribble");
+        write_media(&backup_dir, "WhatsApp Images/IMG-0002.jpg", b"tribble");
+        let cache = FingerprintCache::open(&tmp.path().join("fp.sqlite"))
+            .await
+            .expect("open fingerprint cache");
+        // A first store, so the host cache vouches for both hashes.
+        let first = RawDb::open(&tmp.path().join("first").join("wa.doltlite_db"))
+            .await
+            .expect("open raw store");
+        mirror_beside_msgstore(
+            &backup_dir,
+            &[0u8; 32],
+            &first,
+            &cache,
+            &mut Default::default(),
+        )
+        .await
+        .expect("ingest beside msgstore");
+        first.close().await;
+
+        let db = RawDb::open(&tmp.path().join("wa.doltlite_db"))
+            .await
+            .expect("open raw store");
+        let file = backup_dir
+            .join(MEDIA_DIR)
+            .join("WhatsApp Images/IMG-0001.jpg");
+        if set_mode(&file, 0o000) {
+            mirror_beside_msgstore(
+                &backup_dir,
+                &[0u8; 32],
+                &db,
+                &cache,
+                &mut Default::default(),
+            )
+            .await
+            .expect("ingest beside msgstore");
+            assert!(problems(&db).await.is_empty());
+            let stored: i64 = sqlx::query_scalar("SELECT count(*) FROM cas_objects")
+                .fetch_one(db.cas().pool())
+                .await
+                .expect("count cas");
+            assert_eq!(stored, 1);
+        }
+        set_mode(&file, 0o644);
         db.close().await;
     }
 

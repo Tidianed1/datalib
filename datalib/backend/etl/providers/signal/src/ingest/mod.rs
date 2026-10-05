@@ -13,7 +13,7 @@ use datalib_etl::progress::Progress;
 use datalib_signal_backup::{backup, decrypt_attachment, local_media_name, Snapshot};
 use serde::Serialize;
 use sqlx::Row;
-use tracing::{info, warn};
+use tracing::info;
 
 pub use db::{db_path_for, RawDb};
 pub use schema_raw::{AccountRow, ChatItemRow, ChatRow, RecipientRow};
@@ -63,9 +63,8 @@ pub struct FetchSummary {
     /// short-circuited without touching disk.
     pub blobs_skipped: usize,
     /// Attachments we couldn't decrypt/read (file missing, MAC fail,
-    /// LocatorInfo without a local key, …). Surfaces as warn-level
-    /// log lines; details land on
-    /// `chat_item_attachments_bookkeeping.last_error`.
+    /// LocatorInfo without a local key, …). Each is a `problems` row on
+    /// its `chat_item_attachments` edge.
     pub blob_errors: usize,
     pub snapshot: String,
     /// Blake3 hex of the snapshot (see `schema_raw::SNAPSHOT_BLAKE3_RECIPE_DOC`).
@@ -202,7 +201,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         let frame = match frame {
             Ok(f) => f,
             Err(e) => {
-                warn!(event = "signal_frame_decode_error", error = %e, "a backup frame did not decode");
                 undecoded.push(e.to_string());
                 continue;
             }
@@ -310,7 +308,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     // Once per snapshot read, never on the already-ingested skip above:
     // the next snapshot is read whole, so its report replaces this one.
-    if !opts.control.stop.requested() {
+    // Even on a stopped run: the walk does not stop, so it read every
+    // frame, and the snapshot is stamped below and never read again.
+    {
         let problems: Vec<RunProblem> = undecoded
             .first()
             .map(|first| {
@@ -450,13 +450,6 @@ fn ingest_attachment(
     let enc = match std::fs::read(&enc_path) {
         Ok(b) => b,
         Err(e) => {
-            warn!(
-                event = "signal_attachment_missing",
-                media_name = %media_name,
-                path = %enc_path.display(),
-                error = %e,
-                "an attachment the backup names is not there"
-            );
             pending.rows.push(schema_raw::ChatItemAttachmentRow {
                 id: attachment_id.clone(),
                 chat_item_id: chat_item_pk.to_string(),
@@ -475,12 +468,6 @@ fn ingest_attachment(
     let plaintext = match decrypt_attachment(&enc, &local_key) {
         Ok(p) => p,
         Err(e) => {
-            warn!(
-                event = "signal_attachment_decrypt_failed",
-                media_name = %media_name,
-                error = %e,
-                "an attachment could not be decrypted"
-            );
             pending.rows.push(schema_raw::ChatItemAttachmentRow {
                 id: attachment_id.clone(),
                 chat_item_id: chat_item_pk.to_string(),
@@ -549,7 +536,7 @@ async fn flush_attachments(db: &RawDb, pending: PendingAttachments) -> Result<()
         db.pool(),
         db.cas(),
         &cas_inserts,
-        &pending.rows,
+        pending.rows,
         &pending.errors,
     )
     .await

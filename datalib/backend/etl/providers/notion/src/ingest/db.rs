@@ -493,13 +493,14 @@ impl RawDb {
         .await
     }
 
-    /// Drop the failed edges of `page_id` whose slot its body no longer
-    /// links: nothing will fetch them again, so their rows would stand
-    /// for good and keep the page in the retry set.
+    /// Drop the failed edges of `page_id` whose slot `keep` turns down:
+    /// one its body no longer links, or one upstream says is gone. Nothing
+    /// will fetch them again, so their rows would stand for good and keep
+    /// the page in the retry set.
     pub async fn forget_failed_attachments(
         &self,
         page_id: &str,
-        slots: &HashSet<String>,
+        keep_slot: impl Fn(&str) -> bool,
     ) -> Result<()> {
         let rows = sqlx::query(
             "SELECT a.id, a.ref_id, b.last_error IS NOT NULL AS failed \
@@ -517,7 +518,7 @@ impl RawDb {
             let id: String = r.try_get("id")?;
             let ref_id: String = r.try_get("ref_id")?;
             let failed: bool = r.try_get("failed")?;
-            if failed && !slots.contains(&ref_id) {
+            if failed && !keep_slot(&ref_id) {
                 gone = true;
             } else {
                 keep.insert(id);
@@ -532,6 +533,95 @@ impl RawDb {
             )
             .await?;
         }
+        Ok(())
+    }
+
+    /// A page Notion answered 404 for: deleted, or no longer shared with
+    /// this credential. The ingest deletes nothing, so a page the store
+    /// holds stays as it was; what goes is every failure that would have
+    /// it fetched again, and a stub that never fetched. Its body is
+    /// marked current, so a body left behind by an earlier run does not
+    /// keep it in [`Self::pages_to_refetch`] either.
+    pub async fn retire_page(&self, page_id: &str) -> Result<()> {
+        let mut tx = self.pool().begin().await.context("begin retire page tx")?;
+        let stub: bool = sqlx::query_scalar("SELECT payload IS NULL FROM pages WHERE id = ?")
+            .bind(page_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .context("probe a retired page")?
+            .unwrap_or(false);
+        if stub {
+            for sql in [
+                "DELETE FROM pages WHERE id = ?",
+                "DELETE FROM pages_bookkeeping WHERE id = ?",
+            ] {
+                sqlx::query(sql)
+                    .bind(page_id)
+                    .execute(&mut *tx)
+                    .await
+                    .context("drop a page stub")?;
+            }
+        }
+        clear_failure(&mut tx, "pages", page_id).await?;
+        sqlx::query(
+            "INSERT INTO page_markdown (id, source_last_edited_time) \
+             SELECT id, last_edited_time FROM pages WHERE id = ? \
+             ON CONFLICT(id) DO UPDATE SET \
+                source_last_edited_time = excluded.source_last_edited_time",
+        )
+        .bind(page_id)
+        .execute(&mut *tx)
+        .await
+        .context("mark a retired page's body current")?;
+        clear_failure(&mut tx, "page_markdown", page_id).await?;
+        tx.commit().await.context("commit retire page tx")?;
+        self.forget_failed_attachments(page_id, |_| false).await
+    }
+
+    /// A body Notion answered 404 for, though the page fetched: marked
+    /// current at `edited` with whatever body is stored, so it is asked
+    /// for again only once the page is edited.
+    pub async fn settle_body(&self, page_id: &str, edited: Option<&str>) -> Result<()> {
+        let mut tx = self.pool().begin().await.context("begin settle body tx")?;
+        sqlx::query(
+            "INSERT INTO page_markdown (id, source_last_edited_time) VALUES (?, ?) \
+             ON CONFLICT(id) DO UPDATE SET \
+                source_last_edited_time = excluded.source_last_edited_time",
+        )
+        .bind(page_id)
+        .bind(edited)
+        .execute(&mut *tx)
+        .await
+        .context("mark a body current")?;
+        clear_failure(&mut tx, "page_markdown", page_id).await?;
+        tx.commit().await.context("commit settle body tx")?;
+        Ok(())
+    }
+
+    /// A user Notion answered 404 for. A stub that never fetched goes; a
+    /// user the store holds stays, with its failure cleared.
+    pub async fn forget_user(&self, user_id: &str) -> Result<()> {
+        let mut tx = self.pool().begin().await.context("begin forget user tx")?;
+        let stub: bool = sqlx::query_scalar("SELECT payload IS NULL FROM users WHERE id = ?")
+            .bind(user_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .context("probe a gone user")?
+            .unwrap_or(false);
+        if stub {
+            for sql in [
+                "DELETE FROM users WHERE id = ?",
+                "DELETE FROM users_bookkeeping WHERE id = ?",
+            ] {
+                sqlx::query(sql)
+                    .bind(user_id)
+                    .execute(&mut *tx)
+                    .await
+                    .context("drop a user stub")?;
+            }
+        }
+        clear_failure(&mut tx, "users", user_id).await?;
+        tx.commit().await.context("commit forget user tx")?;
         Ok(())
     }
 
@@ -609,6 +699,31 @@ impl RawDb {
     pub async fn failed_user_ids(&self) -> Result<Vec<String>> {
         dr::failed_ids(self.pool(), "users").await
     }
+}
+
+/// `table:id` is no longer a failure: its sidecar's error and its fetch
+/// problem go, and nothing else about the row changes.
+async fn clear_failure(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    table: &'static str,
+    id: &str,
+) -> Result<()> {
+    // Audited: `table` is a `&'static str` at every callsite; `id` is bound.
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "UPDATE {table}_bookkeeping SET last_error = NULL WHERE id = ?"
+    )))
+    .bind(id)
+    .execute(&mut **tx)
+    .await
+    .with_context(|| format!("clear the failure of {table}:{id}"))?;
+    sqlx::query("DELETE FROM problems WHERE scope_kind = ? AND scope_key = ? AND stage = ?")
+        .bind(datalib_problems::ScopeKind::Entity.as_str())
+        .bind(format!("{table}:{id}"))
+        .bind(datalib_problems::Stage::Fetch.as_str())
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("clear the problem of {table}:{id}"))?;
+    Ok(())
 }
 
 /// One `notion_attachments` row as render reads it.
@@ -751,7 +866,7 @@ mod tests {
         db.flush_attachments(&acc).await.unwrap();
 
         let still_linked: HashSet<String> = ["https://files.notion.so/b.png".to_string()].into();
-        db.forget_failed_attachments(page, &still_linked)
+        db.forget_failed_attachments(page, |slot| still_linked.contains(slot))
             .await
             .unwrap();
         assert!(fetch_problems(&db).await.is_empty());

@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use datalib_etl::http::{HttpRequest, HttpResponse, HttpService, PLAYBACK_ENV};
+use datalib_etl::http::{fixture_key, HttpRequest, HttpResponse, HttpService, PLAYBACK_ENV};
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl::synthesize::{json_response, write_fixture};
 use datalib_etl_notion::ingest::official::{BASE, PAGE_SIZE};
@@ -263,28 +263,151 @@ async fn a_root_notion_does_not_have_is_a_config_problem() {
     let d = tempdir().unwrap();
     let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
     serve_page(&tape, BRIDGE, EDITED, "");
-    let missing = HttpResponse {
-        status: 404,
-        body: br#"{"object":"error","status":404,"code":"object_not_found"}"#.to_vec(),
-        ..json_response(&json!({}))
-    };
-    write_fixture(&tape, &get(&format!("{BASE}/pages/{SICKBAY}")), &missing).unwrap();
+    serve_status(&tape, &format!("{BASE}/pages/{SICKBAY}"), 404);
 
     run(&tape, &store, &[BRIDGE, SICKBAY]).await.unwrap();
     assert_eq!(
         problems(&store).await,
-        vec![
-            row(&format!("config:roots:{SICKBAY}"), "warning"),
-            row(&format!("pages:{SICKBAY}"), "error"),
-        ]
+        vec![row(&format!("config:roots:{SICKBAY}"), "warning")],
+        "a page Notion does not have is gone, not failed"
     );
 
     run(&tape, &store, &[BRIDGE]).await.unwrap();
+    assert!(problems(&store).await.is_empty());
+}
+
+fn serve_status(tape: &Path, url: &str, status: u16) {
+    let resp = HttpResponse {
+        status,
+        body: format!(r#"{{"object":"error","status":{status}}}"#).into_bytes(),
+        ..json_response(&json!({}))
+    };
+    write_fixture(tape, &get(url), &resp).unwrap();
+}
+
+fn unserve(tape: &Path, url: &str) {
+    std::fs::remove_file(tape.join("notion").join(fixture_key(&get(url)))).unwrap();
+}
+
+async fn pages_to_refetch(store: &Path) -> Vec<String> {
+    let db = RawDb::open(store).await.unwrap();
+    let mut ids: Vec<String> = db
+        .pages_to_refetch(true)
+        .await
+        .unwrap()
+        .into_iter()
+        .collect();
+    db.close().await;
+    ids.sort();
+    ids
+}
+
+/// A page that failed and was then deleted upstream answered 404 to every
+/// later run's retry, and kept its `pages:` row for good.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_page_gone_upstream_is_retired_not_retried() {
+    let d = tempdir().unwrap();
+    let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
+    let earlier = "2026-08-01T00:00:00.000Z";
+    serve_page(&tape, BRIDGE, EDITED, "");
+    serve_search(
+        &tape,
+        None,
+        json!([page(BRIDGE, EDITED), page(SICKBAY, earlier)]),
+        None,
+    );
+    run(&tape, &store, &[]).await.unwrap();
     assert_eq!(
         problems(&store).await,
-        vec![row(&format!("pages:{SICKBAY}"), "error")],
-        "the config row goes with the entry; the page's own row stands until it fetches"
+        vec![row(&format!("pages:{SICKBAY}"), "error")]
     );
+
+    let sickbay = format!("{BASE}/pages/{SICKBAY}");
+    serve_status(&tape, &sickbay, 404);
+    serve_search(&tape, None, json!([page(BRIDGE, EDITED)]), None);
+    run(&tape, &store, &[]).await.unwrap();
+    assert!(problems(&store).await.is_empty());
+    assert!(pages_to_refetch(&store).await.is_empty());
+
+    // Not asked for again: a request now would miss the tape and fail.
+    unserve(&tape, &sickbay);
+    run(&tape, &store, &[]).await.unwrap();
+    assert!(problems(&store).await.is_empty());
+}
+
+/// A stored page whose body never comes — Notion answers 404 for the
+/// body, or the page is deleted while its body is behind — was fetched
+/// again every run, its body forever older than its object.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_body_that_will_not_come_is_not_fetched_every_run() {
+    let d = tempdir().unwrap();
+    let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
+    serve_object(&tape, BRIDGE, EDITED);
+    serve_comments(&tape, BRIDGE);
+    serve_status(&tape, &format!("{BASE}/pages/{BRIDGE}/markdown"), 404);
+    serve_object(&tape, SICKBAY, EDITED);
+    serve_comments(&tape, SICKBAY);
+
+    run(&tape, &store, &[BRIDGE, SICKBAY]).await.unwrap();
+    assert_eq!(
+        problems(&store).await,
+        vec![row(&format!("page_markdown:{SICKBAY}"), "error")],
+        "a body that answers 404 is not a failure; one that did not answer is"
+    );
+    assert_eq!(pages_to_refetch(&store).await, vec![SICKBAY.to_string()]);
+
+    serve_status(&tape, &format!("{BASE}/pages/{SICKBAY}"), 404);
+    run(&tape, &store, &[BRIDGE, SICKBAY]).await.unwrap();
+    assert_eq!(
+        problems(&store).await,
+        vec![row(&format!("config:roots:{SICKBAY}"), "warning")]
+    );
+    assert!(pages_to_refetch(&store).await.is_empty());
+    let db = RawDb::open(&store).await.unwrap();
+    assert_eq!(
+        db.load_pages().await.unwrap().len(),
+        2,
+        "the ingest deletes nothing"
+    );
+    db.close().await;
+}
+
+/// Once the retry guard gave up, every page left failed one request at a
+/// time and each became a row, instead of the run ending.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_retry_guard_that_gives_up_ends_the_run() {
+    let d = tempdir().unwrap();
+    let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
+    serve_page(&tape, BRIDGE, EDITED, "");
+    serve_status(&tape, &format!("{BASE}/pages/{SICKBAY}"), 503);
+    serve_status(&tape, &format!("{BASE}/pages/{HOLODECK}"), 503);
+    let tick = std::time::Duration::from_millis(1);
+    let guard = datalib_etl::retry::RetryGuard::new(
+        std::time::Duration::from_secs(3600),
+        1,
+        tick,
+        tick,
+        datalib_etl::stop::StopFlag::default(),
+    );
+
+    let err = datalib_etl::retry::scope(guard, run(&tape, &store, &[BRIDGE, SICKBAY, HOLODECK]))
+        .await
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("gave up"), "{err:#}");
+    assert!(problems(&store).await.is_empty());
+}
+
+/// A refused credential is the whole run's failure, not one row per page.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refused_credential_fails_the_run() {
+    let d = tempdir().unwrap();
+    let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
+    serve_page(&tape, BRIDGE, EDITED, "");
+    serve_status(&tape, &format!("{BASE}/pages/{SICKBAY}"), 401);
+
+    let err = run(&tape, &store, &[BRIDGE, SICKBAY]).await.unwrap_err();
+    assert!(format!("{err:#}").contains("401"), "{err:#}");
+    assert!(problems(&store).await.is_empty());
 }
 
 /// A search that failed past its first page failed the whole step, and

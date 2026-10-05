@@ -8,7 +8,7 @@ use std::process::Stdio;
 use anyhow::{Context, Result};
 use serde_json::Value;
 use tokio::process::Command;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use super::db::{BeeperMediaAttachmentRow, EventRow, RawDb, RoomRow, UserRow};
 use super::FetchSummary;
@@ -644,13 +644,6 @@ async fn ingest_attachment(
         // Not cached by the desktop app, most often: a later run with the
         // file present fills the edge in and clears its row.
         Err(e) => {
-            warn!(
-                event = "beeper_attachment_read_failed",
-                event_uuid = %owning_event_uuid,
-                path = %path.display(),
-                error = %e,
-                "an attachment file could not be read"
-            );
             media.acc.add_failed(
                 owning_event_uuid,
                 &blob_id,
