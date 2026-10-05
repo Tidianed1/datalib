@@ -119,6 +119,7 @@ pub fn classify(text: &str, gateway: bool) -> IssueKind {
     if has(&[
         "No credentials found for",
         "No credentials stored for account",
+        "has no credentials stored for account",
         "No service matches URL",
         "Unknown service:",
     ]) {
@@ -248,6 +249,10 @@ mod tests {
         (
             "Error: Failed to reach latchkey gateway at http://127.0.0.1:1989/latchkey: fetch failed",
             IssueKind::GatewayUnreachable,
+        ),
+        (
+            "Error: Service 'slack' has no credentials stored for account 'picard'. No accounts are stored for 'slack' yet.",
+            IssueKind::NoCredential,
         ),
         (
             "Error: Credentials for google-gmail are expired.\nRun 'latchkey auth browser google-gmail' first.",

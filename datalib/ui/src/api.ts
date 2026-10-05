@@ -1570,7 +1570,12 @@ export type LatchkeyService = {
   /// Where signing in will install the latchkey plugin that adds this
   /// service, when latchkey lacks it and datalib ships one.
   installs_plugin: string | null;
+  /// Who names the account a browser login adds.
+  account_naming: AccountNaming;
 };
+
+/// Mirrors `AccountNaming` in datalib/backend/http/src/connect.rs.
+export type AccountNaming = "service" | "chosen";
 
 /// How to teach latchkey a service it has never heard of, so that a
 /// browser login exists for it. Mirrors `ServiceRegistration` in

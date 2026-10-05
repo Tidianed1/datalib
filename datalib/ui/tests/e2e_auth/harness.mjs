@@ -222,11 +222,16 @@ function hostEnv() {
   return env;
 }
 
-function runLatchkey(env, args) {
+function tryLatchkey(env, args) {
   const out = spawnSync(realNode(), [latchkeyCli(), ...args], {
     env: { ...hostEnv(), ...env },
     encoding: "utf8",
   });
+  return { status: out.status, stdout: out.stdout, stderr: out.stderr };
+}
+
+function runLatchkey(env, args) {
+  const out = tryLatchkey(env, args);
   if (out.status !== 0) {
     throw new Error(`latchkey ${args.join(" ")} exited ${out.status}: ${out.stderr}`);
   }
@@ -381,6 +386,8 @@ export async function startWorld(internet, options) {
     /// Run the real latchkey CLI against this world's store, the way a
     /// person sets one up in a terminal before ever opening the app.
     latchkey: (...args) => runLatchkey(storeEnv(store, key), args),
+    /// The same, for a run that is expected to fail: its exit status and output.
+    latchkeyTry: (...args) => tryLatchkey(storeEnv(store, key), args),
     /// Where latchkey keeps its plugins in this world.
     pluginsDir: path.join(store, "plugins"),
     /// Write a file under the world's directory; returns its path.

@@ -30,6 +30,7 @@ const SET_ONLY = {
   cli: "/opt/datalib/bin/latchkey",
   gateway: null,
   error: null,
+  account_naming: "chosen",
 };
 
 /// The same service registered with a cookie-capture login, which is
