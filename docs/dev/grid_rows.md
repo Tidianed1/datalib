@@ -142,8 +142,12 @@ rather than an error.
 On an existing root, a render store and the grid index change shape only
 when the step that writes them runs, and the loop runs a step only when
 it is stale. Step 5 is what makes them stale: each store's shape is in
-its writer's fingerprint, so the next sync re-runs every render step and
-the grid index once, whether or not anything new came in upstream. The
+its writer's fingerprint. The next sync that reaches the grid index —
+whichever source it was for — pulls in every render step whose store is
+in the old shape, runs it before the index, and then runs the index,
+whether or not anything new came in upstream
+([dag README](../../datalib/backend/dag/README.md) § "What the loop
+runs, and what makes a step stale"). The
 render step then sees its own DDL hash moved (it is one of the render
 params, `_store_schema`) and re-renders every document into the new
 shape, and the grid index rebuilds itself from the stores.
