@@ -1,6 +1,6 @@
-//! The Google Calendar download on fake TNG data, in the shapes Google's
-//! API reference gives for `singleEvents=false` — not yet checked
-//! against a live account (see `INGEST.md`).
+//! The Google Calendar download on fake TNG data. The reply envelope is
+//! the one a live account returns; the events inside follow Google's API
+//! reference for `singleEvents=false` (see `INGEST.md`).
 
 use std::path::Path;
 
@@ -277,16 +277,20 @@ async fn problem_keys(store: &Path) -> Vec<String> {
 
 /// A whole listing may delete what it does not name only if it named
 /// everything it listed. An event it could not identify (no `id`) used to
-/// be skipped and the stored copy deleted (audit 2026-10-02 §4). The
-/// listing now deletes nothing and says why on the calendar's row, and
-/// the next listing that names everything deletes as before.
+/// be skipped and the stored copy deleted, and a reply with no `items`
+/// read as an empty calendar (audit 2026-10-02 §4). Google sends `items`
+/// on every reply, `[]` when empty — measured live across 7 calendars,
+/// incremental replies included — so its absence is not a listing.
+/// Either now deletes nothing and says why on the calendar's row; the
+/// next listing that names everything deletes as before.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_whole_listing_it_cannot_fully_read_deletes_nothing() {
     let d = tempfile::tempdir().expect("tempdir");
-    let (one, two, three, store) = (
+    let (one, two, three, four, store) = (
         d.path().join("one"),
         d.path().join("two"),
         d.path().join("three"),
+        d.path().join("four"),
         d.path().join("store"),
     );
     std::fs::create_dir_all(&store).unwrap();
@@ -303,7 +307,7 @@ async fn a_whole_listing_it_cannot_fully_read_deletes_nothing() {
         "start": {"dateTime": "2026-03-12T11:00:00-07:00"}, "end": {"dateTime": "2026-03-12T12:30:00-07:00"}});
     let mut moved_without_id = moved.clone();
     moved_without_id.as_object_mut().unwrap().remove("id");
-    for root in [&one, &two, &three] {
+    for root in [&one, &two, &three, &four] {
         calendar_list(root);
         fixture(
             root,
@@ -318,6 +322,11 @@ async fn a_whole_listing_it_cannot_fully_read_deletes_nothing() {
         page(json!([series.clone(), moved_without_id]), None, None),
     );
     fixture(&three, &url, page(json!([series]), None, None));
+    fixture(
+        &four,
+        &url,
+        json_response(&json!({"kind": "calendar#events", "nextSyncToken": "s4"})),
+    );
 
     run_in(&one, &store, Some(window)).await;
     let stored = ids(&store).await;
@@ -333,4 +342,9 @@ async fn a_whole_listing_it_cannot_fully_read_deletes_nothing() {
     assert_eq!(third.events_deleted, 1, "{third:?}");
     assert_eq!(ids(&store).await, vec![format!("{PRIMARY}#staff01")]);
     assert_eq!(problem_keys(&store).await, Vec::<String>::new());
+
+    let fourth = run_in(&four, &store, Some(window)).await;
+    assert_eq!(fourth.events_deleted, 0, "{fourth:?}");
+    assert_eq!(ids(&store).await, vec![format!("{PRIMARY}#staff01")]);
+    assert_eq!(problem_keys(&store).await, vec![listing]);
 }

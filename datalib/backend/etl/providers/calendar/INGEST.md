@@ -90,6 +90,19 @@ latchkey's `google-calendar` service holds the OAuth token
 token expired: the calendar is listed whole again and whatever the new
 listing does not name is dropped.
 
+- **Every events reply carries `items`**, `[]` when there is nothing:
+  a whole listing, an empty window and an incremental sync with no
+  changes alike, across 7 calendars. A reply without it is not a page,
+  and fails the calendar rather than reading as an empty one.
+- **An invalid or expired sync token** is a `410` whose error reason is
+  `fullSyncRequired`.
+- **Every event had an `id`**, across about 7,500 on the first pages of
+  7 calendars. One without could be any stored event, so a whole
+  listing that meets one deletes nothing and says so on the calendar's
+  `listing:` row.
+- A whole sync of the 7 calendars stored 10,332 events in 10 requests
+  (two calendars ran past one 2,500-event page); the next, incremental,
+  changed nothing in 8.
 - **Pages come in no particular order.** A full listing names a deleted
   series as a `cancelled` resource, and its occurrences may come on
   either side of it; the deleted series is carried across pages so none

@@ -179,11 +179,13 @@ async fn sync_calendar(
             }
             Err(e) => return Err(e),
         };
+        // Google sends `items` on every events reply, `[]` when there is
+        // nothing (measured live); a reply without it is not a page.
         let items = v
             .get("items")
             .and_then(Value::as_array)
             .cloned()
-            .unwrap_or_default();
+            .context("the events reply carried no `items` list")?;
         apply(db, calendar_id, &items, &known, &mut seen, summary).await?;
         page = str_of(&v, "nextPageToken");
         if page.is_none() {
