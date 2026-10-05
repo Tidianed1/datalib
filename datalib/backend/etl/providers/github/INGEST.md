@@ -57,17 +57,23 @@ nothing.
 `max_prs` caps how many PRs one run fetches. The ones past the cap are
 owed: each gets a warning row (`pull_requests:<owner>/<repo>#<n>`),
 the cursors move as usual, and the next runs fetch what is owed before
-anything new, until the warnings are gone.
+anything new, until the warnings are gone. A PR whose last fetch
+failed is tried every run on top of the cap, so one that keeps failing
+does not hold up the rest.
 
 ## When part of a sync fails
 
 Only `/user` failing fails the step (without the account there is
-nothing to search for), a read or write of the store, or the shared
-retry loop giving up (rate limits or failures past the source's
-budget): the run ends there rather than failing every PR after it.
-Anything else that fails is a `problems` row, and the sync goes on
-with the rest.
+nothing to search for — a credential GitHub refuses fails here), or a
+read or write of the store. Anything else that fails is a `problems`
+row, and the sync goes on with the rest.
 
+- **The shared retry loop giving up** (rate limits or failures past
+  the source's budget) stops the requests there, rather than failing
+  every PR after it, but the run still keeps what it fetched. A
+  `phase:fetch` row (`phase:search` when it was a search) says so, the
+  cursors stay where they were, and the next run lists the same span
+  and fetches the rest; the row goes with it.
 - **A search** that fails is a `listing:search <scope>` row — a
   warning when GitHub refused the credential (401/403), an error
   otherwise. That scope's cursor stays where it was. The rows are
@@ -92,7 +98,8 @@ for, every request fails at once, and that says nothing about GitHub.
 `--pull-request owner/repo#NUM` (also `owner/repo/pull/NUM` or a
 github.com PR URL; repeatable) skips discovery entirely, fetching just
 those PRs: no cursor moves, no listing row changes, and a PR an earlier
-run could not fetch whole waits for the next discovery run. The
+run could not fetch whole waits for the next discovery run. A give-up
+of the retry loop is a row on the PR it stopped at. The
 config's `api.pull_requests` list does the same.
 
 ## Config

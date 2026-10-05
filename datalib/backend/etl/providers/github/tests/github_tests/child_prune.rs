@@ -84,7 +84,10 @@ async fn run(out_db: &Path) -> usize {
         ..FetchOptions::new(db.clone(), crate::tng_now())
     })
     .await;
-    db.commit_all("test").await.unwrap();
+    // As the processor does: only a run that succeeds commits.
+    if out.is_ok() {
+        db.commit_all("test").await.unwrap();
+    }
     db.close().await;
     out.unwrap().pruned
 }
