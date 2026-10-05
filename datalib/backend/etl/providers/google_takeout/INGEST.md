@@ -48,6 +48,14 @@ string (`"maps_review:{ftid}:{date}"`, `"youtube:watch:{id}:{ts}"`);
 see `ns_id` in `schema_raw.rs` and
 [`docs/dev/entity_ids.md`](../../../../../docs/dev/entity_ids.md).
 
+## A feed that fails costs only itself
+
+`fetch` runs each feed through `feed`, which turns an error or a panic
+into a `phase:<feed>` row in `problems` and goes on to the next feed.
+The export is someone else's HTML and JSON, so one odd entry must not
+stop nine products from syncing; the row is what puts the failure on
+the Manage screen. `feeds_failed` in the step summary counts them.
+
 ## Tests
 
 `tests/fixture_walk.rs` points the downloader at the checked-in

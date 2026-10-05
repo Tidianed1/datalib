@@ -633,3 +633,28 @@ async fn a_product_that_returns_smaller_loses_what_it_dropped() {
 }
 
 // ── one entry the parser trips on costs only itself ─────────────────
+
+/// A feed that fails costs that feed and nothing else, and says so where
+/// the Manage row reads it rather than only in the log.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_feed_that_fails_is_a_problem_row_and_the_rest_land() {
+    let e = Export::new();
+    e.rewrite(SAVED, |_| "{ not json".to_string());
+    let s = e.sync().await;
+    assert_eq!(s.feeds_failed, 1, "{s:?}");
+    assert_eq!(s.maps_saved_places, 0, "{s:?}");
+    assert_eq!(s.maps_reviews, 2, "{s:?}");
+    assert_eq!(s.youtube_watch_history, 3, "{s:?}");
+
+    let db = RawDb::open(&e.db_path).await.unwrap();
+    let rows: Vec<(String, String, String)> =
+        sqlx::query_as("SELECT scope_key, severity, sample FROM problems")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+    db.close().await;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].0, "phase:maps_saved_places");
+    assert_eq!(rows[0].1, "error");
+    assert!(rows[0].2.starts_with("parse Saved Places.json"), "{rows:?}");
+}
