@@ -576,7 +576,35 @@ pub enum OnSchemaBreak {
 /// Always [`OnSchemaBreak::Rebuild`]: every row is a function of some
 /// other store, so a rebuild costs a pass over that store.
 pub async fn open_derived(db_path: &Path, ddl: &[&str], kind: StoreKind) -> Result<SqlitePool> {
-    open_inner(db_path, ddl, false, kind, OnSchemaBreak::Rebuild, &[]).await
+    open_derived_indexed(db_path, ddl, &[], kind).await
+}
+
+/// [`open_derived`], plus `lookup_indexes`: indexes that change no row,
+/// created after `ddl` and left out of the shape `_datalib_meta` records,
+/// so adding one does not make every reader see a store in a new shape.
+pub async fn open_derived_indexed(
+    db_path: &Path,
+    ddl: &[&str],
+    lookup_indexes: &[&str],
+    kind: StoreKind,
+) -> Result<SqlitePool> {
+    open_inner(
+        db_path,
+        ddl,
+        lookup_indexes,
+        false,
+        kind,
+        OnSchemaBreak::Rebuild,
+        &[],
+    )
+    .await
+}
+
+/// The shape an owner's open records in `_datalib_meta.schema_hash` for a
+/// store opened with `ddl`: blake3 over `_datalib_meta`'s own DDL, then
+/// `ddl`, in order.
+pub fn recorded_shape<'a>(ddl: impl IntoIterator<Item = &'a str>) -> String {
+    datalib_store_meta::schema_hash(std::iter::once(datalib_store_meta::DDL).chain(ddl))
 }
 
 /// A raw store, for the process that owns it, with no migrations.
@@ -597,6 +625,7 @@ pub async fn open_migrating(
     open_inner(
         db_path,
         extra_ddl,
+        &[],
         true,
         StoreKind::Raw,
         OnSchemaBreak::Refuse,
@@ -614,7 +643,7 @@ pub async fn open_curated(
     kind: StoreKind,
     ladder: &[Migration],
 ) -> Result<SqlitePool> {
-    open_inner(db_path, ddl, false, kind, OnSchemaBreak::Refuse, ladder).await
+    open_inner(db_path, ddl, &[], false, kind, OnSchemaBreak::Refuse, ladder).await
 }
 
 /// [`open`] with the policy said rather than taken from the process.
@@ -623,7 +652,7 @@ pub async fn open_with(
     extra_ddl: &[&str],
     on_break: OnSchemaBreak,
 ) -> Result<SqlitePool> {
-    open_inner(db_path, extra_ddl, true, StoreKind::Raw, on_break, &[]).await
+    open_inner(db_path, extra_ddl, &[], true, StoreKind::Raw, on_break, &[]).await
 }
 
 /// The error [`OnSchemaBreak::Refuse`] fails an open with: every table
@@ -751,6 +780,7 @@ enum Access {
 async fn open_inner(
     db_path: &Path,
     extra_ddl: &[&str],
+    lookup_indexes: &[&str],
     include_shared: bool,
     kind: StoreKind,
     on_break: OnSchemaBreak,
@@ -883,7 +913,7 @@ async fn open_inner(
     }
     // Indexes last, so they see the reconciled columns — and so a
     // recreate costs no index.
-    for stmt in ddl().filter(|s| !is_create_table(s)) {
+    for stmt in ddl().filter(|s| !is_create_table(s)).chain(lookup_indexes) {
         sqlx::query(sqlx::AssertSqlSafe(*stmt))
             .execute(&pool)
             .await
@@ -903,7 +933,7 @@ async fn open_inner(
     let meta_moved = datalib_store_meta::write(
         &pool,
         kind,
-        &datalib_store_meta::schema_hash(ddl().copied()),
+        &recorded_shape(extra_ddl.iter().chain(shared).copied()),
         top,
     )
     .await
@@ -1010,6 +1040,18 @@ pub async fn column_exists(pool: &SqlitePool, table: &str, column: &str) -> Resu
         .await?
         .iter()
         .any(|c| c.name == column))
+}
+
+/// Whether the store has `table`, for a reader of a store whose tables
+/// vary with what upstream had — a mirrored file from an older app.
+pub async fn table_exists(pool: &SqlitePool, table: &str) -> Result<bool> {
+    let n: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?")
+            .bind(table)
+            .fetch_one(pool)
+            .await
+            .with_context(|| format!("look for table {table}"))?;
+    Ok(n > 0)
 }
 
 /// Empty vec if the table does not exist (no error).
@@ -1744,6 +1786,7 @@ pub async fn reset_store(db_path: &Path) -> Result<()> {
     let pool = open_inner(
         db_path,
         &[],
+        &[],
         false,
         StoreKind::Raw,
         OnSchemaBreak::Refuse,
@@ -2231,18 +2274,6 @@ pub struct DiffScanSpec<'a> {
 /// Any failure short of "no last hash" falls back to cold start:
 /// render-everything is always safe, partial-render against a stale diff is
 /// not.
-/// Does this error mean the query named something the store does not have,
-/// rather than that the *cursor* named a commit it does not have?
-///
-/// The distinction decides whether a failed scan is a bug to surface or a
-/// stale cursor to cold-start past. Matching on the message is crude, but
-/// sqlx surfaces both as a bare `Error::Database` and the text is the only
-/// thing that separates them.
-fn is_missing_schema(e: &sqlx::Error) -> bool {
-    let msg = e.to_string();
-    msg.contains("no such table") || msg.contains("no such column")
-}
-
 pub async fn scan_buckets(
     pool: &sqlx::SqlitePool,
     last_render_hash: Option<&str>,
@@ -2310,7 +2341,7 @@ pub async fn scan_buckets(
     // possible thing, forever, and nothing ever says why.
     let rows = match res {
         Ok(r) => r,
-        Err(e) if is_missing_schema(&e) => {
+        Err(e) if crate::pin::missing_schema(&e).is_some() => {
             return Err(anyhow::Error::new(e).context(
                 "dolt_diff bucket scan names a table or column this store does \
                  not have. That is a bug in the query, not a stale cursor: \

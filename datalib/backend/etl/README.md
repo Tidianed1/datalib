@@ -301,7 +301,8 @@ reads through `dolt_at_` modules,
 `dolt_diff_summary`, `dolt_diff_stat`, `dolt_status`, a `COUNT(*)` per
 table, `BEGIN`/`COMMIT` around plain reads (the held read transaction),
 `dolt_branches`, and a read-only open of `<file>@<hash>` with a
-`COUNT(*)` on it — and that list is the allowlist. Any other
+`COUNT(*)` and a `_datalib_meta` read on it — and that list is the
+allowlist. Any other
 statement a reader adds is presumed guilty until
 `doltlite_two_process_test` has run with it. Looking like a read is not
 enough: a read-only `dolt_status` once failed the writer's commit and
@@ -468,14 +469,20 @@ every `open` would cost bytes whether or not anything was ingested.
 
 `open` writes six rows into `_datalib_meta` before the schema commit:
 `datalib_version`, `git_hash`, `doltlite_version`, `schema_hash`
-(blake3 over the DDL it was opened with), `schema_version` (the
+(`recorded_shape`: blake3 over `_datalib_meta`'s DDL and the DDL the
+store was opened with, leaving out the lookup indexes
+`open_derived_indexed` was handed, which change no row), `schema_version` (the
 migration ladder position, `0` until there is a ladder) and
 `store_kind`. Only a row whose value moved is rewritten, so an
 unchanged store costs no commit, and a schema commit that did move
 one is titled `schema: apply DDL (datalib <version>)`. The table is in
 `SHARED_TABLES`, so it is neither mirrored nor diffed nor counted.
 `datalib_store_meta::read` is how anyone asks; `None` means the store
-predates the table. `docs/dev/plans/completed/schema_migrations.md`
+predates the table. A reader of a derived store asks it once per pass
+rather than probing for each table: `grid_index` compares a render
+store's `schema_hash` with `indexed_markdown::schema_hash`, the same
+value the scheduler fingerprints, and leaves a store in any other shape
+as the index had it, with a warning. `docs/dev/plans/completed/schema_migrations.md`
 is the record of the program this was the first step of.
 
 ## Writes: one UPSERT shape, everywhere
