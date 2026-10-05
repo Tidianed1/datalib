@@ -91,13 +91,14 @@ GET  /api/latchkey/{service}               stored accounts, authOptions, gateway
 POST /api/latchkey/{service}/connect       start `latchkey auth browser` → {id}
 GET  /api/latchkey/connect/{id}/status     poll it → running | ok | failed
 POST /api/probe   {type, params, list?}    start `datalib-step probe` → {id, status, …}
-GET  /api/probe/{id}                       poll it → progress, then the report or the error
+GET  /api/probe/{id}                       poll it → progress, then the report or the failure
 ```
 
 `connect` registers the service from `credentialRegister` first if
 latchkey lacks it, runs `ensure-browser` restricted to a browser
-already on the machine (the Chromium download stays something a person
-chooses by running the command), and seeds a placeholder with
+already on the machine — and, when there is none, again with the
+downloading source, which the wizard says while it runs
+(`ConnectPhase`) — and seeds a placeholder with
 `auth set` when the person named an account latchkey has not seen,
 since `auth browser` only refreshes. The login is polled, not
 streamed. Under a latchkey gateway the button is not offered — the

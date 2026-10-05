@@ -16,6 +16,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::process::Command;
 
+use datalib_probe::issue::{classify, IssueKind};
+
 use crate::AppState;
 
 /// How long to wait on `latchkey services info` before giving up. It
@@ -35,7 +37,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const GATEWAY_ENV_VAR: &str = "LATCHKEY_GATEWAY";
 
 /// The gateway's URL, when this process is pointed at one.
-fn latchkey_gateway() -> Option<String> {
+pub(crate) fn latchkey_gateway() -> Option<String> {
     gateway_from(std::env::var_os(GATEWAY_ENV_VAR))
 }
 
@@ -84,6 +86,8 @@ pub struct ServiceInfo {
     /// keyring access). The wizard still lets you type an account name
     /// by hand, so this is a note rather than an error.
     pub error: Option<String>,
+    /// What kind of trouble `error` is, for the wizard's one sentence.
+    pub issue: Option<IssueKind>,
 }
 
 #[derive(Debug, Serialize)]
@@ -124,6 +128,7 @@ pub async fn get_service(
                 accounts: Vec::new(),
                 registered: !unknown,
                 cli: datalib_core::node_runtime::latchkey_cli_hint(),
+                issue: (!unknown).then(|| classify(&message, gateway.is_some())),
                 gateway,
                 error: if unknown { None } else { Some(message) },
             }))
@@ -175,6 +180,7 @@ fn parse_service_info(service: &str, v: &Value) -> ServiceInfo {
         cli: datalib_core::node_runtime::latchkey_cli_hint(),
         gateway: None,
         error: None,
+        issue: None,
     }
 }
 
@@ -242,6 +248,23 @@ pub struct ConnectStatus {
     /// without going to a terminal. Trimmed to the tail — latchkey can
     /// be chatty and the useful part is always at the end.
     pub output: String,
+    /// What the attempt is doing now, while it runs.
+    pub phase: ConnectPhase,
+    /// What kind of trouble `output` is, once `Failed`.
+    pub issue: Option<IssueKind>,
+}
+
+/// What a running browser login is doing, so the wizard can say what
+/// it is waiting on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectPhase {
+    /// Registering the service, finding a browser.
+    Preparing,
+    /// No browser on the machine: fetching one, a one-time download.
+    DownloadingBrowser,
+    /// The browser is open on the service's login page.
+    SigningIn,
 }
 
 // POST /api/latchkey/{service}/credential
@@ -292,7 +315,13 @@ pub async fn set_credential(
         Err(e) => {
             let message = scrub(&e.to_string());
             tracing::error!(service, "latchkey auth set failed: {message}");
-            Err(err(StatusCode::BAD_GATEWAY, &message))
+            Err((
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({
+                    "error": message,
+                    "issue": classify(&message, false),
+                })),
+            ))
         }
     }
 }
@@ -394,6 +423,8 @@ pub async fn start_connect(
         status: ConnectState::Running,
         account: None,
         output: String::new(),
+        phase: ConnectPhase::Preparing,
+        issue: None,
     }));
     attempts()
         .lock()
@@ -428,17 +459,21 @@ pub async fn start_connect(
         // Before the login, not lazily after it fails: the refusal names
         // a command, and the person reading it pressed a button
         // precisely so they would not have to run one.
-        if let Err(e) = latchkey_output(&ensure_browser_args()).await {
-            let message = format!(
-                "no browser available for the login ({}). Latchkey can install one, which \
-                 downloads a Chromium of a few hundred megabytes: run `{} ensure-browser` and \
-                 try again.",
-                tail(&e.to_string()),
-                datalib_core::node_runtime::latchkey_cli_hint(),
-            );
-            fail(&slot, &service, message);
-            return;
+        if latchkey_output(&ensure_browser_args()).await.is_err() {
+            // No browser on the machine. The person pressed "Sign in
+            // with browser", so fetching one is what they asked for;
+            // the wizard says it is happening, since it takes a while.
+            slot.lock().expect("connect slot mutex").phase = ConnectPhase::DownloadingBrowser;
+            if let Err(e) = latchkey_output(&download_browser_args()).await {
+                let message = format!(
+                    "No browser found for the sign-in, and fetching one failed: {}",
+                    tail(&e.to_string()),
+                );
+                fail(&slot, &service, message);
+                return;
+            }
         }
+        slot.lock().expect("connect slot mutex").phase = ConnectPhase::SigningIn;
 
         let login =
             || tokio::time::timeout(CONNECT_TIMEOUT, latchkey_output_env(&args, &login_env));
@@ -481,6 +516,8 @@ pub async fn start_connect(
         status: ConnectState::Running,
         account: None,
         output: String::new(),
+        phase: ConnectPhase::Preparing,
+        issue: None,
     }))
 }
 
@@ -493,6 +530,7 @@ fn fail(slot: &Arc<Mutex<ConnectStatus>>, service: &str, output: String) {
     tracing::error!(service, "latchkey login failed: {}", scrub(&output));
     let mut slot = slot.lock().expect("connect slot mutex");
     slot.status = ConnectState::Failed;
+    slot.issue = Some(classify(&output, false));
     slot.output = output;
 }
 
@@ -539,7 +577,8 @@ fn clear_args(service: &str, account: &str) -> Vec<String> {
 }
 
 /// `ensure-browser`, restricted to the sources that use a browser
-/// already on the machine.
+/// already on the machine. When it finds none, [`download_browser_args`]
+/// fetches one.
 ///
 /// A latchkey store that has never done a browser login has none
 /// configured, and `auth browser` refuses outright ("No browser
@@ -547,19 +586,27 @@ fn clear_args(service: &str, account: &str) -> Vec<String> {
 /// new user, and was invisible to us because a developer's store is
 /// never new.
 ///
-/// The default source list ends in `download-playwright-browser`, so
-/// running it unrestricted can pull a Chromium of a hundred-odd
-/// megabytes. Nobody pressing "Latchkey auth" asked for that, and a
-/// long silent stall behind a spinner is the worst way to deliver it.
-/// These three sources configure an existing browser or fail fast; the
-/// download stays a thing someone chooses, by running the command
-/// themselves. `datalib/tauri/check-app.sh` runs the same sources
-/// against every built .app.
+/// The default source list ends in `download-playwright-browser`, which
+/// pulls a Chromium of a hundred-odd megabytes. A browser already on
+/// the machine is always preferred, so the download is its own step,
+/// taken only when these find nothing and said on screen while it runs
+/// rather than a silent stall behind a spinner.
+/// `datalib/tauri/check-app.sh` runs the same sources against every
+/// built .app.
 fn ensure_browser_args() -> Vec<String> {
     vec![
         "ensure-browser".to_string(),
         "--source".to_string(),
         "existing-config,system-browser,existing-playwright-browser".to_string(),
+    ]
+}
+
+/// `ensure-browser` from the one source that downloads.
+fn download_browser_args() -> Vec<String> {
+    vec![
+        "ensure-browser".to_string(),
+        "--source".to_string(),
+        "download-playwright-browser".to_string(),
     ]
 }
 
@@ -869,20 +916,21 @@ mod scrub_tests {
 
 #[cfg(test)]
 mod ensure_browser_tests {
-    use super::ensure_browser_args;
+    use super::{download_browser_args, ensure_browser_args};
 
-    /// The whole point of naming sources explicitly: the default list
-    /// ends in `download-playwright-browser`, and a button press must
-    /// not turn into a few hundred megabytes nobody asked for.
+    /// A browser already on the machine is always tried first: the
+    /// download is its own step, so the wizard can say it is happening.
     #[test]
-    fn never_offers_to_download_a_browser() {
-        let args = ensure_browser_args();
-        let sources = args.last().expect("a --source value");
-        assert!(
-            !sources.contains("download"),
-            "ensure-browser must not reach the downloading source: {sources}"
-        );
+    fn the_first_look_never_downloads_and_the_second_only_does() {
+        let first = ensure_browser_args();
+        let sources = first.last().expect("a --source value");
+        assert!(!sources.contains("download"), "{sources}");
         assert!(sources.contains("system-browser"), "{sources}");
+        let second = download_browser_args();
+        assert_eq!(
+            second.last().map(String::as_str),
+            Some("download-playwright-browser")
+        );
     }
 }
 

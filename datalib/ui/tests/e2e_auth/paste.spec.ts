@@ -67,8 +67,8 @@ test("a wrong token fails Check connection in a sentence", async ({ page }) => {
   await form.getByRole("button", { name: "Store in latchkey" }).click();
 
   const failed = wizard(page).locator(".wiz-probe-failed");
-  await expect(failed).toBeVisible();
-  expectGlanceable(await failed.locator(".wiz-probe-headline").textContent(), "the headline");
+  await expect(failed).toHaveAttribute("data-issue", "rejected");
+  expectGlanceable(await failed.locator(".issue-headline").textContent(), "the headline");
 });
 
 /// A list that pages says how far it has got while it loads. The fake

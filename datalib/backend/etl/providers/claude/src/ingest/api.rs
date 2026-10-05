@@ -71,7 +71,12 @@ impl ClaudeClient {
 
         let body = resp.body_str();
         if resp.status == 403 {
-            return Err(ClaudeError::Forbidden(format!("GET {path} -> HTTP 403")));
+            // Cloudflare's bot wall is a 403 too; its marker is what tells
+            // a block from a credential that may not do this.
+            return Err(ClaudeError::Forbidden(format!(
+                "GET {path} -> HTTP 403 cf-mitigated={:?}",
+                resp.header("cf-mitigated")
+            )));
         }
         if resp.status != 200 {
             return Err(ClaudeError::Permanent(format!(

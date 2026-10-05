@@ -2,7 +2,7 @@
 
 import type { ProbeNoun } from "./config/catalog";
 import type { FeedbackContext } from "./feedback/context";
-import { ApiError, errorDetail } from "./apiError";
+import { ApiError, errorDetail, FailureError } from "./apiError";
 import { pushToast } from "./toasts";
 
 // `DiffStatus` in datalib_schema, hand-kept in step.
@@ -1565,6 +1565,8 @@ export type LatchkeyService = {
   /// Set when latchkey itself could not be asked. Not fatal: the
   /// account can still be typed.
   error: string | null;
+  /// What kind of trouble `error` is.
+  issue: IssueKind | null;
 };
 
 /// How to teach latchkey a service it has never heard of, so that a
@@ -1615,9 +1617,35 @@ export type ProbeReport = {
   notes: string[];
 };
 
+/// What kind of trouble a sign-in or a probe ran into. Mirrors
+/// `IssueKind` in datalib/backend/probe/src/issue.rs; the wizard says
+/// one sentence per kind (`config/issues.ts`).
+export type IssueKind =
+  | "no_credential"
+  | "expired"
+  | "rejected"
+  | "forbidden"
+  | "blocked"
+  | "rate_limited"
+  | "service_error"
+  | "unreachable"
+  | "gateway_unreachable"
+  | "unexpected_response"
+  | "no_runtime"
+  | "no_browser"
+  | "keychain"
+  | "unknown";
+
+/// A failure as the wizard shows it. Mirrors `Failure` in
+/// datalib/backend/probe/src/issue.rs.
+export type Failure = { issue: IssueKind; detail: string };
+
 /// How one browser-login attempt is going. Mirrors `ConnectState` in
 /// datalib/backend/http/src/connect.rs.
 export type ConnectState = "running" | "ok" | "failed";
+
+/// What a running login is doing. Mirrors `ConnectPhase` there.
+export type ConnectPhase = "preparing" | "downloading_browser" | "signing_in";
 
 export type ConnectAttempt = {
   id: string;
@@ -1629,6 +1657,9 @@ export type ConnectAttempt = {
   /// identity to derive and used latchkey's unnamed default.
   account: string | null;
   output: string;
+  phase: ConnectPhase;
+  /// What kind of trouble `output` is, once `failed`.
+  issue: IssueKind | null;
 };
 
 /// The server's message for a failed request, which for these routes is
@@ -1637,17 +1668,21 @@ export type ConnectAttempt = {
 /// it. Falls back to the raw body, then to the status code.
 async function quietError(url: string, r: Response): Promise<Error> {
   let detail = "";
+  let issue: IssueKind | undefined;
   try {
     const text = (await r.text()).trim();
     try {
-      detail = (JSON.parse(text) as { error?: string }).error ?? text;
+      const body = JSON.parse(text) as { error?: string; issue?: IssueKind };
+      detail = body.error ?? text;
+      issue = body.issue;
     } catch {
       detail = text;
     }
   } catch {
     // ignore — the status line below is still worth reporting
   }
-  return new Error(detail || `${url} → ${r.status}`);
+  detail ||= `${url} → ${r.status}`;
+  return issue ? new FailureError({ issue, detail }) : new Error(detail);
 }
 
 async function quietJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -1721,8 +1756,8 @@ export type ProbeStatus = {
   status: ProbeState;
   progress: ProbeProgress | null;
   report: ProbeReport | null;
-  /// The step's own error chain, on `failed`.
-  error: string | null;
+  /// What went wrong, on `failed`.
+  failure: Failure | null;
 };
 
 /// Start a probe: which account these credentials reach, and with
@@ -1751,7 +1786,7 @@ export function probeStatus(id: string): Promise<ProbeStatus> {
 const PROBE_POLL_MS = 400;
 
 /// A probe from start to finish, telling `onProgress` how far a list
-/// has got on every poll. Rejects with the step's own error text.
+/// has got on every poll. Rejects with a `FailureError`.
 export async function runProbe(
   type: string,
   params: Record<string, unknown>,
@@ -1765,7 +1800,9 @@ export async function runProbe(
     status = await probeStatus(status.id);
   }
   if (status.status === "failed" || !status.report) {
-    throw new Error(status.error ?? "the probe ended without an answer");
+    throw new FailureError(
+      status.failure ?? { issue: "unknown", detail: "the probe ended without an answer" },
+    );
   }
   return status.report;
 }

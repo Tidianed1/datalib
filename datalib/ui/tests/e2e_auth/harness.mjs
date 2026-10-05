@@ -17,6 +17,7 @@ import {
 import https from "node:https";
 import net from "node:net";
 import path from "node:path";
+import { chromium } from "@playwright/test";
 import { FAKE_SITES } from "./fake_sites.mjs";
 
 export const API_TOKEN = "e2e-auth";
@@ -83,6 +84,8 @@ export async function startFakeInternet(sites = FAKE_SITES) {
   const requests = [];
   /** @type {{ matches: (r: any) => boolean, released: Promise<void> }[]} */
   const holds = [];
+  /** @type {Map<string, (r: any) => any>} */
+  const overrides = new Map();
   const server = https.createServer(cert(), async (req, res) => {
     const host = (req.headers.host ?? "").replace(/:\d+$/, "");
     const url = new URL(req.url ?? "/", `https://${host}`);
@@ -90,7 +93,11 @@ export async function startFakeInternet(sites = FAKE_SITES) {
     const seen = { host, method: req.method, path: url.pathname, query: url.search, headers: req.headers, body };
     requests.push(seen);
     for (const hold of holds.filter((h) => h.matches(seen))) await hold.released;
-    const reply = sites[host]?.(seen) ?? { status: 404, json: { error: `no fake for ${host}${url.pathname}` } };
+    const site = overrides.get(host) ?? sites[host];
+    const reply = (await site?.(seen)) ?? {
+      status: 404,
+      json: { error: `no fake for ${host}${url.pathname}` },
+    };
     const headers = { ...(reply.headers ?? {}) };
     let payload = reply.text ?? "";
     if (reply.json !== undefined) {
@@ -111,6 +118,9 @@ export async function startFakeInternet(sites = FAKE_SITES) {
     /// Keep every request `matches` accepts unanswered until the
     /// returned function is called — so a spec can look at a page while
     /// a list is half loaded, rather than racing it.
+    /// Answer every request to `host` with `handler` instead of its
+    /// fake site — how a spec makes one service misbehave.
+    override: (host, handler) => overrides.set(host, handler),
     hold: (matches) => {
       let release = () => {};
       const released = new Promise((resolve) => (release = resolve));
@@ -164,6 +174,9 @@ function readSpy(file) {
     .filter(Boolean)
     .map((line) => JSON.parse(line));
 }
+
+/// A port that was free a moment ago and has nothing listening on it.
+const closedPort = () => freePort();
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -268,10 +281,13 @@ export async function startGateway(internet, options) {
 /// Start a world. Options:
 /// - `gateway`: a `startGateway` result; the backend then holds no
 ///   store of its own, the way it runs under Minds.
-/// - `browser: false`: `ensure-browser` finds nothing.
+/// - `browser`: `"found"` (latchkey's own discovery finds one),
+///   `"download"` (it finds none, and the download fetches one once
+///   `releaseDownload()` is called) or `"none"` (the download fails too).
 /// - `runtime: false`: no bundled runtime at all.
+/// - `offline: true`: no network — every host refuses the connection.
 export async function startWorld(internet, options) {
-  const { gateway = null, browser = true, runtime = true } = options ?? {};
+  const { gateway = null, browser = "found", runtime = true, offline = false } = options ?? {};
   const dir = freshDir("world-");
   const store = path.join(dir, "latchkey");
   mkdirSync(store, { mode: 0o700 });
@@ -280,7 +296,8 @@ export async function startWorld(internet, options) {
   const home = path.join(dir, "home");
   mkdirSync(home);
   const key = randomBytes(32).toString("base64");
-  const curl = curlShim(dir, internet.port);
+  // Offline: every host is a port nothing listens on.
+  const curl = curlShim(dir, offline ? await closedPort() : internet.port);
   const spyLog = path.join(dir, "latchkey-runs.jsonl");
 
   const env = {
@@ -310,11 +327,13 @@ export async function startWorld(internet, options) {
   // The real `ensure-browser` runs; fake_node.mjs then wraps what it
   // found so it runs headless against the fake internet.
   env.PLAYWRIGHT_BROWSERS_PATH = playwrightBrowsers();
-  if (browser) {
-    env.DATALIB_TEST_AUTH_BROWSER_WRAPPER = path.join(dir, "browser");
-    env.DATALIB_TEST_AUTH_FAKE_PORT = String(internet.port);
-  } else {
-    env.DATALIB_TEST_AUTH_NO_BROWSER = "1";
+  env.DATALIB_TEST_AUTH_BROWSER_WRAPPER = path.join(dir, "browser");
+  env.DATALIB_TEST_AUTH_FAKE_PORT = String(internet.port);
+  const downloadGate = path.join(dir, "download-gate");
+  if (browser !== "found") env.DATALIB_TEST_AUTH_NO_BROWSER = "1";
+  if (browser === "download") {
+    env.DATALIB_TEST_AUTH_DOWNLOADS = chromium.executablePath();
+    env.DATALIB_TEST_AUTH_DOWNLOAD_GATE = downloadGate;
   }
   // latchkey refuses a browser login on Linux with no display named,
   // though the headless browser above never opens one.
@@ -363,6 +382,8 @@ export async function startWorld(internet, options) {
     latchkey: (...args) => runLatchkey(storeEnv(store, key), args),
     /// Every latchkey the backend (or a step it spawned) ran so far.
     latchkeyRuns: () => readSpy(spyLog),
+    /// Let the stood-in browser download finish.
+    releaseDownload: () => writeFileSync(downloadGate, ""),
     /// The browser latchkey's own `ensure-browser` found, if it ran.
     browserFound: () => {
       const file = `${env.DATALIB_TEST_AUTH_BROWSER_WRAPPER}.found`;

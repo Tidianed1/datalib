@@ -131,23 +131,29 @@ test("a new source writes no account at all", async ({ page }) => {
   await expect(wizard(page).locator(".wiz-review pre")).not.toContainText("latchkey_settings");
 });
 
-/// An expired sign-in shows up as a failed Check connection, and the
-/// probe's own recipe names a terminal command. The button beside it is
-/// the fix, so the failure says so — and a login that then succeeds
-/// clears the failure it answered rather than leaving it on screen.
+/// An expired sign-in shows up as a failed Check connection, said in
+/// one sentence that points at the login button beside it — not at the
+/// terminal command the probe's own recipe names, which stays in the
+/// details — and a login that then succeeds clears the failure it
+/// answered rather than leaving it on screen.
 test("a failed Check connection points back at the login button", async ({ page }) => {
   await openClaude(page, WITH_BROWSER);
   await page.route("**/api/probe", (route) =>
     route.fulfill(
       probeFailed(
-        "error: claude.ai credentials are not set up: GET /api/account -> HTTP 401\n" +
+        "rejected",
+        "claude.ai credentials are not set up: GET /api/account -> HTTP 401\n" +
           "The credential is the `sessionKey` cookie.",
       ),
     ),
   );
   await wizard(page).getByRole("button", { name: "Check connection" }).click();
   const failed = wizard(page).locator(".wiz-probe-failed");
-  await expect(failed).toContainText("sign in again on the Web login tab");
+  await expect(failed.locator(".issue-headline")).toHaveText(
+    "Claude turned the stored sign-in away.",
+  );
+  await expect(failed).toContainText("Sign in again above");
+  await expect(failed.locator("details")).toContainText("sessionKey");
 
   await page.route("**/api/latchkey/claude-ai/connect", (route) =>
     route.fulfill({ json: { id: "a1", status: "running", output: "" } }),

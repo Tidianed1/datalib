@@ -12,6 +12,8 @@
 use serde::{Deserialize, Serialize};
 use strum::{EnumString, IntoStaticStr, VariantArray};
 
+pub mod issue;
+
 /// What a probe is asked: only which account the credentials reach
 /// (fast — one request), or that and one list a picker offers (as slow
 /// as the account is big).

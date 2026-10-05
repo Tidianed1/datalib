@@ -1,7 +1,8 @@
 # Testing the wizard's latchkey sign-in flows
 
-**Status: the hermetic tier is built (2026-10-05); the keychain tier,
-the real-machine tier and the product fixes below are proposals.** How
+**Status: the hermetic tier is built, with its fault matrix, and the
+product fixes it pinned have landed (2026-10-05); the keychain tier and
+the real-machine tier are proposals.** How
 the built part works is in
 [`datalib/ui/tests/e2e_auth/README.md`](../../../datalib/ui/tests/e2e_auth/README.md);
 this page is what it found and what is left.
@@ -42,35 +43,19 @@ Read from latchkey 3.16's source and measured on a mac the same day.
 - **A `latchkey gateway` binds `localhost`**, which did not answer on
   127.0.0.1 here; the suite passes `--host 127.0.0.1`.
 
-## 2. What the suite found
+## 2. What the suite found, and what came of it
 
-Each is a spec marked `test.fail()` until the product is fixed.
-
-| Finding | Spec |
+| Finding | Now |
 |---|---|
-| Picking a tile runs `services info` — a keychain read on a mac — before any click. | `first-contact.spec.ts` |
-| With no runtime, Slack's Connection section offers no way to sign in and says nothing: the "Couldn't ask latchkey" note lives inside the account picker, and Slack has none. | `first-contact.spec.ts` |
-| With no browser, the login fails with a 284-character paragraph telling the person to run `npx -y latchkey@3.16.2 ensure-browser` — a command, on a screen whose job is to run it, naming `npx` in an app that ships latchkey. | `browser-login.spec.ts` |
+| "Check account" ran the whole listing — every user and conversation in a Slack workspace — to say the credentials work. | "Check connection" is one identity call; each picker loads its own list, with progress (#1007). |
+| Picking a tile runs `services info`, a keychain read on a mac, before any click. | Kept: the dialog is built from its answer. `first-contact.spec.ts` guards that nothing but that read runs, and the section says "Asking latchkey…" while it does. |
+| With no runtime, Slack's Connection section offered no way to sign in and said nothing. | The note is at the top of the section, for every source. |
+| With no browser, the login failed with a paragraph naming an `npx … ensure-browser` command. | The login fetches one itself (`ensure-browser --source download-playwright-browser`) and says so while it runs. |
+| An offline machine, a 503 or a stopped gateway held Check connection for two minutes: the probe retried as patiently as a sync. | A probe makes one attempt and reports it. |
+| A 429's error came back as the step's log records, one of them the headline. | Every failure is classified (`datalib_probe::issue`) and said in one sentence per kind (`ui/src/config/issues.ts`), the text in a details fold. `faults.spec.ts` holds each source × fault to its kind. |
+| Claude reported Cloudflare's block as "credentials are not set up". | Its 403 carries `cf-mitigated`, and reads as blocked. |
 
 ## 3. What is left
-
-**Product fixes**, each against its failing spec:
-
-1. Don't run latchkey on tile pick. The account list is the hard part:
-   account names live inside the encrypted store, so listing them needs
-   the key. Options: list them on a click ("Show stored accounts"); show
-   the accounts datalib's own config already names, which needs no
-   latchkey; or ask latchkey upstream for an unencrypted index of
-   service and account names, or for a `services info` that does not
-   resolve the key.
-2. Say why the Connection section is empty, for every source, not only
-   those with an account picker.
-3. When no browser is found, offer a button that fetches one
-   (`ensure-browser --source download-playwright-browser`, a few hundred
-   MB, said on the button), instead of a command.
-4. Errors in one line. `connect` returns the last 4 KiB of stderr
-   unscrubbed; `probe` returns the whole stderr of `datalib-step`, whose
-   first line can be a JSON log record.
 
 **Coverage still missing:**
 
@@ -95,8 +80,8 @@ Each is a spec marked `test.fail()` until the product is fixed.
 - **Uniformity**: one table-driven spec over every credentialed catalog
   entry, where a source that is meant to differ says so in the table.
 - **Scenarios not yet written**: two stored accounts and the "No
-  credentials stored for account" retry; a gateway that is down; a login
-  page that never hands out a credential (needs a shorter connect
-  timeout for tests).
+  credentials stored for account" retry; a login page that never hands
+  out a credential (needs a shorter connect timeout for tests); the real
+  browser download, which the suite stands in for.
 - **Linux.** The suite sets `DISPLAY` for latchkey's check there, but
   has only run on a mac.

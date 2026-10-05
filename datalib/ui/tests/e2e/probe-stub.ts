@@ -9,11 +9,13 @@ export type ProbeAsk = { type?: string; params?: Record<string, unknown>; list?:
 export const probeAsk = (route: Route): ProbeAsk => route.request().postDataJSON() as ProbeAsk;
 
 export const probeDone = (report: object) => ({
-  json: { id: "p1", status: "ok", progress: null, report, error: null },
+  json: { id: "p1", status: "ok", progress: null, report, failure: null },
 });
 
-export const probeFailed = (error: string) => ({
-  json: { id: "p1", status: "failed", progress: null, report: null, error },
+/// A probe that failed, as the backend classified it (`IssueKind` in
+/// datalib/backend/probe/src/issue.rs).
+export const probeFailed = (issue: string, detail: string) => ({
+  json: { id: "p1", status: "failed", progress: null, report: null, failure: { issue, detail } },
 });
 
 /// A report answered the way the provider would for `ask`: the account
