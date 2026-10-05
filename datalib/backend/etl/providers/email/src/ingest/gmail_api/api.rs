@@ -350,7 +350,7 @@ pub struct MessagePage {
 
 // One label, not many: Gmail intersects repeated `labelIds`, so a
 // request naming three labels returns only messages carrying all three.
-// A union over several labels is several walks — see `full_sync`.
+// A union over several labels is several walks — see `walk_unlisted_scopes`.
 fn messages_list_url(
     user_id: &str,
     page_token: Option<&str>,

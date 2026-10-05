@@ -390,7 +390,7 @@ therefore what it can see:
 | source | re-enumeration | prunes |
 | --- | --- | --- |
 | `email` (JMAP) | `Email/changes` / `Mailbox/changes` tombstones | emails, mailboxes, and the label joins |
-| `email` (Gmail) | `history.list` deletions; a full walk when the cursor ages out | emails, via the same cascade |
+| `email` (Gmail) | `history.list` deletions; a whole-account walk whenever the account is not listed whole | emails, via the same cascade |
 | `contacts` (CardDAV), `calendar` (CalDAV) | RFC 6578 sync-collection `404`/`410`; a whole listing on a first sync or after the server calls the token invalid, and every run for a windowed calendar | contacts or events a whole listing does not name, once it reaches its end: a listing the server cut short (a 507 it would not page past, or 50 pages) deletes nothing until a later run carries it to the end (`dav_unconfirmed`); `datalib_etl::dav` |
 | `contacts` (`.vcf` folder), `calendar` (`.ics` folder) | the folder's scan, and each re-read file | a gone file's address book or calendar; cards or events a re-read file dropped. Nothing is deleted when the walk reported an error |
 | `google_takeout` Chat, Maps photos | the export's scan, and each re-read `messages.json` | a gone file's user, group, messages or photo; messages a re-read file dropped. A missing `Google Chat/` or photos folder deletes nothing |
@@ -597,9 +597,10 @@ So the rule has two halves:
 
 1. **Gate the write on one predicate computed at the end, from what
    actually happened** — not on reaching the end of the function, not
-   on `result.is_ok()`. Gmail's `FetchSummary::drained()` is the
-   pattern: `!stopped_early() && messages_failed == 0`, consulted once,
-   and both the cursor and the scope record are written under it.
+   on `result.is_ok()`. Better still, have nothing to gate: email
+   advances its token with the listing, in the transaction that stores
+   what the listing named, and what is not yet fetched is owed
+   (`email/src/ingest/listed.rs`).
 2. **Take the token early, store it late.** A live state token is
    often only available on the first response of a walk; hold it in a
    local and write it when the walk completes. Writing it where it was
@@ -660,8 +661,8 @@ Current consumers, and what each does when the knob widens:
 |---|---|---|
 | slack | — | Keeps no record. An earlier `since` is a gap below the spans held, and the next run walks it; `media` turned on makes every stored file edge without bytes owed, with no re-walk |
 | github, gitlab | `refresh_window_days` | `scope_state::since_for_scope`, given the prior record, reaches back to the earlier of the cursor and `now - window` |
-| email (JMAP) | `only_extract_labels` | `Email/query` scoped to the newly-added mailboxes |
-| email (Gmail) | `only_extract_labels` | `history.list` since the cursor as usual, plus a `messages.list` walk over the newly-added labels (or the whole account when the filter was removed) |
+| email (JMAP) | — | Keeps no record. An admitted mailbox with no `listed_whole` row is enumerated until an enumeration of it finishes |
+| email (Gmail) | — | The same, per admitted label, or `*` for the whole account |
 | email (mbox) | `only_extract_labels` | Re-read every file |
 | garmin | — | Keeps no cursor and no record. An earlier `since` leaves days with no row and start dates with no `coverage` span, and the next run fetches exactly those |
 | notion | `refresh_window_days` | Re-examine the widened window |
@@ -684,13 +685,8 @@ the token, so a cursor cannot be read without saying what scope it is
 read under — touches every consumer in the table and is worth doing as
 its own change.
 
-One known gap: **Gmail `blob_size_limit_bytes`.** JMAP is exempt
-because `sync_blobs` re-scans every email for missing bytes on every
-run, so a raised cap backfills by itself. Gmail has no such pass and
-does not record the cap: an oversize message lands its row and no
-blob, and the next run skips the id before ever asking again. Raising
-the cap on a Gmail mirror leaves every previously-oversize message
-without bytes.
+A raised `blob_size_limit_bytes` needs no record on either API path: a
+held message with no `.eml` bytes that now fits under the cap is owed.
 
 Render has the same failure mode and resolves it differently —
 wholesale invalidation rather than a proportional reaction: a change to

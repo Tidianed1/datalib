@@ -1,22 +1,23 @@
-//! JMAP downloader. State-token-first incremental sync over four
-//! phases:
+//! JMAP downloader: mailboxes, then what `Email/changes` or an
+//! `Email/query` enumeration lists, then the emails the store owes
+//! (`listed`), then the `.eml` of every email that has none.
 
 pub mod api;
 pub mod db;
 pub mod envelope;
 pub mod gmail_api;
 pub mod labels;
+pub mod listed;
 pub mod mbox;
 pub mod schema_raw;
 pub mod session;
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::bulk::bulk_upsert_in_tx;
-use datalib_etl::download_problems::RunProblem;
 use datalib_etl::download_run::DownloadRun;
 use datalib_etl::http::LatchkeySettings;
 use datalib_etl::progress::{Progress, RunBar};
@@ -32,7 +33,8 @@ pub use db::{block_on_load_all, db_path_for, LoadedRaw, RawDb};
 use api::call;
 use datalib_etl::doltlite_raw as dr;
 use db::refresh_email_joins;
-use schema_raw::{AccountRow, EmailRow, EmlBlobRow, MailboxRow, ThreadRow, MAILBOX_VOLATILE_PATHS};
+use listed::{Held, Named, WHOLE_ACCOUNT};
+use schema_raw::{AccountRow, EmailRow, EmlBlobRow, MailboxRow, MAILBOX_VOLATILE_PATHS};
 
 async fn upsert_account(
     db: &RawDb,
@@ -143,16 +145,6 @@ fn unlisted_mailboxes<'a>(
         .collect()
 }
 
-async fn upsert_threads(db: &RawDb, now: &IsoOffsetTimestamp, rows: &[ThreadRow]) -> Result<()> {
-    if rows.is_empty() {
-        return Ok(());
-    }
-    let mut tx = db.pool().begin().await.context("begin threads tx")?;
-    bulk_upsert_in_tx(&mut tx, rows, now).await?;
-    tx.commit().await.context("commit threads tx")?;
-    Ok(())
-}
-
 async fn upsert_emails(db: &RawDb, now: &IsoOffsetTimestamp, rows: &[EmailRow]) -> Result<()> {
     if rows.is_empty() {
         return Ok(());
@@ -171,10 +163,8 @@ use session::Session;
 /// cap a single `Email/get` at ~500 ids; we stay well below to keep
 /// per-call latency bounded.
 const EMAIL_GET_BATCH: usize = 50;
-/// Batch size for `Email/query` enumeration (full-resync fallback).
+/// Ids asked of `Email/query` per page of an enumeration.
 const EMAIL_QUERY_PAGE: usize = 500;
-/// Batch size for `Thread/get`.
-const THREAD_GET_BATCH: usize = 100;
 /// `Email/changes` `maxChanges` ceiling — large enough to drain a
 /// month of activity in one call, small enough that a single response
 /// stays under a megabyte.
@@ -227,17 +217,16 @@ pub struct FetchOptions {
     pub sealer: Option<datalib_etl::raw_store::Sealer>,
     pub hostname: String,
     pub account_id: Option<String>,
-    /// Skip stored `state` tokens and re-enumerate via `Email/query`.
-    /// Mailboxes still re-fetch via `Mailbox/get`.
+    /// Skip the stored state tokens: list every mailbox and every email
+    /// again, and fetch every email again.
     pub full_resync: bool,
     /// When non-empty, restrict the sync to mailboxes whose full label
     /// path (POSIX-like, e.g. `Work/Projects`; see
     /// [`crate::mailbox_labels`]) exactly matches one of these. Empty =
     /// every mailbox the account exposes. The paths are resolved to
-    /// JMAP mailbox ids once `Mailbox/get` has run, then the filter is
-    /// pushed server-side on full enumeration and applied client-side
-    /// after `Email/get` on the incremental path (since `Email/changes`
-    /// is account-scoped on JMAP).
+    /// JMAP mailbox ids once `Mailbox/get` has run. An enumeration is
+    /// narrowed to them server-side; `Email/changes` is account-wide, so
+    /// an email it names is checked against them once fetched.
     pub only_mailbox_labels: Vec<String>,
     /// Skip downloading any blob whose advertised size exceeds this.
     /// `None` = no limit.
@@ -285,47 +274,29 @@ pub struct FetchSummary {
     pub mailboxes_destroyed: usize,
     pub emails_upserted: usize,
     pub emails_destroyed: usize,
-    pub threads_upserted: usize,
     pub blobs_downloaded: usize,
     pub blobs_skipped: usize,
     pub blobs_errored: usize,
     pub blobs_oversize: usize,
 }
 
-/// Scope key for this provider's [`datalib_etl::scope_config`] blob.
-/// Matches the `jmap:` prefix the state tokens use.
-const SCOPE_CONFIG_KEY: &str = "jmap:download";
-
-/// Blob key. Named so writer and reader can't drift, and the config key
-/// a [`datalib_etl::download_problems::DownloadProblem`] names.
+/// The config key a [`datalib_etl::download_problems::DownloadProblem`]
+/// about the label filter names.
 pub(crate) const K_ONLY_EXTRACT_LABELS: &str = "only_extract_labels";
 
-/// The subset of [`FetchOptions`] that decides which data lands on disk.
-/// Only the label filter qualifies: `hostname`/`account_id` re-key the
-/// whole store, `full_resync` is a one-off override, and
-/// `blob_download_concurrency` is a throughput knob. The blob cap isn't
-/// here either — `sync_blobs` re-scans every email for missing bytes on
-/// every run, so raising it already backfills on its own.
-fn scope_config_blob(opts: &FetchOptions) -> Value {
-    // Sorted so a reordered config list isn't mistaken for a change.
-    let mut labels: Vec<&str> = opts
-        .only_mailbox_labels
-        .iter()
-        .map(String::as_str)
-        .collect();
-    labels.sort_unstable();
-    json!({ K_ONLY_EXTRACT_LABELS: labels })
-}
-
-/// Session, mailboxes, emails, threads, blobs: the five ticks the outer
-/// bar makes whatever the run turns out to hold.
-const PHASES: u64 = 5;
+/// Session, mailboxes, emails, blobs: the four ticks the outer bar
+/// makes whatever the run turns out to hold.
+const PHASES: u64 = 4;
 
 /// The listing and phase names a `problems` row carries.
 const M_MAILBOX_GET: &str = "Mailbox/get";
+const M_EMAIL_CHANGES: &str = "Email/changes";
 const M_EMAIL_QUERY: &str = "Email/query";
-const M_THREAD_GET: &str = "Thread/get";
+const M_EMAIL_GET: &str = "Email/get";
 const M_EML_DOWNLOAD: &str = "eml_download";
+
+/// `Email/get` batches in a row that may fail before the phase stops.
+const GET_FAILURE_BUDGET: usize = 3;
 
 /// `.eml` downloads in a row that may fail before the phase stops: past
 /// this many, something is wrong with every download, not with one.
@@ -379,40 +350,8 @@ async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     )
     .await?;
 
-    // Diff the scope-affecting params against the ones that produced the
-    // stored `Email/changes` cursor. `None` (fresh store, or one written
-    // before `sync_scope_config` existed) plans no backfill.
-    let scope_cfg = scope_config_blob(&opts);
-    let prior_scope_cfg =
-        datalib_etl::scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
-    let label_change = datalib_etl::scope_config::filter_widened(
-        prior_scope_cfg.as_ref(),
-        K_ONLY_EXTRACT_LABELS,
-        &opts.only_mailbox_labels,
-    );
-
-    let result = run_sync(
-        &db,
-        &session,
-        &account_id,
-        &opts,
-        &label_change,
-        &bar,
-        &found,
-    )
-    .await;
+    let result = run_sync(&db, &session, &account_id, &opts, &bar, &found).await;
     bar.finish();
-    // Record the config only once the run satisfied it, so a failure —
-    // or a run that stopped when asked, with mailboxes still unwalked —
-    // leaves the previous label set in place and the next run re-plans
-    // the backfill.
-    datalib_etl::scope_config::store_if_satisfied(
-        db.pool(),
-        SCOPE_CONFIG_KEY,
-        &scope_cfg,
-        result.is_ok() && !opts.control.stop.requested(),
-    )
-    .await;
     // On error we still serialize a partial-summary stub so the row
     // has fields for grafana-style dashboards to graph. The summary
     // type is the same on both paths; on error its fields will simply
@@ -427,11 +366,6 @@ async fn run_sync(
     session: &Session,
     account_id: &str,
     opts: &FetchOptions,
-    // How `only_extract_labels` moved since the run that produced the
-    // stored cursor. `Email/changes` can't surface existing mail in
-    // newly-admitted mailboxes — nothing in them *changed* — so a
-    // widening needs its own enumeration.
-    label_change: &datalib_etl::scope_config::FilterChange,
     bar: &RunBar,
     found: &RunProblems,
 ) -> Result<FetchSummary> {
@@ -459,43 +393,28 @@ async fn run_sync(
 
     // ── mailboxes ───────────────────────────────────────────────────
     bar.doing("mailboxes");
-    if let Err(e) = sync_mailboxes(db, &now, session, account_id, opts, &mut summary).await {
-        // The mailboxes an earlier listing stored still file the mail;
-        // with none stored there is nothing to file it under.
-        let stored = !db.mailbox_names(account_id).await?.is_empty();
-        if !api::is_upstream(&e) || !(stored || opts.control.stop.requested()) {
-            return Err(e);
-        }
-        found.listing(M_MAILBOX_GET, format!("{e:#}"));
-    }
+    let listed = sync_mailboxes(db, &now, session, account_id, opts, &mut summary).await;
+    // The mailboxes an earlier listing stored still file the mail; with
+    // none stored there is nothing to file it under.
+    let stored = !db.mailbox_names(account_id).await?.is_empty();
+    or_a_listing_problem(listed, M_MAILBOX_GET, stored, opts, found)?;
     bar.did(1);
 
-    // Parse the mailbox tree once: both the extraction filter and the
-    // widened-label backfill resolve label paths against it.
-    // (`Mailbox/get` always re-lists, even on an incremental run.)
-    let mailbox_nodes: Vec<crate::mailbox_labels::MailboxNode> =
-        if opts.only_mailbox_labels.is_empty()
-            && *label_change == datalib_etl::scope_config::FilterChange::Unchanged
-        {
-            Vec::new()
-        } else {
-            db.load_mailboxes()
-                .await?
-                .iter()
-                .filter_map(crate::mailbox_labels::MailboxNode::from_payload)
-                .collect()
-        };
-
     // Resolve the configured label paths to mailbox ids now that the
-    // full tree is in the db (`Mailbox/get` always re-lists, even on an
-    // incremental run). Empty config = no filter (sync every mailbox).
-    // An all-unmatched filter resolves to an empty set, which means
-    // "match nothing" — loud-warned below so a typo'd path doesn't
+    // full tree is in the db. Empty config = no filter (sync every
+    // mailbox). An all-unmatched filter resolves to an empty set, which
+    // means "match nothing" — reported below so a typo'd path doesn't
     // silently drop the whole account.
-    let mailbox_filter: Option<HashSet<String>> = if opts.only_mailbox_labels.is_empty() {
+    let mailbox_filter: Option<BTreeSet<String>> = if opts.only_mailbox_labels.is_empty() {
         None
     } else {
-        let resolved = crate::mailbox_labels::resolve(&mailbox_nodes, &opts.only_mailbox_labels);
+        let nodes: Vec<crate::mailbox_labels::MailboxNode> = db
+            .load_mailboxes()
+            .await?
+            .iter()
+            .filter_map(crate::mailbox_labels::MailboxNode::from_payload)
+            .collect();
+        let resolved = crate::mailbox_labels::resolve(&nodes, &opts.only_mailbox_labels);
         for spec in &resolved.unmatched {
             summary
                 .problems
@@ -511,91 +430,31 @@ async fn run_sync(
             resolved_mailboxes = resolved.ids.len(),
             "resolved the label filter to mailboxes"
         );
-        Some(resolved.ids)
+        Some(resolved.ids.into_iter().collect())
     };
     // Every run, so a filter corrected or removed takes its rows with it.
     found.config(summary.problems.clone());
 
-    // Mailboxes newly admitted by a widened `only_extract_labels`.
-    // `Email/changes` only reports what changed since the cursor, so
-    // existing mail in these mailboxes is invisible to it and needs its
-    // own bounded enumeration.
-    // `None` = no backfill. `Some(None)` = the filter was removed, so
-    // enumerate the whole account. `Some(Some(ids))` = enumerate just
-    // the newly-admitted mailboxes.
-    #[allow(clippy::option_option)]
-    let backfill: Option<Option<HashSet<String>>> = match label_change {
-        datalib_etl::scope_config::FilterChange::Unchanged => None,
-        datalib_etl::scope_config::FilterChange::WidenedToAll => {
-            info!(
-                event = "jmap_label_filter_widened",
-                added = "<filter removed>",
-                "enumerating the whole account",
-            );
-            Some(None)
-        }
-        datalib_etl::scope_config::FilterChange::Added(added) => {
-            let resolved = crate::mailbox_labels::resolve(&mailbox_nodes, added);
-            if resolved.ids.is_empty() {
-                None
-            } else {
-                info!(
-                    event = "jmap_label_filter_widened",
-                    added = %added.join(", "),
-                    resolved_mailboxes = resolved.ids.len(),
-                    "enumerating newly-in-scope mailboxes",
-                );
-                Some(Some(resolved.ids))
-            }
-        }
-    };
-
-    // ── emails (+ collect threadIds) ────────────────────────────────
+    // ── emails ──────────────────────────────────────────────────────
     bar.doing("emails");
-    let mut touched_threads: HashSet<String> = HashSet::new();
-    if let Err(e) = sync_emails(
+    let listing = EmailListing {
         db,
-        opts.sealer.as_ref(),
-        &now,
+        now: &now,
         session,
         account_id,
         opts,
-        mailbox_filter.as_ref(),
-        backfill.as_ref(),
-        bar,
-        &mut summary,
-        &mut touched_threads,
-    )
-    .await
-    {
-        // The walk stopped part-way: what it stored stays, nothing is
-        // pruned, and no state is saved, so the next run walks again.
-        let stored = db.holds_emails(account_id).await?;
-        if !api::is_upstream(&e) || !(stored || opts.control.stop.requested()) {
-            return Err(e);
-        }
-        found.listing(M_EMAIL_QUERY, format!("{e:#}"));
-    }
-    bar.did(1);
-
-    // ── threads ─────────────────────────────────────────────────────
-    bar.doing("threads");
-    // A thread an earlier run could not get has emails and no row; its
-    // emails will not change to name it again.
-    touched_threads.extend(db.threads_without_a_row(account_id).await?);
-    if let Some(p) = sync_threads(
-        db,
-        &now,
-        session,
-        account_id,
-        opts,
-        &touched_threads,
-        &mut summary,
-    )
-    .await?
-    {
-        found.push(p);
-    }
+    };
+    let replayed = listing.replay_changes(&mut summary).await;
+    let listed_any = listed::lists_any(db.pool()).await?;
+    or_a_listing_problem(replayed, M_EMAIL_CHANGES, listed_any, opts, found)?;
+    let enumerated = listing
+        .enumerate_unlisted_scopes(mailbox_filter.as_ref(), &mut summary)
+        .await;
+    let listed_any = listed::lists_any(db.pool()).await?;
+    or_a_listing_problem(enumerated, M_EMAIL_QUERY, listed_any, opts, found)?;
+    listing
+        .fetch_owed(mailbox_filter.as_ref(), bar, found, &mut summary)
+        .await?;
     bar.did(1);
 
     // ── blobs ───────────────────────────────────────────────────────
@@ -609,13 +468,34 @@ async fn run_sync(
         mailboxes_upserted = summary.mailboxes_upserted,
         emails_upserted = summary.emails_upserted,
         emails_destroyed = summary.emails_destroyed,
-        threads_upserted = summary.threads_upserted,
         blobs_downloaded = summary.blobs_downloaded,
         blobs_oversize = summary.blobs_oversize,
         blobs_errored = summary.blobs_errored,
         "the JMAP download is done"
     );
     Ok(summary)
+}
+
+/// A listing that upstream would not answer is a `problems` row and the
+/// run goes on with what an earlier listing `stored`; what it listed
+/// before it failed stays listed, and nothing is deleted for being
+/// absent from it. With nothing stored there is nothing to go on with,
+/// and a store that would not write always fails the run.
+fn or_a_listing_problem(
+    listed: Result<()>,
+    name: &str,
+    stored: bool,
+    opts: &FetchOptions,
+    found: &RunProblems,
+) -> Result<()> {
+    let Err(e) = listed else {
+        return Ok(());
+    };
+    if !api::is_upstream(&e) || !(stored || opts.control.stop.requested()) {
+        return Err(e);
+    }
+    found.listing(name, format!("{e:#}"));
+    Ok(())
 }
 
 // Mailboxes
@@ -738,344 +618,302 @@ async fn incremental_mailboxes(
 
 // Emails
 
-#[allow(clippy::too_many_arguments)]
-async fn sync_emails(
-    db: &RawDb,
-    sealer: Option<&datalib_etl::raw_store::Sealer>,
-    now: &IsoOffsetTimestamp,
-    session: &Session,
-    account_id: &str,
-    opts: &FetchOptions,
-    mailbox_filter: Option<&HashSet<String>>,
-    #[allow(clippy::option_option)] backfill: Option<&Option<HashSet<String>>>,
-    bar: &RunBar,
-    summary: &mut FetchSummary,
-    touched_threads: &mut HashSet<String>,
-) -> Result<()> {
-    let stored = if opts.full_resync {
-        None
-    } else {
-        db.load_state(account_id, "Email").await?
-    };
-
-    if let Some(since) = stored {
-        match incremental_emails(
-            db,
-            sealer,
-            now,
-            session,
-            account_id,
-            &since,
-            mailbox_filter,
-            bar,
-            summary,
-            touched_threads,
-        )
-        .await
-        {
-            Ok(()) => {
-                // The incremental pass covered everything that changed.
-                // A widened label filter additionally needs the mail
-                // that did *not* change in the newly-admitted mailboxes.
-                if let Some(scope) = backfill {
-                    let seen = full_enumerate_emails(
-                        db,
-                        sealer,
-                        now,
-                        session,
-                        account_id,
-                        scope.as_ref(),
-                        bar,
-                        summary,
-                        touched_threads,
-                    )
-                    .await?;
-                    prune_to_enumeration(db, account_id, scope.as_ref(), seen, summary).await?;
-                }
-                return Ok(());
-            }
-            Err(e) => warn!(
-                event = "jmap_email_changes_fallback",
-                error = %e,
-                "falling back to full Email/query enumeration",
-            ),
-        }
-    }
-
-    let seen = full_enumerate_emails(
-        db,
-        sealer,
-        now,
-        session,
-        account_id,
-        mailbox_filter,
-        bar,
-        summary,
-        touched_threads,
-    )
-    .await?;
-    prune_to_enumeration(db, account_id, mailbox_filter, seen, summary).await
+/// What the email phase's three steps share.
+struct EmailListing<'a> {
+    db: &'a RawDb,
+    now: &'a IsoOffsetTimestamp,
+    session: &'a Session,
+    account_id: &'a str,
+    opts: &'a FetchOptions,
 }
 
-/// Delete the emails a finished, unfiltered `Email/query` walk did not
-/// list: they were destroyed while no `Email/changes` cursor was
-/// replaying. A walk narrowed to some mailboxes, or one that stopped
-/// part-way, says nothing about the mail it did not reach.
-async fn prune_to_enumeration(
-    db: &RawDb,
-    account_id: &str,
-    mailbox_filter: Option<&HashSet<String>>,
-    seen: Option<BTreeSet<String>>,
-    summary: &mut FetchSummary,
-) -> Result<()> {
-    match (mailbox_filter, seen) {
-        (None, Some(seen)) => {
-            summary.emails_destroyed += db.prune_emails_to(account_id, &seen).await?;
-        }
-        (filter, seen) => info!(
-            event = "jmap_prune_skipped",
-            label_filtered = filter.is_some(),
-            finished = seen.is_some(),
-            "the enumeration did not list the whole account; not treating unlisted emails as destroyed",
-        ),
+impl EmailListing<'_> {
+    fn stopping(&self) -> bool {
+        self.opts.control.stop.requested()
     }
-    Ok(())
-}
 
-#[allow(clippy::too_many_arguments)]
-async fn incremental_emails(
-    db: &RawDb,
-    sealer: Option<&datalib_etl::raw_store::Sealer>,
-    now: &IsoOffsetTimestamp,
-    session: &Session,
-    account_id: &str,
-    since: &str,
-    mailbox_filter: Option<&HashSet<String>>,
-    bar: &RunBar,
-    summary: &mut FetchSummary,
-    touched_threads: &mut HashSet<String>,
-) -> Result<()> {
-    bar.doing("replaying changes");
-    let mut cursor = since.to_string();
-    loop {
-        let changes = call(
-            session,
-            "Email/changes",
-            json!({"accountId": account_id, "sinceState": cursor, "maxChanges": CHANGES_MAX}),
-        )
-        .await?;
-        let created = string_array(&changes, "created");
-        let updated = string_array(&changes, "updated");
-        let destroyed = string_array(&changes, "destroyed");
+    fn token_scope(&self) -> String {
+        db::state_scope(self.account_id, "Email")
+    }
 
-        // Detail-fetch created + updated in batches.
-        let to_fetch: Vec<String> = created.into_iter().chain(updated).collect();
-        // One `Email/changes` page at a time: the protocol says whether
-        // more are coming, never how many ids they hold in total.
-        bar.expect(to_fetch.len() as u64);
-        for batch in to_fetch.chunks(EMAIL_GET_BATCH) {
-            // Asked to stop: the batch that just landed sealed, and the
-            // state for this page is saved only below, so the next run
-            // takes the page again from where this one started.
-            if sealer.is_some_and(|s| s.stopping()) {
-                info!(
-                    event = "jmap_interrupted",
-                    phase = "Email/changes",
-                    "told to stop; leaving the rest of this phase for the next run"
-                );
+    /// Replay `Email/changes` from the stored state, one response to a
+    /// transaction: what it names as created or updated is listed under
+    /// its `newState`, what it names as destroyed goes, and the state
+    /// advances. Whether a named email has been fetched yet is not asked
+    /// here, so the state never waits on a fetch.
+    ///
+    /// With no state to replay from (a first run, `full_resync`, or a
+    /// state the server can no longer calculate changes from) the delta
+    /// starts over from the account's state now.
+    async fn replay_changes(&self, summary: &mut FetchSummary) -> Result<()> {
+        let stored = if self.opts.full_resync {
+            None
+        } else {
+            self.db.load_state(self.account_id, "Email").await?
+        };
+        let Some(mut since) = stored else {
+            return self.start_over().await;
+        };
+        loop {
+            if self.stopping() {
                 return Ok(());
             }
-            let resp = email_get(session, account_id, batch).await?;
-            let list = jmap_list(&resp);
-            ingest_email_list(
-                db,
-                now,
-                account_id,
-                list,
-                mailbox_filter,
-                summary,
-                touched_threads,
+            let changes = match call(
+                self.session,
+                "Email/changes",
+                json!({"accountId": self.account_id, "sinceState": since, "maxChanges": CHANGES_MAX}),
             )
-            .await?;
-            bar.did(batch.len() as u64);
-            // A batch of `Email/get` results has landed in full -- rows and
-            // the blobs they name together -- so the store is consistent
-            // here. Deletions are applied separately, after the walk.
-            if let Some(sealer) = sealer {
-                sealer.wrote(batch.len() as u64).await;
+            .await
+            {
+                Ok(changes) => changes,
+                Err(e) if api::cannot_calculate_changes(&e) => {
+                    info!(
+                        event = "jmap_email_state_expired",
+                        state = %since,
+                        "the server cannot calculate changes from the stored state; listing the account again"
+                    );
+                    return self.start_over().await;
+                }
+                Err(e) => return Err(e),
+            };
+            let named: Vec<String> = string_array(&changes, "created")
+                .into_iter()
+                .chain(string_array(&changes, "updated"))
+                .collect();
+            let destroyed = string_array(&changes, "destroyed");
+            let new_state = changes
+                .get("newState")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("Email/changes response missing newState"))?
+                .to_string();
+
+            let mut tx = self.db.pool().begin().await.context("begin changes tx")?;
+            listed::list_in_tx(&mut tx, &named, Some(&new_state), Named::Changed).await?;
+            summary.emails_destroyed += listed::forget_in_tx(&mut tx, self.now, &destroyed).await?;
+            listed::save_token_in_tx(&mut tx, &self.token_scope(), &new_state).await?;
+            tx.commit().await.context("commit changes tx")?;
+            if let Some(sealer) = &self.opts.sealer {
+                sealer.wrote(destroyed.len() as u64).await;
             }
-        }
 
-        if !destroyed.is_empty() {
-            summary.emails_destroyed += destroyed.len();
-            db.delete_emails(&destroyed).await?;
+            let has_more = changes
+                .get("hasMoreChanges")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if !has_more {
+                return Ok(());
+            }
+            since = new_state;
         }
+    }
 
-        let new_state = changes
-            .get("newState")
+    /// The state is asked for before anything is enumerated, so whatever
+    /// changes while the enumeration walks is replayed by the next run.
+    async fn start_over(&self) -> Result<()> {
+        let resp = email_get(self.session, self.account_id, &[]).await?;
+        let state = resp
+            .get("state")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow!("Email/changes response missing newState"))?
-            .to_string();
-        db.save_state(account_id, "Email", &new_state).await?;
+            .ok_or_else(|| anyhow!("Email/get response missing state"))?;
+        listed::start_over(self.db.pool(), &self.token_scope(), Some(state), true).await
+    }
 
-        let has_more = changes
-            .get("hasMoreChanges")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        if !has_more {
+    /// Enumerate, with `Email/query`, the admitted mailboxes (or the
+    /// account) no enumeration has listed whole: a first run, a start
+    /// over, a mailbox the label filter newly admits. Each page lists its
+    /// ids; an email already listed is left as it is. The walk starts
+    /// again every run until one reaches its end, and only that one
+    /// records its scopes as listed whole and, when it covered the whole
+    /// account, deletes what it did not name.
+    async fn enumerate_unlisted_scopes(
+        &self,
+        mailbox_filter: Option<&BTreeSet<String>>,
+        summary: &mut FetchSummary,
+    ) -> Result<()> {
+        let admitted: BTreeSet<String> = match mailbox_filter {
+            None => [WHOLE_ACCOUNT.to_string()].into(),
+            Some(ids) => ids.clone(),
+        };
+        let scopes = listed::scopes_owed(self.db.pool(), &admitted).await?;
+        // Without a state there is no delta to say what changes after
+        // the walk; the next run starts over and enumerates then.
+        let Some(state) = self.db.load_state(self.account_id, "Email").await? else {
+            return Ok(());
+        };
+        if scopes.is_empty() {
             return Ok(());
         }
-        cursor = new_state;
-    }
-}
+        let filter = match (mailbox_filter, scopes.as_slice()) {
+            (None, _) => Value::Null,
+            (Some(_), [one]) => json!({"inMailbox": one}),
+            (Some(_), many) => {
+                let conds: Vec<Value> = many.iter().map(|m| json!({"inMailbox": m})).collect();
+                json!({"operator": "OR", "conditions": conds})
+            }
+        };
+        info!(
+            event = "jmap_enumerating",
+            scopes = %scopes.join(", "),
+            "listing what no enumeration has listed whole"
+        );
 
-#[allow(clippy::too_many_arguments)]
-async fn full_enumerate_emails(
-    db: &RawDb,
-    sealer: Option<&datalib_etl::raw_store::Sealer>,
-    now: &IsoOffsetTimestamp,
-    session: &Session,
-    account_id: &str,
-    mailbox_filter: Option<&HashSet<String>>,
-    bar: &RunBar,
-    summary: &mut FetchSummary,
-    touched_threads: &mut HashSet<String>,
-) -> Result<Option<BTreeSet<String>>> {
-    bar.doing("enumerating");
-    // `total` below is this walk's own size, so the run total is it
-    // plus whatever a preceding incremental pass already announced.
-    let before = bar.announced();
-    // Decide filter: if a label filter resolved to mailbox ids, push it
-    // server-side as an OR over inMailbox.
-    let filter = match mailbox_filter {
-        None => Value::Null,
-        Some(set) if set.is_empty() => {
-            // Label filter resolved to zero mailboxes (all paths
-            // unmatched). Nothing can match — skip enumeration rather
-            // than send a degenerate empty-OR filter.
-            return Ok(None);
-        }
-        Some(set) if set.len() == 1 => {
-            json!({"inMailbox": set.iter().next().unwrap()})
-        }
-        Some(set) => {
-            let conds: Vec<Value> = set.iter().map(|m| json!({"inMailbox": m})).collect();
-            json!({"operator": "OR", "conditions": conds})
-        }
-    };
+        let mut position: usize = 0;
+        let mut query_state: Option<String> = None;
+        // Every id any page listed. A restart after a `queryState` shift
+        // keeps what it had: those emails existed when listed, and a
+        // later destroy reaches us through `Email/changes`.
+        let mut named: BTreeSet<String> = BTreeSet::new();
+        loop {
+            if self.stopping() {
+                return Ok(());
+            }
+            let mut args = json!({
+                "accountId": self.account_id,
+                "sort": [{"property": "receivedAt", "isAscending": false}],
+                "limit": EMAIL_QUERY_PAGE,
+                "position": position,
+                "calculateTotal": true,
+            });
+            if !filter.is_null() {
+                args["filter"] = filter.clone();
+            }
+            let resp = call(self.session, "Email/query", args).await?;
 
-    let mut position: i64 = 0;
-    // The account's live state token, taken from the first `Email/get` and
-    // stored only once the enumeration has walked everything: stored
-    // earlier, a walk that ends part-way — an error, a stop — leaves a
-    // token behind, and the next run goes incremental from it and never
-    // enumerates the rest.
-    let mut live_state: Option<String> = None;
-    let mut query_state: Option<String> = None;
-    // Every id any page listed. A restart after a `queryState` shift
-    // keeps what it had: those emails existed when listed, and a later
-    // destroy reaches us through the next `Email/changes`.
-    let mut seen: BTreeSet<String> = BTreeSet::new();
-    loop {
-        let mut args = json!({
-            "accountId": account_id,
-            "sort": [{"property": "receivedAt", "isAscending": false}],
-            "limit": EMAIL_QUERY_PAGE,
-            "position": position,
-            "calculateTotal": true,
-        });
-        if !filter.is_null() {
-            args["filter"] = filter.clone();
-        }
-        let resp = call(session, "Email/query", args).await?;
-
-        let page_state = resp
-            .get("queryState")
-            .and_then(|v| v.as_str())
-            .map(String::from);
-        if let (Some(stored), Some(current)) = (&query_state, &page_state) {
-            if stored != current {
-                // Result set shifted underneath us; restart from page 0.
+            let page_state = resp
+                .get("queryState")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            if query_state.is_some() && page_state.is_some() && query_state != page_state {
                 warn!(
                     event = "jmap_email_query_state_shift",
                     "queryState changed mid-pagination; restarting"
                 );
                 position = 0;
-                query_state = Some(current.clone());
+                query_state = page_state;
                 continue;
             }
-        } else if query_state.is_none() {
-            query_state = page_state.clone();
-        }
+            query_state = query_state.or(page_state);
 
-        let ids: Vec<String> = resp
-            .get("ids")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default();
-        if ids.is_empty() {
-            break;
-        }
-        // `calculateTotal` means every page carries the size of the whole
-        // result set, not of the page — so raise the total to it rather
-        // than adding, or each page counts the same messages again.
-        if let Some(total) = resp.get("total").and_then(|v| v.as_i64()) {
-            bar.expect_at_least(before + total.max(0) as u64);
-        }
-        position += ids.len() as i64;
-        seen.extend(ids.iter().cloned());
-
-        for batch in ids.chunks(EMAIL_GET_BATCH) {
-            // Asked to stop: the batch that just landed sealed; with no
-            // state token stored, the next run enumerates again.
-            if sealer.is_some_and(|s| s.stopping()) {
-                info!(
-                    event = "jmap_interrupted",
-                    phase = "Email/query",
-                    "told to stop; leaving the rest of this phase for the next run"
-                );
-                return Ok(None);
+            let ids = string_array(&resp, "ids");
+            if ids.is_empty() {
+                break;
             }
-            let getresp = email_get(session, account_id, batch).await?;
-            let list = jmap_list(&getresp);
-            ingest_email_list(
-                db,
-                now,
-                account_id,
-                list,
-                mailbox_filter,
-                summary,
-                touched_threads,
-            )
-            .await?;
-            bar.did(batch.len() as u64);
-            // A batch has landed in full, so the store is consistent here.
-            if let Some(sealer) = sealer {
-                sealer.wrote(batch.len() as u64).await;
+            let mut tx = self.db.pool().begin().await.context("begin listing tx")?;
+            listed::list_in_tx(&mut tx, &ids, Some(&state), Named::Exists).await?;
+            tx.commit().await.context("commit listing tx")?;
+            if let Some(sealer) = &self.opts.sealer {
+                sealer.wrote(ids.len() as u64).await;
             }
+            position += ids.len();
+            named.extend(ids);
 
-            if live_state.is_none() {
-                live_state = getresp
-                    .get("state")
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string);
-            }
-        }
-
-        if let Some(total) = resp.get("total").and_then(|v| v.as_i64()) {
-            if position >= total {
+            let total = resp.get("total").and_then(|v| v.as_u64());
+            if total.is_some_and(|total| position as u64 >= total) {
                 break;
             }
         }
+        let whole_account = mailbox_filter.is_none();
+        summary.emails_destroyed += listed::close_enumeration(
+            self.db.pool(),
+            self.now,
+            &scopes,
+            whole_account.then_some(&named),
+        )
+        .await?;
+        Ok(())
     }
-    if let Some(state) = live_state {
-        db.save_state(account_id, "Email", &state).await?;
+
+    /// Fetch, with `Email/get`, every listed email the store does not
+    /// hold at its listed stamp. Each batch is one transaction: the
+    /// email rows, their thread rows and the stamp they satisfy. An email
+    /// the server no longer has, or that a label filter keeps out, loses
+    /// its listing and whatever was held for it. A batch that fails
+    /// leaves its emails owed.
+    async fn fetch_owed(
+        &self,
+        mailbox_filter: Option<&BTreeSet<String>>,
+        bar: &RunBar,
+        found: &RunProblems,
+        summary: &mut FetchSummary,
+    ) -> Result<()> {
+        let owed = listed::owed(self.db.pool()).await?;
+        if owed.is_empty() {
+            return Ok(());
+        }
+        bar.expect(owed.len() as u64);
+        bar.doing("fetching emails");
+        let mut failures_in_a_row = 0;
+        for batch in owed.chunks(EMAIL_GET_BATCH) {
+            if self.stopping() {
+                return Ok(());
+            }
+            let ids: Vec<String> = batch.iter().map(|o| o.id.clone()).collect();
+            let resp = match email_get(self.session, self.account_id, &ids).await {
+                Ok(resp) => resp,
+                Err(_) if self.stopping() => return Ok(()),
+                Err(e) if !api::is_upstream(&e) => return Err(e),
+                Err(e) => {
+                    let said = format!("{e:#}");
+                    listed::record_failures(self.db.pool(), &ids, &said).await?;
+                    failures_in_a_row += 1;
+                    if api::is_terminal(&e) || failures_in_a_row >= GET_FAILURE_BUDGET {
+                        found.phase(M_EMAIL_GET, said);
+                        found.cut_short();
+                        return Ok(());
+                    }
+                    bar.did(batch.len() as u64);
+                    continue;
+                }
+            };
+            failures_in_a_row = 0;
+
+            let stamps: HashMap<&str, &Option<String>> =
+                batch.iter().map(|o| (o.id.as_str(), &o.stamp)).collect();
+            let mut held: Vec<Held> = Vec::new();
+            let mut gone = string_array(&resp, "notFound");
+            for envelope in jmap_list(&resp) {
+                let Some(row) = EmailRow::from_jmap_envelope(self.account_id, &envelope) else {
+                    continue;
+                };
+                let Some(stamp) = stamps.get(row.id()) else {
+                    continue;
+                };
+                let admitted =
+                    mailbox_filter.is_none_or(|f| row.mailbox_ids().iter().any(|m| f.contains(m)));
+                if admitted {
+                    held.push(Held {
+                        id: row.id().to_string(),
+                        stamp: (*stamp).clone(),
+                        row,
+                    });
+                } else {
+                    gone.push(row.id().to_string());
+                }
+            }
+            let unanswered: Vec<String> = ids
+                .iter()
+                .filter(|id| !gone.contains(id) && !held.iter().any(|h| &h.id == *id))
+                .cloned()
+                .collect();
+            summary.emails_upserted += held.len();
+
+            let mut tx = self.db.pool().begin().await.context("begin emails tx")?;
+            listed::hold_in_tx(&mut tx, self.now, held).await?;
+            summary.emails_destroyed += listed::forget_in_tx(&mut tx, self.now, &gone).await?;
+            tx.commit().await.context("commit emails tx")?;
+            listed::record_failures(
+                self.db.pool(),
+                &unanswered,
+                "Email/get returned neither the email nor notFound for it",
+            )
+            .await?;
+            bar.did(batch.len() as u64);
+            if let Some(sealer) = &self.opts.sealer {
+                sealer.wrote(batch.len() as u64).await;
+            }
+        }
+        Ok(())
     }
-    Ok(Some(seen))
 }
 
 async fn email_get(session: &Session, account_id: &str, ids: &[String]) -> Result<Value> {
@@ -1093,97 +931,6 @@ async fn email_get(session: &Session, account_id: &str, ids: &[String]) -> Resul
         }),
     )
     .await
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn ingest_email_list(
-    db: &RawDb,
-    now: &IsoOffsetTimestamp,
-    account_id: &str,
-    list: Vec<Value>,
-    mailbox_filter: Option<&HashSet<String>>,
-    summary: &mut FetchSummary,
-    touched_threads: &mut HashSet<String>,
-) -> Result<()> {
-    let mut rows: Vec<EmailRow> = Vec::with_capacity(list.len());
-    for envelope in list {
-        let Some(row) = EmailRow::from_jmap_envelope(account_id, &envelope) else {
-            continue;
-        };
-        if let Some(allow) = mailbox_filter {
-            if !row.mailbox_ids().iter().any(|m| allow.contains(m)) {
-                continue;
-            }
-        }
-        touched_threads.insert(row.thread_id.clone());
-        rows.push(row);
-    }
-    if rows.is_empty() {
-        return Ok(());
-    }
-    summary.emails_upserted += rows.len();
-    upsert_emails(db, now, &rows).await
-}
-
-// Threads
-
-async fn sync_threads(
-    db: &RawDb,
-    now: &IsoOffsetTimestamp,
-    session: &Session,
-    account_id: &str,
-    opts: &FetchOptions,
-    touched: &HashSet<String>,
-    summary: &mut FetchSummary,
-) -> Result<Option<RunProblem>> {
-    if touched.is_empty() || opts.control.stop.requested() {
-        return Ok(None);
-    }
-    // Sorted: `touched` is a hash set, so the same threads would
-    // otherwise go out as a different request — batched differently
-    // each run, and unmatchable by a recorded playback fixture.
-    let mut ids: Vec<String> = touched.iter().cloned().collect();
-    ids.sort_unstable();
-    // A batch that will not answer costs only its threads, and is the
-    // run's one `phase:` row.
-    let mut failed: Option<RunProblem> = None;
-    for batch in ids.chunks(THREAD_GET_BATCH) {
-        let resp = match call(
-            session,
-            "Thread/get",
-            json!({"accountId": account_id, "ids": batch}),
-        )
-        .await
-        {
-            Ok(resp) => resp,
-            Err(e) => {
-                let terminal = api::is_terminal(&e);
-                failed.get_or_insert_with(|| RunProblem::phase(M_THREAD_GET, format!("{e:#}")));
-                if terminal {
-                    break;
-                }
-                continue;
-            }
-        };
-        let list = jmap_list(&resp);
-        // Build the whole batch's worth of rows up front, then bulk-
-        // upsert in one tx. The per-thread `upsert_thread` call this
-        // replaced opened a fresh transaction per row, which made a
-        // 200-thread sync 200 sequential commits.
-        let mut rows: Vec<ThreadRow> = Vec::with_capacity(list.len());
-        for thread in &list {
-            let Some(id) = thread.get("id").and_then(|v| v.as_str()) else {
-                continue;
-            };
-            rows.push(ThreadRow::from_jmap_payload(id, account_id, thread)?);
-        }
-        summary.threads_upserted += rows.len();
-        upsert_threads(db, now, &rows).await?;
-        if let Some(state) = resp.get("state").and_then(|v| v.as_str()) {
-            db.save_state(account_id, "Thread", state).await?;
-        }
-    }
-    Ok(failed)
 }
 
 // Blobs

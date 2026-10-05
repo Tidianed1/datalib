@@ -1,6 +1,6 @@
 # Sync state: what is owed is what upstream listed, minus what we hold
 
-**Status: decided 2026-10-05; steps 0 to 2 of §7 are built (the three fixes, Garmin, Slack).** This is the design and
+**Status: decided 2026-10-05; steps 0 to 3 of §7 are built (the three fixes, Garmin, Slack, email's two API paths).** This is the design and
 the order of work. It came out of the audit in
 [`audits/2026-10-05_loose_ends.md`](../audits/2026-10-05_loose_ends.md)
 and a read of the four downloads with the most resume state (Slack,
@@ -373,7 +373,41 @@ separate attachment retry pass, `walks_cut_short` as a gate. Stays: the
 sweep markers for `conversations.list` and `users.list` (they schedule
 a listing), the refresh window and its prune, account state.
 
-### What doing them showed
+### Email (step 3)
+
+A delta names what changed and gives no version, so the listing mints
+one: each item a delta names is stamped with the token of the response
+that named it. What we hold records the stamp it was fetched for.
+
+| Kind | Listed (wanted) | Held | Owed |
+|---|---|---|---|
+| a message (JMAP) | a row per email id the delta or an enumeration named, with the state token that last named it | the email row, with the token it was fetched for | tokens differ, or no email row |
+| a message (Gmail) | a row per Gmail id `history.list` or `messages.list` named, with the `historyId` that last named it; a relabel names it again | the id-to-email mapping row, written with the email, with the `historyId` it was fetched for | they differ, or no mapping row |
+| a body (`.eml`) | the email row | the blob edge's bytes | no bytes, and not over the size limit |
+| a thread | — | — | not fetched: membership is written from the email rows, in the transaction that writes them, unless something is found to need upstream's thread object |
+| which mailboxes or labels have been listed whole | the mailboxes the filter admits (or the account) | a row per scope whose enumeration reached its end | admitted and not yet enumerated |
+
+A delta's response is written in one transaction: the listed rows, the
+deletions it names, and the new token. The token advances then, because
+what the delta named is durable whether or not it has been fetched. A
+message that will not fetch stays owed and never holds the token.
+
+An enumeration (a first sync, an expired history, a newly admitted
+mailbox) lists ids page by page and restarts each run, since neither
+API's paging survives between runs; what it listed and what was fetched
+carry over. Its last transaction deletes what it did not name, saves the
+token it was started under, and records the scope as listed whole.
+
+Goes: `jmap:download` and `gmail:download` scope_config, `drained()`
+and `messages_failed` as a gate on the cursor, `known_gmail_ids` as a
+skip-check, `earlier_record_problems` and the `record:gmail_messages:`
+retry queue, `attempted`/`refetching`/`touched_threads` and the other
+in-memory sets, the JMAP `Thread` state token, the fall-back to a full
+enumeration on any error. Stays: the delta tokens, the quota throttle
+and budgets (policy), refile on a label that is gone, the body
+worklist. mbox is a local source and moves in step 6.
+
+### What doing these three showed
 
 - **A first sync hides these bugs.** Garmin's old code passed every one
   of 275 cuts from an empty store, and failed at cut 30 of 42 once the
@@ -390,4 +424,18 @@ a listing), the refresh window and its prune, account state.
   lists is now three or four queries over the store.
 - **An existing store is walked again once.** By the new rules it holds
   nothing: no spans, no fetched-on dates, no listing hashes.
+- **Email's enumeration saves its token when it starts, not when it
+  closes.** A walk that restarts next run would otherwise sample a
+  newer state and miss a change to something it had already listed.
+  What says "this scope was listed whole" is its own row, written with
+  the prune, so the token is free to move early.
+- **JMAP no longer fetches threads.** Nothing read upstream's thread
+  object; membership is written from the email rows in their
+  transaction, on both API paths.
+- **Three providers, three hand-built versions of the same thing.**
+  Each added its own "held version" (Garmin five columns, email a
+  table, Slack a table it already had) and its own fetch loop. Before
+  Notion: move the held version into the `_bookkeeping` sidecar every
+  table already has, so "owed" is one shared query, and write one
+  fetch loop whose unit is a batch with an outcome per item.
 

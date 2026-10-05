@@ -118,10 +118,12 @@ impl Mirror {
 
     pub async fn gmail_ids(&self) -> BTreeSet<String> {
         self.read(|db| async move {
-            sqlx::query_scalar::<_, String>("SELECT gmail_id FROM gmail_messages")
-                .fetch_all(db.pool())
-                .await
-                .expect("read gmail_messages")
+            sqlx::query_scalar::<_, String>(
+                "SELECT id FROM fetched_messages WHERE email_id IS NOT NULL",
+            )
+            .fetch_all(db.pool())
+            .await
+            .expect("read fetched_messages")
         })
         .await
         .into_iter()

@@ -90,18 +90,11 @@ impl DataProcessor for EmailIngest {
         &self.id
     }
 
-    /// Seals after each flushed batch — the email rows, their id mapping and
-    /// their blob bytes land together, so a consumer never sees a message
-    /// naming bytes it cannot resolve. Deletions come from
-    /// `prune_to_enumeration`, which runs after the walk and only when the
-    /// walk was authoritative over the whole mailbox, so between seals the
-    /// store is the previous snapshot plus what this run has mirrored.
-    ///
-    /// JMAP (Fastmail) and the Gmail API both seal, at their respective
-    /// batch boundaries. mbox does not — no seam is wired — so it commits
-    /// once at the end, which costs latency and never correctness: a
-    /// consumer that gets no checkpoints simply does one pass when the
-    /// download finishes.
+    /// JMAP (Fastmail) and the Gmail API seal after each batch of
+    /// fetched messages and each batch of `.eml` bodies. mbox does not —
+    /// no seam is wired — so it commits once at the end, which costs
+    /// latency and never correctness: a consumer that gets no checkpoints
+    /// simply does one pass when the download finishes.
     fn streams_output(&self) -> bool {
         true
     }
@@ -128,11 +121,10 @@ impl DataProcessor for EmailIngest {
                     })
                     .await?;
                     format!(
-                        "mailboxes={} emails={} destroyed={} threads={} blobs(dl={} oversize={} err={})",
+                        "mailboxes={} emails={} destroyed={} blobs(dl={} oversize={} err={})",
                         s.mailboxes_upserted,
                         s.emails_upserted,
                         s.emails_destroyed,
-                        s.threads_upserted,
                         s.blobs_downloaded,
                         s.blobs_oversize,
                         s.blobs_errored,
@@ -146,16 +138,16 @@ impl DataProcessor for EmailIngest {
                         latchkey: self.latchkey.clone(),
                         only_labels: self.only_extract_labels.clone(),
                         blob_size_limit_bytes: self.blob_size_limit_bytes,
+                        flush_batch: None,
                         progress: ctx.progress.clone(),
                         control: ctx.control.clone(),
                     })
                     .await?;
                     format!(
-                        "mailboxes={} threads={} emails={} destroyed={} \
+                        "mailboxes={} emails={} destroyed={} \
                          blobs(stored={} skipped={} oversize={}) filtered={} \
-                         quota_units={} full_sync={} budget_exhausted={}",
+                         quota_units={} walked=[{}] budget_exhausted={}",
                         s.mailboxes_upserted,
-                        s.threads_upserted,
                         s.emails_upserted,
                         s.emails_destroyed,
                         s.blobs_stored,
@@ -163,7 +155,7 @@ impl DataProcessor for EmailIngest {
                         s.blobs_oversize,
                         s.messages_filtered,
                         s.quota_units_spent,
-                        s.full_sync,
+                        s.walked.join(", "),
                         s.budget_exhausted,
                     )
                 }

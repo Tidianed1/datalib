@@ -1,6 +1,6 @@
 //! When part of a Gmail sync fails: what failed is a `problems` row that
 //! clears only once the same thing is tried again and works, and a
-//! failure every later request would share ends the run.
+//! failure every later request would share ends the fetch.
 //!
 //! Driven through the HTTP playback layer: no credential, no network.
 
@@ -19,11 +19,11 @@ use crate::support::{
 const PICARD: &str = "18c9f2a1b2c3d701";
 const RIKER: &str = "18c9f2a1b2c3d702";
 
-/// A message that fetched but would not store is behind the cursor the
-/// run then stores, so no later listing names it. Its bytes never
-/// change, so fetching it again with the same build would cost 20 quota
-/// units every run for the same answer: the row stands, and a new build
-/// asks for it by id.
+/// A message that fetched but would not store is not named again by any
+/// later listing. Its bytes never change, so fetching it again with the
+/// same build would cost 20 quota units every run for the same answer:
+/// the row stands, and a new build asks for it, because the store says
+/// which build it was that could not store it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_message_that_would_not_store_is_fetched_again_by_a_new_build() {
     let m = Mirror::new();
@@ -42,10 +42,7 @@ async fn a_message_that_would_not_store_is_fetched_again_by_a_new_build() {
     unusable["raw"] = json!("");
     put_gmail(&m.playback, &gmail_get_url(RIKER), &unusable);
     run(&m, |_| {}).await.expect("first run");
-    assert_eq!(
-        problems(&m).await,
-        [format!("record:gmail_messages:{RIKER}")]
-    );
+    assert_eq!(problems(&m).await, [format!("listed_messages:{RIKER}")]);
 
     // Nothing changed upstream since.
     put_gmail(
@@ -58,10 +55,7 @@ async fn a_message_that_would_not_store_is_fetched_again_by_a_new_build() {
         second.quota_units_spent, 4,
         "profile, labels and history only; the message was fetched again: {second:?}"
     );
-    assert_eq!(
-        problems(&m).await,
-        [format!("record:gmail_messages:{RIKER}")]
-    );
+    assert_eq!(problems(&m).await, [format!("listed_messages:{RIKER}")]);
 
     // A build that stores it.
     put_gmail(
@@ -145,10 +139,11 @@ async fn an_oversize_message_is_fetched_once_the_limit_allows() {
     assert!(problems(&m).await.is_empty(), "the .eml landed");
 }
 
-/// A refused credential refuses every message after it: the run ends
-/// on the first instead of writing one failure each.
+/// A refused credential refuses every message after it: the fetch ends
+/// on the first instead of writing one failure each. With nothing
+/// mirrored there is nothing for a partial run to keep, and it fails.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_refused_credential_ends_the_run() {
+async fn a_refused_credential_ends_the_fetch() {
     let m = Mirror::new();
     put_gmail_account(&m.playback, "9001", json!([inbox_label()]));
     put_gmail(
@@ -156,6 +151,7 @@ async fn a_refused_credential_ends_the_run() {
         &gmail_list_url(&[]),
         &json!({ "messages": [{ "id": RIKER }, { "id": PICARD }] }),
     );
+    // The newer id is fetched first.
     put_gmail_response(&m.playback, &gmail_get_url(RIKER), &status(401));
     put_gmail(
         &m.playback,
@@ -164,17 +160,56 @@ async fn a_refused_credential_ends_the_run() {
     );
     run(&m, |_| {})
         .await
-        .expect_err("a refused credential ends the run");
+        .expect_err("a refused credential with nothing mirrored fails the run");
     assert!(
         m.gmail_ids().await.is_empty(),
         "nothing after it was fetched"
     );
     assert!(problems(&m).await.is_empty());
-    assert_eq!(cursor(&m).await, None);
 }
 
-/// One label's walk that fails costs that label: the others are walked,
-/// the cursor is held, and the next run that walks it clears the row.
+/// The same refusal once something is mirrored was the run's error too,
+/// and a failed run commits nothing: the messages the run had fetched
+/// went with it. It is a `phase:` row now, and what was fetched stays.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refused_credential_keeps_what_the_run_fetched() {
+    let m = Mirror::new();
+    put_gmail_account(&m.playback, "9001", json!([inbox_label()]));
+    put_gmail(
+        &m.playback,
+        &gmail_list_url(&[]),
+        &json!({ "messages": [{ "id": RIKER }, { "id": PICARD }] }),
+    );
+    put_gmail(
+        &m.playback,
+        &gmail_get_url(RIKER),
+        &gmail_message(RIKER, &["INBOX"], "Number One"),
+    );
+    put_gmail_response(&m.playback, &gmail_get_url(PICARD), &status(401));
+    run(&m, |_| {})
+        .await
+        .expect("a refusal after a message landed keeps the run's work");
+    assert_eq!(m.gmail_ids().await, ids(&[RIKER]));
+    assert_eq!(problems(&m).await, ["phase:messages.get"]);
+
+    put_gmail(
+        &m.playback,
+        &gmail_history_url("9001"),
+        &json!({ "historyId": "9001" }),
+    );
+    put_gmail(
+        &m.playback,
+        &gmail_get_url(PICARD),
+        &gmail_message(PICARD, &["INBOX"], "Engage"),
+    );
+    run(&m, |_| {}).await.expect("second run");
+    assert_eq!(m.gmail_ids().await, ids(&[PICARD, RIKER]));
+    assert!(problems(&m).await.is_empty(), "{:?}", problems(&m).await);
+}
+
+/// One label's walk that fails costs that label: the others are walked
+/// and recorded as listed whole, and the one that failed, having no such
+/// record, is walked by the next run, which clears the row.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_label_walk_that_fails_costs_only_that_label() {
     let m = Mirror::new();
@@ -211,14 +246,24 @@ async fn a_label_walk_that_fails_costs_only_that_label() {
         .expect("one walk that fails does not fail the run");
     assert_eq!(m.gmail_ids().await, ids(&[PICARD]));
     assert_eq!(problems(&m).await, ["listing:messages.list holodeck"]);
-    assert_eq!(cursor(&m).await, None, "the walk that failed is owed");
+    assert_eq!(
+        listed_whole(&m).await,
+        ["Label_7"],
+        "the walk that failed is owed"
+    );
+    put_gmail(
+        &m.playback,
+        &gmail_history_url("9001"),
+        &json!({ "historyId": "9001" }),
+    );
 
     put_gmail(
         &m.playback,
         &gmail_list_url(&["Label_9"]),
         &json!({ "messages": [{ "id": RIKER }] }),
     );
-    run(&m, labels).await.expect("second run");
+    let second = run(&m, labels).await.expect("second run");
+    assert_eq!(second.walked, ["holodeck"], "{second:?}");
     assert_eq!(m.gmail_ids().await, ids(&[PICARD, RIKER]));
     assert!(problems(&m).await.is_empty());
 }
@@ -236,9 +281,14 @@ async fn an_earlier_failure_the_run_never_reached_keeps_its_row() {
     );
     put_gmail_response(&m.playback, &gmail_get_url(RIKER), &status(400));
     run(&m, |_| {}).await.expect("first run");
-    let failed = [format!("record:gmail_messages:{RIKER}")];
+    let failed = [format!("listed_messages:{RIKER}")];
     assert_eq!(problems(&m).await, failed);
 
+    put_gmail(
+        &m.playback,
+        &gmail_history_url("9001"),
+        &json!({ "historyId": "9001" }),
+    );
     let second = run(&m, |o| o.config.message_budget = Some(0))
         .await
         .expect("second run");
@@ -285,11 +335,10 @@ async fn severities(m: &Mirror) -> Vec<(String, String, String)> {
     .await
 }
 
-async fn cursor(m: &Mirror) -> Option<String> {
+async fn listed_whole(m: &Mirror) -> Vec<String> {
     m.read(|db: RawDb| async move {
-        sqlx::query_scalar("SELECT last_seen_at_utc FROM sync_scope_state WHERE scope = ?")
-            .bind("gmail:t@example.test:historyId")
-            .fetch_optional(db.pool())
+        sqlx::query_scalar("SELECT scope FROM listed_whole ORDER BY scope")
+            .fetch_all(db.pool())
             .await
             .unwrap()
     })
