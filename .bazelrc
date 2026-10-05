@@ -80,7 +80,11 @@ test --test_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
 # asks CoreFoundation for the preferred languages whenever no LANG is set
 # and a locale variable changes. On macOS 27 that call segfaults now and
 # then; bazel's generate-xml.sh (`LC_ALL=C sed`) hit it and the test was
-# reported FAILED TO BUILD. With LANG set, gettext never asks.
+# reported FAILED TO BUILD. With LANG set, gettext never asks. Build and
+# tool actions run the same bash off the same PATH, so they get it too,
+# set three ways as PATH is.
+build:macos --action_env=LANG=C.UTF-8
+build:macos --host_action_env=LANG=C.UTF-8
 test:macos --test_env=LANG=C.UTF-8
 
 # There used to be a `--sandbox_add_mount_pair=$(HOME)/.cache/qmd/models`

@@ -63,22 +63,16 @@ pub async fn put_state(
     if serde_json::from_slice::<serde_json::Value>(&body).is_err() {
         return StatusCode::BAD_REQUEST;
     }
-    match write_atomically(&state_dir(&s.root), &name, &body) {
+    let dir = state_dir(&s.root);
+    let written = std::fs::create_dir_all(&dir)
+        .and_then(|()| datalib_runtime::atomic::write(&dir.join(format!("{name}.json")), &body));
+    match written {
         Ok(()) => StatusCode::NO_CONTENT,
         Err(e) => {
             tracing::error!("ui state: write {name}: {e}");
             StatusCode::INTERNAL_SERVER_ERROR
         }
     }
-}
-
-// Through a temporary file and a rename, so a reader never sees half a
-// document.
-fn write_atomically(dir: &FsPath, name: &str, body: &[u8]) -> std::io::Result<()> {
-    std::fs::create_dir_all(dir)?;
-    let tmp = dir.join(format!(".{name}.json.tmp"));
-    std::fs::write(&tmp, body)?;
-    std::fs::rename(&tmp, dir.join(format!("{name}.json")))
 }
 
 #[cfg(test)]
