@@ -308,11 +308,12 @@ impl Scan {
             // The path first, and short: the sample is cut at 80 characters.
             format!(
                 "{}: {} ({} unreadable under {}; nothing was deleted this run)",
-                first
-                    .path
-                    .strip_prefix(&self.root)
-                    .unwrap_or(&first.path)
-                    .display(),
+                match first.path.strip_prefix(&self.root) {
+                    Ok(rel) if rel.as_os_str().is_empty() => Path::new("."),
+                    Ok(rel) => rel,
+                    Err(_) => &first.path,
+                }
+                .display(),
                 first.error,
                 self.errors.len(),
                 self.root_as_given.display(),
