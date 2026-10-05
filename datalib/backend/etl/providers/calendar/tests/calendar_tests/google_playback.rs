@@ -264,3 +264,54 @@ async fn a_window_is_listed_whole_every_run_and_keeps_no_token() {
     db.close().await;
     assert!(tokens.iter().all(Option::is_none), "{tokens:?}");
 }
+
+/// A calendar that would not list is a row, and a run that stopped
+/// before it reached any calendar leaves that row standing: it listed
+/// nothing, so it cannot say the calendar answers again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stopped_run_leaves_the_last_listing_rows() {
+    let d = tempfile::tempdir().expect("tempdir");
+    let (playback, store) = (d.path().join("playback"), d.path().join("store"));
+    std::fs::create_dir_all(&store).unwrap();
+    calendar_list(&playback);
+    fixture(
+        &playback,
+        &events_url(PRIMARY, None, None),
+        page(json!([]), None, Some("p1")),
+    );
+    // No fixture for the away team's events: that listing fails.
+    run(&playback, &store).await;
+    let failed = vec!["listing:calendar Away team".to_string()];
+    assert_eq!(problems(&store).await, failed);
+
+    std::env::set_var(PLAYBACK_ENV, &playback);
+    let db = RawDb::open(&db_path_for(&store)).await.expect("open store");
+    let control = datalib_etl::control::DownloadControl::default();
+    control.stop.request();
+    google::fetch(google::FetchOptions {
+        db: db.clone(),
+        calendars: Vec::new(),
+        window: None,
+        latchkey: LatchkeySettings::default(),
+        progress: Default::default(),
+        control,
+    })
+    .await
+    .expect("a stopped run");
+    db.commit_all("test").await.expect("commit");
+    db.close().await;
+    std::env::remove_var(PLAYBACK_ENV);
+    assert_eq!(problems(&store).await, failed);
+}
+
+async fn problems(store: &Path) -> Vec<String> {
+    let db = RawDb::open(&db_path_for(store))
+        .await
+        .expect("reopen store");
+    let v: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems ORDER BY scope_key")
+        .fetch_all(db.pool())
+        .await
+        .expect("query");
+    db.close().await;
+    v
+}

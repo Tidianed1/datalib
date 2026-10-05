@@ -171,6 +171,29 @@ impl RawDb {
         Ok(out)
     }
 
+    /// Whether an earlier run stored any of this account's emails.
+    pub async fn holds_emails(&self, account_id: &str) -> Result<bool> {
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM emails WHERE account_id = ?)")
+            .bind(account_id)
+            .fetch_one(self.pool())
+            .await
+            .context("ask whether the account has emails")
+    }
+
+    /// The threads this account's emails name that have no row of their
+    /// own: the ones a `Thread/get` did not answer for.
+    pub async fn threads_without_a_row(&self, account_id: &str) -> Result<Vec<String>> {
+        sqlx::query_scalar(
+            "SELECT DISTINCT e.thread_id FROM emails e
+             WHERE e.account_id = ? AND e.thread_id != ''
+               AND NOT EXISTS (SELECT 1 FROM threads t WHERE t.id = e.thread_id)",
+        )
+        .bind(account_id)
+        .fetch_all(self.pool())
+        .await
+        .context("select the threads with no row")
+    }
+
     /// This account's mailbox rows: id → name.
     pub async fn mailbox_names(&self, account_id: &str) -> Result<BTreeMap<String, String>> {
         let rows: Vec<(String, Option<String>)> =
@@ -288,6 +311,17 @@ impl RawDb {
             .await
             .context("begin delete emails tx")?;
         for id in ids {
+            // The `.eml`'s fetch problem goes with it: an email upstream no
+            // longer has cannot fail to download.
+            sqlx::query(
+                "DELETE FROM problems WHERE scope_kind = ? AND scope_key IN \
+                 (SELECT 'email_blobs:' || id FROM email_blobs WHERE email_id = ?)",
+            )
+            .bind(datalib_problems::ScopeKind::Entity.as_str())
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("forget the problems of email {id}"))?;
             for sql in [
                 "DELETE FROM email_mailboxes WHERE email_id = ?",
                 "DELETE FROM email_keywords WHERE email_id = ?",
