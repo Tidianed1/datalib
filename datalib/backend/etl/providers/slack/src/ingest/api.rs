@@ -30,6 +30,10 @@ pub enum SlackError {
     /// would.
     #[error("{method}: ok=false error={error:?}")]
     Refused { method: String, error: String },
+    /// The run was told to stop, so the transport sent nothing. Not a
+    /// failure of what was asked for.
+    #[error("{0}")]
+    Interrupted(String),
 }
 
 const REFUSAL_CODES: &[&str] = &["not_allowed_token_type", "missing_scope", "unknown_method"];
@@ -99,6 +103,7 @@ async fn call_slack_once(
         .await
         .map_err(|e: HttpError| match e {
             HttpError::PlaybackMiss(msg) => SlackError::Permanent(format!("{method}: {msg}")),
+            HttpError::Interrupted { .. } => SlackError::Interrupted(format!("{method}: {e}")),
             _ => SlackError::Permanent(format!("{method}: {e}")),
         })?;
 

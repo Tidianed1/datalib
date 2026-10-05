@@ -241,11 +241,30 @@ Two rules worth knowing when reading the code:
   * **An absent record plans no work.** Treating "no record" as
     "unknown, therefore re-download" would backfill a whole mirror from
     a store that simply predates the record.
-  * **The record is written only when no channel failed.** Per-channel
-    errors are warned and stepped over, so a run can return `Ok` without
-    having covered everything; recording anyway would drop a scheduled
-    backfill permanently, since — unlike the resume cursor — bookkeeping
-    doesn't self-heal from stored rows.
+  * **The record is written only when no channel or thread failed.**
+    Those are stepped over (§"When part of a sync fails"), so a run can
+    return `Ok` without having covered everything; recording anyway
+    would drop a scheduled backfill permanently, since — unlike the
+    resume cursor — bookkeeping doesn't self-heal from stored rows.
+
+## When part of a sync fails
+
+Only `auth.test` failing fails the step, or a channel listing that
+fails with no channels stored from an earlier one: without either
+there is nothing to walk. Anything else that fails is a `problems` row,
+and the sync goes on with the rest.
+
+- **A listing** — `users.list`, `conversations.list`, or one channel's
+  `conversations.history` — is a `listing:` row (`listing:users.list`,
+  `listing:conversations.history <channel>`). The run walks what an
+  earlier listing stored. The rows are replaced at the end of every run
+  that is not stopped, so the next run that lists cleanly clears them.
+- **A thread** whose `conversations.replies` fails is a row on its root
+  message (`messages:<team>#<channel>#<ts>`), a warning since the root
+  and any earlier replies are still there. Render names that message's
+  grid row, so the problem shows on the thread's document. The next run
+  asks for the thread again, even when its root is behind the resume
+  cursor, and the root's next upsert clears the row.
 
 ## Attachments
 

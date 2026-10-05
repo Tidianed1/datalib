@@ -592,6 +592,52 @@ impl RawDb {
         Ok(())
     }
 
+    /// A thread whose replies could not be fetched, recorded on its root
+    /// message: that is the row the render can name, so the problem
+    /// reaches the thread's document. The root's next upsert clears it.
+    pub async fn record_thread_failure(
+        &self,
+        team_id: &str,
+        channel_id: &str,
+        thread_ts: &str,
+        err: &str,
+    ) -> Result<()> {
+        let root = slack_message_key(team_id, channel_id, thread_ts);
+        let mut tx = self
+            .pool()
+            .begin()
+            .await
+            .context("begin thread failure tx")?;
+        dr::record_object_error(
+            &mut tx,
+            <MessageRow as datalib_etl::bulk::BulkUpsertable>::TABLE,
+            &root,
+            &format!("its replies could not be fetched: {err}"),
+        )
+        .await?;
+        tx.commit().await.context("commit thread failure tx")?;
+        Ok(())
+    }
+
+    /// The root `ts` of every thread [`Self::record_thread_failure`]
+    /// named and nothing has fetched since, by channel.
+    pub async fn threads_that_failed(&self) -> Result<HashMap<String, HashSet<String>>> {
+        let ids = dr::failed_ids(
+            self.pool(),
+            <MessageRow as datalib_etl::bulk::BulkUpsertable>::TABLE,
+        )
+        .await?;
+        let mut out: HashMap<String, HashSet<String>> = HashMap::new();
+        for id in &ids {
+            if let Some((_, channel, ts)) = super::schema_raw::split_key(id) {
+                out.entry(channel.to_string())
+                    .or_default()
+                    .insert(ts.to_string());
+            }
+        }
+        Ok(out)
+    }
+
     pub async fn latest_reply_by_thread(&self) -> Result<HashMap<(String, String), String>> {
         let rows = sqlx::query(
             "SELECT channel_id, thread_ts, latest_reply FROM replies_pages

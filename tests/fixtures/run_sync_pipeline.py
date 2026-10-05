@@ -746,8 +746,8 @@ def _run_pipeline_twice_and_diff(
         print(f"[run_sync_pipeline] {s} diff {a[:12]}..{b[:12]}", flush=True)
     # `--sync` names source steps; each diff step is downstream of its
     # source's ingest and runs as part of that chain. The Slack ingest's
-    # incremental request has no tape in either tree now, which it
-    # reports and skips, and the store does not move.
+    # incremental requests now ask past everything v2 holds, and v2
+    # answers each with an empty page, so the store does not move.
     driver.sync(chains)
 
 
