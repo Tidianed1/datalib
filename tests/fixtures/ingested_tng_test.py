@@ -999,6 +999,27 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ],
             "the people the index knows by Picard's address",
         )
+        # One number written two ways — the address book's vCard 4 `tel:`
+        # URI with dashes, the SMS backup's and Google Voice's bare digits
+        # — is one handle, so a link made through either reaches both.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT DISTINCT c.source_id || '|' || c.name || '|' "
+                "|| json_extract(j.value, '$.value') "
+                "FROM source_contact_handles h JOIN source_contacts c "
+                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key, "
+                "json_each(c.contact_json, '$.handles') j "
+                "WHERE h.handle = 'tel:+12025550101' "
+                "AND json_extract(j.value, '$.handle') = h.handle ORDER BY 1;",
+            ),
+            [
+                "google-takeout|Jean-Luc Picard|+12025550101",
+                "sms-backup-restore|Jean-Luc Picard|+12025550101",
+                "tng_contacts|Jean-Luc Picard|tel:+1-202-555-0101",
+            ],
+            "the people the index knows by Picard's number, as each wrote it",
+        )
         self.assertEqual(
             self._query(
                 self._index_db,

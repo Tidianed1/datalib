@@ -638,9 +638,13 @@ Two tables in the render store, both written by the driver
 - **`render_cursor`** — one row: the raw store's commit the last run
   consumed, and the render params (a period, a label filter — whatever
   each processor declares through `RenderProcessor::render_params`)
-  the documents were rendered with. The driver writes it in the same
-  transaction as the run's last work, so it can never claim a range the
-  store's rows do not reflect, and rewrites it only when it moves.
+  the documents were rendered with. Beside the processors' own, the
+  driver adds two of every source's: the render store's DDL hash and
+  `datalib_handle::RULES_VERSION`, so a new `grid_rows` column or a
+  change to what a handle normalizes to renders every source again
+  without anyone bumping a `RENDER_VERSION`. The driver writes it in the
+  same transaction as the run's last work, so it can never claim a range
+  the store's rows do not reflect, and rewrites it only when it moves.
 - **`render_inputs`** — `(bucket_key, input_table, input_id)`, one row
   per raw row a bucket's render **asked for, found or not**. A thread
   rendered while its author's `users` row had not been fetched yet

@@ -19,6 +19,7 @@ rust_library(
         "@datalib_crates//:serde",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",
+        "@datalib_crates//:tracing",
         "@datalib_crates//:uuid",
     ],
 )

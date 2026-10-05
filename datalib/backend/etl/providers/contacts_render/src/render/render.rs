@@ -171,7 +171,7 @@ fn normalize(
         person.members.push(name);
     }
     person.names = contact.display_name.iter().cloned().collect();
-    person.org = contact.org.as_ref().map(|org| org.replace(';', " — "));
+    person.org = (!contact.org.is_empty()).then(|| contact.org.join(" — "));
     person.title = contact.title.clone();
     person.handles.extend(
         contact
@@ -189,7 +189,7 @@ fn normalize(
         // ADR is `;`-separated: PO box; ext; street; locality; region; postcode; country
         person.details.push(Detail::new(
             field_label("Address", &a.label()),
-            a.value.replace(';', ", "),
+            a.text_list(';').join(", "),
         ));
     }
     person.note = contact.note.clone();
@@ -303,7 +303,7 @@ mod tests {
             emails: vec![prop("jlp@enterprise", Some("WORK"))],
             phones: vec![prop("+1-555", Some("WORK"))],
             addresses: vec![prop(";;Ready Room;Deck 1;;;", Some("WORK"))],
-            org: Some("Starfleet;USS Enterprise".to_string()),
+            org: vec!["Starfleet".to_string(), "USS Enterprise".to_string()],
             title: Some("Captain".to_string()),
             note: Some("Make it so.".to_string()),
             photo: None,
@@ -401,7 +401,7 @@ mod tests {
             emails: Vec::new(),
             phones: Vec::new(),
             addresses: Vec::new(),
-            org: None,
+            org: Vec::new(),
             title: None,
             note: None,
             inputs: vec![Input::new("contacts", "row-group")],
