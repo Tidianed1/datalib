@@ -207,9 +207,8 @@ const renderFields = computed(() => (renders.value ? activeFields("render") : []
 /// The ingest fields the main form renders: the descriptor's, less the
 /// latchkey account. That one lands on the same params target and is
 /// written by the same code as any other field, but it is *shown* in
-/// the Connection block beside the button that populates it — or, where
-/// `showAccountPicker` is off, not shown at all. Either way it must not
-/// reappear here; rendering it twice is the bug this exists to prevent.
+/// the Connection block beside the buttons that sign in to it; rendering
+/// it twice is the bug this exists to prevent.
 const formFields = computed(() =>
   downloadFields.value.filter((f) => !(f.kind === "text" && f.latchkey)),
 );
@@ -522,33 +521,13 @@ const service = computed(() => {
     : null;
 });
 
-/// Whether naming a latchkey account is offered for this source.
-///
-/// Off wherever we register the service ourselves with a generic
-/// cookie capture, because latchkey cannot honour what the control
-/// would promise: `auth browser` accepts `--account`, reports success,
-/// and files the credential under the unnamed default anyway
-/// (imbue-ai/latchkey#148), having first refused a name that does not
-/// exist yet. A picker there can only name an account the login
-/// ignores, and the config would then point at a credential that lives
-/// somewhere else.
-///
-/// On everywhere else, and deliberately: a built-in OAuth service
-/// learns an identity from the account signed into and files under it,
-/// so Fastmail and Gmail really do hold one credential per address.
-///
-/// Hidden rather than deleted — the field, the account list and the
-/// plumbing that sends one all remain, and are still tested — so this
-/// is one condition to drop when #148 is fixed.
-const showAccountPicker = computed(() => !chosen.value?.credentialRegister);
-
-/// The one field, if any, that holds a latchkey account. There is at
-/// most one per descriptor: a step mirrors one identity.
-const accountField = computed(() =>
-  showAccountPicker.value
-    ? (downloadFields.value.find((f) => f.kind === "text" && f.latchkey) as
-        (Field & { kind: "text" }) | undefined)
-    : undefined,
+/// The one field that holds a latchkey account. Every latchkey source
+/// has exactly one (`fieldsFor` adds it where the descriptor does not):
+/// a step mirrors one identity.
+const accountField = computed(
+  () =>
+    downloadFields.value.find((f) => f.kind === "text" && f.latchkey) as
+      (Field & { kind: "text" }) | undefined,
 );
 
 const accounts = ref<StoredAccount[] | null>(null);

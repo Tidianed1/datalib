@@ -412,8 +412,29 @@ export function fieldPhaseOf(step: ConfiguredStep): FieldPhase {
 /// and defaults to `download`, which is where all but one sit — only
 /// `signal` declares a render knob today, so a render step's form is
 /// usually a name and nothing else.
+///
+/// Every source that signs in through latchkey gets an account field,
+/// whether or not its descriptor declares one: picking a stored login,
+/// or naming a new one, is the same for every service. A descriptor
+/// declares its own only to word it (Gmail's is "Google account").
 export function fieldsFor(entry: CatalogEntry, phase: FieldPhase): Field[] {
-  return (entry.fields ?? []).filter((f) => (f.phase ?? "download") === phase);
+  const fields = (entry.fields ?? []).filter((f) => (f.phase ?? "download") === phase);
+  const declaresAccount = fields.some((f) => f.kind === "text" && f.latchkey);
+  if (phase !== "download" || !entry.credentialService || declaresAccount) return fields;
+  return [accountFieldFor(entry), ...fields];
+}
+
+/// The account field a latchkey source gets when it declares none.
+export function accountFieldFor(entry: CatalogEntry): Field {
+  return {
+    kind: "text",
+    latchkey: true,
+    target: "latchkey_settings.account",
+    label: `${entry.label} account`,
+    help:
+      `Which stored ${entry.label} login to use, or a name for a new one. Leave it empty ` +
+      "if latchkey holds only one.",
+  };
 }
 
 export type FieldValues = Record<string, unknown>;

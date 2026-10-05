@@ -22,6 +22,7 @@ test("a pasted token is stored, then Check connection reaches the workspace", as
   await pickTile(page, TILE.slack);
   await wizard(page).getByRole("tab", { name: "Paste a key" }).click();
   const form = wizard(page).locator(".wiz-paste");
+  await wizard(page).getByRole("combobox", { name: "Slack account" }).fill("enterprise");
   await form.getByLabel("Token").fill(TNG.slackToken);
   await form.getByRole("button", { name: "Store in latchkey" }).click();
   await expect(form).toContainText("Stored in latchkey.");
@@ -63,6 +64,7 @@ test("a wrong token fails Check connection in a sentence", async ({ page }) => {
   await pickTile(page, TILE.slack);
   await wizard(page).getByRole("tab", { name: "Paste a key" }).click();
   const form = wizard(page).locator(".wiz-paste");
+  await wizard(page).getByRole("combobox", { name: "Slack account" }).fill("enterprise");
   await form.getByLabel("Token").fill("xoxp-tng-wrong");
   await form.getByRole("button", { name: "Store in latchkey" }).click();
 

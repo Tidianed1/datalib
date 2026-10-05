@@ -8,6 +8,7 @@
 import { describe, expect, it } from "vitest";
 import {
   insertEntries,
+  fieldsFor,
   buildDiffSource,
   buildGroup,
   buildSource,
@@ -32,7 +33,7 @@ import {
   unwireFromFanIns,
   wireIntoFanIns,
 } from "../src/config/sourceSteps";
-import { catalogFor } from "../src/config/catalog";
+import { CATALOG, catalogFor } from "../src/config/catalog";
 
 const SLACK = catalogFor("slack")!;
 const CLAUDE = catalogFor("claude")!;
@@ -1317,5 +1318,28 @@ command = "datalib-applet unified_index"
         .map((s) => s.id)
         .at(-1),
     ).toBe("slack/keyword_index");
+  });
+});
+
+describe("the latchkey account field", () => {
+  /// Picking a stored login, or naming a new one, is the same for every
+  /// service — Slack had none at all, and Claude's was hidden.
+  it("is there, once, on every source that signs in through latchkey", () => {
+    for (const entry of CATALOG.filter((e) => e.credentialService)) {
+      const accounts = fieldsFor(entry, "download").filter((f) => f.kind === "text" && f.latchkey);
+      expect(
+        accounts.map((f) => f.target),
+        entry.label,
+      ).toEqual(["latchkey_settings.account"]);
+    }
+  });
+
+  it("is worded for the source when it declares none", () => {
+    const [account] = fieldsFor(SLACK, "download");
+    expect(account).toMatchObject({ label: "Slack account", target: "latchkey_settings.account" });
+  });
+
+  it("never reaches a render step", () => {
+    expect(fieldsFor(SLACK, "render").some((f) => f.kind === "text" && f.latchkey)).toBe(false);
   });
 });
