@@ -8,6 +8,12 @@
 //! the cut, including what the run had not sealed, so a download that
 //! leans on "the unsealed tail is discarded" fails it.
 //!
+//! Run it twice per provider: from an empty store, and from the store an
+//! earlier run left ([`Rig::seed`]) against a tape where upstream has
+//! changed. Garmin's old code passed every cut of a first sync and
+//! failed the second kind: none of its bugs could show until something
+//! was already stored.
+//!
 //! Playback only: the cut is made where a replayed request is served.
 
 use std::future::Future;
@@ -107,6 +113,15 @@ pub async fn run<T>(
 pub trait Rig: Sync {
     type Store: Send;
 
+    /// Put under a fresh `dir` whatever the download starts from. The
+    /// default is nothing: a first sync. A first sync cannot show a bug
+    /// that needs something already stored (a changed item, a widened
+    /// range), so a provider also runs the check from the store an
+    /// earlier run left, against a tape where upstream has since moved.
+    async fn seed(&self, _dir: &Path) -> Result<()> {
+        Ok(())
+    }
+
     /// Open the raw store under `dir`, as a writer.
     async fn open(&self, dir: &Path) -> Result<Self::Store>;
 
@@ -174,7 +189,10 @@ pub async fn every_cut_resumes(
 /// Opens, downloads (cut at `at`), seals. Returns the requests made. A
 /// run that was cut may end either way; one that was not must succeed.
 async fn one_run(rig: &impl Rig, dir: &Path, at: Option<u64>, how: How) -> Result<u64> {
-    std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+    if !dir.exists() {
+        std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+        rig.seed(dir).await.context("seed the store")?;
+    }
     let store = rig.open(dir).await.context("open the store")?;
     let stop = StopFlag::new();
     let ran = run(at, how, stop.clone(), rig.download(&store, stop)).await;

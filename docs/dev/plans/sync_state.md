@@ -1,6 +1,6 @@
 # Sync state: what is owed is what upstream listed, minus what we hold
 
-**Status: decided 2026-10-05; step 0 of §7 and the two shared pieces of §9 are built.** This is the design and
+**Status: decided 2026-10-05; steps 0 to 2 of §7 are built (the three fixes, Garmin, Slack).** This is the design and
 the order of work. It came out of the audit in
 [`audits/2026-10-05_loose_ends.md`](../audits/2026-10-05_loose_ends.md)
 and a read of the four downloads with the most resume state (Slack,
@@ -336,11 +336,11 @@ Everything else stays in the provider, as queries over its own tables:
 | Kind | Listed (wanted) | Held | Owed |
 |---|---|---|---|
 | a day of a metric | the calendar: every date from `since` to the walk's end, per configured metric | the day's row, an empty answer included, with the date it was fetched on | no row, or fetched while the day could still change (before the date plus `refresh_days`) |
-| a wellness day | the calendar | a row per day looked at, with or without a bundle | the same rule |
+| a wellness day | the calendar | the day's file-edge row, with or without bytes, and the date it was fetched on | the same rule |
 | weigh-ins | — | — | listed whole each run in 90-day chunks from `since`; a handful of requests |
 | the activity listing | `[since, now]` | `coverage` scope `activities`, plus the trailing `refresh_days` always | the gaps |
 | an activity's detail | the stored listing row, by a hash of its payload | the detail row, with the listing hash it was fetched for | hashes differ, or no detail row |
-| an activity's file | the stored listing row, when files are on | the file edge; an unreadable file records the listing hash it failed for | no edge; or no bytes, unless it was unreadable for this same hash |
+| an activity's file | the stored listing row, when files are on | the file edge; an unreadable file records the listing hash it failed for | no edge, or an edge not answered for this listing hash. "No file" and "unreadable" are answers, so each is asked once per version |
 
 Goes: the four `garmin:<phase>` cursors, `garmin:download` and the
 `since_widened` logic, `failed_daily_ids`, `days_to_retry`,
@@ -354,8 +354,8 @@ order, the completeness evidence for each prune.
 
 | Kind | Listed (wanted) | Held | Owed |
 |---|---|---|---|
-| a channel's history | `[since, now]` | `coverage` scope `history:<channel>`, extended with each page in that page's transaction, over top-level messages only | the gaps, each walked newest-first; plus the trailing refresh window, re-walked for edits and deletions |
-| a thread's replies | every stored root's `latest_reply` | `replies_pages.latest_reply` for that thread | the root's is newer, or the thread has replies and no `replies_pages` row |
+| a channel's history | `[since, ∞)`: the top gap is asked with no upper bound and covered up to the newest message seen | `coverage` scope `history:<channel>`, extended with each page in that page's transaction, over top-level messages only | the gaps, each walked newest-first; plus the trailing refresh window, re-walked for edits and deletions |
+| a thread's replies | every stored root's `latest_reply` | `replies_pages.latest_reply` for that thread | the stamp is missing, empty (a failed read leaves an empty one) or older |
 | an attachment's bytes | the edge row, written with its message | the edge's `blake3` | no bytes, media on, and not over the size limit |
 
 A page that stores messages and extends coverage is one transaction,
@@ -372,4 +372,22 @@ Goes: `MAX(ts)`/`MIN(ts)` as cursors, `slack:download` and
 separate attachment retry pass, `walks_cut_short` as a gate. Stays: the
 sweep markers for `conversations.list` and `users.list` (they schedule
 a listing), the refresh window and its prune, account state.
+
+### What doing them showed
+
+- **A first sync hides these bugs.** Garmin's old code passed every one
+  of 275 cuts from an empty store, and failed at cut 30 of 42 once the
+  run started from an earlier store with one activity renamed upstream.
+  Slack's old code failed 6 of 20 cuts on a first sync, but passed all
+  of them with a refresh window wide enough to re-walk everything. So
+  the test runs twice per provider (`Rig::seed`), and its tape and
+  pinned now have to put history outside whatever a run re-reads anyway.
+- **Coverage ends are padded.** Slack's `ts` strings do not sort as
+  strings across widths, so a span's ends are zero-padded copies.
+- **Size.** Slack's ingest lost about 12% of its non-test lines (4388
+  to 3876); Garmin's about 5% (2128 to 2023). The larger change is
+  where the state went: what was cursors, retry sets and in-memory
+  lists is now three or four queries over the store.
+- **An existing store is walked again once.** By the new rules it holds
+  nothing: no spans, no fetched-on dates, no listing hashes.
 

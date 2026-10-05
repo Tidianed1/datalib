@@ -42,7 +42,8 @@ pub fn req_get_bytes(url: &str) -> HttpRequest {
 
 #[derive(thiserror::Error, Debug)]
 pub enum GarminError {
-    /// 401/403: the bearer was refused even after one refresh.
+    /// 401/403: the bearer was refused even after one refresh; or no
+    /// bearer could be had at all, which every later request would share.
     #[error("unauthorized: {0}")]
     Auth(String),
     #[error("{0}")]
@@ -81,7 +82,11 @@ impl GarminClient {
         let url = self.url(path);
         let mut refreshed = false;
         loop {
-            let bearer = self.creds.bearer().await?;
+            let bearer = self
+                .creds
+                .bearer()
+                .await
+                .map_err(|e| GarminError::Auth(format!("no bearer for GET {path}: {e:#}")))?;
             let req = build(&url).bearer(bearer);
             let resp = latchkey_curl(&req)
                 .await
@@ -145,4 +150,25 @@ impl GarminClient {
 
 fn preview(body: &[u8]) -> String {
     String::from_utf8_lossy(body).chars().take(300).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A bearer that cannot be had (the hourly token exchange failed) was
+    /// a plain error, so each daily metric recorded ten days as failed
+    /// before giving up. It ends the run, as a refused bearer does.
+    #[tokio::test]
+    async fn a_request_that_cannot_get_a_bearer_is_an_auth_failure() {
+        let mut client = GarminClient::new(Credentials::without_a_bearer());
+        let Err(e) = client.get_json("/hrv-service/hrv/2369-04-14").await else {
+            panic!("a request with no bearer went out");
+        };
+        assert!(
+            matches!(e.downcast_ref::<GarminError>(), Some(GarminError::Auth(_))),
+            "{e:#}"
+        );
+        assert_eq!(client.requests, 0);
+    }
 }
