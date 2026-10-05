@@ -7,8 +7,8 @@
 
 use std::path::PathBuf;
 
-use anyhow::{bail, Context, Result};
-use datalib_problems::{Outcome, Problem, Reason, ScopeKind};
+use anyhow::{bail, Result};
+use datalib_problems::{Outcome, Problem, Reason};
 use serde::Serialize;
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
@@ -290,47 +290,20 @@ pub async fn read_changed(
 
 /// The last run's unreadable files under `rel_prefix` that this run could
 /// not see — under an entry its walk could not read, or the whole tree
-/// when `scan` is `None` — carried into this run's set: nothing tried
-/// them again, so nothing can say they read now.
+/// when `scan` is `None` — carried into this run's set.
 async fn unseen_unreadable(
     pool: &SqlitePool,
     rel_prefix: &str,
     scan: Option<&Scan>,
 ) -> Result<Vec<RecordProblem>> {
-    let key_prefix = format!(
-        "{}transcripts:{rel_prefix}",
-        download_problems::RECORD_PREFIX
-    );
-    let rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT scope_key, sample FROM problems WHERE scope_kind = ? AND INSTR(scope_key, ?) = 1",
-    )
-    .bind(ScopeKind::Entity.as_str())
-    .bind(&key_prefix)
-    .fetch_all(pool)
-    .await
-    .context("read the last run's unreadable transcripts")?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|(key, sample)| {
-            let rel = key.strip_prefix(&key_prefix)?;
-            scan.is_none_or(|scan| could_not_see(scan, rel))
-                .then(|| RecordProblem::new("transcripts", &format!("{rel_prefix}{rel}"), sample))
-        })
-        .collect())
-}
-
-/// Whether `rel` is a path this scan did not find and may only have
-/// failed to see.
-fn could_not_see(scan: &Scan, rel: &str) -> bool {
-    scan.file(rel).is_none()
-        && scan
-            .errors
-            .iter()
-            .any(|e| match e.path.strip_prefix(&scan.root) {
-                Ok(dir) => {
-                    let dir = dir.to_string_lossy();
-                    dir.is_empty() || dir == rel || fsscan::is_under(rel, &dir)
-                }
-                Err(_) => true,
+    Ok(
+        download_problems::earlier_records(pool, "transcripts", rel_prefix)
+            .await?
+            .into_iter()
+            .filter(|r| {
+                let rel = r.id.strip_prefix(rel_prefix).unwrap_or(&r.id);
+                scan.is_none_or(|scan| scan.could_not_see(rel))
             })
+            .collect(),
+    )
 }

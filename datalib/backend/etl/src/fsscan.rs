@@ -289,6 +289,23 @@ impl Scan {
         self.files.iter().find(|f| f.rel == rel)
     }
 
+    /// Whether `rel` is a path this scan did not find and may only have
+    /// failed to see: it lies under, or is, an entry the walk could not
+    /// read. A row about such a path was not tried again this run.
+    pub fn could_not_see(&self, rel: &str) -> bool {
+        self.file(rel).is_none()
+            && self
+                .errors
+                .iter()
+                .any(|e| match e.path.strip_prefix(&self.root) {
+                    Ok(dir) => {
+                        let dir = dir.to_string_lossy();
+                        dir.is_empty() || dir == rel || is_under(rel, &dir)
+                    }
+                    Err(_) => true,
+                })
+    }
+
     /// The run problem a walk with errors leaves, for
     /// [`crate::download_problems::report_run`]: the files it reports gone
     /// keep their records until a walk completes. Empty for a clean walk,

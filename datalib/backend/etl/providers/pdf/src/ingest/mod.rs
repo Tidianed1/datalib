@@ -175,46 +175,18 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 }
 
 /// The last scan's `record:{table}:` rows on paths this scan did not try
-/// again — under an entry its walk could not read — carried into
-/// this scan's set: nothing re-attempted them, so nothing can say they
-/// read now.
+/// again — under an entry its walk could not read — carried into this
+/// scan's set.
 async fn untried_records(
     pool: &sqlx::SqlitePool,
     table: &str,
     scan: &fsscan::Scan,
 ) -> Result<Vec<RecordProblem>> {
-    let key_prefix = format!("{}{table}:", download_problems::RECORD_PREFIX);
-    let rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT scope_key, sample FROM problems WHERE scope_kind = ? AND INSTR(scope_key, ?) = 1",
-    )
-    .bind(datalib_problems::ScopeKind::Entity.as_str())
-    .bind(&key_prefix)
-    .fetch_all(pool)
-    .await
-    .with_context(|| format!("read the last scan's {table} problems"))?;
-    Ok(rows
+    Ok(download_problems::earlier_records(pool, table, "")
+        .await?
         .into_iter()
-        .filter_map(|(key, sample)| {
-            let rel = key.strip_prefix(&key_prefix)?;
-            (could_not_see(scan, rel)).then(|| RecordProblem::new(table, rel, sample))
-        })
+        .filter(|r| scan.could_not_see(&r.id))
         .collect())
-}
-
-/// Whether `rel` is a path this scan did not find and may only have
-/// failed to see.
-fn could_not_see(scan: &fsscan::Scan, rel: &str) -> bool {
-    scan.file(rel).is_none()
-        && scan
-            .errors
-            .iter()
-            .any(|e| match e.path.strip_prefix(&scan.root) {
-                Ok(dir) => {
-                    let dir = dir.to_string_lossy();
-                    dir.is_empty() || dir == rel || fsscan::is_under(rel, &dir)
-                }
-                Err(_) => true,
-            })
 }
 
 fn is_pdf(p: &Path) -> bool {

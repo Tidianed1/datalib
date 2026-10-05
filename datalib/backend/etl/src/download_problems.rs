@@ -339,6 +339,35 @@ impl RecordProblem {
 
 /// Records this run could not fetch. Replaces the previous run's set,
 /// so one that succeeds this time drops off by itself.
+/// The last run's `record:<table>:<id_prefix>…` rows, to carry into this
+/// run's [`report_records`] set those this run did not try again: a
+/// whole-set replace would otherwise clear them without a retry.
+pub async fn earlier_records(
+    pool: &sqlx::SqlitePool,
+    table: &str,
+    id_prefix: &str,
+) -> anyhow::Result<Vec<RecordProblem>> {
+    use anyhow::Context as _;
+    let key_prefix = format!("{RECORD_PREFIX}{table}:");
+    // `INSTR(x, ?) = 1` rather than `LIKE`: `_` in a path is a wildcard
+    // to LIKE.
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT scope_key, sample FROM problems WHERE scope_kind = ? AND INSTR(scope_key, ?) = 1",
+    )
+    .bind(datalib_problems::ScopeKind::Entity.as_str())
+    .bind(format!("{key_prefix}{id_prefix}"))
+    .fetch_all(pool)
+    .await
+    .with_context(|| format!("read the last run's {table} record problems"))?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(key, sample)| {
+            let id = key.strip_prefix(&key_prefix)?;
+            Some(RecordProblem::new(table, id, sample))
+        })
+        .collect())
+}
+
 pub async fn report_records(pool: &sqlx::SqlitePool, problems: &[RecordProblem]) {
     use datalib_problems::{Outcome, Problem, Reason, Severity};
     let rows: Vec<(String, Outcome, Problem)> = problems
