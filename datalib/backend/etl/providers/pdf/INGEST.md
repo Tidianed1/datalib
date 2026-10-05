@@ -42,7 +42,9 @@ The scan goes on, and what it could not do is a `problems` row:
   (`a_walk_with_errors_drops_no_path`).
 - **A document that would not identify** is
   `record:pdf_paths:<path>`, with what the parser said. It is retried
-  every scan (above), and the scan that identifies it clears the row.
+  every scan (above), and the scan that identifies it clears the row; a
+  scan that cannot see it (under an entry its walk could not read) keeps
+  it.
   The fixture's `holodeck/corrupt.pdf` is one, on purpose. No grid row
   carries it: a document that never identified never renders.
 

@@ -385,7 +385,9 @@ The scan goes on, and what it could not do is a `problems` row:
   scan tries it again, and the row goes with the first that succeeds.
 
 Both sets are replaced whole each scan, which is right because each
-scan walks the whole tree and retries everything it could not read.
+scan walks the whole tree and retries everything it could not read —
+except a file it did not try: one under an entry its walk could not
+read, or declined as a cloud placeholder, keeps its row.
 
 Reconciliation is a **set difference, not a timestamp sweep**. The
 simpler `DELETE … WHERE last_seen_at <> <this run>` looks equivalent and

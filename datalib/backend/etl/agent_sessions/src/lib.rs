@@ -7,15 +7,15 @@
 
 use std::path::PathBuf;
 
-use anyhow::{bail, Result};
-use datalib_problems::{Outcome, Problem, Reason};
+use anyhow::{bail, Context, Result};
+use datalib_problems::{Outcome, Problem, Reason, ScopeKind};
 use serde::Serialize;
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use datalib_etl::download_problems::{self, RecordProblem, RunProblem};
 use datalib_etl::file_checkpoint;
 use datalib_etl::fingerprint_cache::FingerprintCache;
-use datalib_etl::fsscan::{self, ScannedFile};
+use datalib_etl::fsscan::{self, Scan, ScannedFile};
 use datalib_etl::progress::Progress;
 
 /// The two tables every agent-session raw store keeps: `transcripts`,
@@ -125,6 +125,9 @@ type FileProblem = (Outcome, Problem);
 /// writes their rows, and what the run could not read.
 pub struct ReadFiles {
     read: Vec<(String, ScannedFile, Option<FileProblem>)>,
+    /// `(scope, rel)` of files a clean walk no longer finds. Their rows
+    /// stay; their stamps, and what a stamp says the file lacked, go.
+    gone: Vec<(String, String)>,
     walk_problems: Vec<RunProblem>,
     unreadable: Vec<RecordProblem>,
 }
@@ -133,6 +136,9 @@ impl ReadFiles {
     pub async fn stamp(&self, tx: &mut Transaction<'_, Sqlite>) -> Result<()> {
         for (scope, f, problem) in &self.read {
             file_checkpoint::record_file_with_problem(tx, scope, f, problem.clone()).await?;
+        }
+        for (scope, rel) in &self.gone {
+            file_checkpoint::forget_file(tx, scope, rel).await?;
         }
         Ok(())
     }
@@ -190,6 +196,7 @@ pub async fn read_changed(
     let mut summary = FetchSummary::default();
     let mut out = ReadFiles {
         read: Vec::new(),
+        gone: Vec::new(),
         walk_problems: Vec::new(),
         unreadable: Vec::new(),
     };
@@ -210,8 +217,18 @@ pub async fn read_changed(
         })
         .await?;
         out.walk_problems.extend(scan.walk_problems_as(&tree.scope));
+        if !scan.errors.is_empty() {
+            out.unreadable
+                .extend(unseen_unreadable(pool, &tree.rel_prefix, Some(&scan)).await?);
+        }
         let changes = scan.changes_since(&prev);
         summary.files += scan.files.len();
+        out.gone.extend(
+            changes
+                .gone()
+                .into_iter()
+                .map(|rel| (tree.scope.clone(), rel.to_string())),
+        );
 
         for f in changes.needs_reading() {
             let rel_path = format!("{}{}", tree.rel_prefix, f.rel);
@@ -258,6 +275,8 @@ pub async fn read_changed(
         }
     }
     for tree in missing {
+        out.unreadable
+            .extend(unseen_unreadable(pool, &tree.rel_prefix, None).await?);
         out.walk_problems.push(RunProblem::listing(
             &tree.scope,
             format!(
@@ -267,4 +286,51 @@ pub async fn read_changed(
         ));
     }
     Ok((summary, out))
+}
+
+/// The last run's unreadable files under `rel_prefix` that this run could
+/// not see — under an entry its walk could not read, or the whole tree
+/// when `scan` is `None` — carried into this run's set: nothing tried
+/// them again, so nothing can say they read now.
+async fn unseen_unreadable(
+    pool: &SqlitePool,
+    rel_prefix: &str,
+    scan: Option<&Scan>,
+) -> Result<Vec<RecordProblem>> {
+    let key_prefix = format!(
+        "{}transcripts:{rel_prefix}",
+        download_problems::RECORD_PREFIX
+    );
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT scope_key, sample FROM problems WHERE scope_kind = ? AND INSTR(scope_key, ?) = 1",
+    )
+    .bind(ScopeKind::Entity.as_str())
+    .bind(&key_prefix)
+    .fetch_all(pool)
+    .await
+    .context("read the last run's unreadable transcripts")?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(key, sample)| {
+            let rel = key.strip_prefix(&key_prefix)?;
+            scan.is_none_or(|scan| could_not_see(scan, rel))
+                .then(|| RecordProblem::new("transcripts", &format!("{rel_prefix}{rel}"), sample))
+        })
+        .collect())
+}
+
+/// Whether `rel` is a path this scan did not find and may only have
+/// failed to see.
+fn could_not_see(scan: &Scan, rel: &str) -> bool {
+    scan.file(rel).is_none()
+        && scan
+            .errors
+            .iter()
+            .any(|e| match e.path.strip_prefix(&scan.root) {
+                Ok(dir) => {
+                    let dir = dir.to_string_lossy();
+                    dir.is_empty() || dir == rel || fsscan::is_under(rel, &dir)
+                }
+                Err(_) => true,
+            })
 }

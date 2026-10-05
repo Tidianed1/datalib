@@ -573,6 +573,49 @@ async fn a_backup_that_will_not_mirror_holds_up_no_other() -> Result<()> {
     Ok(())
 }
 
+/// When the newest backup cannot be put back on top, HEAD is an older
+/// state and that is a problem on the newest — on every later sync too,
+/// which keeps trying, until it lands.
+#[tokio::test]
+async fn a_newest_that_cannot_go_back_on_top_is_retried_until_it_does() -> Result<()> {
+    let f = Fixture::new();
+    f.backup(
+        "2022-06-15 1400",
+        "TngCatalog.lrcat",
+        Some("TngCatalog.zip"),
+        &[RERATE],
+    )
+    .await;
+    f.sync(&options()).await?;
+    let away = f.dir.path().join("away");
+    std::fs::rename(f.backups().join("2022-06-15 1400"), &away)?;
+    f.backup(
+        "2020-01-01 0000",
+        "TngCatalog.lrcat",
+        Some("TngCatalog.zip"),
+        &[],
+    )
+    .await;
+
+    let run = f.sync(&options()).await?;
+    assert_eq!(run.mirrored, ["2020-01-01 0000"]);
+    let newest = ["record:lightroom_snapshots:2022-06-15 1400"];
+    assert_eq!(problem_keys(&f).await, newest);
+    let run = f.sync(&options()).await?;
+    assert!(run.mirrored.is_empty());
+    assert_eq!(problem_keys(&f).await, newest, "still behind, still said");
+
+    std::fs::rename(&away, f.backups().join("2022-06-15 1400"))?;
+    f.sync(&options()).await?;
+    assert_eq!(problem_keys(&f).await, Vec::<String>::new());
+    let pool = f.read().await;
+    assert_eq!(rating_of_picard(&pool).await, Some(1), "HEAD is 2022 again");
+    pool.close().await;
+    let run = f.sync(&options()).await?;
+    assert!(run.last.is_none(), "and nothing is left to put back");
+    Ok(())
+}
+
 /// A stopped run's problems are not the whole truth, so the last run's
 /// stand.
 #[tokio::test]

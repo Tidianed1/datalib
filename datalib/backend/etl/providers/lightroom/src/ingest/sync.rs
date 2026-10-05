@@ -25,6 +25,13 @@ use super::unpack::{self, is_catalog, is_zip};
 /// under.
 const SCOPE: &str = "backups";
 
+/// `scope_config`'s key for whether HEAD is behind the newest backup the
+/// store holds: an older backup was replayed and the newest has not been
+/// put back on top yet. Written before each backup's commit and cleared
+/// once the newest is HEAD, so a run that fails or stops in between leaves
+/// the next one to finish the job.
+const HEAD_BEHIND: &str = "head_behind";
+
 /// `file_checkpoint`'s scope for the live catalog's files.
 const CATALOG_CURSOR: &str = "lightroom/catalog";
 
@@ -117,6 +124,8 @@ pub async fn run(
     let scope = scope_of(&options);
     let recorded = scope_config::load(pool, SCOPE).await?;
     let filters_changed = recorded.as_ref().is_some_and(|r| r != &scope);
+    let mut head_behind =
+        scope_config::load(pool, HEAD_BEHIND).await? == Some(serde_json::json!(true));
 
     let mut run = SyncRun::default();
 
@@ -164,6 +173,9 @@ pub async fn run(
             continue;
         };
         options.gc = false;
+        if inputs.catalog.is_none() {
+            set_head_behind(pool, &mut head_behind, true).await?;
+        }
         let hash = fsscan::hex(&backup.file.blake3);
         backups::record(pool, &backup.name, backup.taken_at, &backup.file.rel, &hash).await?;
         let msg = format!(
@@ -186,11 +198,12 @@ pub async fn run(
     // HEAD has to end on the newest state. With a catalog, that is the
     // catalog, mirrored below. Without one it is the newest backup, which
     // needs mirroring again when a backup older than it was replayed
-    // after it, or when the filters changed and no new backup carries
-    // them. Dated now: the reason is now, not when the backup was taken.
+    // after it — this run or one that did not get as far — or when the
+    // filters changed and no new backup carries them. Dated now: the
+    // reason is now, not when the backup was taken.
     let again = if inputs.catalog.is_some() {
         None
-    } else if !run.mirrored.is_empty() {
+    } else if !run.mirrored.is_empty() || head_behind {
         Some("to put the newest back on top")
     } else if filters_changed {
         Some("under new filters")
@@ -240,6 +253,10 @@ pub async fn run(
             },
             None => {}
         }
+    }
+
+    if inputs.catalog.is_none() {
+        set_head_behind(pool, &mut head_behind, newest_missing).await?;
     }
 
     // Record the filters once HEAD is mirrored under them. An absent
@@ -305,6 +322,14 @@ async fn mirror_backup(
     }
     problems.push(RecordProblem::new(LEDGER, &backup.name, format!("{err:#}")));
     Ok(None)
+}
+
+async fn set_head_behind(pool: &SqlitePool, recorded: &mut bool, behind: bool) -> Result<()> {
+    if *recorded != behind {
+        scope_config::store(pool, HEAD_BEHIND, &serde_json::json!(behind)).await?;
+        *recorded = behind;
+    }
+    Ok(())
 }
 
 /// What is uncommitted, table by table.

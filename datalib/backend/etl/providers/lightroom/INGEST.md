@@ -351,7 +351,11 @@ that newest state back on top as its last commit, whether or not it
 changed. That keeps things simple when a backup turns up late, older
 than what is already committed: it is replayed like any other, the
 history detours back to it for one commit, and the next commit returns
-to the present.
+to the present. When that last step does not land — the newest backup
+is gone from disk or will not mirror, or the run fails or is stopped
+first — HEAD is an older state and the newest backup is a problem on the
+Manage row; `scope_config`'s `head_behind` record, committed with the
+replayed backup, makes every later sync try again until it lands.
 
 - **Which file is a backup.** The folder is scanned with `fsscan`, so a
   backup already hashed costs a `stat`. Each entry in it is one backup:

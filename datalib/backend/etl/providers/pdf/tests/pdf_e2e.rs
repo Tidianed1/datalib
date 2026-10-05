@@ -682,6 +682,24 @@ async fn a_document_that_will_not_identify_is_a_row_until_it_does() -> Result<()
     Ok(())
 }
 
+/// A document the scan cannot see at all is not tried again, so its row
+/// stands rather than clearing.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unseen_document_keeps_its_row() -> Result<()> {
+    let h = Harness::on_a_copy();
+    h.scan().await?;
+    let corrupt = h.root.join("holodeck/corrupt.pdf");
+    std::fs::remove_file(&corrupt)?;
+    std::os::unix::fs::symlink(h.root.join("nowhere.pdf"), &corrupt)?;
+    h.scan().await?;
+    let keys: Vec<String> = problems(&h).await?.into_iter().map(|r| r.0).collect();
+    assert_eq!(
+        keys,
+        ["listing:files", "record:pdf_paths:holodeck/corrupt.pdf"]
+    );
+    Ok(())
+}
+
 /// A walk that could not read part of the tree drops no path: a file it
 /// did not see may be one it could not see. The next clean walk drops
 /// what is really gone.

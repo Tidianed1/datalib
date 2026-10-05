@@ -102,14 +102,17 @@ sync goes on (the shared walk in `datalib_etl_agent_sessions`, which
   content record with no `uuid` — are one row for the file, keyed
   `file:claude_code/sessions:<path>`, saying how many and which came
   first. The file is stamped, so the row stands until the file changes
-  and is read again. **The last line is never counted**: a transcript is
+  and is read again, or is gone from a walk that read the whole tree
+  (its stamp goes then too; the rows read from it stay). **The last line is never counted**: a transcript is
   only ever appended to, so a torn last line is the ordinary case for a
   session that is open right now, and the read after it is finished
   keeps it. Bytes that are not UTF-8 are read as U+FFFD and said in the
   same row, so one stray byte does not cost the whole file.
 - **A file that could not be opened** is `record:transcripts:<path>`.
   It is left unstamped, so every sync tries it again and the row goes
-  when one reads it.
+  when one reads it. A sync that cannot see the file at all — it is under
+  an entry the walk could not read, or the root is missing — keeps the
+  row, since nothing tried it.
 - **An entry the walk could not read** (a folder it may not list, a
   dangling link) is `listing:claude_code/sessions`. The walk is
   repeated every sync, so the row goes with the first clean one.

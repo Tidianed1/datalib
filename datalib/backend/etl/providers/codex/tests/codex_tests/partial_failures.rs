@@ -170,15 +170,49 @@ async fn what_a_run_could_not_read_is_a_row_until_it_reads() {
         return;
     }
     let s = env.fetch().await.unwrap();
-    set_mode(&path, 0o644);
+    let row = format!("record:transcripts:sessions/{victim}");
     assert_eq!(s.unreadable, 1);
+    assert_eq!(env.problem_keys().await, std::slice::from_ref(&row));
+
+    // Its folder will not list now, so this run never sees the file: its
+    // row stands rather than clearing.
+    let folder = path.parent().unwrap();
+    set_mode(folder, 0o000);
+    let s = env.fetch().await;
+    set_mode(folder, 0o755);
+    set_mode(&path, 0o644);
+    s.unwrap();
     assert_eq!(
         env.problem_keys().await,
-        [format!("record:transcripts:sessions/{victim}")]
+        ["listing:codex/sessions".to_string(), row]
     );
+
     let s = env.fetch().await.unwrap();
     assert_eq!((s.unreadable, s.files_read), (0, 1), "retried, and read");
     assert_eq!(env.problem_keys().await, Vec::<String>::new());
+}
+
+/// A rollout that is gone takes its stamp, and the row on what its read
+/// could not use, with it; the rows read from it stay.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_gone_rollout_takes_its_file_row_with_it() {
+    let env = Env::new().await;
+    copy_tree(&fixture_dir(), &env.home);
+    let bad = env.home.join(BAD_ROLLOUT);
+    std::fs::create_dir_all(bad.parent().unwrap()).unwrap();
+    let meta = r#"{"timestamp":"2364-04-14T08:00:00.000Z","type":"session_meta","payload":{"id":"bad-thread","cwd":"/Users/riker"}}"#;
+    std::fs::write(&bad, format!("{meta}\nnot json\n{meta}\n")).unwrap();
+    env.fetch().await.unwrap();
+    assert_eq!(env.problem_keys().await.len(), 1);
+
+    std::fs::remove_file(&bad).unwrap();
+    env.fetch().await.unwrap();
+    assert_eq!(env.problem_keys().await, Vec::<String>::new());
+    let kept: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM transcripts WHERE id = 'bad-thread'")
+        .fetch_one(env.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(kept, 1);
 }
 
 fn set_mode(path: &Path, mode: u32) {

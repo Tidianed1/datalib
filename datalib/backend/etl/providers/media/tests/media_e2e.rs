@@ -1234,6 +1234,19 @@ async fn a_file_that_would_not_open_is_a_row_until_it_does() -> Result<()> {
     .await?;
     assert_eq!(n, 1, "the playlist that would not read keeps its row");
 
+    // A scan that cannot see the file at all does not try it, so its row
+    // stands; the playlist, read again, clears.
+    let aside = h.root.join("untagged_hum.mp3.aside");
+    std::fs::rename(&media, &aside)?;
+    std::os::unix::fs::symlink(h.root.join("nowhere.mp3"), &media)?;
+    h.scan().await?;
+    assert_eq!(
+        problem_keys(&h.db).await?,
+        ["listing:files", "record:media_files:music/untagged_hum.mp3"]
+    );
+    std::fs::remove_file(&media)?;
+    std::fs::rename(&aside, &media)?;
+
     let s = h.scan().await?;
     assert_eq!((s.errors, s.items), (0, 1), "{s:?}");
     assert_eq!(problem_keys(&h.db).await?, Vec::<String>::new());
