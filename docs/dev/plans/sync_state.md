@@ -1,6 +1,6 @@
 # Sync state: what is owed is what upstream listed, minus what we hold
 
-**Status: decided 2026-10-05; step 0 of §7 is built.** This is the design and
+**Status: decided 2026-10-05; step 0 of §7 and the two shared pieces of §9 are built.** This is the design and
 the order of work. It came out of the audit in
 [`audits/2026-10-05_loose_ends.md`](../audits/2026-10-05_loose_ends.md)
 and a read of the four downloads with the most resume state (Slack,
@@ -297,3 +297,79 @@ hand). The harness needs a way to fail the *k*-th, whichever it is.
 
 When a provider passes this test, sealing a failed run becomes safe for
 it, and the behaviour #1008 tried and withdrew can come back.
+
+## 9. The general form, from doing Garmin and Slack together
+
+Two providers at once showed which parts are shared. There are two, and
+both are small.
+
+**`etl/src/interrupt.rs` — the test of §8.** A provider implements
+`Rig` (open the store, run one download, commit and close, dump the
+data tables) and calls `every_cut_resumes` twice: `How::Kill`, where the
+cut request never answers and nothing after it runs, and `How::Stop`,
+where the request fails as interrupted with the stop flag up. Either
+way the store is committed at the cut, the download is run again, and
+the data tables must equal an uninterrupted run's. Its own test feeds
+it a download whose row doubles as "done" and requires that it be
+caught.
+
+**`etl/src/coverage.rs` — "that we looked", for ranges.** A table of
+spans per scope, and two pure functions: `gaps(want, held)` and
+`merged`. A walk calls `cover(tx, scope, span)` in the transaction that
+stores what it found in that span. What is left to walk is
+`gaps(the range wanted, the spans held)`.
+
+This replaces more than Slack's channel cursor. **Every mark that
+bounds a listing is a span, not a point.** Garmin's activity listing
+"from the cursor" is the classic cursor that swallows a config change:
+widen `since` below the cursor and the older activities are never
+listed. As a span, the old walk covered `[old since, then]`, the new
+range wanted is `[new since, now]`, and the gap below is owed with no
+record of any config. So `scope_config` goes for listings too, and
+Notion's search mark and the forge search cursors should become spans
+in their steps.
+
+Everything else stays in the provider, as queries over its own tables:
+
+### Garmin
+
+| Kind | Listed (wanted) | Held | Owed |
+|---|---|---|---|
+| a day of a metric | the calendar: every date from `since` to the walk's end, per configured metric | the day's row, an empty answer included, with the date it was fetched on | no row, or fetched while the day could still change (before the date plus `refresh_days`) |
+| a wellness day | the calendar | a row per day looked at, with or without a bundle | the same rule |
+| weigh-ins | — | — | listed whole each run in 90-day chunks from `since`; a handful of requests |
+| the activity listing | `[since, now]` | `coverage` scope `activities`, plus the trailing `refresh_days` always | the gaps |
+| an activity's detail | the stored listing row, by a hash of its payload | the detail row, with the listing hash it was fetched for | hashes differ, or no detail row |
+| an activity's file | the stored listing row, when files are on | the file edge; an unreadable file records the listing hash it failed for | no edge; or no bytes, unless it was unreadable for this same hash |
+
+Goes: the four `garmin:<phase>` cursors, `garmin:download` and the
+`since_widened` logic, `failed_daily_ids`, `days_to_retry`,
+`forget_failed_days_before`, the in-memory `changed` set,
+`activities_without_detail`, `activities_with_failed_files`,
+`failed_wellness_days`. Stays: `garmin:default_since` (it pins the
+window's start, it is not progress), the failure budget, the phase
+order, the completeness evidence for each prune.
+
+### Slack
+
+| Kind | Listed (wanted) | Held | Owed |
+|---|---|---|---|
+| a channel's history | `[since, now]` | `coverage` scope `history:<channel>`, extended with each page in that page's transaction, over top-level messages only | the gaps, each walked newest-first; plus the trailing refresh window, re-walked for edits and deletions |
+| a thread's replies | every stored root's `latest_reply` | `replies_pages.latest_reply` for that thread | the root's is newer, or the thread has replies and no `replies_pages` row |
+| an attachment's bytes | the edge row, written with its message | the edge's `blake3` | no bytes, media on, and not over the size limit |
+
+A page that stores messages and extends coverage is one transaction,
+with the edge rows for its files. A walk cut off after its first page
+has covered the top of the gap, so the next run walks what is under it.
+A thread is found by asking the store, not by having been listed this
+run, so a root stored by a run that died before its replies is owed. A
+failed replies call is recorded on the thread's `replies_pages` row, not
+on the root message, whose next write would erase it.
+
+Goes: `MAX(ts)`/`MIN(ts)` as cursors, `slack:download` and
+`force_full_walk`/`backfill_below_oldest`, `threads_that_failed` and
+`record_thread_failure`, the per-channel attachment accumulator and the
+separate attachment retry pass, `walks_cut_short` as a gate. Stays: the
+sweep markers for `conversations.list` and `users.list` (they schedule
+a listing), the refresh window and its prune, account state.
+
