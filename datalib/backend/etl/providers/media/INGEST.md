@@ -342,6 +342,17 @@ touch-without-edit, a duplicate copy, a new file, a deletion, and a
 shortened playlist — followed by a rescan that hashes exactly five files
 and identifies exactly two new items.
 
+## What the reconcile does not delete
+
+A path the scan did not read is not a path that is gone. A cloud
+placeholder (above) and a file over `max_bytes` are found by the walk
+and not read; both are in the scan's `present_unread`, and their rows
+stay. A walk that reported an error deletes nothing at all, because an
+unreadable folder's files look exactly like deleted ones; the error is
+the source's `listing:files` problem. `a_path_the_scan_passed_over_keeps_its_row`
+in `tests/media_e2e.rs` covers all three, the placeholder as a sparse
+file (a size and no blocks).
+
 ## Interrupting a scan
 
 The path-keyed tables are reconciled at the **end** of a scan, not
@@ -419,11 +430,6 @@ that the item was once here. Pinned by
   fixture pipeline runs only sources that render.
   `download_only_sources_plan_a_download_and_no_render` in
   `datalib_step/src/dispatch.rs` covers the config and planning half.
-- **`skip_dataless` is not exercised by any test.** Constructing a
-  cloud placeholder in a hermetic sandbox means making a file whose
-  `st_blocks` is zero, which is filesystem-dependent. The guard is
-  simple and the counter makes its effect visible at runtime, but it has
-  never been observed firing.
 - **A scan interrupted before its first flush loses that batch**, up to
   `BATCH_SIZE` files. Everything already flushed survives.
 

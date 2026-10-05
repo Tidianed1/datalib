@@ -28,11 +28,23 @@ pub async fn ingest(
     let n = file_checkpoint::ingest_snapshot(db.pool(), SCOPE, scan.file(FILE_REL), |bytes| {
         let skipped = skipped.insert(Vec::new());
         let text = String::from_utf8_lossy(bytes);
+        let mut lines = text.lines();
+        // The header names the columns in the account's language, so only
+        // its shape is checked.
+        let header = lines.next().map(split_csv_row).unwrap_or_default();
+        if header.len() != 3 {
+            return Err(super::unknown_layout(
+                FILE_REL,
+                &format!("has a header of {} columns, not 3", header.len()),
+            ));
+        }
         let mut rows: Vec<YoutubeSubscriptionRow> = Vec::new();
-        for (i, line) in text.lines().enumerate() {
-            if i == 0 || line.trim().is_empty() {
+        let mut listed = 0;
+        for line in lines {
+            if line.trim().is_empty() {
                 continue;
             }
+            listed += 1;
             let cells = split_csv_row(line);
             if cells.len() < 3 {
                 skipped.push(SkippedRecord {
@@ -60,7 +72,8 @@ pub async fn ingest(
                 channel_title: Some(channel_title),
             });
         }
-        Ok(Some(rows))
+        super::require_some_read(FILE_REL, listed, rows.len())?;
+        Ok(rows)
     })
     .await?;
     super::report_skipped_if_read(db, "youtube_subscriptions", skipped).await;

@@ -8,7 +8,6 @@ use anyhow::{Context, Result};
 use datalib_etl::file_checkpoint::{self, SnapshotCounts};
 use datalib_etl::progress::Progress;
 use serde_json::Value;
-use tracing::warn;
 
 use super::db::RawDb;
 use super::schema_raw::{ns_id, MapsReviewRow};
@@ -26,14 +25,10 @@ pub async fn ingest(
     let n = file_checkpoint::ingest_snapshot(db.pool(), SCOPE, scan.file(FILE_REL), |bytes| {
         let skipped = skipped.insert(Vec::new());
         let geo: Value = serde_json::from_slice(bytes).context("parse Reviews.json")?;
-        let Some(features) = geo.get("features").and_then(|v| v.as_array()) else {
-            warn!(
-                event = "maps_reviews_no_features",
-                path = FILE_REL,
-                "the reviews file has no features list; nothing was ingested or deleted"
-            );
-            return Ok(None);
-        };
+        let features = geo
+            .get("features")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| super::unknown_layout(FILE_REL, "has no `features` list"))?;
         let mut rows: Vec<MapsReviewRow> = Vec::with_capacity(features.len());
         for f in features {
             let Some(props) = f.get("properties") else {
@@ -64,7 +59,8 @@ pub async fn ingest(
                 when_ts: Some(date.to_string()),
             });
         }
-        Ok(Some(rows))
+        super::require_some_read(FILE_REL, features.len(), rows.len())?;
+        Ok(rows)
     })
     .await?;
     super::report_skipped_if_read(db, "maps_reviews", skipped).await;

@@ -124,6 +124,10 @@ pub struct Scan {
     /// the way.
     pub given_resolved: PathBuf,
     pub files: Vec<ScannedFile>,
+    /// Root-relative paths the walk found and did not read: refused by the
+    /// caller's admit hook, or over [`ScanOptions::max_bytes`]. They are
+    /// there, so a caller keyed by path keeps their rows.
+    pub present_unread: Vec<String>,
     pub errors: Vec<WalkError>,
     pub stats: ScanStats,
 }
@@ -412,14 +416,17 @@ where
         reusable: Option<Blake3>,
     }
     let mut candidates = Vec::with_capacity(walked.len());
+    let mut present_unread = Vec::new();
     for entry in walked {
         if !admit(&entry.path, &entry.meta) {
+            present_unread.push(entry.rel);
             continue;
         }
         let fresh = fswalk::fresh_stat(&entry.meta);
         if let Some(max) = opts.max_bytes {
             if fresh.size as u64 > max {
                 stats.too_large += 1;
+                present_unread.push(entry.rel);
                 continue;
             }
         }
@@ -524,6 +531,7 @@ where
         root_as_given: given.to_path_buf(),
         given_resolved: resolved,
         files,
+        present_unread,
         errors,
         stats,
     })
@@ -770,6 +778,7 @@ mod tests {
         assert_eq!(s.files.len(), 1);
         assert_eq!(s.stats.too_large, 1);
         assert_eq!(s.stats.hashed, 1);
+        assert_eq!(s.present_unread, vec!["big.bin".to_string()]);
     }
 
     // ── the question the whole thing exists for ──────────────────────
