@@ -150,6 +150,11 @@ fn update_time_iso(v: &Value) -> Option<String> {
 /// pointer at the fix; anything else passes through unembellished.
 fn credential_hint(e: ChatGPTError) -> anyhow::Error {
     let s = e.to_string();
+    // Cloudflare's challenge is a 403 too, and no credential gets past
+    // it: a sign-in recipe would send the person after the wrong fix.
+    if s.contains(r#"cf-mitigated=Some("challenge")"#) {
+        return anyhow!("chatgpt.com's bot protection blocked the request: {s}");
+    }
     let setup_problem = s.contains("No service matches URL")
         || s.to_ascii_lowercase().contains("no credentials")
         || s.contains("HTTP 401")
@@ -258,5 +263,17 @@ mod tests {
         assert!(hint.contains("auth browser chatgpt"), "{hint}");
         let plain = credential_hint(ChatGPTError::Permanent("timed out".into())).to_string();
         assert!(!plain.contains("auth browser"), "{plain}");
+    }
+
+    /// Cloudflare's challenge is a 403 that no credential gets past; the
+    /// sign-in recipe would send the person after the wrong fix.
+    #[test]
+    fn a_cloudflare_challenge_gets_no_sign_in_recipe() {
+        let hint = credential_hint(ChatGPTError::Permanent(
+            r#"GET /backend-api/me -> HTTP 403 cf-mitigated=Some("challenge") body="""#.into(),
+        ))
+        .to_string();
+        assert!(hint.contains("bot protection"), "{hint}");
+        assert!(!hint.contains("auth browser"), "{hint}");
     }
 }

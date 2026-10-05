@@ -758,6 +758,7 @@ const conversionCommands = computed(() => {
 const connect = ref<{
   state: "idle" | "running" | "ok" | "failed";
   message: string;
+  phase?: ConnectPhase;
   failure?: Failure;
 }>({
   state: "idle",
@@ -809,7 +810,11 @@ async function connectViaLatchkey() {
       if (closed) return;
       const status = await latchkeyConnectStatus(started.id);
       if (status.status === "running") {
-        connect.value = { state: "running", message: CONNECT_PHASE_TEXT[status.phase] };
+        connect.value = {
+          state: "running",
+          message: CONNECT_PHASE_TEXT[status.phase],
+          phase: status.phase,
+        };
         continue;
       }
       if (status.status === "ok") {
@@ -1262,9 +1267,11 @@ function submit() {
                   @click="connectViaLatchkey"
                 >
                   {{
-                    connect.state === "running"
-                      ? "Waiting for the browser…"
-                      : "Sign in with browser"
+                    connect.state !== "running"
+                      ? "Sign in with browser"
+                      : connect.phase === "downloading_browser"
+                        ? "Getting a browser…"
+                        : "Waiting for the browser…"
                   }}
                 </button>
               </div>
