@@ -55,12 +55,25 @@ Which credential to use, and how to make it read-only, is in
   `resourcetype` is `schedule-inbox` / `schedule-outbox`, not
   `calendar`. Only `calendar` collections are mirrored.
 - `sync-collection` with an empty token returned every object of a
-  2,000-event calendar in one reply, with no 507 truncation. The
-  truncation path (a 507 on the collection itself) follows the new
-  token anyway. A listing that stops short, because the token stopped
-  moving or 50 pages went by, deletes nothing and leaves a
-  `listing:calendar <name>` problem; the shared loop is
-  `datalib_etl::dav::sync`, which CardDAV uses too.
+  2,000-event calendar in one reply, with no 507 truncation. Asked for
+  fewer with `<limit><nresults>2</nresults></limit>`, it answers 2
+  objects and a 507 on the collection, and the token it returns moves
+  to the next page, so the truncation path is real; the address book
+  does the same.
+- An unknown or expired sync token is a 403 whose body names RFC
+  6578's precondition: `<D:error xmlns:D="DAV:"><D:valid-sync-token/>`
+  with a `responsedescription` of `Invalid sync-token`. Only that
+  starts a listing from nothing; any other refusal fails the calendar.
+- Depth makes no difference: `sync-collection`, `calendar-multiget`
+  and `calendar-query` returned the same at Depth 0, 1 and none, on
+  each of 6 calendars. We send what the RFCs define (0, 0 and 1).
+
+The loop is `datalib_etl::dav::sync`, which CardDAV shares, and what a
+listing owes the store across runs is `datalib_etl::dav::state`. A
+listing that stops short leaves a `listing:calendar <name>` problem and
+deletes nothing until a later run carries it to the end. A server
+without `sync-collection` fails the calendar: there is no second way
+to list one, apart from the window's `calendar-query` above.
 - Shape of the data across ~5,200 objects: 3,855 single events; the
   rest a series with 0 to many overrides in the same object; 5 objects
   holding only overrides (invitations to one occurrence). No `STATUS`
