@@ -1,52 +1,59 @@
-//! `datalib-step probe <source_type>` — ask a provider what a set of
-//! credentials can reach, without downloading anything.
+//! `datalib-step probe <source_type> [--list <list>]` — ask a provider
+//! which account a set of credentials reaches, and optionally one list a
+//! picker offers, without downloading anything.
 
 use anyhow::{Context, Result};
+use datalib_probe::{OnProgress, ProbeAsk, ProbeList};
 
 use crate::source_type::SourceType;
 
-pub async fn run(source_type: SourceType, params: &serde_json::Value) -> Result<serde_json::Value> {
+pub async fn run(
+    source_type: SourceType,
+    params: &serde_json::Value,
+    ask: ProbeAsk,
+    progress: OnProgress<'_>,
+) -> Result<serde_json::Value> {
     match source_type {
         SourceType::Email => {
             let config: datalib_etl_email_config::EmailConfig =
                 serde_json::from_value(params.clone())
                     .context("parse the params as an email download config")?;
-            let report = datalib_etl_email::probe::probe(&config).await?;
+            let report = datalib_etl_email::probe::probe(&config, ask).await?;
             Ok(serde_json::to_value(report)?)
         }
         SourceType::Claude => {
             let config: datalib_etl_claude_config::ClaudeConfig =
                 serde_json::from_value(params.clone())
                     .context("parse the params as a claude download config")?;
-            let report = datalib_etl_claude::probe::probe(&config).await?;
+            let report = datalib_etl_claude::probe::probe(&config, ask, progress).await?;
             Ok(serde_json::to_value(report)?)
         }
         SourceType::Chatgpt => {
             let config: datalib_etl_chatgpt_config::ChatgptConfig =
                 serde_json::from_value(params.clone())
                     .context("parse the params as a chatgpt download config")?;
-            let report = datalib_etl_chatgpt::probe::probe(&config).await?;
+            let report = datalib_etl_chatgpt::probe::probe(&config, ask, progress).await?;
             Ok(serde_json::to_value(report)?)
         }
         SourceType::Calendar => {
             let config: datalib_etl_calendar_config::CalendarConfig =
                 serde_json::from_value(params.clone())
                     .context("parse the params as a calendar download config")?;
-            let report = datalib_etl_calendar::probe::probe(&config).await?;
+            let report = datalib_etl_calendar::probe::probe(&config, ask).await?;
             Ok(serde_json::to_value(report)?)
         }
         SourceType::Contacts => {
             let config: datalib_etl_contacts_config::ContactsConfig =
                 serde_json::from_value(params.clone())
                     .context("parse the params as a contacts download config")?;
-            let report = datalib_etl_contacts::probe::probe(&config).await?;
+            let report = datalib_etl_contacts::probe::probe(&config, ask).await?;
             Ok(serde_json::to_value(report)?)
         }
         SourceType::Slack => {
             let config: datalib_etl_slack_config::SlackConfig =
                 serde_json::from_value(params.clone())
                     .context("parse the params as a slack download config")?;
-            let report = datalib_etl_slack::probe::probe(&config).await?;
+            let report = datalib_etl_slack::probe::probe(&config, ask, progress).await?;
             Ok(serde_json::to_value(report)?)
         }
         other => anyhow::bail!(
@@ -61,7 +68,11 @@ pub async fn run(source_type: SourceType, params: &serde_json::Value) -> Result<
 /// provider's probe, and write the answer where the caller reads it.
 /// Never returns on failure.
 #[allow(clippy::disallowed_macros)]
-pub async fn run_cli(source_type: &str, params_file: Option<&std::path::Path>) -> ! {
+pub async fn run_cli(
+    source_type: &str,
+    list: Option<&str>,
+    params_file: Option<&std::path::Path>,
+) -> ! {
     let report = async {
         let source_type = SourceType::parse(source_type).ok_or_else(|| {
             anyhow::anyhow!(
@@ -69,8 +80,14 @@ pub async fn run_cli(source_type: &str, params_file: Option<&std::path::Path>) -
                 SourceType::known_list()
             )
         })?;
+        let ask = match list {
+            None => ProbeAsk::Account,
+            Some(name) => ProbeAsk::List(ProbeList::parse(name).ok_or_else(|| {
+                anyhow::anyhow!("no list called {name:?} — a probe lists one of a picker's lists")
+            })?),
+        };
         let params = crate::source::read_params(params_file)?;
-        run(source_type, &params).await
+        run(source_type, &params, ask, &|p| eprintln!("{}", p.line())).await
     }
     .await;
     match report {

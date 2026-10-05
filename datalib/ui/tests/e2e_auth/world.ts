@@ -52,6 +52,10 @@ export async function attachWhatHappened(testInfo: TestInfo, world: World, inter
 
 export const wizard = (page: Page) => page.getByRole("dialog");
 
+/// One field of the wizard's form, by its caption.
+export const wizField = (page: Page, caption: string) =>
+  wizard(page).locator(`.wiz-field:has(> .wiz-label:text-is("${caption}"))`);
+
 /// Open "Add source" and pick the tile whose blurb is `blurb`.
 export async function pickTile(page: Page, blurb: string) {
   await page.goto("/data_sources");

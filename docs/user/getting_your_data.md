@@ -144,8 +144,8 @@ conversations.
 A one-time registration, then a browser login. ChatGPT uses a bearer
 access token rather than a cookie, and latchkey can go and fetch it
 for you. The app's Add Data Source wizard does both from its
-**Sign in with browser** button (and **Check account** then lists the
-account's conversations to pick from); by hand it is:
+**Sign in with browser** button (and **Load conversations** then lists
+the account's conversations to pick from); by hand it is:
 
 ```sh
 latchkey services register chatgpt \

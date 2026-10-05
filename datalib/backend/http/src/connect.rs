@@ -22,9 +22,6 @@ use crate::AppState;
 /// makes a validation request per stored credential, so it is a network
 /// call, not a keyring read.
 const SERVICES_TIMEOUT: Duration = Duration::from_secs(45);
-/// How long a probe may take. Two HTTP calls against a mail API, plus
-/// however long latchkey needs to refresh an expired OAuth token.
-const PROBE_TIMEOUT: Duration = Duration::from_secs(120);
 /// How long a browser login may stay pending before we call it lost.
 /// Long, because the clock is a person reading a consent screen.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
@@ -620,89 +617,6 @@ pub async fn connect_status(
     }
 }
 
-// POST /api/probe
-
-#[derive(Debug, Deserialize)]
-pub struct ProbeRequest {
-    /// The group's `type`: the provider word (`slack`, `email`, …).
-    #[serde(rename = "type")]
-    pub source_type: String,
-    /// The provider's **download** params, exactly as they would be
-    /// written under `[steps.params]`. Download-shaped even when the
-    /// wizard is filling in a render step: a render step's own params
-    /// hold no credentials, and the labels its filter can name are the
-    /// ones the account has.
-    #[serde(default)]
-    pub params: Value,
-}
-
-pub async fn probe(
-    State(s): State<AppState>,
-    Json(req): Json<ProbeRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let source_type = validated_type(&req.source_type)?;
-    let step_bin = crate::binaries::resolve_step_bin().ok_or_else(|| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "no `datalib-step` binary found (set $DATALIB_STEP_BIN or $DATALIB_BINARY_DIR). \
-             Testing a connection runs the provider's own probe, so it needs the step binary \
-             the pipeline uses.",
-        )
-    })?;
-    let params = serde_json::to_string(&req.params).unwrap_or_else(|_| "{}".to_string());
-    // The wizard's typed credentials are in here; an owner-only file
-    // keeps them off argv, where `ps` would show them to every user.
-    let params_file = datalib_dag::subprocess::write_params_file(
-        &s.root,
-        &format!("probe_{source_type}"),
-        &params,
-    )
-    .map_err(|e| {
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("params file: {e:#}"),
-        )
-    })?;
-
-    let mut cmd = Command::new(step_bin);
-    cmd.arg("probe")
-        .arg(&source_type)
-        .arg(datalib_dag::subprocess::PARAMS_FILE_FLAG)
-        .arg(params_file.path())
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let out = match tokio::time::timeout(PROBE_TIMEOUT, cmd.output()).await {
-        Ok(Ok(out)) => out,
-        Ok(Err(e)) => return Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}"))),
-        Err(_) => {
-            return Err(err(
-                StatusCode::GATEWAY_TIMEOUT,
-                "the probe did not answer within two minutes",
-            ))
-        }
-    };
-    if !out.status.success() {
-        // The step prints its error chain to stderr; that chain is the
-        // useful message ("Gmail users.getProfile: HTTP 401 …"), so
-        // pass it through rather than replacing it with our own.
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        tracing::error!(
-            source_type = %source_type,
-            "probe failed: {}",
-            scrub(&error_chain(&stderr))
-        );
-        return Err(err(StatusCode::BAD_GATEWAY, &tail(&stderr)));
-    }
-    let report: Value = serde_json::from_slice(&out.stdout).map_err(|e| {
-        err(
-            StatusCode::BAD_GATEWAY,
-            &format!("the probe printed something that isn't JSON: {e}"),
-        )
-    })?;
-    Ok(Json(report))
-}
-
 // shared
 
 /// A browser login that must observe a *fresh* sign-in, so latchkey
@@ -759,7 +673,7 @@ async fn latchkey_json(args: &[&str], timeout: Duration) -> anyhow::Result<Value
         .map_err(|e| anyhow::anyhow!("latchkey printed something that isn't JSON: {e}"))
 }
 
-fn tail(s: &str) -> String {
+pub(crate) fn tail(s: &str) -> String {
     let s = s.trim();
     const MAX: usize = 4096;
     if s.len() <= MAX {
@@ -777,7 +691,7 @@ fn tail(s: &str) -> String {
 /// The `error: …` lines `datalib-step probe` prints on failure, without
 /// the tracing output around them. Falls back to the whole tail when a
 /// crash left no chain.
-fn error_chain(stderr: &str) -> String {
+pub(crate) fn error_chain(stderr: &str) -> String {
     let chain: Vec<&str> = stderr
         .lines()
         .filter(|l| l.starts_with("error: "))
@@ -799,7 +713,7 @@ fn error_chain(stderr: &str) -> String {
 /// the rest of a line after `Cookie:` / `Set-Cookie:`, any JWT, and the
 /// value of any `k=v` whose key mentions a token, secret, password,
 /// session or cookie.
-fn scrub(s: &str) -> String {
+pub(crate) fn scrub(s: &str) -> String {
     const BLANK: &str = "<redacted>";
     let mut out = String::with_capacity(s.len());
     for (i, line) in s.lines().enumerate() {
@@ -889,7 +803,7 @@ fn validated_service(service: &str) -> Result<String, (StatusCode, Json<Value>)>
     Ok(s.to_string())
 }
 
-fn validated_type(source_type: &str) -> Result<String, (StatusCode, Json<Value>)> {
+pub(crate) fn validated_type(source_type: &str) -> Result<String, (StatusCode, Json<Value>)> {
     let s = source_type.trim();
     if s.is_empty() || !s.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
         return Err(err(
@@ -900,7 +814,7 @@ fn validated_type(source_type: &str) -> Result<String, (StatusCode, Json<Value>)
     Ok(s.to_string())
 }
 
-fn err(status: StatusCode, message: &str) -> (StatusCode, Json<Value>) {
+pub(crate) fn err(status: StatusCode, message: &str) -> (StatusCode, Json<Value>) {
     (status, Json(serde_json::json!({ "error": message })))
 }
 

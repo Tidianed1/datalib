@@ -89,12 +89,17 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Utility (not a pipeline step): ask a provider what these
-    /// credentials can reach, and print one JSON object on stdout.
-    /// Writes nothing and needs no data root.
+    /// Utility (not a pipeline step): ask a provider which account
+    /// these credentials reach — and, with `--list`, one list a picker
+    /// offers — and print one JSON object on stdout. Progress goes to
+    /// stderr while a list pages. Writes nothing and needs no data root.
     Probe {
         /// Source type (`slack`, `claude`, …): the provider to ask.
         source_type: String,
+        /// The list to load as well: `channels`, `conversations`,
+        /// `labels`, `mailboxes`, `calendars` or `addressbooks`.
+        #[arg(long)]
+        list: Option<String>,
     },
     /// Utility (not a pipeline step): sign in to a service that holds
     /// its own credential rather than a latchkey one, and store it
@@ -207,8 +212,8 @@ async fn main() {
     // owns no tree, claims no outputs and must leave stdout holding
     // exactly one JSON object, so an `outcome` event line after it
     // would corrupt the only thing its caller reads.
-    if let Some(Cmd::Probe { source_type }) = &cli.cmd {
-        probe::run_cli(source_type, cli.params_file.as_deref()).await;
+    if let Some(Cmd::Probe { source_type, list }) = &cli.cmd {
+        probe::run_cli(source_type, list.as_deref(), cli.params_file.as_deref()).await;
     }
     // `pull-models` likewise: nothing here is a step.
     if let Some(Cmd::PullModels { models_dir }) = &cli.cmd {

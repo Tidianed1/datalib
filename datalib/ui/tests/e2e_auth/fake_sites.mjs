@@ -49,17 +49,31 @@ function slack(req) {
           ],
         },
       };
-    case "/api/conversations.list":
+    case "/api/conversations.list": {
+      const q = new URLSearchParams(req.query);
+      if (q.get("types") === "im,mpim") {
+        return { json: { ...page, channels: [{ id: "D_RIKER", is_im: true, user: "U_RIKER" }] } };
+      }
+      // Channels come in two pages, so a picker has progress to show.
+      if (q.get("cursor") === "page-2") {
+        return {
+          json: {
+            ...page,
+            channels: [{ id: "C_TEN", name: "ten-forward", is_channel: true, num_members: 40 }],
+          },
+        };
+      }
       return {
         json: {
-          ...page,
+          ok: true,
+          response_metadata: { next_cursor: "page-2" },
           channels: [
             { id: "C_BRIDGE", name: "bridge", is_channel: true, is_member: true, num_members: 12 },
             { id: "C_ENG", name: "engineering", is_channel: true, is_private: true, is_member: true, num_members: 4 },
-            { id: "D_RIKER", is_im: true, user: "U_RIKER" },
           ],
         },
       };
+    }
     default:
       return { status: 404, json: { ok: false, error: "unknown_method" } };
   }

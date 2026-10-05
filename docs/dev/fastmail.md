@@ -78,7 +78,7 @@ nor the password was tested:
   `fastmail-dav` credential with a `PROPFIND` on
   `carddav.fastmail.com/dav/principals/`, where a password with only
   calendar access gets 401 ([imbue-ai/latchkey#167](https://github.com/imbue-ai/latchkey/issues/167)).
-  **Check account** is the real answer.
+  **Check connection** is the real answer.
 
 ## Checking a credential by hand
 
@@ -90,7 +90,8 @@ latchkey --account "you@fastmail.com contacts" curl -sS -o /dev/null -w '%{http_
 ```
 
 207 means it reads. To see the source's own view, run its probe — the
-same call the wizard's **Check account** makes:
+same call the wizard's **Check connection** makes (add
+`--list addressbooks` for what a picker's **Load** fetches):
 
 ```sh
 echo '{"fastmail": {}, "latchkey_settings": {"account": "you@fastmail.com contacts"}}' > p.json

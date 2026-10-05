@@ -3,6 +3,7 @@
 //! to the DAV root, every value is CDATA, and the home lists scheduling
 //! boxes beside the calendars.
 
+use datalib_probe::{ProbeAsk, ProbeList};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -194,7 +195,8 @@ async fn discovers_through_well_known_and_syncs_incrementally() {
     let config: datalib_etl_calendar_config::CalendarConfig =
         serde_json::from_value(serde_json::json!({"caldav": {"server_url": format!("{HOST}/")}}))
             .unwrap();
-    let report = datalib_etl_calendar::probe::probe(&config).await;
+    let report =
+        datalib_etl_calendar::probe::probe(&config, ProbeAsk::List(ProbeList::Calendars)).await;
     std::env::remove_var(PLAYBACK_ENV);
     let report = report.expect("probe under playback");
     assert_eq!(

@@ -1,10 +1,10 @@
 # The sign-in suite
 
 Playwright specs for the wizard's latchkey flows — pasting a key,
-"Sign in with browser", Check account, a latchkey gateway — run against
-a real `datalib-http`, the real Bazel-pinned latchkey, the real curl
-router and curl-impersonate, and a real browser that latchkey's own
-`ensure-browser` finds. What is faked is what lies outside the machine
+"Sign in with browser", Check connection, a picker's Load, a latchkey
+gateway — run against a real `datalib-http`, the real Bazel-pinned
+latchkey, the real curl router and curl-impersonate, and a real browser
+that latchkey's own `ensure-browser` finds. What is faked is what lies outside the machine
 or would touch the person running it.
 
 ```sh
@@ -42,6 +42,7 @@ internet saw, and the world's directory, which holds the backend's log.
 | The network, for curl | `LATCHKEY_CURL` is a two-line script that logs its argv and runs the real `latchkey-curl-router` with `--connect-to ::127.0.0.1:<port> -k`. latchkey still sees the real URL, so its own service definitions match; the router still sends the hosts datalib marks through curl-impersonate (`expectImpersonated` checks the User-Agent that arrives). |
 | The browser | latchkey's real `ensure-browser` runs, with the sources the backend passes. `fake_node.mjs` then wraps whatever it found — the same binary, plus `--headless=new` and `--host-resolver-rules` pointing every host at the fake internet. The browser config is written only when the backend asks for one, so a login that skips `ensure-browser` fails. |
 | The bundled `node` | The staged runtime's `node` runs `fake_node.mjs` before each latchkey: it logs the run (`world.latchkeyRuns()`), refuses one that has neither a key nor a gateway (it would open the real keychain), and does the browser wrapping above. |
+| A list that pages | `internet.hold(predicate)` keeps matching requests unanswered until the spec releases them, so a half-loaded list is a state the spec waits for. |
 | A machine with no browser | `worldOptions: { browser: false }` — the one place discovery is faked, with latchkey's own error. |
 | Minds' gateway | `worldOptions: { gatewaySeed }` starts a real `latchkey gateway` with its own store; the backend then gets `LATCHKEY_GATEWAY` and nothing else. |
 

@@ -1,17 +1,19 @@
 // What happens before the person has asked for anything. On a mac,
 // every latchkey run outside a gateway reads the keychain at startup —
-// `services info` included — so a run here is a keychain prompt the
-// person did not ask for.
+// `services info` included — so what runs here is kept to the one read
+// that fills the dialog.
 import { expect, expectGlanceable, pickTile, subcommand, test, TILE, wizard } from "./world";
 
-test("picking a tile runs no latchkey", async ({ page, world }) => {
-  // Fails today: the wizard runs `services info` on pick to learn the
-  // sign-in ways and the stored accounts. Flip once it waits for a click.
-  test.fail();
+/// Picking a tile reads latchkey to fill the dialog — which sign-in
+/// ways there are, which accounts it holds — and nothing more. Storing,
+/// registering, opening a browser or reaching the service waits for a
+/// click.
+test("picking a tile only reads", async ({ page, world, internet }) => {
   await pickTile(page, TILE.slack);
-  await expect(wizard(page).getByRole("button", { name: "Check account" })).toBeVisible();
+  await expect(wizard(page).getByRole("button", { name: "Check connection" })).toBeVisible();
   await expect(wizard(page).getByRole("tab", { name: "Paste a key" })).toBeVisible();
-  expect(world.latchkeyRuns().map(subcommand)).toEqual([]);
+  expect(world.latchkeyRuns().map(subcommand)).toEqual(["services info"]);
+  expect(internet.to("slack.com")).toHaveLength(0);
 });
 
 test.describe("with no bundled runtime", () => {

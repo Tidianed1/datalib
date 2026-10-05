@@ -364,9 +364,9 @@ went red and then green on the same commit.
 ## The sign-in suite
 
 `//datalib/ui:e2e_auth_test` drives the wizard's latchkey flows (pasting
-a key, "Sign in with browser", Check account, a gateway) against the
-real latchkey, curl router and browser, with the third-party sites
-faked. It is `manual`, not part of the merge gate; run it with
+a key, "Sign in with browser", Check connection, a picker's Load, a
+gateway) against the real latchkey, curl router and browser, with the
+third-party sites faked. It is `manual`, not part of the merge gate; run it with
 `bazelisk run //datalib/ui:e2e_auth`, and CI runs it nightly on macOS
 (`.github/workflows/latchkey-auth.yml`). What is real and what is faked:
 [`tests/e2e_auth/README.md`](/datalib/ui/tests/e2e_auth/README.md).
