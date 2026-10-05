@@ -641,6 +641,289 @@ async fn a_product_that_returns_smaller_loses_what_it_dropped() {
     assert_eq!(e.count("chat_groups").await, 1);
 }
 
+// ── What a run could not do is a problem until it succeeds ──────────
+
+const MAPS_PHOTO_SIDECAR: &str = "Maps/Photos and videos/2026-06-04-tenfwd.json";
+const MAPS_PHOTO_MEDIA: &str = "Maps/Photos and videos/2026-06-04-tenfwd.jpg";
+const CHAT_ATTACHMENT: &str = "Google Chat/Groups/DM TNG-BRIDGE/course-laid-in.txt";
+const GEMINI_ATTACHMENT: &str = "My Activity/Gemini Apps/Prime-Directive-summary.txt";
+const VOICE_MMS: &str = "Voice/Calls/Jean-Luc Picard - Text - 2364-03-01T09_00_00Z-1-1.jpg";
+const VOICE_MISSED: &str = "Voice/Calls/Wesley Crusher - Missed - 2364-03-03T11_00_00Z.html";
+
+/// The rows the fixture leaves on a clean run, built in on purpose: a
+/// saved place with no key, a watch-history entry that is not a video,
+/// and a Chat attachment the export lacks.
+fn from_the_fixture(key: &str) -> bool {
+    key.starts_with("skipped:maps_saved_places:")
+        || key.starts_with("skipped:youtube_watch_history:")
+        || key == "chat_attachments:TNG-BRIDGE/T2/T2#risa-shore-leave.png"
+}
+
+impl Export {
+    /// `(scope_key, severity, reason)` of every problem the test made,
+    /// sorted.
+    async fn problems(&self) -> Vec<(String, String, String)> {
+        let db = RawDb::open(&self.db_path).await.unwrap();
+        let rows: Vec<(String, String, String)> =
+            sqlx::query_as("SELECT scope_key, severity, reason FROM problems ORDER BY scope_key")
+                .fetch_all(db.pool())
+                .await
+                .unwrap();
+        db.close().await;
+        rows.into_iter()
+            .filter(|r| !from_the_fixture(&r.0))
+            .collect()
+    }
+
+    async fn keys(&self) -> Vec<String> {
+        self.problems().await.into_iter().map(|r| r.0).collect()
+    }
+
+    /// The keys of a `report_skipped` part's rows end in a hash, so a
+    /// test names the part.
+    async fn skipped_parts(&self) -> Vec<String> {
+        self.keys()
+            .await
+            .into_iter()
+            .map(|k| match k.strip_prefix("skipped:") {
+                Some(rest) => format!("skipped:{}", rest.rsplit_once(':').unwrap().0),
+                None => k,
+            })
+            .collect()
+    }
+
+    /// Move a file out of the export; returns where it went.
+    fn take(&self, rel: &str) -> PathBuf {
+        let aside = self.work.path().join("taken").join(rel);
+        std::fs::create_dir_all(aside.parent().unwrap()).unwrap();
+        std::fs::rename(self.root.join(rel), &aside).unwrap();
+        aside
+    }
+}
+
+/// A feed that fails as a whole is a `phase:` row, and the rest of the
+/// export still lands; the run that reads it clears the row.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_feed_that_fails_is_a_phase_problem_until_it_reads() {
+    let e = Export::new();
+    let good = std::fs::read(e.root.join(REVIEWS)).unwrap();
+    std::fs::write(e.root.join(REVIEWS), b"{ not json").unwrap();
+    let s = e.sync().await;
+    assert_eq!(s.feeds_failed, 1, "{s:?}");
+    assert!(s.maps_saved_places > 0, "the other feeds ran: {s:?}");
+    assert_eq!(e.keys().await, ["phase:maps_reviews"]);
+
+    std::fs::write(e.root.join(REVIEWS), good).unwrap();
+    e.sync().await;
+    assert_eq!(e.keys().await, Vec::<String>::new());
+    assert_eq!(e.count("maps_reviews").await, 2);
+}
+
+/// A Maps file with no `features` list says nothing about which places
+/// exist: nothing is stored or deleted, and the file carries one row that
+/// stands while it does not change and goes with the read of a good one.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_maps_file_without_a_list_is_a_problem_on_the_file() {
+    let e = Export::new();
+    e.sync().await;
+    let good = std::fs::read(e.root.join(REVIEWS)).unwrap();
+    e.rewrite(REVIEWS, |_| "{}".to_string());
+    e.sync().await;
+    assert_eq!(e.count("maps_reviews").await, 2);
+    let key = format!("file:google_takeout/maps_reviews:{REVIEWS}");
+    assert_eq!(
+        e.problems().await,
+        [(
+            key.clone(),
+            "error".to_string(),
+            "undeserializable".to_string()
+        )]
+    );
+
+    e.sync().await;
+    assert_eq!(
+        e.keys().await,
+        [key.as_str()],
+        "unchanged, not read, still true"
+    );
+
+    std::fs::write(e.root.join(REVIEWS), good).unwrap();
+    e.sync().await;
+    assert_eq!(e.keys().await, Vec::<String>::new());
+}
+
+/// A sidecar that will not parse is left unstamped and named; a photo
+/// whose media is not in the export lands without bytes, says so on its
+/// record, and is looked for again until it is there.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_maps_photo_that_did_not_read_is_tried_again_until_it_does() {
+    let e = Export::new();
+    let media = e.take(MAPS_PHOTO_MEDIA);
+    e.sync().await;
+    assert_eq!(
+        e.problems().await,
+        [(
+            "maps_photos:2026-06-04-tenfwd".to_string(),
+            "warning".to_string(),
+            "not_found".to_string()
+        )]
+    );
+    assert_eq!(
+        e.count("maps_photos").await,
+        1,
+        "the row lands without bytes"
+    );
+
+    std::fs::rename(&media, e.root.join(MAPS_PHOTO_MEDIA)).unwrap();
+    let s = e.sync().await;
+    assert_eq!(s.blobs_stored, 1, "{s:?}");
+    assert_eq!(e.keys().await, Vec::<String>::new());
+
+    let sidecar = std::fs::read(e.root.join(MAPS_PHOTO_SIDECAR)).unwrap();
+    std::fs::write(e.root.join(MAPS_PHOTO_SIDECAR), b"{").unwrap();
+    e.sync().await;
+    assert_eq!(e.skipped_parts().await, ["skipped:maps_photos"]);
+    std::fs::write(e.root.join(MAPS_PHOTO_SIDECAR), sidecar).unwrap();
+    e.sync().await;
+    assert_eq!(e.keys().await, Vec::<String>::new());
+}
+
+/// One Chat file that will not parse costs that file, not the feed; an
+/// attachment not in the export is a warning on its edge, tried again
+/// though the `messages.json` naming it is unchanged.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_chat_file_or_attachment_that_did_not_read_is_tried_again() {
+    let e = Export::new();
+    let attachment = e.take(CHAT_ATTACHMENT);
+    let good = std::fs::read(e.root.join(MESSAGES)).unwrap();
+    std::fs::write(e.root.join(MESSAGES), b"{ not json").unwrap();
+    let s = e.sync().await;
+    assert_eq!(s.chat_users, 1, "the rest of the feed landed: {s:?}");
+    assert_eq!(e.skipped_parts().await, ["skipped:google_chat"]);
+
+    std::fs::write(e.root.join(MESSAGES), good).unwrap();
+    e.sync().await;
+    assert_eq!(e.count("chat_messages").await, 2);
+    assert_eq!(
+        e.problems().await,
+        [(
+            "chat_attachments:TNG-BRIDGE/T2/T2#course-laid-in.txt".to_string(),
+            "warning".to_string(),
+            "not_found".to_string()
+        )]
+    );
+
+    std::fs::rename(&attachment, e.root.join(CHAT_ATTACHMENT)).unwrap();
+    let s = e.sync().await;
+    assert_eq!(
+        s.chat_messages, 0,
+        "messages.json was not read again: {s:?}"
+    );
+    assert_eq!(s.blobs_stored, 1, "{s:?}");
+    assert_eq!(e.keys().await, Vec::<String>::new());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_gemini_attachment_not_in_the_export_is_tried_again() {
+    let e = Export::new();
+    let attachment = e.take(GEMINI_ATTACHMENT);
+    e.sync().await;
+    let problems = e.problems().await;
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(
+        problems[0].0.starts_with("gemini_attachments:")
+            && problems[0].0.ends_with("#Prime-Directive-summary.txt"),
+        "{problems:?}"
+    );
+    assert_eq!(
+        (problems[0].1.as_str(), problems[0].2.as_str()),
+        ("warning", "not_found")
+    );
+
+    std::fs::rename(&attachment, e.root.join(GEMINI_ATTACHMENT)).unwrap();
+    let s = e.sync().await;
+    assert_eq!(s.gemini_activity, 0, "the activity file was not read again");
+    assert_eq!(e.keys().await, Vec::<String>::new());
+}
+
+/// A Voice file whose attachment is not in the export is named and read
+/// again next run, and the read that finds it clears the row.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_voice_attachment_not_in_the_export_is_tried_again() {
+    let e = Export::new();
+    let mms = e.take(VOICE_MMS);
+    e.sync().await;
+    assert_eq!(e.skipped_parts().await, ["skipped:google_voice"]);
+    e.sync().await;
+    assert_eq!(
+        e.skipped_parts().await,
+        ["skipped:google_voice"],
+        "still not there"
+    );
+
+    std::fs::rename(&mms, e.root.join(VOICE_MMS)).unwrap();
+    let s = e.sync().await;
+    assert_eq!(s.blobs_stored, 1, "{s:?}");
+    assert_eq!(e.keys().await, Vec::<String>::new());
+    let s = e.sync().await;
+    assert_eq!(s.voice_messages, 0, "stamped once it read whole: {s:?}");
+}
+
+/// A run that holds deletions back must leave the rewritten file looking
+/// rewritten, or the next run reads only what changed, deletes nothing,
+/// and the record the rewrite dropped stays for good.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rewrite_seen_on_a_held_back_run_is_acted_on_by_the_next() {
+    let e = Export::new();
+    e.sync().await;
+    let before = e.count("voice_messages").await;
+
+    e.rewrite(VOICE_MISSED, |html| {
+        html.replace(
+            "2364-03-03T11:00:00.000-08:00",
+            "2364-03-03T12:00:00.000-08:00",
+        )
+    });
+    let bills = std::fs::read(e.root.join("Voice/Bills.html")).unwrap();
+    std::fs::write(e.root.join("Voice/Bills.html"), b"\xff\xfe").unwrap();
+    let s = e.sync().await;
+    assert_eq!(s.removed, 0, "{s:?}");
+    assert_eq!(e.count("voice_messages").await, before + 1);
+    let keys = e.keys().await;
+    assert!(
+        keys.contains(&"listing:removed_records".to_string()),
+        "{keys:?}"
+    );
+
+    std::fs::write(e.root.join("Voice/Bills.html"), bills).unwrap();
+    let s = e.sync().await;
+    assert_eq!(s.removed, 1, "the call the rewrite replaced goes: {s:?}");
+    assert_eq!(e.count("voice_messages").await, before);
+    assert_eq!(e.keys().await, Vec::<String>::new());
+}
+
+/// A stopped run reports nothing, so it clears nothing either.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stopped_run_leaves_the_last_runs_problems() {
+    let e = Export::new();
+    let good = std::fs::read(e.root.join(REVIEWS)).unwrap();
+    std::fs::write(e.root.join(REVIEWS), b"{ not json").unwrap();
+    e.sync().await;
+    assert_eq!(e.keys().await, ["phase:maps_reviews"]);
+
+    std::fs::write(e.root.join(REVIEWS), good).unwrap();
+    let db = RawDb::open(&e.db_path).await.unwrap();
+    let o = FetchOptions {
+        input_path: e.root.clone(),
+        ..opts(e.work.path(), &db, SyncFlags::all()).await
+    };
+    o.control.stop.request();
+    ingest::fetch(o).await.unwrap();
+    db.commit_all("test").await.unwrap();
+    db.close().await;
+    assert_eq!(e.keys().await, ["phase:maps_reviews"]);
+}
+
 // ── one entry the parser trips on costs only itself ─────────────────
 
 /// A feed that fails costs that feed and nothing else, and says so where

@@ -61,8 +61,8 @@ upstream. `datalib/backend/etl/README.md` explains the split.
    reports under and is cheap.
 2. **List** `/backend-api/conversations?offset=&limit=100&order=updated`,
    newest-updated first, until the pages run out, `max_pages` is hit,
-   or — with `since` set — a page ends past the cutoff. The walk is
-   *complete* only in the first case.
+   a page fails, or — with `since` set — a page ends past the cutoff.
+   The walk is *complete* only in the first case.
 3. **Prune**, only after a complete walk: a conversation the store
    holds that the listing did not name was deleted on chatgpt.com, so
    it is deleted here (its row stays in doltlite history). An
@@ -82,10 +82,14 @@ upstream. `datalib/backend/etl/README.md` explains the split.
 6. **Seal** after each conversation and its blobs have both landed,
    never between the two, so a render that starts early never sees a
    message pointing at bytes it cannot resolve.
+7. **Retry** the attachments earlier runs did not land (below).
 
 `conv_uuids` replaces steps 2–4 with exactly the named conversations
 (bare ids or paste-able `https://chatgpt.com/c/<id>` URLs); the
 listing is never walked and nothing is pruned.
+
+A prune takes the pruned conversations' attachment edges, bookkeeping
+and `problems` rows with them.
 
 ### The skip key compares at whole seconds
 
@@ -106,20 +110,61 @@ in `blobs.sqlite` keyed by blake3, with a `chatgpt_attachments`
 row linking the conversation's `file_id` to that hash. Signed URLs
 rotate; bytes do not, so a file whose `blake3` is already on its edge
 row is not fetched again (delete `blobs.sqlite` *and* reset the ingest
-step, and the next sync re-pulls). A failed blob bumps its `attempt_count` and `last_error`
-and does not fail the sync. The name and MIME type render needs stay
-in the conversation payload; the edge table holds only the mapping.
+step, and the next sync re-pulls). The name and MIME type render needs
+stay in the conversation payload; the edge table holds only the
+mapping.
 
-### Errors and rate limits
+A blob that does not land is still an edge row, with no `blake3`; its
+bookkeeping holds why (`last_error`), and so does its `problems` row,
+which render shows on the conversation's page. The walk reaches a
+conversation's attachments only when it fetches the conversation, and
+an unchanged one is not fetched again, so after the walk every
+conversation with such an edge is read back from the store and its
+attachments tried again. The row clears when the blob lands.
 
-A conversation the API refuses (`ChatGPTError::Permanent`) is
-recorded on its bookkeeping row through `record_object_error`, which
-is how it reaches the `problems` table and the Manage screen; the run
-moves on. A `429` is retried with `Retry-After`, or exponential
-backoff when the header is absent, inside the shared `latchkey_curl`
-chokepoint; when that gives up, `api::ChatGPTClient::get` maps the
-`HttpError::GaveUp` to `ChatGPTError::RateLimited` and the run stops
-cleanly, to resume from the same store next time.
+A file chatgpt.com answers `404` or `410` for is gone, not failed: its
+row is a `not_found` warning, and the retry pass leaves it alone. It is
+asked for again only when its conversation changes and is refetched.
+
+### When part of a sync fails
+
+Only two things fail the step: `/me` failing (the credential is not
+working), and the first listing page failing with no conversation
+stored to fall back on. Anything else is a `problems` row, and the sync
+goes on with what it has:
+
+- **A conversation that will not fetch** is recorded on its bookkeeping
+  row through `record_object_error`, keyed `conversations:<id>`, and
+  render shows it on that conversation. A conversation that never
+  fetched has no `update_time`, so the next run's skip-check queues it
+  again; the row clears when it lands.
+- **A listing page that fails** after the first keeps the pages before
+  it. The walk is then incomplete, so nothing is pruned, and the run
+  records `listing:conversations`. Every run lists again, so the next
+  clean listing clears it.
+- **A rate limit** — a `429` is retried with `Retry-After`, or
+  exponential backoff when the header is absent, inside the shared
+  `latchkey_curl` chokepoint; when that gives up,
+  `api::ChatGPTClient::get` maps the `HttpError::GaveUp` to
+  `ChatGPTError::RateLimited` — ends the walk, since every later request
+  would be refused too, and records `phase:conversations` with how many
+  were left. What was left is still missing or stale, so the next run's
+  skip-check queues it, and that run's report clears the row. A rate
+  limit on an attachment ends the walk the same way, its conversation
+  unwritten; one in the attachment retry ends that pass as
+  `phase:attachments`. A run cut short like this does not rewrite the
+  `config:` rows, since it did not check every named conversation.
+- **A named conversation** (`conv_uuids`) that answers `404` is
+  `config:conv_uuids:<value>`; any other failure is its
+  `conversations:<id>` row, as above. Every named conversation is
+  fetched every run, so both clear when it answers.
+- **An attachment** is its edge's row (see Attachments above).
+
+The `listing:`/`phase:` and `config:` rows are each written once, at the
+end of a run, replacing the last run's. A run that was asked to stop
+writes neither, and records nothing about a request the stop refused: a
+conversation whose attachments the stop cut short is not written at
+all, so the next run starts it over.
 
 A reset (`datalib-dag --reset`) empties all three tables and their
 bookkeeping, so the next sync's diff against the pre-reset commit is
@@ -248,8 +293,9 @@ A TNG-themed fixture of the API's shapes lives at
 `conversations/<id>.json` per conversation), exposed as the Bazel
 `tng_fixture` filegroup. Every hermetic test is a module of
 `:chatgpt_tests`: `chatgpt_render` renders the fixture, and
-`incremental_skip` and `playback_roundtrip` replay it through a playback
-tape (`docs/dev/testing.md` § "Watching a sync stream" explains the
+`incremental_skip`, `playback_roundtrip` and `run_problems` (what a
+partial failure records, and when it clears) replay small snapshots of
+the same shape through a playback tape (`docs/dev/testing.md` § "Watching a sync stream" explains the
 tapes). The shared `tests/fixtures` root ingests it too.
 
 The `live` module downloads one real conversation and snapshots it.

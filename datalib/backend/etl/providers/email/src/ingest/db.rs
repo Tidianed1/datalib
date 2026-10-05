@@ -51,6 +51,31 @@ impl RawDb {
         dr::upsert_scope_state(self.pool(), scope, token).await
     }
 
+    /// Every scope key that starts with `prefix`, with the prefix taken
+    /// off, and its value.
+    pub async fn scopes_under(&self, prefix: &str) -> Result<Vec<(String, String)>> {
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT scope, last_seen_at_utc FROM sync_scope_state WHERE INSTR(scope, ?) = 1",
+        )
+        .bind(prefix)
+        .fetch_all(self.pool())
+        .await
+        .context("select scopes under a prefix")?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(k, v)| Some((k.strip_prefix(prefix)?.to_string(), v)))
+            .collect())
+    }
+
+    pub async fn forget_scope(&self, scope: &str) -> Result<()> {
+        sqlx::query("DELETE FROM sync_scope_state WHERE scope = ?")
+            .bind(scope)
+            .execute(self.pool())
+            .await
+            .context("delete a scope")?;
+        Ok(())
+    }
+
     // ── loads (consumed by render) ───────────────────────────────
 
     pub async fn load_accounts(&self) -> Result<Vec<Value>> {
@@ -171,6 +196,29 @@ impl RawDb {
         Ok(out)
     }
 
+    /// Whether an earlier run stored any of this account's emails.
+    pub async fn holds_emails(&self, account_id: &str) -> Result<bool> {
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM emails WHERE account_id = ?)")
+            .bind(account_id)
+            .fetch_one(self.pool())
+            .await
+            .context("ask whether the account has emails")
+    }
+
+    /// The threads this account's emails name that have no row of their
+    /// own: the ones a `Thread/get` did not answer for.
+    pub async fn threads_without_a_row(&self, account_id: &str) -> Result<Vec<String>> {
+        sqlx::query_scalar(
+            "SELECT DISTINCT e.thread_id FROM emails e
+             WHERE e.account_id = ? AND e.thread_id != ''
+               AND NOT EXISTS (SELECT 1 FROM threads t WHERE t.id = e.thread_id)",
+        )
+        .bind(account_id)
+        .fetch_all(self.pool())
+        .await
+        .context("select the threads with no row")
+    }
+
     /// This account's mailbox rows: id → name.
     pub async fn mailbox_names(&self, account_id: &str) -> Result<BTreeMap<String, String>> {
         let rows: Vec<(String, Option<String>)> =
@@ -288,6 +336,17 @@ impl RawDb {
             .await
             .context("begin delete emails tx")?;
         for id in ids {
+            // The `.eml`'s fetch problem goes with it: an email upstream no
+            // longer has cannot fail to download.
+            sqlx::query(
+                "DELETE FROM problems WHERE scope_kind = ? AND scope_key IN \
+                 (SELECT 'email_blobs:' || id FROM email_blobs WHERE email_id = ?)",
+            )
+            .bind(datalib_problems::ScopeKind::Entity.as_str())
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("forget the problems of email {id}"))?;
             for sql in [
                 "DELETE FROM email_mailboxes WHERE email_id = ?",
                 "DELETE FROM email_keywords WHERE email_id = ?",

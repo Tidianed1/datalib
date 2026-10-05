@@ -289,23 +289,51 @@ impl Scan {
         self.files.iter().find(|f| f.rel == rel)
     }
 
+    /// Whether `rel` is a path this scan did not find and may only have
+    /// failed to see: it lies under, or is, an entry the walk could not
+    /// read. A row about such a path was not tried again this run.
+    pub fn could_not_see(&self, rel: &str) -> bool {
+        self.file(rel).is_none()
+            && self
+                .errors
+                .iter()
+                .any(|e| match e.path.strip_prefix(&self.root) {
+                    Ok(dir) => {
+                        let dir = dir.to_string_lossy();
+                        dir.is_empty() || dir == rel || is_under(rel, &dir)
+                    }
+                    Err(_) => true,
+                })
+    }
+
     /// The run problem a walk with errors leaves, for
     /// [`crate::download_problems::report_run`]: the files it reports gone
     /// keep their records until a walk completes. Empty for a clean walk,
     /// so reporting it also clears the last run's row.
     pub fn walk_problems(&self) -> Vec<crate::download_problems::RunProblem> {
+        self.walk_problems_as("files")
+    }
+
+    /// [`Self::walk_problems`] under a name of the caller's, for a source
+    /// that scans more than one tree: `report_run` keeps one row per name.
+    pub fn walk_problems_as(&self, name: &str) -> Vec<crate::download_problems::RunProblem> {
         let Some(first) = self.errors.first() else {
             return Vec::new();
         };
         vec![crate::download_problems::RunProblem::listing(
-            "files",
+            name,
+            // The path first, and short: the sample is cut at 80 characters.
             format!(
-                "{} entries under {} could not be read, so no file's records \
-                 were deleted this run; first: {}: {}",
+                "{}: {} ({} unreadable under {}; nothing was deleted this run)",
+                match first.path.strip_prefix(&self.root) {
+                    Ok(rel) if rel.as_os_str().is_empty() => Path::new("."),
+                    Ok(rel) => rel,
+                    Err(_) => &first.path,
+                }
+                .display(),
+                first.error,
                 self.errors.len(),
                 self.root_as_given.display(),
-                first.path.display(),
-                first.error,
             ),
         )]
     }

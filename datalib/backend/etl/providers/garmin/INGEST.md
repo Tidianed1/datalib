@@ -85,7 +85,9 @@ below).
 1. **Account and devices.** `/userprofile-service/socialProfile` (the
    `displayName` every per-user path needs) and `user-settings` land in
    `garmin_account`; `/device-service/deviceregistration/devices` in
-   `garmin_devices`, pruned to the listing when it is one.
+   `garmin_devices`, pruned to the listing when it is one. The run
+   cannot start without the social profile; a `user-settings` that
+   fails leaves the stored row and a `listing:user_settings` row.
 2. **Per-day metrics.** For each metric in `api.metrics` (default: all
    twenty in `DAILY_METRICS` in `garmin_config`), one request per
    calendar day through the end of the window, stored verbatim in
@@ -112,7 +114,11 @@ below).
    this run or not; a listed one with no FIT file
    in the CAS yet gets `/download-service/files/activity/<id>` fetched,
    the one `.fit` inside the zip stored, and an edge row written
-   (`activity_files = false` turns that off). Activities dated a full
+   (`activity_files = false` turns that off). A FIT that failed is
+   fetched again next run, listed or not; one that then answers 404
+   has its edge dropped. A download that came back but held no
+   readable FIT is asked for again only once its activity's listing
+   entry changes, since the same bytes would come back. Activities dated a full
    day inside the walked window that the listing did not name are
    pruned with their details and edges — once the page walk reached a
    short page. A walk that stopped on a bad page still upserts the
@@ -122,14 +128,16 @@ below).
    as-is: all-day heart rate, stress, steps, body battery and sleep at
    sensor resolution. Off by default because it is one zip per day and
    the per-day JSON already carries the same series at chart
-   resolution. A bundle already stored is never re-fetched.
+   resolution. A bundle already stored is never re-fetched; one that
+   failed is fetched again next run, however far behind the cursor.
 6. **Whole-account listings.** Personal records, gear, earned badges,
    workouts and active goals, each re-read complete every run into
    `garmin_items` (keyed `<kind>#<upstream id>`) and pruned to the
    listing when it is one. Workouts and goals are paged
    (`start`/`limit`, `ITEM_PAGE` at a time) to the first short page;
    the other three answer the whole list in one response. Gear is
-   skipped when the social profile carries no `profileId`.
+   skipped when the social profile carries no `profileId`, and says
+   so as `listing:gear`.
 
 ### What a failure leaves
 
@@ -145,8 +153,8 @@ carries downstream and the Manage screen counts:
 | what | key | when it clears |
 | --- | --- | --- |
 | a day's metric that could not be fetched | `garmin_daily:<metric>#<date>` | a later run retries the day and it fetches |
-| an activity detail, FIT file or wellness bundle that could not be fetched | `garmin_activity_details:<id>`, `garmin_activity_files:<id>#fit`, `garmin_wellness_files:<date>#wellness_zip` | it fetches |
-| a listing that was not an enumeration | `listing:<devices\|weight\|activities\|personal_records\|gear\|badges\|workouts\|goals>` | the next run in which it lists |
+| an activity detail, FIT file or wellness bundle that could not be fetched | `garmin_activity_details:<id>`, `garmin_activity_files:<id>#fit`, `garmin_wellness_files:<date>#wellness_zip` | a later run retries it and it fetches (or a file answers 404), or the activity is pruned |
+| a listing that was not an enumeration, or could not be asked for | `listing:<user_settings\|devices\|weight\|activities\|personal_records\|gear\|badges\|workouts\|goals>` | the next run in which it lists |
 | a phase that failed wholesale | `phase:<devices\|daily\|weight\|activities\|wellness\|items>` | the next run in which it runs |
 
 The `listing:` and `phase:` rows are replaced whole each run
@@ -154,6 +162,16 @@ The `listing:` and `phase:` rows are replaced whole each run
 answers again clears its row without anyone doing anything; a row that
 persists keeps its `first_seen_at_utc`. A `warn!` alone is never the
 only record.
+
+Each file edge carries its own record's hash. An earlier build keyed
+every file of a batch under one ref, so each edge of a batch got the
+last file's hash and a failure was stamped on all of them. Once per
+table, on the first run with that table's walk turned on, an edge whose
+hash another record's edge shares is cleared and stamped failed, so the
+walks above fetch it again; `sync_scope_state` records that it ran
+(`garmin:shared_hash_repair:<table>`). Once only, because two
+activities may share a file for real, and fetching those every run
+would get the same bytes back.
 
 Inside the per-day walk, a metric that fails ten days in a row is
 abandoned for the run rather than paid for once per day of history;

@@ -1494,6 +1494,19 @@ yolink_readings_bookkeeping
     last_error
     volatile_payload
     tz_offset
+yolink_windows
+    id
+    device_name
+    start_ms
+    end_ms
+yolink_windows_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
 
 == garmin/raw ==
 garmin_account

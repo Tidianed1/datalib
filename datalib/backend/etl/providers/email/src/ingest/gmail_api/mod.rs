@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::bulk::bulk_upsert_entity_in_tx;
 use datalib_etl::control::DownloadControl;
-use datalib_etl::download_problems::{self, DownloadProblem, RecordProblem};
+use datalib_etl::download_problems::{self, DownloadProblem, RecordProblem, RunProblem};
 use datalib_etl::download_run::DownloadRun;
 use datalib_etl::http::LatchkeySettings;
 use datalib_etl::progress::{Progress, RunBar};
@@ -124,6 +124,10 @@ pub struct FetchSummary {
     /// the store, and the summary is a log line.
     #[serde(skip)]
     pub records: Vec<datalib_etl::download_problems::RecordProblem>,
+    /// `messages.list` walks that stopped on an error. Each holds the
+    /// cursor, since the messages past it were never listed.
+    #[serde(skip)]
+    pub listings: Vec<RunProblem>,
 }
 
 /// The raw table Gmail's own message ids key. Named here so a problem
@@ -196,7 +200,7 @@ impl FetchSummary {
     /// either after a partial one tells the next run "caught up", and an
     /// incremental run never re-lists what this one skipped.
     pub fn drained(&self) -> bool {
-        !self.stopped_early() && self.messages_failed == 0
+        !self.stopped_early() && self.messages_failed == 0 && self.listings.is_empty()
     }
 
     /// The run ended before the walk did, on purpose.
@@ -335,7 +339,33 @@ async fn run_sync(
     // Loaded once per run, not once per page: both are whole-table reads
     // and `fetch_ids` is called per `messages.list` page.
     let known_blobs = db.loaded_blob_ids().await?;
-    let known_gmail_ids = load_known_gmail_ids(db).await?;
+    let mut known_gmail_ids = load_known_gmail_ids(db).await?;
+    // What an earlier run could not use. The cursor moves past a message
+    // that would not store, and a message is fetched once however its
+    // `.eml` fared, so neither would come up again by itself.
+    let earlier_failures = earlier_record_problems(db).await?;
+    let lacking_eml = missing_their_eml(db, opts.blob_size_limit_bytes).await?;
+    // A Gmail message's bytes never change, so one this build could not
+    // store will not store by fetching it again: only a new build can.
+    let build = build_identity();
+    let unstorable_here: BTreeSet<String> = db
+        .scopes_under(&unstorable_scope(&account_id, ""))
+        .await?
+        .into_iter()
+        .filter(|(_, by)| *by == build)
+        .map(|(id, _)| id)
+        .collect();
+    let mut retry: BTreeSet<String> = earlier_failures
+        .iter()
+        .map(|r| r.id.clone())
+        .filter(|id| !known_gmail_ids.contains(id) && !unstorable_here.contains(id))
+        .collect();
+    let mut refetching = BTreeSet::new();
+    for id in lacking_eml {
+        known_gmail_ids.remove(&id);
+        retry.insert(id.clone());
+        refetching.insert(id);
+    }
 
     let mut state = RunState {
         db,
@@ -351,6 +381,10 @@ async fn run_sync(
         fetched: 0,
         known_blobs,
         known_gmail_ids,
+        unstorable_here,
+        refetching,
+        unstorable: BTreeSet::new(),
+        attempted: BTreeSet::new(),
         threads: BTreeSet::new(),
         // Nothing fixed to seed it with: unlike the JMAP path, this one
         // has no coarse phase ticks, so the bar stays at 0/0 until the
@@ -367,90 +401,42 @@ async fn run_sync(
         Some(changes) => changes.history_id.clone(),
     };
 
-    if let Some(changes) = &plan.history {
-        summary.emails_destroyed = destroy(db, &changes.deleted).await?;
-        let ids: Vec<String> = changes
-            .added
-            .iter()
-            .chain(changes.relabeled.iter())
-            .cloned()
-            .collect();
-        info!(
-            event = "gmail_history_replay",
-            account = %account_id,
-            since = stored.as_deref().unwrap_or(""),
-            fetch = ids.len(),
-            deleted = changes.deleted.len(),
-            "replaying history since the stored cursor",
-        );
-        // The id list is materialized, so this stretch has an exact size.
-        state.bar.expect(ids.len() as u64);
-        state.bar.doing("replaying history");
-        fetch_ids(&mut state, &mut throttle, &ids, opts, &mut summary).await?;
-    } else {
-        summary.full_sync = true;
-    }
-
-    if let Some(walk_label_ids) = &plan.walk {
-        if plan.history.is_some() {
-            summary.backfilled_labels = plan.backfilled_labels.clone();
-        }
-        let enumerated = if summary.stopped_early() {
-            None
-        } else {
-            full_sync(
-                &mut state,
-                &mut throttle,
-                opts,
-                walk_label_ids,
-                &mut summary,
-            )
-            .await?
-        };
-        // A walk that covered the whole mailbox is the one moment this
-        // provider can see a deletion `history.list` never reported —
-        // one outside its retention window, or outside the old filter.
-        //
-        // Two conditions, both about whether the walk was authoritative
-        // over the whole mailbox. A label filter narrows it server-side,
-        // so messages outside those labels are unlisted rather than
-        // deleted; a budget-limited walk never asked for its remaining
-        // pages. Either one makes absence meaningless.
-        match (&enumerated, walk_label_ids.is_empty()) {
-            (Some(seen), true) => {
-                summary.emails_destroyed += prune_to_enumeration(db, seen).await?;
-            }
-            _ => info!(
-                event = "gmail_prune_skipped",
-                label_filtered = !walk_label_ids.is_empty(),
-                budget_exhausted = summary.budget_exhausted,
-                "the walk was not authoritative over the whole mailbox; \
-                 not treating unlisted messages as deleted",
-            ),
-        }
-    }
-
+    let retry: Vec<String> = retry.into_iter().collect();
+    let walked = walk(
+        &mut state,
+        &mut throttle,
+        opts,
+        &plan,
+        &retry,
+        stored.as_deref(),
+        &mut summary,
+    )
+    .await;
+    // Whatever the walk fetched lands, an error or not: it is all
+    // complete messages, and the held cursor brings back the rest.
     flush(&mut state, &mut summary).await?;
     flush_threads(&mut state, &mut summary).await?;
     state.bar.finish();
 
     // Only advance the cursor when the run drained its work, and a run
-    // has two ways not to: it stopped at `message_budget`, or a
+    // has three ways not to: it stopped at `message_budget`, a
     // `messages.get` failed for a reason other than the message being
-    // gone. Either way storing the cursor tells the next run "you are
-    // caught up" — and because the next run is then incremental,
-    // `history.list` only names what *changed*, so a message that merely
-    // failed to fetch is never named again. It would be missing until
-    // the cursor aged out or someone set `full_resync`.
+    // gone, or a `messages.list` walk stopped on an error. Any of them
+    // and storing the cursor tells the next run "you are caught up" —
+    // and because the next run is then incremental, `history.list` only
+    // names what *changed*, so a message that merely failed to fetch is
+    // never named again. It would be missing until the cursor aged out
+    // or someone set `full_resync`.
     //
     // Leaving the cursor put means the next run re-enumerates — cheap,
     // because `messages.list` is 5 units a page and every id already
     // fetched is skipped before spending `messages.get`'s 20.
-    if !summary.drained() {
+    if walked.is_err() || !summary.drained() {
         info!(
             event = "gmail_cursor_held",
             fetched = summary.emails_upserted,
             failed = summary.messages_failed,
+            walks_cut_short = summary.listings.len(),
             budget_exhausted = summary.budget_exhausted,
             interrupted = summary.interrupted,
             "work this run did not do; leaving the cursor so the next run resumes",
@@ -461,9 +447,24 @@ async fn run_sync(
     }
 
     summary.quota_units_spent = throttle.spent_total();
-    // After the walk, so the set is this run's whole answer: it replaces
-    // the last run's, and a message that fetched this time drops off.
+    // The set replaces the last run's, so an earlier failure this run
+    // never got to — a stop, the budget, an error — is carried over
+    // rather than read as fetched.
+    summary.records.extend(
+        earlier_failures
+            .into_iter()
+            .filter(|r| !state.attempted.contains(&r.id) && !state.known_gmail_ids.contains(&r.id)),
+    );
+    // One row per message, however many times the run asked for it.
+    let mut reported = BTreeSet::new();
+    summary.records.retain(|r| reported.insert(r.id.clone()));
     download_problems::report_records(db.pool(), &summary.records).await;
+    remember_unstorable(db, &account_id, &build, &state.unstorable, &reported).await?;
+    // A walk the run never reached keeps its last row.
+    if walked.is_ok() && !summary.stopped_early() {
+        download_problems::report_run(db.pool(), &summary.listings).await;
+    }
+    walked?;
     info!(
         event = "gmail_summary",
         account = %account_id,
@@ -483,6 +484,93 @@ async fn run_sync(
         "gmail sync finished",
     );
     Ok(summary)
+}
+
+/// Everything the run fetches: the retries, the history replay, the
+/// walk, and the prune a complete walk allows. An `Err` is a store that
+/// would not write, or a failure nothing after it would survive.
+#[allow(clippy::too_many_arguments)]
+async fn walk(
+    state: &mut RunState<'_>,
+    throttle: &mut QuotaThrottle,
+    opts: &FetchOptions,
+    plan: &Plan,
+    retry: &[String],
+    stored: Option<&str>,
+    summary: &mut FetchSummary,
+) -> Result<()> {
+    if !retry.is_empty() {
+        info!(
+            event = "gmail_retry",
+            account = %state.account_id,
+            count = retry.len(),
+            "fetching again the messages an earlier run could not use",
+        );
+        state.bar.expect(retry.len() as u64);
+        state.bar.doing("retrying");
+        fetch_ids(state, throttle, retry, opts, summary).await?;
+    }
+
+    if let Some(changes) = &plan.history {
+        summary.emails_destroyed = destroy(state.db, &changes.deleted).await?;
+        // A deleted message's failure is over, mirrored or not.
+        state.attempted.extend(changes.deleted.iter().cloned());
+        let ids: Vec<String> = changes
+            .added
+            .iter()
+            .chain(changes.relabeled.iter())
+            .cloned()
+            .collect();
+        info!(
+            event = "gmail_history_replay",
+            account = %state.account_id,
+            since = stored.unwrap_or(""),
+            fetch = ids.len(),
+            deleted = changes.deleted.len(),
+            "replaying history since the stored cursor",
+        );
+        // The id list is materialized, so this stretch has an exact size.
+        state.bar.expect(ids.len() as u64);
+        state.bar.doing("replaying history");
+        fetch_ids(state, throttle, &ids, opts, summary).await?;
+    } else {
+        summary.full_sync = true;
+    }
+
+    let Some(walk_label_ids) = &plan.walk else {
+        return Ok(());
+    };
+    if plan.history.is_some() {
+        summary.backfilled_labels = plan.backfilled_labels.clone();
+    }
+    let enumerated = if summary.stopped_early() {
+        None
+    } else {
+        full_sync(state, throttle, opts, walk_label_ids, summary).await?
+    };
+    // A walk that covered the whole mailbox is the one moment this
+    // provider can see a deletion `history.list` never reported — one
+    // outside its retention window, or outside the old filter.
+    //
+    // Two conditions, both about whether the walk was authoritative over
+    // the whole mailbox. A label filter narrows it server-side, so
+    // messages outside those labels are unlisted rather than deleted; a
+    // walk that stopped — the budget, or a page that failed — never
+    // listed its remaining pages. Either one makes absence meaningless.
+    match (&enumerated, walk_label_ids.is_empty()) {
+        (Some(seen), true) => {
+            summary.emails_destroyed += prune_to_enumeration(state.db, seen).await?;
+        }
+        _ => info!(
+            event = "gmail_prune_skipped",
+            label_filtered = !walk_label_ids.is_empty(),
+            budget_exhausted = summary.budget_exhausted,
+            walks_cut_short = summary.listings.len(),
+            "the walk was not authoritative over the whole mailbox; \
+             not treating unlisted messages as deleted",
+        ),
+    }
+    Ok(())
 }
 
 /// What one run does: replay `history.list` since the stored cursor, walk
@@ -642,6 +730,17 @@ struct RunState<'a> {
     /// backfill make progress across runs instead of re-fetching the
     /// same prefix forever.
     known_gmail_ids: BTreeSet<String>,
+    /// Ids `messages.get` gave a final answer for this run: fetched,
+    /// gone, or failed. An earlier failure not among them was not tried.
+    attempted: BTreeSet<String>,
+    /// Messages this build already fetched and could not store: skipped
+    /// like the mirrored ones, their rows carried over.
+    unstorable_here: BTreeSet<String>,
+    /// Ones that fetched and would not store this run.
+    unstorable: BTreeSet<String>,
+    /// Mirrored messages fetched again for their `.eml`. A 404 for one is
+    /// a deletion.
+    refetching: BTreeSet<String>,
     /// Thread ids touched this run; membership is rebuilt from the
     /// `emails` table at the end, not from what this run happened to see.
     threads: BTreeSet<String>,
@@ -663,9 +762,9 @@ struct Pending {
 /// Walk every message id Gmail will name, fetching the ones we lack.
 ///
 /// Returns the ids the walk saw, or `None` when the walk did not finish —
-/// it stopped at `message_budget`. The distinction is what makes pruning
-/// safe: a budget-limited walk has pages it never asked for, and the
-/// messages in them still exist.
+/// it stopped at `message_budget`, or a page would not list. The
+/// distinction is what makes pruning safe: a walk that stopped has pages
+/// it never asked for, and the messages in them still exist.
 async fn full_sync(
     state: &mut RunState<'_>,
     throttle: &mut QuotaThrottle,
@@ -674,6 +773,7 @@ async fn full_sync(
     summary: &mut FetchSummary,
 ) -> Result<Option<BTreeSet<String>>> {
     let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut complete = true;
     for label_id in enumeration_walks(label_ids) {
         let label = label_id.map_or_else(|| "<all>".to_string(), |id| state.index.name(id));
         let mut token: Option<String> = None;
@@ -686,14 +786,37 @@ async fn full_sync(
         let before = state.bar.announced();
         loop {
             throttle.acquire(api::UNITS_MESSAGES_LIST).await;
-            let page = api::list_messages(
+            let page = match api::list_messages(
                 state.user_id,
                 state.client,
                 token.as_deref(),
                 LIST_PAGE_SIZE,
                 label_id,
             )
-            .await?;
+            .await
+            {
+                Ok(page) => page,
+                // The stop refused the request; the run ends as a partial one.
+                Err(_) if opts.control.stop.requested() => {
+                    summary.interrupted = true;
+                    return Ok(None);
+                }
+                // With nothing mirrored there is nothing to keep going for.
+                Err(e) if api::is_terminal(&e) || state.known_gmail_ids.is_empty() => {
+                    return Err(e.context(format!("messages.list {label}")));
+                }
+                // The other walks still run; this one's messages past the
+                // failed page wait for the next run, which the held
+                // cursor makes walk again.
+                Err(e) => {
+                    complete = false;
+                    summary.listings.push(RunProblem::listing(
+                        &format!("messages.list {label}"),
+                        format!("{e:#}"),
+                    ));
+                    break;
+                }
+            };
             pages += 1;
             listed += page.ids.len();
             // The estimate can come in under what the walk really lists,
@@ -737,7 +860,7 @@ async fn full_sync(
             "finished walking one label",
         );
     }
-    Ok(Some(seen))
+    Ok(complete.then_some(seen))
 }
 
 // `only_extract_labels` means "carrying **any** of these", and Gmail's
@@ -763,7 +886,7 @@ async fn fetch_ids(
         // Already mirrored: skip before spending 20 quota units on it.
         // This is what lets successive budget-limited runs walk forward
         // through a large mailbox instead of re-fetching the same prefix.
-        if state.known_gmail_ids.contains(id) {
+        if state.known_gmail_ids.contains(id) || state.unstorable_here.contains(id) {
             summary.messages_already_had += 1;
             // Ticked although nothing was fetched: the total counts ids
             // *listed*, and a re-walk of a mirrored mailbox is almost
@@ -799,15 +922,18 @@ async fn fetch_ids(
                 // Deleted between the list and the get: normal on a busy
                 // mailbox, and nothing to come back for.
                 info!(event = "gmail_message_deleted_before_fetch", id = %id, "a listed message was gone before it could be fetched");
+                state.attempted.insert(id.clone());
+                if state.refetching.contains(id) {
+                    summary.emails_destroyed += destroy(state.db, std::slice::from_ref(id)).await?;
+                }
                 state.bar.did(1);
                 continue;
             }
-            // The retry loop backed off for as long as the run's give-up
-            // bounds allow and Google still would not serve. Walking on
-            // would fail every remaining id the same way, one attempt
-            // each; stopping keeps what the sealed batches already
-            // committed, and the held cursor makes the next run resume.
-            Err(e) if api::is_gave_up(&e) => {
+            // Walking on would fail every remaining id the same way, one
+            // attempt each; stopping keeps what this run fetched (the
+            // caller flushes it), and the held cursor makes the next run
+            // resume.
+            Err(e) if api::is_terminal(&e) => {
                 return Err(e.context(format!("fetching message {id}")));
             }
             Err(e) => {
@@ -818,6 +944,7 @@ async fn fetch_ids(
                 // error, and it is not one: nobody wants "you stopped
                 // this" on the Manage screen as a fetch that failed.
                 if !opts.control.stop.requested() {
+                    state.attempted.insert(id.clone());
                     summary.records.push(RecordProblem::new(
                         GMAIL_MESSAGES_TABLE,
                         id,
@@ -829,6 +956,7 @@ async fn fetch_ids(
             }
         };
         state.fetched += 1;
+        state.attempted.insert(id.clone());
         state.bar.did(1);
 
         let ingested = match ingest::ingest(state.account_id, state.index, &msg) {
@@ -837,6 +965,7 @@ async fn fetch_ids(
                 // Fetched but unusable: the bytes came back and we could
                 // not make a record of them. A person wants to know
                 // which message, and a `warn!` reaches nobody.
+                state.unstorable.insert(msg.id.clone());
                 summary.records.push(RecordProblem::new(
                     GMAIL_MESSAGES_TABLE,
                     &msg.id,
@@ -860,9 +989,18 @@ async fn fetch_ids(
 
         let oversize = state
             .blob_size_limit_bytes
-            .is_some_and(|cap| ingested.raw.len() as u64 > cap);
-        if oversize {
+            .filter(|cap| ingested.raw.len() as u64 > *cap);
+        if let Some(cap) = oversize {
             summary.blobs_oversize += 1;
+            state.pending.cas.add_skipped(
+                &ingested.email_id,
+                &ingested.blob_id,
+                datalib_problems::Reason::OverSizeLimit,
+                format!(
+                    "the .eml is {} bytes, over blob_size_limit_bytes ({cap})",
+                    ingested.raw.len()
+                ),
+            );
         } else if state.known_blobs.contains_key(&ingested.blob_id)
             || state.pending.seen_blob_ids.contains(&ingested.blob_id)
         {
@@ -1030,6 +1168,93 @@ async fn prune_to_enumeration(db: &RawDb, seen: &BTreeSet<String>) -> Result<usi
     let n = destroy(db, &gone).await?;
     datalib_etl::prune::record("gmail messages", held.len(), n);
     Ok(n)
+}
+
+/// The messages an earlier run recorded as fetched but unusable, or not
+/// fetched at all, with what it said about each.
+async fn earlier_record_problems(db: &RawDb) -> Result<Vec<RecordProblem>> {
+    let prefix = format!(
+        "{}{GMAIL_MESSAGES_TABLE}:",
+        download_problems::RECORD_PREFIX
+    );
+    let rows: Vec<(String, Option<String>)> = sqlx::query_as(
+        "SELECT scope_key, sample FROM problems WHERE scope_kind = ? AND INSTR(scope_key, ?) = 1",
+    )
+    .bind(datalib_problems::ScopeKind::Entity.as_str())
+    .bind(&prefix)
+    .fetch_all(db.pool())
+    .await
+    .context("loading the messages an earlier run could not fetch")?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(key, detail)| {
+            let id = key.strip_prefix(&prefix)?;
+            Some(RecordProblem::new(
+                GMAIL_MESSAGES_TABLE,
+                id,
+                detail.unwrap_or_default(),
+            ))
+        })
+        .collect())
+}
+
+/// The build that is running: a message it could not store is tried
+/// again only by another.
+fn build_identity() -> String {
+    format!(
+        "{}+{}",
+        datalib_runtime::build_id::DATALIB_VERSION,
+        datalib_runtime::build_id::git_hash().unwrap_or_default()
+    )
+}
+
+/// Where the build that last failed to store a message is kept, beside
+/// the cursor and under its `gmail:` namespace.
+fn unstorable_scope(account_id: &str, gmail_id: &str) -> String {
+    format!("gmail:{account_id}:unstorable:{gmail_id}")
+}
+
+/// Record which build failed to store each message this run, and forget
+/// the ones that no longer have a row: stored, or gone.
+async fn remember_unstorable(
+    db: &RawDb,
+    account_id: &str,
+    build: &str,
+    failed_now: &BTreeSet<String>,
+    with_a_row: &BTreeSet<String>,
+) -> Result<()> {
+    for id in failed_now {
+        db.save_scope(&unstorable_scope(account_id, id), build)
+            .await?;
+    }
+    for (id, _) in db.scopes_under(&unstorable_scope(account_id, "")).await? {
+        if !with_a_row.contains(&id) {
+            db.forget_scope(&unstorable_scope(account_id, &id)).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Mirrored messages whose `.eml` is not stored and would now fit under
+/// `cap`: the ones an earlier, lower cap turned away.
+async fn missing_their_eml(db: &RawDb, cap: Option<u64>) -> Result<Vec<String>> {
+    let rows: Vec<(String, Option<i64>)> = sqlx::query_as(
+        "SELECT g.gmail_id, e.size FROM gmail_messages g JOIN emails e ON e.id = g.email_id
+         WHERE NOT EXISTS (SELECT 1 FROM email_blobs b
+                           WHERE b.blob_id = e.blob_id AND b.blake3 IS NOT NULL)",
+    )
+    .fetch_all(db.pool())
+    .await
+    .context("loading the messages with no .eml stored")?;
+    Ok(rows
+        .into_iter()
+        .filter(|(_, size)| match (cap, size) {
+            (None, _) => true,
+            (Some(cap), Some(size)) => *size as u64 <= cap,
+            (Some(_), None) => false,
+        })
+        .map(|(id, _)| id)
+        .collect())
 }
 
 async fn load_known_gmail_ids(db: &RawDb) -> Result<BTreeSet<String>> {

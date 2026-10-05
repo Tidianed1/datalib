@@ -77,3 +77,27 @@ impl SourceRender for ChatgptRender {
         Ok("rendered".into())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datalib_etl::blob_cas::CasEdgeRow;
+    use datalib_etl_chatgpt::ingest::schema_raw::ConversationAttachmentRow;
+
+    /// A download's problem about a conversation or one of its
+    /// attachments reaches the conversation's grid row: the key the
+    /// download wrote mints the id the render gives that conversation.
+    #[test]
+    fn an_attachment_is_its_conversations_row() {
+        let attachment = ConversationAttachmentRow::pk_recipe("c1", "file-1");
+        let conversation = crate::render::ids::conversation("src", "c1").uuid;
+        let item = |table, id| ChatgptRender.item_of_entity("src", table, id);
+        assert_eq!(
+            item("chatgpt_attachments", &attachment),
+            Some(conversation.clone())
+        );
+        assert_eq!(item("conversations", "c1"), Some(conversation));
+        assert_eq!(item("me", "u1"), None);
+        assert_eq!(item("chatgpt_attachments", "no-separator"), None);
+    }
+}

@@ -135,8 +135,13 @@ drops the inode check and falls back to `(mtime, size)`. Less safe,
 but Unison's own behavior on those filesystems.
 
 `stamp_kind = "rescan"` forces a rehash regardless of what the triple
-says. Nothing writes it today; a `stamp_kind` the cache does not
-recognise reads as `rescan`, so an unknown writer's row is rehashed.
+says, and on a directory a real `readdir` where an unchanged one would
+list its children from the cache. The walk writes it on a directory
+that would not list, or that lost a child to an error this scan: the
+cache cannot name a child it never saw, so without it that directory
+would read as empty, with no error, until its mtime next moved. A
+`stamp_kind` the cache does not recognise reads as `rescan` too, so an
+unknown writer's row is rehashed.
 
 ## Stamping policy
 
@@ -276,10 +281,16 @@ part of any tree-hash; see §"Stamping policy".
 - No JSONL wire-event tape. There is no upstream wire to mirror; the
   filesystem itself is the human-inspectable tape.
 - No retry semantics for transient failures. A `read(2)` either
-  succeeds or it's a real error. An unreadable entry is logged
-  (`fsindex_entry_error`) and counted in the `fsindex_phase_breakdown`
-  event (`stat_errors`, `read_errors`, `non_utf8_paths`); nothing about
-  it is written to the store, and the next scan simply tries it again.
+  succeeds or it's a real error, and the next scan simply tries it
+  again. An entry the scan could not record — a folder that would not
+  list, a file that would not stat or hash, a link that would not read,
+  a name that is not UTF-8, an `.fsindex.yaml` that would not parse,
+  a folder the stamping pass could not stamp — is a `problems` row
+  keyed `record:files:<id>` or `record:dirs:<id>`, and the rest of the
+  scan goes on. Every scan re-walks the whole tree, so its rows replace
+  the last scan's and an entry that reads cleanly drops off. The
+  `fsindex_phase_breakdown` event still counts them (`stat_errors`,
+  `read_errors`, `non_utf8_paths`).
 
 ## Open follow-ups
 

@@ -66,50 +66,70 @@ impl RawDb {
         Ok(out)
     }
 
-    /// Delete every conversation not in `keep`, and its attachment edges.
+    /// Delete every conversation not in `keep`, its attachment edges, and
+    /// the fetch problems of both.
     ///
     /// Only for a caller holding a **complete** listing — see the gate at
     /// the callsite. That gate is the whole safety story: nothing here
     /// second-guesses how much it deletes, because the rows stay in
     /// doltlite history either way.
     pub async fn prune_conversations(&self, keep: &HashSet<String>) -> Result<usize> {
-        let held: Vec<String> = sqlx::query_scalar("SELECT id FROM conversations")
-            .fetch_all(self.pool())
+        let held: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM conversations")
+            .fetch_one(self.pool())
             .await
-            .context("list conversation ids for prune")?;
-        let gone: Vec<String> = held
-            .iter()
-            .filter(|id| !keep.contains(*id))
-            .cloned()
-            .collect();
-        if gone.is_empty() {
-            return Ok(0);
-        }
+            .context("count conversations for prune")?;
         let mut tx = self.pool().begin().await.context("begin prune tx")?;
-        for chunk in gone.chunks(datalib_etl::bulk::SQL_CHUNK) {
-            let mut placeholders = String::new();
-            datalib_etl::bulk::push_placeholder_list(&mut placeholders, chunk.len());
-            for sql in [
-                format!(
-                    "DELETE FROM chatgpt_attachments WHERE conversation_id IN ({placeholders})"
-                ),
-                format!("DELETE FROM conversations WHERE id IN ({placeholders})"),
-                format!("DELETE FROM conversations_bookkeeping WHERE id IN ({placeholders})"),
-            ] {
-                // Audited: static table names; the IN-list is a `?,?,?` run
-                // sized from the chunk and every id is bound.
-                let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
-                for id in chunk {
-                    q = q.bind(id.clone());
-                }
-                q.execute(&mut *tx)
-                    .await
-                    .context("prune chatgpt conversations")?;
-            }
-        }
+        let gone =
+            datalib_etl::prune::prune_scope_in_tx(&mut tx, "conversations", &[], keep).await?;
+        datalib_etl::prune::delete_owned_in_tx(
+            &mut tx,
+            "chatgpt_attachments",
+            "conversation_id",
+            &gone,
+        )
+        .await?;
         tx.commit().await.context("commit prune tx")?;
-        datalib_etl::prune::record("chatgpt conversations", held.len(), gone.len());
+        datalib_etl::prune::record("chatgpt conversations", held as usize, gone.len());
         Ok(gone.len())
+    }
+
+    pub async fn has_any_conversation(&self) -> Result<bool> {
+        let row = sqlx::query("SELECT 1 FROM conversations LIMIT 1")
+            .fetch_optional(self.pool())
+            .await
+            .context("has_any_conversation")?;
+        Ok(row.is_some())
+    }
+
+    /// The conversation as stored, `None` for one never fetched.
+    pub async fn load_conversation_payload(&self, id: &str) -> Result<Option<Value>> {
+        let payload: Option<Option<String>> =
+            sqlx::query_scalar("SELECT json(payload) FROM conversations WHERE id = ?")
+                .bind(id)
+                .fetch_optional(self.pool())
+                .await
+                .context("select one conversation")?;
+        payload
+            .flatten()
+            .map(|s| serde_json::from_str(&s).context("parse a stored conversation"))
+            .transpose()
+    }
+
+    /// Every conversation with an attachment whose last attempt failed.
+    /// One chatgpt.com no longer has is a skip, not a failure, and waits
+    /// for its conversation to change.
+    pub async fn conversations_with_unfetched_attachments(&self) -> Result<Vec<String>> {
+        sqlx::query_scalar(
+            "SELECT DISTINCT a.conversation_id FROM chatgpt_attachments a \
+             JOIN problems p ON p.scope_kind = ? \
+                AND p.scope_key = 'chatgpt_attachments:' || a.id \
+             WHERE p.reason = ? ORDER BY a.conversation_id",
+        )
+        .bind(datalib_problems::ScopeKind::Entity.as_str())
+        .bind(datalib_problems::Reason::FetchFailed.as_str())
+        .fetch_all(self.pool())
+        .await
+        .context("select conversations with unfetched attachments")
     }
 
     pub async fn record_conversation_error(&self, id: &str, err: &str) -> Result<()> {

@@ -157,8 +157,8 @@ async fn garmin_synth_playback_ingest_roundtrip() {
             "SELECT COUNT(*) FROM sync_scope_state WHERE scope LIKE 'garmin:%'"
         )
         .await,
-        (DAILY_METRICS.len() + 2) as i64,
-        "one cursor per metric, plus weight and activities"
+        (DAILY_METRICS.len() + 3) as i64,
+        "one cursor per metric, plus weight and activities, plus the FIT edges' repair mark"
     );
 
     // The FIT bytes are in the CAS, unzipped.

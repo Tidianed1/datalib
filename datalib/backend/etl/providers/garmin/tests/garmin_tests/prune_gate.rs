@@ -15,7 +15,7 @@ use datalib_etl::retry::{self, RetryGuard};
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl::synthesize::{write_fixture, Synthesizer};
 use datalib_etl_garmin::auth::Credentials;
-use datalib_etl_garmin::ingest::api::{base_url, req_get};
+use datalib_etl_garmin::ingest::api::{base_url, req_get, req_get_bytes};
 use datalib_etl_garmin::ingest::{db_path_for, fetch, FetchOptions, FetchSummary, RawDb};
 use datalib_etl_garmin::synthesize::GarminSynth;
 use datalib_etl_garmin_config::GarminApi;
@@ -81,6 +81,12 @@ impl Account {
     /// Make one request answer differently from what the spec says.
     pub(crate) fn answer(&self, path: &str, resp: HttpResponse) {
         let req = req_get(&format!("{}{path}", base_url("garmin.com")));
+        write_fixture(&self.playback, &req, &resp).unwrap();
+    }
+
+    /// As [`Self::answer`], for a file download.
+    pub(crate) fn answer_bytes(&self, path: &str, resp: HttpResponse) {
+        let req = req_get_bytes(&format!("{}{path}", base_url("garmin.com")));
         write_fixture(&self.playback, &req, &resp).unwrap();
     }
 
@@ -163,6 +169,25 @@ impl Account {
         rows.into_iter().collect()
     }
 
+    /// `(id, blake3)` pairs, as `sql` selects them.
+    pub(crate) async fn pairs(&self, sql: &'static str) -> Vec<(String, Option<String>)> {
+        let pool = datalib_pin::open_reader(&db_path_for(&self.raw))
+            .await
+            .unwrap();
+        let rows = sqlx::query_as(sql).fetch_all(&pool).await.unwrap();
+        pool.close().await;
+        rows
+    }
+
+    /// One statement against the store, the way an earlier build would
+    /// have left it.
+    pub(crate) async fn exec(&self, sql: &'static str) {
+        let db = RawDb::open(&db_path_for(&self.raw)).await.unwrap();
+        sqlx::query(sql).execute(db.pool()).await.unwrap();
+        db.commit_all("test").await.unwrap();
+        db.close().await;
+    }
+
     pub(crate) async fn set_cursor(&self, scope: &str, value: &str) {
         let db = RawDb::open(&db_path_for(&self.raw)).await.unwrap();
         db.set_cursor(scope, value).await.unwrap();
@@ -178,6 +203,18 @@ pub(crate) fn status(code: u16, body: &str) -> HttpResponse {
         status: code,
         headers,
         body: body.as_bytes().to_vec(),
+        duration_ms: 0,
+    }
+}
+
+/// A 200 carrying `body` as a download.
+pub(crate) fn bytes(body: &[u8]) -> HttpResponse {
+    let mut headers = BTreeMap::new();
+    headers.insert("content-type".into(), "application/zip".into());
+    HttpResponse {
+        status: 200,
+        headers,
+        body: body.to_vec(),
         duration_ms: 0,
     }
 }
@@ -409,4 +446,55 @@ async fn a_second_page_that_fails_does_not_prune_and_a_complete_walk_does() {
         ITEM_PAGE as i64
     );
     assert!(a.problems().await.is_empty());
+}
+
+/// User-settings feeds nothing else the run does, so a transient
+/// failure on it used to fail the whole step; now it costs that row
+/// only, which stays as the last run stored it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_user_settings_failure_is_a_listing_row_and_the_stored_row_stays() {
+    let _serial = PLAYBACK.lock().await;
+    let a = Account::tng();
+    a.run().await;
+    a.answer(
+        "/userprofile-service/userprofile/user-settings",
+        status(500, "upstream fell over"),
+    );
+    let s = a.run().await;
+    assert_eq!(s.errors, 1, "{}", s.line());
+    assert_eq!(s.items, 4, "the rest of the run went ahead: {}", s.line());
+    assert_eq!(
+        a.problems().await.keys().collect::<Vec<_>>(),
+        ["listing:user_settings"]
+    );
+    assert_eq!(
+        a.count("SELECT COUNT(*) FROM garmin_account WHERE id = 'user_settings' AND payload IS NOT NULL")
+            .await,
+        1
+    );
+
+    a.resynthesize();
+    let s = a.run().await;
+    assert_eq!(s.errors, 0, "{}", s.line());
+    assert!(a.problems().await.is_empty());
+}
+
+/// Gear is listed by the profile's `profileId`; an account without one
+/// cannot list it, and says so rather than only logging it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn gear_that_cannot_be_listed_is_a_listing_row() {
+    let _serial = PLAYBACK.lock().await;
+    let mut a = Account::tng();
+    let profile = a.spec["social_profile"].as_object_mut().unwrap();
+    profile.remove("profileId");
+    profile.remove("id");
+    a.resynthesize();
+    let s = a.run().await;
+    assert_eq!(s.items, 3, "{}", s.line());
+    let problems = a.problems().await;
+    assert_eq!(problems.keys().collect::<Vec<_>>(), ["listing:gear"]);
+    assert!(
+        problems["listing:gear"].contains("profileId"),
+        "{problems:?}"
+    );
 }

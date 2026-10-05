@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use sqlx::Row;
 
-use datalib_etl::blob_cas::CasEdgeRow as _;
+use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::doltlite_raw::{self as dr};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
@@ -36,6 +36,9 @@ pub struct PageUpsert {
 pub struct PageState {
     pub last_edited_time: Option<String>,
     pub has_payload: bool,
+    /// The `last_edited_time` the stored body was fetched at. Behind the
+    /// page's own when a run stored the page and not its body.
+    pub body_edited_time: Option<String>,
 }
 
 /// One page's body for [`RawDb::upsert_page_markdown`].
@@ -81,7 +84,9 @@ pub struct CommentUpsert {
 impl RawDb {
     pub async fn page_states(&self) -> Result<std::collections::HashMap<String, PageState>> {
         let rows = sqlx::query(
-            "SELECT id, last_edited_time, payload IS NOT NULL AS has_payload FROM pages",
+            "SELECT p.id, p.last_edited_time, p.payload IS NOT NULL AS has_payload, \
+                    m.source_last_edited_time AS body_edited_time \
+             FROM pages p LEFT JOIN page_markdown m ON m.id = p.id",
         )
         .fetch_all(self.pool())
         .await
@@ -96,6 +101,7 @@ impl RawDb {
                 PageState {
                     last_edited_time: last,
                     has_payload: has != 0,
+                    body_edited_time: r.try_get("body_edited_time").ok().flatten(),
                 },
             );
         }
@@ -472,52 +478,252 @@ impl RawDb {
         Ok(row.is_some())
     }
 
-    /// Hash + store the bytes in the per-source CAS, then land an edge
-    /// row on `notion_attachments`. No writes to the shared
-    /// `blob_refs` table — Notion uses the per-provider edge shape
-    /// every other provider settled on.
-    pub async fn store_blob(
-        &self,
-        block_id: &str,
-        ref_id: &str,
-        content_type: Option<&str>,
-        bytes: &[u8],
-    ) -> Result<String> {
-        let hash = self.cas().put(bytes, content_type).await?;
-        let edge = NotionAttachmentRow {
-            id: NotionAttachmentRow::pk_recipe(block_id, ref_id),
-            page_id: block_id.to_string(),
-            ref_id: ref_id.to_string(),
-            blake3: Some(hash.clone()),
-        };
-        let now = datalib_time::IsoOffsetTimestamp::now_local();
-        let mut tx = self
-            .pool()
-            .begin()
-            .await
-            .context("begin notion_attachments tx")?;
-        datalib_etl::bulk::bulk_upsert_in_tx(&mut tx, &[edge], &now).await?;
-        tx.commit().await.context("commit notion_attachments tx")?;
-        Ok(hash)
+    /// Land one page's attachment edges and the bytes that came back,
+    /// stamping the ones that did not as failed so a later run retries
+    /// them ([`Self::pages_to_refetch`]).
+    pub async fn flush_attachments(&self, acc: &CasEdgeAccumulator) -> Result<()> {
+        acc.flush(self.pool(), self.cas(), |page_id, ref_id, blake3| {
+            NotionAttachmentRow {
+                id: NotionAttachmentRow::pk_recipe(page_id, ref_id),
+                page_id: page_id.to_string(),
+                ref_id: ref_id.to_string(),
+                blake3: blake3.map(String::from),
+            }
+        })
+        .await
     }
 
-    /// Record a known-but-not-yet-fetched edge row so a future retry
-    /// has something to look at. Mirrors how WhatsApp / Beeper handle
-    /// "we know about this attachment but haven't pulled bytes" —
-    /// blake3 stays NULL until the CAS write lands.
-    pub async fn record_blob_error(&self, block_id: &str, ref_id: &str) -> Result<()> {
-        let edge = NotionAttachmentRow {
-            id: NotionAttachmentRow::pk_recipe(block_id, ref_id),
-            page_id: block_id.to_string(),
-            ref_id: ref_id.to_string(),
-            blake3: None,
-        };
-        let now = datalib_time::IsoOffsetTimestamp::now_local();
-        let mut tx = self.pool().begin().await.context("begin blob error tx")?;
-        datalib_etl::bulk::bulk_upsert_in_tx(&mut tx, &[edge], &now).await?;
-        tx.commit().await.context("commit blob error tx")?;
+    /// Drop the failed edges of `page_id` whose slot `keep` turns down:
+    /// one its body no longer links, or one upstream says is gone. Nothing
+    /// will fetch them again, so their rows would stand for good and keep
+    /// the page in the retry set.
+    pub async fn forget_failed_attachments(
+        &self,
+        page_id: &str,
+        keep_slot: impl Fn(&str) -> bool,
+    ) -> Result<()> {
+        let rows = sqlx::query(
+            "SELECT a.id, a.ref_id, b.last_error IS NOT NULL AS failed \
+             FROM notion_attachments a \
+             LEFT JOIN notion_attachments_bookkeeping b ON b.id = a.id \
+             WHERE a.page_id = ?",
+        )
+        .bind(page_id)
+        .fetch_all(self.pool())
+        .await
+        .context("select the attachment edges of a page")?;
+        let mut keep = HashSet::new();
+        let mut gone = false;
+        for r in rows {
+            let id: String = r.try_get("id")?;
+            let ref_id: String = r.try_get("ref_id")?;
+            let failed: bool = r.try_get("failed")?;
+            if failed && !keep_slot(&ref_id) {
+                gone = true;
+            } else {
+                keep.insert(id);
+            }
+        }
+        if gone {
+            datalib_etl::prune::prune_scope(
+                self.pool(),
+                "notion_attachments",
+                &[("page_id", page_id)],
+                &keep,
+            )
+            .await?;
+        }
         Ok(())
     }
+
+    /// A page Notion answered 404 for: deleted, or no longer shared with
+    /// this credential. The ingest deletes nothing, so a page the store
+    /// holds stays as it was; what goes is every failure that would have
+    /// it fetched again, and a stub that never fetched. Its body is
+    /// marked current, so a body left behind by an earlier run does not
+    /// keep it in [`Self::pages_to_refetch`] either.
+    pub async fn retire_page(&self, page_id: &str) -> Result<()> {
+        let mut tx = self.pool().begin().await.context("begin retire page tx")?;
+        let stub: bool = sqlx::query_scalar("SELECT payload IS NULL FROM pages WHERE id = ?")
+            .bind(page_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .context("probe a retired page")?
+            .unwrap_or(false);
+        if stub {
+            for sql in [
+                "DELETE FROM pages WHERE id = ?",
+                "DELETE FROM pages_bookkeeping WHERE id = ?",
+            ] {
+                sqlx::query(sql)
+                    .bind(page_id)
+                    .execute(&mut *tx)
+                    .await
+                    .context("drop a page stub")?;
+            }
+        }
+        clear_failure(&mut tx, "pages", page_id).await?;
+        sqlx::query(
+            "INSERT INTO page_markdown (id, source_last_edited_time) \
+             SELECT id, last_edited_time FROM pages WHERE id = ? \
+             ON CONFLICT(id) DO UPDATE SET \
+                source_last_edited_time = excluded.source_last_edited_time",
+        )
+        .bind(page_id)
+        .execute(&mut *tx)
+        .await
+        .context("mark a retired page's body current")?;
+        clear_failure(&mut tx, "page_markdown", page_id).await?;
+        tx.commit().await.context("commit retire page tx")?;
+        self.forget_failed_attachments(page_id, |_| false).await
+    }
+
+    /// A body Notion answered 404 for, though the page fetched: marked
+    /// current at `edited` with whatever body is stored, so it is asked
+    /// for again only once the page is edited.
+    pub async fn settle_body(&self, page_id: &str, edited: Option<&str>) -> Result<()> {
+        let mut tx = self.pool().begin().await.context("begin settle body tx")?;
+        sqlx::query(
+            "INSERT INTO page_markdown (id, source_last_edited_time) VALUES (?, ?) \
+             ON CONFLICT(id) DO UPDATE SET \
+                source_last_edited_time = excluded.source_last_edited_time",
+        )
+        .bind(page_id)
+        .bind(edited)
+        .execute(&mut *tx)
+        .await
+        .context("mark a body current")?;
+        clear_failure(&mut tx, "page_markdown", page_id).await?;
+        tx.commit().await.context("commit settle body tx")?;
+        Ok(())
+    }
+
+    /// A user Notion answered 404 for. A stub that never fetched goes; a
+    /// user the store holds stays, with its failure cleared.
+    pub async fn forget_user(&self, user_id: &str) -> Result<()> {
+        let mut tx = self.pool().begin().await.context("begin forget user tx")?;
+        let stub: bool = sqlx::query_scalar("SELECT payload IS NULL FROM users WHERE id = ?")
+            .bind(user_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .context("probe a gone user")?
+            .unwrap_or(false);
+        if stub {
+            for sql in [
+                "DELETE FROM users WHERE id = ?",
+                "DELETE FROM users_bookkeeping WHERE id = ?",
+            ] {
+                sqlx::query(sql)
+                    .bind(user_id)
+                    .execute(&mut *tx)
+                    .await
+                    .context("drop a user stub")?;
+            }
+        }
+        clear_failure(&mut tx, "users", user_id).await?;
+        tx.commit().await.context("commit forget user tx")?;
+        Ok(())
+    }
+
+    /// A fetch of `id` in `table` that failed, kept on its sidecar and as
+    /// a `problems` row until the same record fetches.
+    pub async fn record_fetch_error(&self, table: &str, id: &str, err: &str) -> Result<()> {
+        let mut tx = self.pool().begin().await.context("begin fetch error tx")?;
+        dr::record_object_error(&mut tx, table, id, err).await?;
+        tx.commit().await.context("commit fetch error tx")?;
+        Ok(())
+    }
+
+    /// A body stored short on purpose: a warning that stands until the
+    /// page is fetched whole.
+    pub async fn record_body_cut_short(&self, page_id: &str, detail: &str) -> Result<()> {
+        let mut tx = self.pool().begin().await.context("begin body skip tx")?;
+        dr::record_object_skipped(
+            &mut tx,
+            "page_markdown",
+            page_id,
+            datalib_problems::Reason::DeliberateLoss,
+            detail,
+        )
+        .await?;
+        tx.commit().await.context("commit body skip tx")?;
+        Ok(())
+    }
+
+    /// Pages a run must fetch again although upstream has not moved them:
+    /// one whose object, comments, body or an attachment failed last
+    /// time, or whose stored body is older than its stored object.
+    ///
+    /// A body cut short by the follow-up cap is left out: fetching it
+    /// again gets the same body. So are failed attachments when the run
+    /// will not fetch attachments.
+    pub async fn pages_to_refetch(&self, attachments: bool) -> Result<HashSet<String>> {
+        let mut out: HashSet<String> = self.failed_page_ids().await?.into_iter().collect();
+        let behind: Vec<String> = sqlx::query_scalar(
+            "SELECT p.id FROM pages p LEFT JOIN page_markdown m ON m.id = p.id \
+             WHERE p.payload IS NOT NULL \
+               AND (m.id IS NULL OR m.source_last_edited_time IS NOT p.last_edited_time)",
+        )
+        .fetch_all(self.pool())
+        .await
+        .context("select pages whose body is behind")?;
+        out.extend(behind);
+        let bodies: Vec<String> = sqlx::query_scalar(
+            "SELECT b.id FROM page_markdown_bookkeeping b \
+             WHERE b.last_error IS NOT NULL \
+               AND NOT EXISTS (SELECT 1 FROM problems p \
+                   WHERE p.scope_kind = ? AND p.scope_key = 'page_markdown:' || b.id \
+                     AND p.reason = ?)",
+        )
+        .bind(datalib_problems::ScopeKind::Entity.as_str())
+        .bind(datalib_problems::Reason::DeliberateLoss.as_str())
+        .fetch_all(self.pool())
+        .await
+        .context("select page bodies that failed")?;
+        out.extend(bodies);
+        if !attachments {
+            return Ok(out);
+        }
+        let owners: Vec<String> = sqlx::query_scalar(
+            "SELECT a.page_id FROM notion_attachments a \
+             JOIN notion_attachments_bookkeeping b ON b.id = a.id \
+             WHERE b.last_error IS NOT NULL",
+        )
+        .fetch_all(self.pool())
+        .await
+        .context("select pages whose attachments failed")?;
+        out.extend(owners);
+        Ok(out)
+    }
+
+    pub async fn failed_user_ids(&self) -> Result<Vec<String>> {
+        dr::failed_ids(self.pool(), "users").await
+    }
+}
+
+/// `table:id` is no longer a failure: its sidecar's error and its fetch
+/// problem go, and nothing else about the row changes.
+async fn clear_failure(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    table: &'static str,
+    id: &str,
+) -> Result<()> {
+    // Audited: `table` is a `&'static str` at every callsite; `id` is bound.
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "UPDATE {table}_bookkeeping SET last_error = NULL WHERE id = ?"
+    )))
+    .bind(id)
+    .execute(&mut **tx)
+    .await
+    .with_context(|| format!("clear the failure of {table}:{id}"))?;
+    sqlx::query("DELETE FROM problems WHERE scope_kind = ? AND scope_key = ? AND stage = ?")
+        .bind(datalib_problems::ScopeKind::Entity.as_str())
+        .bind(format!("{table}:{id}"))
+        .bind(datalib_problems::Stage::Fetch.as_str())
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("clear the problem of {table}:{id}"))?;
+    Ok(())
 }
 
 /// One `notion_attachments` row as render reads it.
@@ -584,15 +790,91 @@ mod tests {
             !db.blob_exists(&ref_id).await.unwrap(),
             "edge should not exist before store"
         );
-        let hash = db
-            .store_blob(block_id, &ref_id, Some("image/png"), b"\x89PNG fake bytes")
+        let mut acc = CasEdgeAccumulator::new();
+        acc.add_fetched(
+            block_id,
+            &ref_id,
+            b"\x89PNG fake bytes".to_vec(),
+            Some("image/png".into()),
+            None,
+        );
+        db.flush_attachments(&acc)
             .await
-            .expect("store_blob should succeed once the bookkeeping sidecar exists");
-        assert_eq!(hash.len(), 64, "blake3 hex hash");
+            .expect("the flush should succeed once the bookkeeping sidecar exists");
         assert!(
             db.blob_exists(&ref_id).await.unwrap(),
             "edge with non-null blake3 should exist after store"
         );
+    }
+
+    async fn fetch_problems(db: &RawDb) -> Vec<(String, String)> {
+        sqlx::query_as("SELECT scope_key, severity FROM problems ORDER BY scope_key")
+            .fetch_all(db.pool())
+            .await
+            .unwrap()
+    }
+
+    /// An attachment whose bytes did not come back used to be upserted
+    /// like a fetched one, which stamped it fetched and cleared its
+    /// problem: the mirror lacked the file and nothing said so.
+    #[tokio::test]
+    async fn a_failed_attachment_is_a_problem_until_its_bytes_land() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&dir.path().join("fail.doltlite_db"))
+            .await
+            .unwrap();
+        let page = "page-enterprise";
+        let slot = "https://prod-files-secure.s3.us-west-2.amazonaws.com/x/warp.png";
+        let edge = NotionAttachmentRow::pk_recipe(page, slot);
+
+        let mut acc = CasEdgeAccumulator::new();
+        acc.add_failed(page, slot, "HTTP 403");
+        db.flush_attachments(&acc).await.unwrap();
+        assert!(!db.blob_exists(slot).await.unwrap());
+        assert_eq!(
+            fetch_problems(&db).await,
+            vec![(format!("notion_attachments:{edge}"), "error".to_string())]
+        );
+        assert!(db.pages_to_refetch(true).await.unwrap().contains(page));
+
+        let mut acc = CasEdgeAccumulator::new();
+        acc.add_fetched(page, slot, b"bytes".to_vec(), None, None);
+        db.flush_attachments(&acc).await.unwrap();
+        assert!(db.blob_exists(slot).await.unwrap());
+        assert!(fetch_problems(&db).await.is_empty());
+        assert!(!db.pages_to_refetch(true).await.unwrap().contains(page));
+    }
+
+    /// A failed attachment the page no longer links can never fetch, so
+    /// it goes rather than keeping the page in the retry set for good.
+    #[tokio::test]
+    async fn a_failed_attachment_the_body_dropped_is_forgotten() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&dir.path().join("gone.doltlite_db"))
+            .await
+            .unwrap();
+        let page = "page-defiant";
+        let mut acc = CasEdgeAccumulator::new();
+        acc.add_failed(page, "https://files.notion.so/a.png", "HTTP 500");
+        acc.add_fetched(
+            page,
+            "https://files.notion.so/b.png",
+            b"b".to_vec(),
+            None,
+            None,
+        );
+        db.flush_attachments(&acc).await.unwrap();
+
+        let still_linked: HashSet<String> = ["https://files.notion.so/b.png".to_string()].into();
+        db.forget_failed_attachments(page, |slot| still_linked.contains(slot))
+            .await
+            .unwrap();
+        assert!(fetch_problems(&db).await.is_empty());
+        let left: Vec<String> = sqlx::query_scalar("SELECT ref_id FROM notion_attachments")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(left, vec!["https://files.notion.so/b.png".to_string()]);
     }
 
     #[tokio::test]

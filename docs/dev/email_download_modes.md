@@ -211,12 +211,19 @@ same namespacing discipline as the JMAP path's `jmap:` keys.
 
 The cursor and the recorded filter both advance only when the run
 drained its work — no `message_budget` stop, no interruption, no
-`messages.get` failure other than a 404 — because either one stored
+`messages.get` failure other than a 404, no `messages.list` walk that
+failed — because either one stored
 after a partial run tells the next run it is caught up, and the next
 run's `history.list` never names a message that merely failed to fetch.
 A held cursor makes the next run re-enumerate, which is cheap:
 `messages.list` is 5 units a page, and every id already in
 `gmail_messages` is skipped before `messages.get`'s 20 are spent.
+
+A message an earlier run could not use keeps its `record:gmail_messages:`
+row, and every run fetches those ids again first, whatever the cursor
+says; so is an `.eml` once skipped as too large, once the limit allows
+it. A `messages.list` walk that fails is a `listing:messages.list
+<label>` row; the other labels are still walked and nothing is pruned.
 
 A walk over the whole mailbox (no label filter, not budget-limited) is
 also when deletions `history.list` never reported are found: rows the
@@ -266,8 +273,10 @@ into it and keep going, the way the Slack provider does.
   (`DownloadParams`: by default thirty minutes without a successful
   request, or fifty failures in a row) — the run stops with
   an error rather than walking on to fail every remaining id one attempt
-  at a time. The sealed batches are already committed and the cursor is
-  held, so the next run resumes.
+  at a time. So does a refused credential (401, or a 403 that is not a
+  rate limit) or `dailyLimitExceeded`. What was fetched and not yet
+  flushed is flushed first, the sealed batches are already committed and
+  the cursor is held, so the next run resumes.
 
 A 100k-message mailbox is still ~6 hours of backfill; the run is
 expected to take that long. `message_budget` stops a run early with a

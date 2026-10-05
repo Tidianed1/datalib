@@ -19,6 +19,7 @@ pub use db::{db_path_for, RawDb};
 use datalib_etl::download_problems::{self, RunProblem, RunProblemKind};
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan;
+use datalib_problems::{Outcome, Problem, Reason};
 use futures::FutureExt;
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
@@ -252,7 +253,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         .iter()
         .filter(|p| p.kind == RunProblemKind::Phase)
         .count();
-    download_problems::report_run(db.pool(), &problems).await;
+    if !opts.control.stop.requested() {
+        download_problems::report_run(db.pool(), &problems).await;
+    }
 
     Ok(summary)
 }
@@ -267,6 +270,15 @@ pub(crate) async fn report_skipped_if_read(
     if let Some(skipped) = skipped {
         download_problems::report_skipped(db.pool(), part, &skipped).await;
     }
+}
+
+/// What a Maps file with no `features` list leaves on the file: it says
+/// nothing about which places exist, so nothing was stored or deleted.
+pub(crate) fn no_features_list() -> (Outcome, Problem) {
+    (
+        Outcome::Dropped,
+        Problem::field("features", Reason::Undeserializable, ""),
+    )
 }
 
 /// Runs one feed so that its failure, an error or a panic, costs only

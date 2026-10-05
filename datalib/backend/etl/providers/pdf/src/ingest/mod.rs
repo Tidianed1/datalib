@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+use datalib_etl::download_problems::{self, RecordProblem};
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan;
 use datalib_etl::fswalk;
@@ -69,7 +70,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // the in-memory cache is what preserves the fast-rescan path across
     // it.
     let prev = opts.db.load_prev().await.context("load rescan cache")?;
-    opts.db.reset_paths().await.context("reset pdf_paths")?;
 
     // Written before the walk, so an interrupted scan still leaves the
     // render step able to find the tree.
@@ -101,8 +101,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     )
     .await?;
     summary.errors += scan.errors.len();
-    for e in &scan.errors {
-        tracing::warn!(path = %e.path.display(), error = %e.error, "pdf_walk_error");
+    // A walk that could not read part of the tree may only have failed to
+    // see a path, so the table is not truncated and nothing falls out:
+    // what the walk did see is upserted over what was there.
+    if scan.errors.is_empty() {
+        opts.db.reset_paths().await.context("reset pdf_paths")?;
     }
     summary.pdfs_seen = scan.files.len();
     summary.too_large = scan.stats.too_large;
@@ -115,6 +118,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // Documents identified during *this* scan, so N copies of one file
     // are classified once rather than N times.
     let mut seen_docs: HashMap<String, bool> = HashMap::new();
+    let mut unread: Vec<RecordProblem> = Vec::new();
+    if !scan.errors.is_empty() {
+        unread.extend(untried_records(opts.db.pool(), "pdf_paths", &scan).await?);
+    }
 
     for f in &scan.files {
         opts.progress.inc(1);
@@ -135,9 +142,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                         ..row
                     });
                 }
+                // Retried every scan: a document that never identified
+                // is not in `pdf_documents`.
                 Err(e) => {
                     summary.errors += 1;
-                    tracing::warn!(path = %f.rel, error = %e, "pdf_identify_failed");
+                    unread.push(RecordProblem::new("pdf_paths", &f.rel, format!("{e:#}")));
                     continue;
                 }
             }
@@ -158,7 +167,26 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     if !doc_batch.is_empty() || !path_batch.is_empty() {
         opts.db.write_batch(&doc_batch, &path_batch, &now).await?;
     }
+    // Every scan walks the whole tree and retries every document it
+    // could not identify, so each set replaces the last scan's.
+    download_problems::report_run(opts.db.pool(), &scan.walk_problems()).await;
+    download_problems::report_records(opts.db.pool(), &unread).await;
     Ok(summary)
+}
+
+/// The last scan's `record:{table}:` rows on paths this scan did not try
+/// again — under an entry its walk could not read — carried into this
+/// scan's set.
+async fn untried_records(
+    pool: &sqlx::SqlitePool,
+    table: &str,
+    scan: &fsscan::Scan,
+) -> Result<Vec<RecordProblem>> {
+    Ok(download_problems::earlier_records(pool, table, "")
+        .await?
+        .into_iter()
+        .filter(|r| scan.could_not_see(&r.id))
+        .collect())
 }
 
 fn is_pdf(p: &Path) -> bool {
@@ -175,9 +203,9 @@ fn identify(path: &Path, size: i64) -> Result<PdfDocumentRow> {
     // against a different cache key.
     let det =
         pdf_inspector::process_pdf_with_options(path, pdf_inspector::PdfOptions::detect_only())
-            .map_err(|e| anyhow::anyhow!("classify {}: {e}", path.display()))?;
+            .map_err(|e| anyhow::anyhow!("classify: {e}"))?;
 
-    let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    let bytes = std::fs::read(path).context("read")?;
     // One parse feeds both: the metadata fields and the content hash
     // want the same `lopdf::Document`, and building it is the expensive
     // half of each.

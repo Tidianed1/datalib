@@ -11,9 +11,9 @@ use anyhow::{Context, Result};
 use datalib_etl::file_checkpoint::{self, SnapshotCounts};
 use datalib_etl::progress::Progress;
 use serde_json::Value;
-use tracing::warn;
 
 use super::db::RawDb;
+use super::no_features_list;
 use super::schema_raw::{ns_id, MapsSavedPlaceRow};
 use datalib_etl::doltlite_raw::WirePayload;
 
@@ -30,16 +30,15 @@ pub async fn ingest(
         let skipped = skipped.insert(Vec::new());
         let geo: Value = serde_json::from_slice(bytes).context("parse Saved Places.json")?;
         let Some(features) = geo.get("features").and_then(|v| v.as_array()) else {
-            warn!(
-                event = "maps_saved_no_features",
-                path = FILE_REL,
-                "the saved-places file has no features list; nothing was ingested or deleted"
-            );
-            return Ok(None);
+            return Ok((None, Some(no_features_list())));
         };
         let mut rows: Vec<MapsSavedPlaceRow> = Vec::with_capacity(features.len());
         for f in features {
             let Some(props) = f.get("properties") else {
+                skipped.push(SkippedRecord {
+                    entry: f.to_string(),
+                    problem: Problem::field("properties", Reason::NoIdentity, ""),
+                });
                 continue;
             };
             let date = props.get("date").and_then(|v| v.as_str()).unwrap_or("");
@@ -67,7 +66,7 @@ pub async fn ingest(
                 when_ts: Some(date.to_string()),
             });
         }
-        Ok(Some(rows))
+        Ok((Some(rows), None))
     })
     .await?;
     super::report_skipped_if_read(db, "maps_saved_places", skipped).await;

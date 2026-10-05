@@ -143,6 +143,22 @@ attachment as a placeholder; copying `Media/` in later and re-running
 fills them in — render's diff scan follows a changed registry row back
 to its message.
 
+## When part of a backup will not read
+
+msgstore is the backup: if it will not decrypt or mirror, the step
+fails. The two things beside it cost only themselves, as `problems`
+rows, and every run tries them again:
+
+| what failed | its row | what is kept |
+| --- | --- | --- |
+| `wa.db` will not decrypt or read | `phase:wa.db contacts` | the stored `wa_db_contacts` |
+| part of `Media/` will not list | `listing:media` | the whole registry: the drop-and-refill is held back, since a file the walk could not see is not gone |
+| a media file's bytes will not read | `record:wa_media_files:<relative_path>` | its registry row, so the message names the file and says it is not fetched |
+
+A run reads again every file whose bytes the CAS lacks, so the
+`record:` rows are replaced whole each run that walks `Media/`; a run
+without `Media/` leaves them as they were.
+
 ## What render does with it
 
 `whatsapp_render/src/render/parse.rs` loads `jid`, `chat`, `message`,

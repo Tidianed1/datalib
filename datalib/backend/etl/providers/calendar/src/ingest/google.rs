@@ -78,7 +78,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             ));
         }
     }
-    download_problems::report_run(db.pool(), &problems).await;
+    // A stop leaves calendars unsynced; their last rows stand.
+    if !opts.control.stop.requested() {
+        download_problems::report_run(db.pool(), &problems).await;
+    }
     Ok(summary)
 }
 

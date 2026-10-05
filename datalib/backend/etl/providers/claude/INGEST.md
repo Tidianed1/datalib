@@ -75,10 +75,43 @@ All paths are under `https://claude.ai/api`.
 
 A `403` on the conversation listing means "no chat permission for this
 org": the org is counted (`forbidden_orgs`), reported as one `problems`
-row, and skipped. Same for the project listing. A `403` on a detail
-fetch is retried twice first (0.5 s, then 2 s), because claude.ai
-answers 403 now and then to a detail GET issued right after the
-listing, and the same UUID a moment later returns 200.
+row (`listing:org:<name>`), and skipped. Same for the project listing. A
+`403` on a detail fetch is retried twice first (0.5 s, then 2 s),
+because claude.ai answers 403 now and then to a detail GET issued right
+after the listing, and the same UUID a moment later returns 200.
+
+## When part of a sync fails
+
+Two things fail the step: the `/organizations` listing failing (it is
+the credential preflight, and with no orgs there is nothing to walk),
+and no org's conversation listing answering at all — every org refused
+or failed, which is a credential that stopped working inside the org
+listing's 6h cache, not a partial sync. Nothing is pruned on such a
+run. Every other failure is a `problems` row, and the sync goes on with
+what it has. A store that will not take a read or a write still fails
+the step.
+
+| what failed | row | cleared by |
+|---|---|---|
+| `/account`, with no user stored | `phase:account` | the next run, which asks again while there is no user |
+| one org's conversation listing (not a 403) | `listing:conversations org:<name>` | the next run that lists it; until then nothing of that org is pruned |
+| one org's project listing | `listing:projects org:<name>` | the next run that lists it |
+| one project's docs listing | `listing:project_docs <project>` (a warning for a 403) | the next listing of them: a failed listing clears the project's sweep marker, so it is due again even when its metadata was stored this run |
+| a configured `project_uuids` entry no listed org has | `config:project_uuids:<value>` | a run in which it matches, or the config dropping it |
+| a configured `conv_uuids` entry every org answers 404 or 403 for | `config:conv_uuids:<value>` | as above |
+| one conversation's detail fetch | `conversations:<id>` on its bookkeeping row | its next successful fetch: a conversation never fetched has no `updated_at`, so the next run queues it as missing |
+| one file | `claude_attachments:<conversation>#<file>`, with the real reason | the file landing; see Attachments |
+| the rate limit (the shared give-up guard tripped) | `phase:conversations`, `phase:projects` or `phase:attachments`, wherever it stopped | the next run that gets through; the walk stops there, since every later request would be refused too |
+| a conversation or project in a bulk export with no `uuid` | `phase:export` | the next export ingest without one |
+
+Render shows a `conversations:` or `claude_attachments:` row on the
+conversation's page. The `listing:`/`phase:` rows and the `config:` rows
+are each written once, at the end of a run, replacing the last run's,
+on both the listing path and the `conv_uuids` path. A run the rate limit
+cut short does not rewrite the `config:` rows, since it did not check
+every configured entry. A run that was asked to stop writes neither, and records nothing about a request the stop
+refused: a conversation whose files the stop cut short is not written
+at all, so the next run starts it over.
 
 ## Projects
 
@@ -120,7 +153,11 @@ docs listing sits behind a per-project sweep marker in
 `sync_scope_state` (`claude:sweep:project_docs:<uuid>`) with a
 `PROJECT_DOCS_TTL` of 24h. Docs are refetched when the project's
 metadata changed, when no sweep has ever completed, or when the last one
-aged out — worst case one extra request per project per day.
+aged out — worst case one extra request per project per day. The
+`/organizations` listing sits behind the same kind of marker
+(`claude:sweep:orgs`, 6h). Both are stamped with, and aged against, the
+run's pinned now (`DATALIB_DAG_NOW`), not the wall clock, so whether a
+run asks for a listing is the same on every replay of it.
 
 A reset (`datalib-dag --reset`) empties `sync_scope_state` with the
 rest, so the next sync sweeps every project again;
@@ -130,8 +167,8 @@ rest, so the next sync sweeps every project again;
 removed upstream keeps its row (and keeps rendering): the project walk
 only upserts what the listing returns. A reset (`datalib-dag --reset`)
 is the way to drop them. A UUID in
-`api.project_uuids` that matches nothing in any visible org logs
-`claude_project_uuid_not_found` rather than quietly mirroring
+`api.project_uuids` that matches nothing in any visible org is a
+`config:project_uuids:<value>` problem rather than quietly mirroring
 nothing.
 
 ## The `export` method: ingesting a bulk export
@@ -200,13 +237,25 @@ treatment differs.
 
 | Slot | What it carries | Ingest | Render |
 |---|---|---|---|
-| `chat_messages[*].files[]` | A downloadable upload — image, PDF, … Has `file_uuid`, `file_name`, `preview_url`, `document_asset.url`. | `fetch_files_for` → `download_one_file` → the blob CAS, with a `claude_attachments` edge from the conversation's `file_uuid` to the bytes. | chat-common materializes it by `file_uuid`: an image inline, anything else as a link. |
+| `chat_messages[*].files[]` | A downloadable upload — image, PDF, … Has `file_uuid`, `file_name`, `preview_url`, `document_asset.url`. | `fetch_files` → `download_one_file` → the blob CAS, with a `claude_attachments` edge from the conversation's `file_uuid` to the bytes. | chat-common materializes it by `file_uuid`: an image inline, anything else as a link. |
 | `chat_messages[*].attachments[]` | **Text** Claude extracted from an upload: `id`, `file_name`, `file_type`, `file_size`, `extracted_content`. **No `preview_url`** — the binary is not retained server-side. | Nothing to fetch; no edge row. | `render_extracted_attachment`: a quoted block headed `**[attachment: <name>]**`. |
 
 An `attachments[]` item has no CAS edge because there are no bytes to
 address: its content is already in `conversations.payload`. If Claude
 ever starts keeping those binaries (a download URL appears in the
 payload), they would get edges like `files[]`.
+
+A file that does not land is still an edge row, with no `blake3`; its
+bookkeeping and its `problems` row say why. The walk reaches a
+conversation's files only when it fetches the conversation, and an
+unchanged one is not fetched again, so after the walk every
+conversation with such an edge is read back from the store and its
+files tried again from the file objects its payload carries.
+
+A file claude.ai answers `404` or `410` for, or one whose object names
+no URL, is not there to fetch rather than failed: its row is a
+`not_found` warning and the retry pass leaves it alone. It is asked for
+again only when its conversation changes and is refetched.
 
 ## Resume + prioritization
 
@@ -238,7 +287,14 @@ name was deleted on claude.ai, and the walk deletes it
 (`prune_org_conversations`; the row stays in doltlite history). The
 prune reads the unfiltered listing, not the `since`-narrowed one, and
 never touches a row whose `org_uuid` is NULL (an export-ingested one)
-or an org whose listing was refused.
+or an org whose listing was refused or failed. A pruned conversation
+takes its attachment edges, their bookkeeping and the `problems` rows
+of both with it.
+
+A conversation whose every fetch failed is an id-only stub — no
+payload, so no org. When every org listed, a stub no listing names is
+pruned too, problem and all; otherwise stubs wait for a run in which
+they all did.
 
 ## Bootstrapping from an export, then keeping it fresh with the API
 
@@ -313,7 +369,8 @@ store already holds.
 Every request goes through the shared `latchkey_curl` chokepoint, which
 retries a `429` or `502`–`504`, honoring `Retry-After`, within the
 source's `download_params` give-up bounds. When it gives up, the
-request fails as `ClaudeError::Permanent`, like any other error.
+request fails as `ClaudeError::RateLimited` and the run does no more
+requests; see the table above.
 
 ## Sample data
 

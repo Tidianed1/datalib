@@ -61,7 +61,8 @@ async fn gitlab_synth_playback_extract_roundtrip() {
     write_event(&api, ENTITY_DISCUSSION, k, disc_raw.clone());
 
     let report = GitlabSynth::new(&api).synthesize(&playback).unwrap();
-    assert_eq!(report.fixtures_written, 6);
+    // 1 user + 3 scopes + 3 resumed ones + 1 MR detail + 1 discussions
+    assert_eq!(report.fixtures_written, 9);
 
     std::env::set_var(PLAYBACK_ENV, &playback);
 
@@ -72,7 +73,7 @@ async fn gitlab_synth_playback_extract_roundtrip() {
         full_sync: true,
         refresh_window_days: 0,
         sleep_between: Duration::ZERO,
-        ..FetchOptions::new(db.clone())
+        ..FetchOptions::new(db.clone(), crate::tng_now())
     })
     .await;
     // Seal on the same handle, the way the download step's

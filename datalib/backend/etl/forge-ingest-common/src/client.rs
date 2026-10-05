@@ -26,6 +26,44 @@ static LINK_NEXT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"<([^>]+)>;\s*rel="
 pub enum ForgeError {
     #[error("{0}")]
     Permanent(String),
+    /// The shared retry loop spent the source's give-up budget: no
+    /// request after this one will fare better.
+    #[error("{0}")]
+    GaveUp(String),
+    #[error("{url}: HTTP {status} body={body:?}")]
+    Status {
+        url: String,
+        status: u16,
+        body: String,
+    },
+}
+
+impl ForgeError {
+    /// The forge would not give this credential what it asked for.
+    pub fn refused(&self) -> bool {
+        matches!(
+            self,
+            ForgeError::Status {
+                status: 401 | 403,
+                ..
+            }
+        )
+    }
+
+    pub fn gave_up(&self) -> bool {
+        matches!(self, ForgeError::GaveUp(_))
+    }
+
+    /// The forge says the thing is not there (any more).
+    pub fn gone(&self) -> bool {
+        matches!(
+            self,
+            ForgeError::Status {
+                status: 404 | 410,
+                ..
+            }
+        )
+    }
 }
 
 pub struct ForgeClient {
@@ -66,7 +104,10 @@ impl ForgeClient {
         // waited out every rate limit and transient it could.
         let resp = latchkey_curl_classified(&req, self.classify)
             .await
-            .map_err(|e: HttpError| ForgeError::Permanent(e.to_string()))?;
+            .map_err(|e: HttpError| match e {
+                HttpError::GaveUp { .. } => ForgeError::GaveUp(e.to_string()),
+                _ => ForgeError::Permanent(e.to_string()),
+            })?;
         self.network_ms
             .fetch_add(resp.duration_ms, Ordering::Relaxed);
         self.requests.fetch_add(1, Ordering::Relaxed);
@@ -94,11 +135,11 @@ impl ForgeClient {
             let headers: HashMap<String, String> = resp.headers.into_iter().collect();
             return Ok((value, headers));
         }
-        let preview: String = body.chars().take(300).collect();
-        Err(ForgeError::Permanent(format!(
-            "{url}: HTTP {} body={preview:?}",
-            resp.status
-        )))
+        Err(ForgeError::Status {
+            url: url.to_string(),
+            status: resp.status,
+            body: body.chars().take(300).collect(),
+        })
     }
 
     /// Walk `Link: rel=next` pagination until exhausted, accumulating

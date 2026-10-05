@@ -8,6 +8,7 @@ pub mod schema_raw;
 use std::path::PathBuf;
 
 use anyhow::Result;
+use datalib_etl::download_problems::{self, RunProblem};
 use datalib_etl::download_run::DownloadRun;
 use serde::Serialize;
 use serde_json::json;
@@ -119,7 +120,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     let mut summary = FetchSummary::default();
     let result = (async {
-        index_db::ingest(
+        // What the run could not read, as a whole: replaces the last
+        // run's rows once it gets to the end.
+        let mut run_problems: Vec<RunProblem> = Vec::new();
+        let unmatched = index_db::ingest(
             &index_db_path,
             &dst,
             &media_root,
@@ -127,6 +131,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             opts.media,
             &mut summary,
             &opts.progress,
+            &mut run_problems,
         )
         .await?;
         // After the index.db spine is in place, walk every
@@ -134,7 +139,18 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         // backfill external_event_id by joining on mxid. Cloud
         // bridges (slack/googlechat/…) have no local megabridge file
         // and are silently skipped.
-        megabridge::enrich(&beeper_dir, &dst, &opts.sources, &mut summary).await?;
+        megabridge::enrich(
+            &beeper_dir,
+            &dst,
+            &opts.sources,
+            &mut summary,
+            &mut run_problems,
+        )
+        .await?;
+        if !opts.control.stop.requested() {
+            download_problems::report(dst.pool(), &unmatched).await;
+            download_problems::report_run(dst.pool(), &run_problems).await;
+        }
         Ok::<(), anyhow::Error>(())
     })
     .await;

@@ -383,11 +383,21 @@ const CONTACTS_UUID_NS: Uuid = Uuid::from_bytes([
 /// one PK across re-exports; it's the closest thing to object permanence
 /// the data allows when there's no stable server id.
 pub fn synthesized_name_uid(given: &str, family: &str) -> String {
-    let recipe = format!(
+    synthesized_name_uid_nth(given, family, 1)
+}
+
+/// [`synthesized_name_uid`] for the `nth` card of one file that carries
+/// the same name, so two people called the same are two rows. The first
+/// keeps the plain id.
+pub fn synthesized_name_uid_nth(given: &str, family: &str, nth: usize) -> String {
+    let mut recipe = format!(
         "contact:name:{}:{}",
         given.trim().to_lowercase(),
         family.trim().to_lowercase(),
     );
+    if nth > 1 {
+        recipe.push_str(&format!(":{nth}"));
+    }
     Uuid::new_v5(&CONTACTS_UUID_NS, recipe.as_bytes())
         .as_hyphenated()
         .to_string()
@@ -468,12 +478,14 @@ mod tests {
     }
 
     #[test]
-    fn synthesized_name_uid_collides_on_shared_first_last_name() {
-        // The documented hazard: two distinct people, same first+last
-        // name, collapse onto one id. Callers warn on this.
+    fn a_second_card_of_the_same_name_gets_its_own_id() {
         assert_eq!(
             synthesized_name_uid("John", "Smith"),
+            synthesized_name_uid_nth("John", "Smith", 1),
+        );
+        assert_ne!(
             synthesized_name_uid("John", "Smith"),
+            synthesized_name_uid_nth("John", "Smith", 2),
         );
     }
 }

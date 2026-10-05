@@ -84,7 +84,7 @@ pub async fn ingest(
                 channel_id,
             });
         }
-        Ok(Some(rows))
+        Ok((Some(rows), None))
     })
     .await?;
     super::report_skipped_if_read(db, "youtube_watch_history", skipped).await;

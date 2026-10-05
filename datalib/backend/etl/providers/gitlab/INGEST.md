@@ -4,8 +4,11 @@
 threads from `gitlab.com/api/v4` into one doltlite raw store,
 `<out>/entities.doltlite_db`. The sync loop — discovery, per-scope
 cursors, skipping unchanged items, pruning deleted children, `--full` —
-is the one GitHub uses; read [`../github/INGEST.md`](../github/INGEST.md)
-§"Incremental sync" for it. What differs is below.
+is the one GitHub uses, and so is what a failure costs; read
+[`../github/INGEST.md`](../github/INGEST.md) §"Incremental sync" and
+§"When part of a sync fails" for them, with `merge_requests:<project>!<iid>`
+for the row on an MR and `listing:search <scope>` for a scope. What
+differs is below.
 
 | table | endpoint |
 |---|---|
@@ -19,6 +22,14 @@ per discussion and render unrolls it into per-note rows. Before a
 payload is stored, a numeric `v=` parameter is stripped from every
 `avatar_url` (`src/ingest/canonicalize.rs`), so an avatar bump alone
 is not a change.
+
+Unlike GitHub, a listed MR whose `updated_at` matches the stored one is
+skipped. So an MR is stored only once its discussions listed, or
+failed for a reason other than a stop: one stored while a stop cut its
+discussions short would be skipped until it next changes. An MR whose
+last fetch failed is fetched whatever its `updated_at` says. `max_mrs`
+is GitHub's `max_prs`: it counts the MRs fetched, not the unchanged
+ones skipped.
 
 ## Auth
 

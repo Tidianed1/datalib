@@ -8,11 +8,12 @@
 //! run incremental, `history.list` would only name what *changed*, so a
 //! message that merely failed to fetch would never be named again. And a
 //! transient failure that outlasts the retry loop's give-up bounds ends
-//! the run: nothing after it would fare better.
+//! the run: nothing after it would fare better, though what it fetched
+//! before is kept.
 //!
 //! Driven through the HTTP playback layer: no credential, no network.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::Duration;
 
@@ -42,7 +43,12 @@ async fn a_failure_holds_the_cursor_and_a_deletion_does_not() {
 /// The regression this file exists for. A 400 is not in the transport's
 /// retryable set, so it reaches the fetch loop on the first attempt.
 async fn a_definitive_failure_holds_the_cursor() {
-    let (summary, cursor) = run_with_bad_status(400).await;
+    let Outcome {
+        summary,
+        cursor,
+        problems,
+        ..
+    } = run_with_bad_status(400).await;
     let summary = summary.expect("a failed message does not fail the run");
 
     assert_eq!(summary.emails_upserted, 1, "the good message still lands");
@@ -55,12 +61,22 @@ async fn a_definitive_failure_holds_the_cursor() {
         "the cursor advanced past a message this run never fetched — the \
          next run goes incremental and will never name it again",
     );
+    assert_eq!(
+        problems,
+        [format!("record:gmail_messages:{BAD}")],
+        "the message that failed is a row a person can see",
+    );
 }
 
 /// The other half, and the reason holding the cursor cannot simply be
 /// unconditional: a deleted message is not work left undone.
 async fn a_404_is_a_deletion_and_lets_the_cursor_advance() {
-    let (summary, cursor) = run_with_bad_status(404).await;
+    let Outcome {
+        summary,
+        cursor,
+        problems,
+        ..
+    } = run_with_bad_status(404).await;
     let summary = summary.expect("a deletion does not fail the run");
 
     assert_eq!(summary.emails_upserted, 1);
@@ -72,6 +88,10 @@ async fn a_404_is_a_deletion_and_lets_the_cursor_advance() {
         cursor.as_deref(),
         Some("9001"),
         "nothing was left undone, so the run may record where it got to",
+    );
+    assert!(
+        problems.is_empty(),
+        "a deletion is not a problem: {problems:?}"
     );
 }
 
@@ -90,7 +110,12 @@ async fn a_transient_failure_that_outlasts_the_retries_ends_the_run() {
         fast,
         datalib_etl::stop::StopFlag::default(),
     );
-    let (summary, cursor) = retry::scope(guard, run_with_bad_status(500)).await;
+    let Outcome {
+        summary,
+        cursor,
+        mirrored,
+        ..
+    } = retry::scope(guard, run_with_bad_status(500)).await;
 
     let err = summary.expect_err("a run whose retries gave up must fail");
     assert!(
@@ -101,27 +126,53 @@ async fn a_transient_failure_that_outlasts_the_retries_ends_the_run() {
         cursor, None,
         "a run that stopped early may not record a cursor"
     );
+    assert_eq!(
+        mirrored,
+        BTreeSet::from([GOOD.to_string()]),
+        "the message fetched before the failure was dropped with the run",
+    );
 }
 
-/// Mirrors one good message and one that answers `bad_status`. Returns
-/// the fetch's result and the stored `historyId` cursor, if any.
-async fn run_with_bad_status(bad_status: u16) -> (anyhow::Result<FetchSummary>, Option<String>) {
+struct Outcome {
+    summary: anyhow::Result<FetchSummary>,
+    /// The stored `historyId` cursor, if any.
+    cursor: Option<String>,
+    /// The `problems` rows' keys.
+    problems: Vec<String>,
+    /// The Gmail ids the store holds.
+    mirrored: BTreeSet<String>,
+}
+
+/// Mirrors one good message and one that answers `bad_status`.
+async fn run_with_bad_status(bad_status: u16) -> Outcome {
     let m = Mirror::new();
     write_fixtures(&m.playback, bad_status);
 
     let summary = m.run(|db| gmail_api::fetch(FetchOptions::new(db))).await;
-    let cursor = m
+    let (cursor, problems) = m
         .read(|db| async move {
-            sqlx::query_scalar::<_, String>(
+            let cursor = sqlx::query_scalar::<_, String>(
                 "SELECT last_seen_at_utc FROM sync_scope_state WHERE scope = ?",
             )
             .bind("gmail:t@example.test:historyId")
             .fetch_optional(db.pool())
             .await
-            .expect("read the cursor")
+            .expect("read the cursor");
+            let problems = sqlx::query_scalar::<_, String>(
+                "SELECT scope_key FROM problems ORDER BY scope_key",
+            )
+            .fetch_all(db.pool())
+            .await
+            .expect("read the problems");
+            (cursor, problems)
         })
         .await;
-    (summary, cursor)
+    Outcome {
+        summary,
+        cursor,
+        problems,
+        mirrored: m.gmail_ids().await,
+    }
 }
 
 fn write_fixtures(playback: &Path, bad_status: u16) {

@@ -13,6 +13,10 @@ pub use datalib_etl::doltlite_raw::db_path_for;
 
 datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl());
 
+/// The `sync_scope_state` key, less the table, saying that table's file
+/// edges have been through [`RawDb::repair_shared_file_hashes`].
+pub const REPAIRED_PREFIX: &str = "garmin:shared_hash_repair:";
+
 impl RawDb {
     /// `(id → payload text)` for every id listed, from one table. Ids
     /// absent from the table are absent from the map.
@@ -91,6 +95,17 @@ impl RawDb {
                 }
                 q.execute(&mut *tx).await?;
             }
+            // A row that is gone cannot fail to fetch any more.
+            // Audited: `placeholders` is a `?,?,?` run sized from the
+            // chunk; every key is bound.
+            let mut q = sqlx::query(sqlx::AssertSqlSafe(format!(
+                "DELETE FROM problems WHERE scope_kind = ? AND scope_key IN ({placeholders})"
+            )))
+            .bind(datalib_problems::ScopeKind::Entity.as_str());
+            for id in chunk {
+                q = q.bind(format!("{table}:{id}"));
+            }
+            q.execute(&mut *tx).await?;
         }
         tx.commit().await?;
         Ok(())
@@ -195,6 +210,110 @@ impl RawDb {
                 ))
             })
             .collect())
+    }
+
+    /// The activities whose FIT fetch failed last time it was tried.
+    /// The activities whose FIT fetch failed last time it was tried:
+    /// `(could not be fetched, came back unreadable)`. The second
+    /// starts with [`super::UNREADABLE_FIT`].
+    pub async fn activities_with_failed_files(&self) -> Result<(HashSet<String>, HashSet<String>)> {
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT f.activity_id, b.last_error FROM garmin_activity_files f \
+             JOIN garmin_activity_files_bookkeeping b ON b.id = f.id \
+             WHERE b.last_error IS NOT NULL",
+        )
+        .fetch_all(self.pool())
+        .await
+        .context("select garmin_activity_files that failed")?;
+        let (unreadable, failed): (Vec<_>, Vec<_>) = rows
+            .into_iter()
+            .partition(|(_, err)| err.starts_with(super::UNREADABLE_FIT));
+        Ok((
+            failed.into_iter().map(|(id, _)| id).collect(),
+            unreadable.into_iter().map(|(id, _)| id).collect(),
+        ))
+    }
+
+    /// The days whose wellness bundle failed last time it was tried.
+    pub async fn failed_wellness_days(&self) -> Result<HashSet<String>> {
+        let days: Vec<String> = sqlx::query_scalar(
+            "SELECT f.calendar_date FROM garmin_wellness_files f \
+             JOIN garmin_wellness_files_bookkeeping b ON b.id = f.id \
+             WHERE b.last_error IS NOT NULL",
+        )
+        .fetch_all(self.pool())
+        .await
+        .context("select garmin_wellness_files that failed")?;
+        Ok(days.into_iter().collect())
+    }
+
+    /// Drop file edges, with their sidecars and problems.
+    pub async fn forget_file_edges(&self, table: &'static str, ids: &[String]) -> Result<()> {
+        self.delete_ids(table, ids).await
+    }
+
+    /// Mend the file edges an earlier build wrote: it keyed every file of
+    /// a batch under one ref, so each edge of the batch got the last
+    /// file's hash, and a hash several records' edges share is the mark it
+    /// left. Those edges lose the hash and are stamped failed, which is
+    /// what makes the walks fetch them again.
+    ///
+    /// Once per table, recorded under [`REPAIRED_PREFIX`], and only while
+    /// the walk that would refetch it is on: two activities may share a
+    /// file for real (a multisport leg and its parent, perhaps), and a
+    /// repair run every time would refetch those on every run. A fresh
+    /// store is marked repaired on its first run.
+    pub async fn repair_shared_file_hashes(
+        &self,
+        activity_files: bool,
+        wellness_files: bool,
+    ) -> Result<()> {
+        for (on, table, owner, what) in [
+            (
+                activity_files,
+                "garmin_activity_files",
+                "activity_id",
+                "activity",
+            ),
+            (
+                wellness_files,
+                "garmin_wellness_files",
+                "calendar_date",
+                "day",
+            ),
+        ] {
+            let marker = format!("{REPAIRED_PREFIX}{table}");
+            if !on || self.cursor(&marker).await?.is_some() {
+                continue;
+            }
+            // Audited: `table` and `owner` are literals from the list above.
+            let ids: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                "SELECT id FROM {table} WHERE blake3 IN \
+                 (SELECT blake3 FROM {table} WHERE blake3 IS NOT NULL \
+                  GROUP BY blake3 HAVING COUNT(DISTINCT {owner}) > 1) ORDER BY id"
+            )))
+            .fetch_all(self.pool())
+            .await
+            .with_context(|| format!("find shared hashes in {table}"))?;
+            let err = format!(
+                "the stored hash was another {what}'s file, written by an earlier build; \
+                 fetching it again"
+            );
+            let mut tx = self.pool().begin().await?;
+            for id in &ids {
+                // Audited: `table` is a literal from the list above; `id` is bound.
+                sqlx::query(sqlx::AssertSqlSafe(format!(
+                    "UPDATE {table} SET blake3 = NULL WHERE id = ?"
+                )))
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+                dr::record_object_error(&mut tx, table, id, &err).await?;
+            }
+            tx.commit().await?;
+            self.set_cursor(&marker, "done").await?;
+        }
+        Ok(())
     }
 
     /// Every stored activity with no detail payload: its fetch failed,
