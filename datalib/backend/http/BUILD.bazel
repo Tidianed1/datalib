@@ -131,9 +131,7 @@ rust_library(
 
 rust_test(
     name = "http_unittests",
-    # Not `small`: the watch tests guard each filesystem event for 60s,
-    # which fseventsd needs on a busy disk (see `DEADLINE` in watch.rs).
-    size = "medium",
+    size = "small",
     crate = ":datalib_http",
     edition = "2021",
     proc_macro_deps = [
@@ -162,6 +160,8 @@ _SLICES = {
     "request_log_test": "request_log::",
     "server_log_test": "server_log::",
     "ui_events_test": "ui_events::",
+    # Waits on the OS's filesystem events, which a busy disk delays.
+    "watch_os_test": "watch_os::",
 }
 
 rust_test(
@@ -232,6 +232,16 @@ rust_test_slice(
 rust_test_slice(
     name = "ui_events_test",
     filter = _SLICES["ui_events_test"],
+    test = ":http_tests",
+)
+
+# The few watch tests that need the OS's own filesystem events, alone:
+# fseventsd delays every client's events when the disk is busy, and the
+# heaviest tests in the tree are what keeps it busy.
+rust_test_slice(
+    name = "watch_os_test",
+    filter = _SLICES["watch_os_test"],
+    tags = ["exclusive"],
     test = ":http_tests",
 )
 
