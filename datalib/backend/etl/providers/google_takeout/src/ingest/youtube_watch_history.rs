@@ -1,12 +1,13 @@
 //! `YouTube and YouTube Music/history/watch-history.html` walker.
 
+use datalib_etl::download_problems::SkippedRecord;
 use datalib_etl::fsscan;
+use datalib_problems::{Problem, Severity};
 
 use anyhow::Result;
 use datalib_etl::file_checkpoint::{self, SnapshotCounts};
 use datalib_etl::progress::Progress;
 use serde_json::json;
-use tracing::warn;
 
 use super::db::RawDb;
 use super::mdl_html;
@@ -22,7 +23,9 @@ pub async fn ingest(
     scan: &fsscan::Scan,
     progress: &Progress,
 ) -> Result<SnapshotCounts> {
+    let mut skipped = None;
     let n = file_checkpoint::ingest_snapshot(db.pool(), SCOPE, scan.file(FILE_REL), |bytes| {
+        let skipped = skipped.insert(Vec::new());
         let html = String::from_utf8_lossy(bytes);
         let mut rows: Vec<YoutubeWatchRow> = Vec::new();
         for cell in mdl_html::iter_cells(&html) {
@@ -34,7 +37,17 @@ pub async fn ingest(
             };
             let video_id = video_id_from_url(&video_url).unwrap_or_default();
             if video_id.is_empty() {
-                warn!(event = "youtube_watch_skip_no_video_id", url = %video_url, "a watch-history entry has no video id; skipped it");
+                // A community post, an ad's redirect link, an account
+                // page: entries the history lists that are not videos.
+                skipped.push(SkippedRecord {
+                    entry: cell.to_string(),
+                    problem: Problem::lossy(
+                        "youtube_watch_not_a_video",
+                        Some("videoUrl".to_string()),
+                        &video_url,
+                    )
+                    .severity(Severity::Warning),
+                });
                 continue;
             }
             let (channel_url, channel_title) = anchors
@@ -74,6 +87,7 @@ pub async fn ingest(
         Ok(Some(rows))
     })
     .await?;
+    super::report_skipped_if_read(db, "youtube_watch_history", skipped).await;
     progress.set_message(&format!("youtube_watch_history: {}", n.written));
     Ok(n)
 }

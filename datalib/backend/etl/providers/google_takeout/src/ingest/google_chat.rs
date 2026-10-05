@@ -155,7 +155,6 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
                                         warn!(
                                             event = "chat_attachment_missing",
                                             message_id = %owning,
-                                            export_name = %export_name,
                                             "an attachment the message names is not in the export"
                                         );
                                         acc.add_failed(
@@ -184,7 +183,6 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
                                         warn!(
                                             event = "chat_attachment_unreadable",
                                             message_id = %owning,
-                                            export_name = %export_name,
                                             error = %e,
                                             "an attachment could not be read"
                                         );

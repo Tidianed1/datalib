@@ -107,7 +107,6 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
                     warn!(
                         event = "gemini_attachment_missing",
                         activity_id = %id,
-                        file_name = %file_name,
                         error = %e,
                         "an attachment the activity names is not in the export"
                     );

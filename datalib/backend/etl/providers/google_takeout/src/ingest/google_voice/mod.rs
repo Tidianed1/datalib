@@ -10,11 +10,12 @@ use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{blake3_hex, CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw::WirePayload;
-use datalib_etl::download_problems::RunProblem;
+use datalib_etl::download_problems::{self, RunProblem, SkippedRecord};
 use datalib_etl::file_checkpoint;
 use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
 use datalib_etl::prune;
+use datalib_problems::{Problem, Reason};
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::json;
 use tracing::warn;
@@ -71,6 +72,7 @@ pub async fn ingest(
     let under =
         |f: &fsscan::ScannedFile, dir: &str| fsscan::is_under(&f.rel, &format!("Voice/{dir}"));
     let mut failed = 0usize;
+    let mut skipped: Vec<SkippedRecord> = Vec::new();
 
     let mut message_rows: Vec<VoiceMessageRow> = Vec::new();
     let mut bill_rows: Vec<VoiceBillRow> = Vec::new();
@@ -97,7 +99,13 @@ pub async fn ingest(
             &mut n_attachments,
         )
         .unwrap_or_else(|e| {
-            warn!(event = "voice_record_failed", path = %path.display(), error = %e, "a call record could not be parsed");
+            skipped.push(SkippedRecord {
+                entry: f.rel.clone(),
+                problem: Problem::record(
+                    Reason::Undeserializable,
+                    &format!("{}: {}", f.rel, e.root_cause()),
+                ),
+            });
             failed += 1;
             false
         });
@@ -131,7 +139,10 @@ pub async fn ingest(
                 done.push(f);
             }
             Err(e) => {
-                warn!(event = "voice_bills_failed", error = %e, "the bills could not be parsed");
+                skipped.push(SkippedRecord {
+                    entry: f.rel.clone(),
+                    problem: Problem::record(Reason::FetchFailed, &format!("{}: {e}", f.rel)),
+                });
                 failed += 1;
             }
         }
@@ -163,7 +174,10 @@ pub async fn ingest(
                 done.push(f);
             }
             Err(e) => {
-                warn!(event = "voice_greeting_failed", path = %path.display(), error = %e, "a greeting could not be ingested");
+                skipped.push(SkippedRecord {
+                    entry: f.rel.clone(),
+                    problem: Problem::record(Reason::FetchFailed, &format!("{}: {e}", f.rel)),
+                });
                 failed += 1;
             }
         }
@@ -185,6 +199,7 @@ pub async fn ingest(
         file_checkpoint::record_file(&mut tx, SCOPE, f).await?;
     }
     tx.commit().await.context("commit google_voice tx")?;
+    download_problems::report_skipped(db.pool(), "google_voice", &skipped).await;
 
     let blobs_stored = acc.bundle_mut().cas_inserts().len();
     acc.flush(db.pool(), db.cas(), |owning, ref_id, blake3| {
@@ -380,12 +395,12 @@ fn ingest_text_thread(
                         attachment_refs.push(ref_name);
                     }
                     Err(e) => {
-                        warn!(event = "voice_attachment_unreadable", src = %src, error = %e, "an attachment could not be read");
+                        warn!(event = "voice_attachment_unreadable", message_id = %id, error = %e, "an attachment could not be read");
                         acc.add_failed(&id, &ref_name, "attachment unreadable");
                     }
                 }
             } else {
-                warn!(event = "voice_attachment_missing", src = %src, "an attachment the record names is not in the export");
+                warn!(event = "voice_attachment_missing", message_id = %id, "an attachment the record names is not in the export");
                 acc.add_failed(&id, src, "attachment not found on disk");
             }
         }
@@ -454,7 +469,7 @@ fn ingest_event(
                     audio_ref = Some(ref_name);
                 }
                 Err(e) => {
-                    warn!(event = "voice_audio_unreadable", src = %src, error = %e, "an audio file could not be read");
+                    warn!(event = "voice_audio_unreadable", message_id = %id, error = %e, "an audio file could not be read");
                     acc.add_failed(&id, &ref_name, "audio unreadable");
                 }
             }
@@ -523,7 +538,7 @@ fn ingest_orphan_audio(
             *n_attachments += 1;
         }
         Err(e) => {
-            warn!(event = "voice_orphan_audio_unreadable", path = %path.display(), error = %e, "an audio file no record names could not be read");
+            warn!(event = "voice_orphan_audio_unreadable", message_id = %id, error = %e, "an audio file no record names could not be read");
             acc.add_failed(&id, &ref_name, "audio unreadable");
         }
     }

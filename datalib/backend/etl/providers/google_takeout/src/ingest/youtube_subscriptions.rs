@@ -3,13 +3,14 @@
 //! Three-column CSV: `Channel Id,Channel Url,Channel Title`. PK is
 //! `Channel Id` verbatim. Not event-shaped; `when_ts` stays NULL.
 
+use datalib_etl::download_problems::SkippedRecord;
 use datalib_etl::fsscan;
+use datalib_problems::{Problem, Reason};
 
 use anyhow::Result;
 use datalib_etl::file_checkpoint::{self, SnapshotCounts};
 use datalib_etl::progress::Progress;
 use serde_json::json;
-use tracing::warn;
 
 use super::db::RawDb;
 use super::schema_raw::YoutubeSubscriptionRow;
@@ -23,7 +24,9 @@ pub async fn ingest(
     scan: &fsscan::Scan,
     progress: &Progress,
 ) -> Result<SnapshotCounts> {
+    let mut skipped = None;
     let n = file_checkpoint::ingest_snapshot(db.pool(), SCOPE, scan.file(FILE_REL), |bytes| {
+        let skipped = skipped.insert(Vec::new());
         let text = String::from_utf8_lossy(bytes);
         let mut rows: Vec<YoutubeSubscriptionRow> = Vec::new();
         for (i, line) in text.lines().enumerate() {
@@ -32,12 +35,10 @@ pub async fn ingest(
             }
             let cells = split_csv_row(line);
             if cells.len() < 3 {
-                warn!(
-                    event = "youtube_subscriptions_short_row",
-                    row = i,
-                    line,
-                    "a subscriptions row is short; skipped it"
-                );
+                skipped.push(SkippedRecord {
+                    entry: line.to_string(),
+                    problem: Problem::record(Reason::Undeserializable, line),
+                });
                 continue;
             }
             let channel_id = cells[0].trim().to_string();
@@ -62,6 +63,7 @@ pub async fn ingest(
         Ok(Some(rows))
     })
     .await?;
+    super::report_skipped_if_read(db, "youtube_subscriptions", skipped).await;
     progress.set_message(&format!("youtube_subscriptions: {}", n.written));
     Ok(n)
 }
