@@ -186,6 +186,31 @@ character; the grid's search text keeps the text as typed, and
 test of this feeds a field `<script>x</script> & co` and checks it
 renders escaped.
 
+The trap is text between tags on a markdown line — the message
+header's `## <span class="msg-author">…</span>`: markdown-it parses it
+as markdown, so it needs `escape_md_inline`, not the HTML-only
+`escape_text`. `escape_text` is for text inside an HTML block, and it
+writes a line break as `&#10;`, since a blank line would end the block.
+
+`datalib/ui/tests/hostile_text.test.ts` is the check across renderers.
+`//datalib/backend/etl/hostile_samples` puts a string of HTML and
+markdown (a tag, a link, an image, a `|`, a code span, an entity, a
+blank line, a `---` line) into every plain-text field the shared
+renderers take — chat-common, calendar-common, contact-common,
+forge-render-common, Slack's mrkdwn, `MessageHeader`, `Title` — and
+the test renders each document through the app's own markdown-it and
+sanitizer and asserts every field reads exactly as typed and makes no
+element of its own. It runs the escape helpers the same way over a few
+hundred generated strings. A provider's private text paths (Facebook
+posts, Claude's tool results, the time-series facts) are not reached
+by it and keep their own tests.
+
+Front matter is YAML, and a value from upstream goes through
+`datalib_etl_render::front_matter::yaml_scalar`, which JSON-quotes it,
+so a line break, a quote or a `---` inside cannot end the line or the
+block. The applet strips front matter at the first line that is `---`
+by itself.
+
 ## 3. The projection
 
 Three shapes, in order:

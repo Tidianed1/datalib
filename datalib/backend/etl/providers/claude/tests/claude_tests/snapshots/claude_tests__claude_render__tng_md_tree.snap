@@ -11,9 +11,9 @@ chat_uuid: 00000000-0000-83ab-b990-357eea87eda5
 markdown_uuid: 00000000-0000-83ab-b990-357eea87eda5
 period: all
 display: "Stellar Cartography"
-account: jlpicard@enterprise.starfleet.test
-project: Stellar Cartography
-external_id: 70000002-1701-4d00-8000-000000000702
+account: "jlpicard@enterprise.starfleet.test"
+project: "Stellar Cartography"
+external_id: "70000002-1701-4d00-8000-000000000702"
 item_count: 3
 ---
 
@@ -59,8 +59,8 @@ chat_uuid: 00000000-0000-84d9-a07c-75bb3c93c654
 markdown_uuid: 00000000-0000-84d9-a07c-75bb3c93c654
 period: all
 display: "Poisoned: a message with an unreadable stamp"
-account: jlpicard@enterprise.starfleet.test
-external_id: c0000006-1701-4d00-8000-00000000c006
+account: "jlpicard@enterprise.starfleet.test"
+external_id: "c0000006-1701-4d00-8000-00000000c006"
 item_count: 2
 ---
 
@@ -92,9 +92,9 @@ chat_uuid: 00000000-0000-856b-944c-412bf8dca640
 markdown_uuid: 00000000-0000-856b-944c-412bf8dca640
 period: all
 display: "Klingon Diplomatic Greeting Drafting"
-account: jlpicard@enterprise.starfleet.test
-project: Bridge Operations
-external_id: c0000003-1701-4d00-8000-00000000c003
+account: "jlpicard@enterprise.starfleet.test"
+project: "Bridge Operations"
+external_id: "c0000003-1701-4d00-8000-00000000c003"
 item_count: 4
 ---
 
@@ -194,8 +194,8 @@ chat_uuid: 00000000-0000-882d-b21e-5e54f3f20dbb
 markdown_uuid: 00000000-0000-882d-b21e-5e54f3f20dbb
 period: all
 display: "Borg Encryption Signature Lookup"
-account: jlpicard@enterprise.starfleet.test
-external_id: c0000005-1701-4d00-8000-00000000c005
+account: "jlpicard@enterprise.starfleet.test"
+external_id: "c0000005-1701-4d00-8000-00000000c005"
 item_count: 2
 ---
 
@@ -297,8 +297,8 @@ chat_uuid: 00000000-0000-8b06-828d-f59d39f6190d
 markdown_uuid: 00000000-0000-8b06-828d-f59d39f6190d
 period: all
 display: "Tricorder Image Diagnostic"
-account: bcrusher@enterprise.starfleet.test
-external_id: c0000004-1701-4d00-8000-00000000c004
+account: "bcrusher@enterprise.starfleet.test"
+external_id: "c0000004-1701-4d00-8000-00000000c004"
 item_count: 2
 ---
 
@@ -332,9 +332,9 @@ chat_uuid: 00000000-0000-8da1-84c9-7ed998e5bd85
 markdown_uuid: 00000000-0000-8da1-84c9-7ed998e5bd85
 period: all
 display: "Bridge Operations"
-account: jlpicard@enterprise.starfleet.test
-project: Bridge Operations
-external_id: 70000001-1701-4d00-8000-000000000701
+account: "jlpicard@enterprise.starfleet.test"
+project: "Bridge Operations"
+external_id: "70000001-1701-4d00-8000-000000000701"
 item_count: 4
 ---
 

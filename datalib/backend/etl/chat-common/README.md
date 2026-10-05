@@ -210,7 +210,10 @@ name, a system note — and an item's `text` according to the profile's
 LinkedIn message), `Markdown` for an assistant's reply or for markdown
 the provider built itself, having escaped the plain text it put inside
 (Facebook's posts, Beeper's reply line, an email). The grid's search
-text is `text` as given either way.
+text is `text` as given either way. Front-matter values go through
+`yaml_scalar`. `datalib/ui/tests/hostile_text.test.ts` renders a
+document whose every plain field holds HTML and markdown through the
+app's own markdown-it and sanitizer, and checks each reads as typed.
 
 What markdown does reach the page, `ui/src/cards/sanitize.ts` runs
 through DOMPurify: scripts, event handlers, `javascript:` URLs and form

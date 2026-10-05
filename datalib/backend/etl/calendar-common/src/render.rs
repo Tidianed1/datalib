@@ -7,11 +7,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
-use datalib_etl::title::Title;
+use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{escape_md_block, escape_md_inline, md_code_span, md_link_dest};
 use datalib_etl_render::inputs::{Bucket, Buckets};
 use datalib_etl_render::section::{join, Section};
+use datalib_etl_render::title::Title;
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
@@ -228,17 +229,23 @@ fn render_markdown(
     fm.push_str(&format!("source_id: {source_id}\n"));
     fm.push_str(&format!("provider: {}\n", profile.provider));
     fm.push_str(&format!("kind: {}\n", kind_of(event)));
-    fm.push_str(&format!("calendar: {}\n", yaml_safe(&event.calendar_label)));
-    fm.push_str(&format!("title: {}\n", yaml_safe(title_of(event))));
-    fm.push_str(&format!("external_id: {}\n", yaml_safe(&event.upstream_id)));
+    fm.push_str(&format!(
+        "calendar: {}\n",
+        yaml_scalar(&event.calendar_label)
+    ));
+    fm.push_str(&format!("title: {}\n", yaml_scalar(title_of(event))));
+    fm.push_str(&format!(
+        "external_id: {}\n",
+        yaml_scalar(&event.upstream_id)
+    ));
     if let Some(s) = start_instant {
         fm.push_str(&format!("start: {s}\n"));
     }
     if let Some(ts) = &event.created {
-        fm.push_str(&format!("created: {}\n", yaml_safe(ts)));
+        fm.push_str(&format!("created: {}\n", yaml_scalar(ts)));
     }
     if let Some(ts) = &event.modified_at {
-        fm.push_str(&format!("modified_at: {}\n", yaml_safe(ts)));
+        fm.push_str(&format!("modified_at: {}\n", yaml_scalar(ts)));
     }
     fm.push_str("---\n\n");
 
@@ -535,19 +542,6 @@ fn text_block(s: &str) -> String {
         .map(|line| escape_md_block(line.trim_end()))
         .collect::<Vec<_>>()
         .join("<br>\n")
-}
-
-fn yaml_safe(s: &str) -> String {
-    if s.chars().any(|c| ":#[]{}&*?,|>'\"%@`\n".contains(c)) {
-        format!(
-            "\"{}\"",
-            s.replace('\\', "\\\\")
-                .replace('"', "\\\"")
-                .replace('\n', " ")
-        )
-    } else {
-        s.to_string()
-    }
 }
 
 #[cfg(test)]

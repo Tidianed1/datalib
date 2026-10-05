@@ -413,6 +413,16 @@ copy_to_bin(
 # Left alone, vitest forks a jsdom worker per host core regardless of
 # what bazel budgeted it, which on a four-vCPU CI runner meant this
 # ~7s suite took 85-96s whenever the e2e suite ran beside it.
+# What every shared renderer writes when its plain-text fields hold HTML
+# and markdown, for `tests/hostile_text.test.ts` to render through the
+# app's own markdown-it and sanitizer. It lands beside that test.
+genrule(
+    name = "hostile_samples",
+    srcs = ["//datalib/backend/etl/hostile_samples:render_hostile_samples"],
+    outs = ["tests/hostile_samples.json"],
+    cmd = "$(location //datalib/backend/etl/hostile_samples:render_hostile_samples) $@ >/dev/null",
+)
+
 vitest_bin.vitest_test(
     name = "unit_test",
     args = [
@@ -421,6 +431,7 @@ vitest_bin.vitest_test(
     ],
     chdir = package_name(),
     data = [
+        ":hostile_samples",
         ":node_modules",
         ":vitest_inputs",
     ],

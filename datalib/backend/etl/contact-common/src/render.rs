@@ -8,11 +8,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
-use datalib_etl::title::Title;
+use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::escape_md_inline;
 use datalib_etl_render::inputs::{Bucket, Buckets};
 use datalib_etl_render::section::{join, Section};
+use datalib_etl_render::title::Title;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
@@ -243,20 +244,20 @@ fn render_markdown(
     out.push_str(&format!("markdown_uuid: {m_uuid}\n"));
     out.push_str(&format!("source_id: {source_id}\n"));
     out.push_str(&format!("provider: {}\n", profile.provider));
-    out.push_str(&format!("group: {}\n", yaml_safe(&doc.group_label)));
+    out.push_str(&format!("group: {}\n", yaml_scalar(&doc.group_label)));
     if !contact.key.is_empty() {
-        out.push_str(&format!("external_id: {}\n", yaml_safe(&contact.key)));
+        out.push_str(&format!("external_id: {}\n", yaml_scalar(&contact.key)));
     }
     if let Some(dn) = contact.name() {
-        out.push_str(&format!("title: {}\n", yaml_safe(dn)));
+        out.push_str(&format!("title: {}\n", yaml_scalar(dn)));
     }
     // A stamp we don't have is omitted, never written empty; the grid
     // row is `None` to match.
     if let Some(ts) = &contact.created_at {
-        out.push_str(&format!("created_at: {}\n", yaml_safe(ts)));
+        out.push_str(&format!("created_at: {}\n", yaml_scalar(ts)));
     }
     if let Some(ts) = &contact.modified_at {
-        out.push_str(&format!("modified_at: {}\n", yaml_safe(ts)));
+        out.push_str(&format!("modified_at: {}\n", yaml_scalar(ts)));
     }
     out.push_str("---\n\n");
     let frontmatter = Section::unkeyed(out);
@@ -400,15 +401,6 @@ fn autolink_cell(url: &str) -> String {
     }
     out.push('>');
     out
-}
-
-fn yaml_safe(s: &str) -> String {
-    if s.chars().any(|c| ":#[]{}&*?,|>'\"%@`\n".contains(c)) {
-        let escaped = s.replace('"', "\\\"");
-        format!("\"{escaped}\"")
-    } else {
-        s.to_string()
-    }
 }
 
 #[cfg(test)]

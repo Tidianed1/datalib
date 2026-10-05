@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
+use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{escape_md_block, escape_md_inline};
 use datalib_etl_render::inputs::{Bucket, Buckets};
@@ -29,7 +30,7 @@ use super::parse::ParsedNotion;
 ///     comment's id carries its `created_time` in its leading bits
 ///     (`datalib_id`'s v8 layout). Every uuid moved; `notion_page_uuid`
 ///     now holds the page's datalib id.
-pub const RENDER_VERSION: u32 = 6;
+pub const RENDER_VERSION: u32 = 7;
 pub const SLUG_MAX_LEN: usize = 60;
 
 static SLUG_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[^a-z0-9]+").unwrap());
@@ -148,24 +149,21 @@ fn localize_attachments(markdown: &str, bundle: &BlobBundle) -> String {
     out
 }
 
-fn frontmatter(title: &str, page: &Value, extra: &[(&str, String)]) -> String {
+fn frontmatter(title: &str, page: &Value) -> String {
     let mut fm = String::from("---\n");
-    fm.push_str(&format!("title: {:?}\n", title));
+    fm.push_str(&format!("title: {}\n", yaml_scalar(title)));
     for (k, v) in [
         ("created_at", "created_time"),
         ("last_edited_at", "last_edited_time"),
     ] {
         if let Some(t) = page.get(v).and_then(|x| x.as_str()) {
-            fm.push_str(&format!("{k}: {t}\n"));
+            fm.push_str(&format!("{k}: {}\n", yaml_scalar(t)));
         }
     }
     if let Some(u) = page.get("url").and_then(|x| x.as_str()) {
-        fm.push_str(&format!("source_url: {u}\n"));
+        fm.push_str(&format!("source_url: {}\n", yaml_scalar(u)));
     }
     fm.push_str("source_label: Notion\n");
-    for (k, v) in extra {
-        fm.push_str(&format!("{k}: {v}\n"));
-    }
     fm.push_str("---\n\n");
     fm
 }
@@ -313,8 +311,8 @@ fn render_thread(
     fs::create_dir_all(dir)?;
     let path = dir.join(thread_filename(disc_id));
     let mut out = format!(
-        "---\ntitle: {:?}\nsource_label: Notion\n---\n\n",
-        page_title
+        "---\ntitle: {}\nsource_label: Notion\n---\n\n",
+        yaml_scalar(page_title)
     );
     // A comment names the block it hangs off and carries no quote of
     // it, so without this the thread opens with no indication of what
@@ -415,7 +413,7 @@ pub fn render_notion(
         } else {
             body
         };
-        let mut out = frontmatter(page_title, page, &[]);
+        let mut out = frontmatter(page_title, page);
         out.push_str(&body);
         fs::write(&md_path, out).with_context(|| format!("write {}", md_path.display()))?;
 
