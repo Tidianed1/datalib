@@ -39,6 +39,9 @@ struct SealState {
     /// checkpoint rides it rather than growing a second one.
     progress: crate::progress::Progress,
     stop: crate::stop::StopFlag,
+    /// The running download's problems, written ahead of each seal so a
+    /// checkpoint carries them.
+    problems: std::sync::Mutex<Option<crate::run_problems::RunProblems>>,
 }
 
 /// A cheap, cloneable handle a fetch loop holds so it can seal at its own
@@ -77,6 +80,10 @@ impl Sealer {
     pub fn stopping(&self) -> bool {
         self.state.stop.requested()
     }
+
+    pub(crate) fn carry(&self, problems: Option<crate::run_problems::RunProblems>) {
+        *self.state.problems.lock().unwrap() = problems;
+    }
 }
 
 impl RawStoreSession {
@@ -102,6 +109,7 @@ impl RawStoreSession {
                 )),
                 progress: ctx.progress.clone(),
                 stop: ctx.control.stop.clone(),
+                problems: std::sync::Mutex::new(None),
             }),
         }
     }
@@ -128,7 +136,12 @@ impl RawStoreSession {
     where
         Fut: std::future::Future<Output = Result<String>>,
     {
-        match body(self.sealer()).await {
+        let result = body(self.sealer()).await;
+        // Counted before the stores close, and on the error path too: a
+        // failed run's sealed checkpoints hold rows the Manage screen
+        // should count.
+        self.state.publish_problem_counts().await;
+        match result {
             Ok(summary) => self.finish(ctx, summary).await,
             Err(e) => {
                 self.state.close_all().await;
@@ -203,15 +216,49 @@ impl SealState {
             c.sealed();
             pending
         };
+        let carried = self.problems.lock().unwrap().clone();
+        if let Some(problems) = carried {
+            problems
+                .write_or_say(&self.pool, crate::run_problems::Ran::PartWay)
+                .await;
+        }
         let msg = format!("checkpoint {}: entities", self.source_id);
         let sealed = crate::doltlite_raw::commit_run(&self.pool, &msg).await?;
         // `None` means there was nothing dirty after all; no version moved,
         // so there is nothing to announce.
         if let Some(hash) = sealed {
+            self.publish_problem_counts().await;
             self.progress.checkpoint_rows(&hash, rows);
             crate::http::record_seal();
         }
         Ok(())
+    }
+
+    /// The store's errors and warnings as the step's `problems` metric,
+    /// zero included, so the Manage row counts what a checkpoint holds
+    /// while the download is still running. Never a reason to fail.
+    async fn publish_problem_counts(&self) {
+        use datalib_problems::{Severity, METRIC};
+        let counted: Result<Vec<(String, i64)>, _> =
+            sqlx::query_as("SELECT severity, COUNT(*) FROM problems GROUP BY severity")
+                .fetch_all(&self.pool)
+                .await;
+        match counted {
+            Ok(rows) => {
+                for severity in [Severity::Error, Severity::Warning] {
+                    let n = rows
+                        .iter()
+                        .find(|(word, _)| word == severity.as_str())
+                        .map_or(0, |(_, n)| *n);
+                    self.progress.metric(METRIC, &[severity.metric_label()], n);
+                }
+            }
+            Err(e) => tracing::warn!(
+                source = %self.source_id,
+                error = %e,
+                "could not count the store's problems; the Manage row keeps its last count"
+            ),
+        }
     }
 }
 
@@ -259,6 +306,7 @@ mod tests {
             checkpointer: std::sync::Mutex::new(crate::checkpointer::Checkpointer::new(cadence)),
             progress: p,
             stop: crate::stop::StopFlag::default(),
+            problems: std::sync::Mutex::new(None),
         }
     }
 
@@ -336,6 +384,66 @@ mod tests {
             announced,
             vec![head.commit().to_string()],
             "the announced version must be the new HEAD"
+        );
+    }
+
+    /// A consumer reading a checkpoint has to see what the download could
+    /// not do for the rows that checkpoint publishes, not learn of it when
+    /// the run ends.
+    #[tokio::test]
+    async fn a_seal_carries_the_problems_found_so_far() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("entities.doltlite_db");
+        let entities = store(&path).await;
+        if !crate::doltlite_raw::has_dolt_extensions(&entities).await {
+            return;
+        }
+        let counts = Arc::new(std::sync::Mutex::new(Vec::<(String, i64)>::new()));
+        struct Counts(Arc<std::sync::Mutex<Vec<(String, i64)>>>);
+        impl crate::progress::ProgressSink for Counts {
+            fn metric(&self, name: &str, labels: &[(&str, &str)], value: i64) {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push((format!("{name}{{{}={}}}", labels[0].0, labels[0].1), value));
+            }
+        }
+        let sealer = Sealer {
+            state: Arc::new(state(
+                entities.clone(),
+                None,
+                crate::progress::Progress::new(Arc::new(Counts(counts.clone()))),
+            )),
+        };
+        let at_the_seal = crate::run_problems::collecting_sealed(
+            &entities,
+            &crate::stop::StopFlag::new(),
+            Some(&sealer),
+            |problems| async {
+                let problems = problems;
+                problems.listing("workouts", "HTTP 500");
+                sealer.wrote(1).await;
+                let head = crate::pin::head(&entities).await?.unwrap();
+                let reader = crate::doltlite_raw::open_reader(&path, Some(head.commit()))
+                    .await?
+                    .unwrap();
+                let keys: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems")
+                    .fetch_all(reader.pool())
+                    .await?;
+                reader.pool().close().await;
+                Ok(keys)
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(at_the_seal, ["listing:workouts"]);
+        assert_eq!(
+            *counts.lock().unwrap(),
+            [
+                ("problems{severity=error}".to_string(), 1),
+                ("problems{severity=warning}".to_string(), 0)
+            ],
+            "the count the Manage row draws moves with the seal"
         );
     }
 

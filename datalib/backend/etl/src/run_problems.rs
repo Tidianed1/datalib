@@ -1,11 +1,16 @@
-//! What a download could not do, collected while it runs and written
-//! once, when it ends. The one way a download writes a `problems` row
-//! that is not pinned to a stored record or a file's stamp.
+//! What a download could not do, collected while it runs. The one way a
+//! download writes a `problems` row that is not pinned to a stored record
+//! or a file's stamp.
 //!
 //! A row clears only when the run that would clear it tried the thing
-//! again. So each kind of report says what the run covered, and
-//! [`collecting`] sweeps exactly that: see `docs/dev/data_architecture_ingestion.md`
+//! again. So each kind of report says what the run covered, and the
+//! collector sweeps exactly that: see `docs/dev/data_architecture_ingestion.md`
 //! §"Error handling" for the rule and what each kind covers.
+//!
+//! Adding a row needs no coverage, so a streaming download's rows ride
+//! each seal ([`collecting_sealed`]) and a consumer reading a checkpoint
+//! sees them. Only the sweep of listing and phase rows waits for the end,
+//! because only then is it known that every one of them ran.
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -17,8 +22,9 @@ use anyhow::Result;
 
 use crate::download_problems::{
     self as rows, DownloadProblem, RecordProblem, RunProblem, RunProblemKind, SilentEntry,
-    SkippedRecord, Sweep,
+    SkippedRecord, Sweep, Untried,
 };
+use crate::raw_store::Sealer;
 use crate::stop::StopFlag;
 
 /// Run a download's `body` with a collector, and write what it collected
@@ -32,36 +38,48 @@ pub async fn collecting<T, Fut>(
 where
     Fut: Future<Output = Result<T>>,
 {
-    let problems = RunProblems::unwritten();
-    let result = body(problems.clone()).await;
-    let ended = if stop.requested() {
-        Ended::Stopped
-    } else if result.is_err() || problems.lock().cut_short {
-        Ended::CutShort
-    } else {
-        Ended::Complete
+    collecting_sealed(pool, stop, None, body).await
+}
+
+/// [`collecting`] for a download that seals as it goes: each seal first
+/// writes what the run has found so far, so a checkpoint carries the
+/// problems of the rows it publishes.
+pub async fn collecting_sealed<T, Fut>(
+    pool: &sqlx::SqlitePool,
+    stop: &StopFlag,
+    sealer: Option<&Sealer>,
+    body: impl FnOnce(RunProblems) -> Fut,
+) -> Result<T>
+where
+    Fut: Future<Output = Result<T>>,
+{
+    let problems = RunProblems {
+        state: Arc::default(),
+        stop: stop.clone(),
     };
-    if let Err(e) = problems.write(pool, ended).await {
-        tracing::warn!(
-            error = %format!("{e:#}"),
-            "could not record what the run could not do; the Manage row will not show it"
-        );
+    if let Some(sealer) = sealer {
+        sealer.carry(Some(problems.clone()));
     }
+    let result = body(problems.clone()).await;
+    if let Some(sealer) = sealer {
+        sealer.carry(None);
+    }
+    let ran = if result.is_ok() {
+        Ran::ToItsEnd
+    } else {
+        Ran::PartWay
+    };
+    problems.write_or_say(pool, ran).await;
     result
 }
 
-/// How far a run got, which decides what its listing and phase rows may
-/// replace.
+/// Whether the body has returned `Ok`: the one thing a write in the
+/// middle of a run cannot know, and what the sweep of listing and phase
+/// rows waits for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Ended {
-    /// Every listing and phase ran: this run's rows are the whole truth.
-    Complete,
-    /// It ended early by its own choice, or on an error: what it found
-    /// is true, and what it did not reach keeps its row.
-    CutShort,
-    /// Told to stop. A failure seen after a stop is the stop's, and a
-    /// phase the stop kept from running would read as one that recovered.
-    Stopped,
+pub(crate) enum Ran {
+    PartWay,
+    ToItsEnd,
 }
 
 /// A cheap, cloneable handle on one run's problems; every clone adds to
@@ -69,6 +87,7 @@ enum Ended {
 #[derive(Clone, Default)]
 pub struct RunProblems {
     state: Arc<Mutex<State>>,
+    stop: StopFlag,
 }
 
 impl std::fmt::Debug for RunProblems {
@@ -77,10 +96,10 @@ impl std::fmt::Debug for RunProblems {
     }
 }
 
-type Untried = Box<dyn Fn(&str) -> bool + Send + Sync>;
-
 #[derive(Default)]
 struct State {
+    /// Something was reported since the last write.
+    unwritten: bool,
     config: Option<Vec<DownloadProblem>>,
     run: Vec<RunProblem>,
     cut_short: bool,
@@ -126,11 +145,16 @@ impl RunProblems {
     }
 
     pub fn push(&self, problem: RunProblem) {
-        self.lock().run.push(problem);
+        self.extend([problem]);
     }
 
+    /// A failure reported after a stop is the stop's, since every request
+    /// after one fails at once, so it is not recorded.
     pub fn extend(&self, problems: impl IntoIterator<Item = RunProblem>) {
-        self.lock().run.extend(problems);
+        if self.stop.requested() {
+            return;
+        }
+        self.changed().run.extend(problems);
     }
 
     /// Run one phase so that its failure, an error or a panic, costs only
@@ -153,14 +177,14 @@ impl RunProblems {
     /// a budget spent. Its listing and phase rows are added to the last
     /// run's, where a complete run's replace them.
     pub fn cut_short(&self) {
-        self.lock().cut_short = true;
+        self.changed().cut_short = true;
     }
 
     /// The configured entries upstream does not have, once every one has
     /// been looked up: the whole set, an empty one included, so an entry
     /// the config no longer names or upstream now has loses its row.
     pub fn config(&self, problems: impl IntoIterator<Item = DownloadProblem>) {
-        self.lock()
+        self.changed()
             .config
             .get_or_insert_with(Vec::new)
             .extend(problems);
@@ -172,7 +196,7 @@ impl RunProblems {
     }
 
     pub fn records_failed(&self, problems: impl IntoIterator<Item = RecordProblem>) {
-        let mut state = self.lock();
+        let mut state = self.changed();
         for p in problems {
             state
                 .records
@@ -187,7 +211,7 @@ impl RunProblems {
     /// run that is not among this run's failures is one that fetched.
     /// A stopped run did not try them all, and clears none.
     pub fn records_tried_all(&self, table: &str) {
-        self.lock()
+        self.changed()
             .records
             .entry(table.to_string())
             .or_default()
@@ -203,18 +227,18 @@ impl RunProblems {
         table: &str,
         untried: impl Fn(&str) -> bool + Send + Sync + 'static,
     ) {
-        self.lock()
+        self.changed()
             .records
             .entry(table.to_string())
             .or_default()
-            .tried = Tried::AllBut(Box::new(untried));
+            .tried = Tried::AllBut(Arc::new(untried));
     }
 
     /// What one `part` of the download (a feed, a file) read and chose
     /// not to store, the last time it read its input. Replaces that
     /// part's rows, so a part that read nothing this run says nothing.
     pub fn skipped(&self, part: &str, skipped: impl IntoIterator<Item = SkippedRecord>) {
-        self.lock()
+        self.changed()
             .skipped
             .entry(part.to_string())
             .or_default()
@@ -224,7 +248,7 @@ impl RunProblems {
     /// The configured entries that have gone quiet, once every one has
     /// been checked: the whole set.
     pub fn silent(&self, silent: impl IntoIterator<Item = SilentEntry>) {
-        self.lock()
+        self.changed()
             .silent
             .get_or_insert_with(Vec::new)
             .extend(silent);
@@ -241,54 +265,76 @@ impl RunProblems {
         self.lock().run.clone()
     }
 
-    async fn write(&self, pool: &sqlx::SqlitePool, ended: Ended) -> Result<()> {
-        let state = std::mem::take(&mut *self.lock());
-        let mut sweeps: Vec<Sweep<'_>> = Vec::new();
-        let mut out: Vec<rows::Row> = Vec::new();
-        fn whole<'a>(prefix: String) -> Sweep<'a> {
+    pub(crate) async fn write_or_say(&self, pool: &sqlx::SqlitePool, ran: Ran) {
+        if let Err(e) = self.write(pool, ran).await {
+            tracing::warn!(
+                error = %format!("{e:#}"),
+                "could not record what the run could not do; the Manage row will not show it"
+            );
+        }
+    }
+
+    /// Write the set as it stands. Every write is the whole set so far,
+    /// so one in the middle of a run and the one at its end agree; only
+    /// the last may also clear the listing and phase rows the run did
+    /// not report, and only if the run reached all of them.
+    async fn write(&self, pool: &sqlx::SqlitePool, ran: Ran) -> Result<()> {
+        fn whole(prefix: String) -> Sweep {
             Sweep { prefix, keep: None }
         }
-
-        if let Some(config) = &state.config {
-            // A stopped run may not have looked every entry up.
-            if ended != Ended::Stopped {
-                sweeps.push(whole(rows::CONFIG_SWEEP.to_string()));
+        let stopped = self.stop.requested();
+        let (sweeps, out) = {
+            let mut state = self.lock();
+            if !state.unwritten && ran == Ran::PartWay {
+                return Ok(());
             }
-            out.extend(rows::config_rows(config));
-        }
-        match ended {
-            Ended::Complete => {
+            state.unwritten = false;
+            let mut sweeps: Vec<Sweep> = Vec::new();
+            let mut out: Vec<rows::Row> = Vec::new();
+            if let Some(config) = &state.config {
+                // A stopped run may not have looked every entry up.
+                if !stopped {
+                    sweeps.push(whole(rows::CONFIG_SWEEP.to_string()));
+                }
+                out.extend(rows::config_rows(config));
+            }
+            if ran == Ran::ToItsEnd && !stopped && !state.cut_short {
                 sweeps.extend(rows::run_prefixes().into_iter().map(whole));
-                out.extend(rows::run_rows(&state.run));
             }
-            Ended::CutShort => out.extend(rows::run_rows(&state.run)),
-            Ended::Stopped => {}
-        }
-        for (table, records) in &state.records {
-            let prefix = rows::record_prefix(table);
-            match &records.tried {
-                Tried::OnlyTheFailed => {}
-                Tried::All if ended == Ended::Stopped => {}
-                Tried::All => sweeps.push(whole(prefix)),
-                Tried::AllBut(untried) => sweeps.push(Sweep {
-                    prefix,
-                    keep: Some(untried.as_ref()),
-                }),
+            out.extend(rows::run_rows(&state.run));
+            for (table, records) in &state.records {
+                let prefix = rows::record_prefix(table);
+                match &records.tried {
+                    Tried::OnlyTheFailed => {}
+                    Tried::All if stopped => {}
+                    Tried::All => sweeps.push(whole(prefix)),
+                    Tried::AllBut(untried) => sweeps.push(Sweep {
+                        prefix,
+                        keep: Some(untried.clone()),
+                    }),
+                }
+                out.extend(rows::record_rows(&records.failed));
             }
-            out.extend(rows::record_rows(&records.failed));
-        }
-        for (part, skipped) in &state.skipped {
-            sweeps.push(whole(rows::skipped_prefix(part)));
-            out.extend(rows::skipped_rows(part, skipped));
-        }
-        if let Some(silent) = &state.silent {
-            sweeps.push(whole(rows::SILENT_SWEEP.to_string()));
-            out.extend(rows::silent_rows(silent));
-        }
+            for (part, skipped) in &state.skipped {
+                sweeps.push(whole(rows::skipped_prefix(part)));
+                out.extend(rows::skipped_rows(part, skipped));
+            }
+            if let Some(silent) = &state.silent {
+                sweeps.push(whole(rows::SILENT_SWEEP.to_string()));
+                out.extend(rows::silent_rows(silent));
+            }
+            (sweeps, out)
+        };
         if sweeps.is_empty() && out.is_empty() {
             return Ok(());
         }
         rows::apply(pool, &sweeps, out).await
+    }
+
+    fn changed(&self) -> MutexGuard<'_, State> {
+        let mut state = self.lock();
+        state.unwritten = true;
+        state
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
@@ -411,17 +457,22 @@ mod tests {
     }
 
     /// A stopped run did not reach every listing, so the ones it missed
-    /// would read as recovered, and a failure after a stop is the stop's.
+    /// would read as recovered: it clears none. What failed before the
+    /// stop did fail; what fails after it is the stop's, and is not kept.
     #[tokio::test]
-    async fn a_stopped_run_leaves_the_listing_and_phase_rows_as_they_were() {
+    async fn a_stopped_run_clears_nothing_and_keeps_only_what_failed_before_the_stop() {
         let d = tempfile::tempdir().unwrap();
         let pool = store(&d).await;
         run(&pool, |p| p.listing("workouts", "HTTP 500")).await;
 
         let stop = StopFlag::new();
-        stop.request();
-        run_with(&pool, &stop, |p| p.phase("weight", "interrupted")).await;
-        assert_eq!(keys(&pool).await, ["listing:workouts"]);
+        run_with(&pool, &stop, |p| {
+            p.listing("devices", "HTTP 502");
+            stop.request();
+            p.phase("weight", "interrupted");
+        })
+        .await;
+        assert_eq!(keys(&pool).await, ["listing:devices", "listing:workouts"]);
         pool.close().await;
     }
 

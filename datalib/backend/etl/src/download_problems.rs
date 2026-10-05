@@ -628,10 +628,14 @@ pub(crate) const SILENT_SWEEP: &str = SILENT_PREFIX;
 /// The rows a run has a verdict on: every entity-scoped row whose key
 /// starts with `prefix`, less the ones `keep` says the run did not try
 /// again (it is given the key with the prefix taken off).
-pub(crate) struct Sweep<'a> {
+pub(crate) struct Sweep {
     pub prefix: String,
-    pub keep: Option<&'a (dyn Fn(&str) -> bool + Send + Sync)>,
+    pub keep: Option<Untried>,
 }
+
+/// Says, of a key with its sweep prefix taken off, whether the run left
+/// it untried.
+pub(crate) type Untried = std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync>;
 
 /// SQLite's default bound-parameter limit is far above this; one
 /// statement per chunk keeps a big sweep from being one statement per row.
@@ -643,7 +647,7 @@ const KEY_CHUNK: usize = 500;
 /// the first, since the key is the row's identity.
 pub(crate) async fn apply(
     pool: &sqlx::SqlitePool,
-    sweeps: &[Sweep<'_>],
+    sweeps: &[Sweep],
     rows: Vec<Row>,
 ) -> anyhow::Result<()> {
     use anyhow::Context as _;
@@ -675,6 +679,7 @@ pub(crate) async fn apply(
         for (key, first) in earlier {
             let kept = sweep
                 .keep
+                .as_ref()
                 .is_some_and(|keep| keep(key.strip_prefix(sweep.prefix.as_str()).unwrap_or(&key)));
             if !kept {
                 gone.push(key.clone());
