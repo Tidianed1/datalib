@@ -115,14 +115,18 @@ impl RawDb {
             .transpose()
     }
 
-    /// Every conversation with an attachment whose last attempt left it
-    /// without bytes.
+    /// Every conversation with an attachment whose last attempt failed.
+    /// One chatgpt.com no longer has is a skip, not a failure, and waits
+    /// for its conversation to change.
     pub async fn conversations_with_unfetched_attachments(&self) -> Result<Vec<String>> {
         sqlx::query_scalar(
             "SELECT DISTINCT a.conversation_id FROM chatgpt_attachments a \
-             JOIN chatgpt_attachments_bookkeeping b ON b.id = a.id \
-             WHERE b.last_error IS NOT NULL ORDER BY a.conversation_id",
+             JOIN problems p ON p.scope_kind = ? \
+                AND p.scope_key = 'chatgpt_attachments:' || a.id \
+             WHERE p.reason = ? ORDER BY a.conversation_id",
         )
+        .bind(datalib_problems::ScopeKind::Entity.as_str())
+        .bind(datalib_problems::Reason::FetchFailed.as_str())
         .fetch_all(self.pool())
         .await
         .context("select conversations with unfetched attachments")

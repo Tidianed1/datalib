@@ -22,6 +22,7 @@ use datalib_etl::download_run::DownloadRun;
 use datalib_etl::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
 use datalib_etl::progress::RunBar;
 use datalib_etl::stop::StopFlag;
+use datalib_problems::Reason;
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -314,7 +315,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             .await?;
         }
 
-        if !opts.conv_uuids.is_empty() {
+        if walk.rate_limited {
+            // Every request now would be refused the same way.
+        } else if !opts.conv_uuids.is_empty() {
             bar.expect(opts.conv_uuids.len() as u64);
             for raw in &opts.conv_uuids {
                 if stop.requested() {
@@ -342,6 +345,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     // Its own `conversations:<id>` row says why.
                     SingleOutcome::Failed => {}
                     SingleOutcome::Stopped => break,
+                    SingleOutcome::Cut(reason) => {
+                        walk.give_up("conversations", &reason);
+                        break;
+                    }
                     SingleOutcome::NotFoundInAnyOrg => {
                         summary.problems.push(DownloadProblem::not_found(
                             "conv_uuids",
@@ -382,20 +389,16 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             .await?;
         }
 
-        if !stop.requested() {
-            retry_attachments(
-                &db,
-                &opts,
-                &walk.attachments_tried,
-                &mut summary,
-                &mut blake3_by_file,
-            )
-            .await?;
+        if !stop.requested() && !walk.rate_limited {
+            retry_attachments(&db, &opts, &mut summary, &mut blake3_by_file, &mut walk).await?;
         }
         // A stop may have cut any of it short; the last run's rows stand
-        // until a run gets through.
+        // until a run gets through. A rate limit may have left configured
+        // entries unchecked, so their `config:` rows stand too.
         if !stop.requested() {
-            download_problems::report(db.pool(), &summary.problems).await;
+            if !walk.rate_limited {
+                download_problems::report(db.pool(), &summary.problems).await;
+            }
             download_problems::report_run(db.pool(), &walk.run_problems()).await;
         }
         Ok::<(), anyhow::Error>(())
@@ -424,9 +427,20 @@ struct Walk {
     forbidden_orgs: BTreeMap<String, String>,
     /// Conversations whose attachments the walk already tried this run.
     attachments_tried: HashSet<String>,
+    /// The shared give-up guard tripped; every further request would be
+    /// refused the same way, so the run does no more of them.
+    rate_limited: bool,
 }
 
 impl Walk {
+    fn give_up(&mut self, at: &str, reason: &str) {
+        self.rate_limited = true;
+        self.run_problems.push(RunProblem::phase(
+            at,
+            format!("stopped at the rate limit; the rest is left for the next run: {reason}"),
+        ));
+    }
+
     /// Everything for `report_run`: one row per org this credential
     /// cannot read, keyed `listing:org:<name>`, so the Manage row says
     /// why a whole org is missing, and every listing or phase that failed.
@@ -471,7 +485,11 @@ async fn walk_listings(
     }
     let mut plans: Vec<OrgPlan> = Vec::new();
     let mut listings_by_org: Vec<(String, String, Vec<Value>)> = Vec::new();
+    // A stub may belong to any org, so they are pruned only when every
+    // org listed.
     let mut every_org_listed = true;
+    let mut refused: Option<ClaudeError> = None;
+    let mut failed: Option<String> = None;
     for org in orgs {
         let Some((org_uuid, org_name)) = org_identity(org) else {
             continue;
@@ -483,7 +501,12 @@ async fn walk_listings(
         {
             Ok(l) => l,
             Err(_) if stop.requested() => return Ok(()),
-            Err(ClaudeError::Forbidden(_)) => {
+            // Nothing is pruned on a run that listed nothing whole.
+            Err(ClaudeError::RateLimited(reason)) => {
+                walk.give_up("conversations", &reason);
+                return Ok(());
+            }
+            Err(e @ ClaudeError::Forbidden(_)) => {
                 info!(
                     event = "claude_org_forbidden",
                     org = %org_name,
@@ -493,6 +516,8 @@ async fn walk_listings(
                 summary.forbidden_orgs += 1;
                 walk.forbidden_orgs
                     .insert(org_uuid.to_string(), org_name.clone());
+                every_org_listed = false;
+                refused = Some(e);
                 continue;
             }
             // Not pruned: it never reaches `listings_by_org`.
@@ -502,6 +527,7 @@ async fn walk_listings(
                     e.to_string(),
                 ));
                 every_org_listed = false;
+                failed = Some(e.to_string());
                 continue;
             }
         };
@@ -513,6 +539,18 @@ async fn walk_listings(
         );
         sleep(SLEEP_BETWEEN).await;
         listings_by_org.push((org_uuid.to_string(), org_name, listing));
+    }
+
+    // No org listed: the credential is not working (the org listing it
+    // passed may be hours old), and that is not a partial sync.
+    if listings_by_org.is_empty() {
+        match (failed, refused) {
+            (None, Some(e)) => {
+                return Err(credential_hint(e).context("every org refused its conversation listing"))
+            }
+            (Some(e), _) => anyhow::bail!("no org's conversations could be listed; the last: {e}"),
+            (None, None) => {}
+        }
     }
 
     for (org_uuid, org_name, listing) in &listings_by_org {
@@ -658,8 +696,13 @@ async fn walk_listings(
                         stop,
                     )
                     .await?;
-                    if !saved {
-                        break 'orgs;
+                    match saved {
+                        None => {}
+                        Some(Cut::Stopped) => break 'orgs,
+                        Some(Cut::RateLimited(reason)) => {
+                            walk.give_up("attachments", &reason);
+                            break 'orgs;
+                        }
                     }
                     walk.attachments_tried.insert(uuid.to_string());
                     if let Some(sealer) = opts.sealer.as_ref() {
@@ -671,6 +714,11 @@ async fn walk_listings(
                 }
                 Err((_, retries)) if stop.requested() => {
                     summary.forbidden_retry_attempts += retries as u64;
+                    break 'orgs;
+                }
+                Err((ClaudeError::RateLimited(reason), retries)) => {
+                    summary.forbidden_retry_attempts += retries as u64;
+                    walk.give_up("conversations", &reason);
                     break 'orgs;
                 }
                 Err((e, retries)) => {
@@ -720,6 +768,10 @@ async fn sync_projects(
         {
             Ok(l) => l,
             Err(_) if stop.requested() => return Ok(()),
+            Err(ClaudeError::RateLimited(reason)) => {
+                walk.give_up("projects", &reason);
+                return Ok(());
+            }
             Err(ClaudeError::Forbidden(_)) => {
                 info!(
                     event = "claude_projects_forbidden",
@@ -809,9 +861,13 @@ async fn sync_projects(
                 summary.project_docs_skipped += 1;
                 continue;
             }
-            // A listing that fails leaves the sweep marker where it was,
-            // so the next run asks again.
-            match client.list_project_docs(org_uuid, uuid).await {
+            let docs = client.list_project_docs(org_uuid, uuid).await;
+            if docs.is_err() && !stop.requested() {
+                // Due again next run, even with its metadata stored and a
+                // sweep marker under a day old.
+                db.forget_sweep(&project_docs_sweep_key(uuid)).await?;
+            }
+            match docs {
                 Ok(docs) => {
                     summary.project_docs_fetched +=
                         upsert_project_docs(db, &docs, uuid, now).await?;
@@ -822,6 +878,10 @@ async fn sync_projects(
                         .await?;
                 }
                 Err(_) if stop.requested() => return Ok(()),
+                Err(ClaudeError::RateLimited(reason)) => {
+                    walk.give_up("projects", &reason);
+                    return Ok(());
+                }
                 Err(e @ ClaudeError::Forbidden(_)) => {
                     walk.run_problems.push(RunProblem::forbidden(
                         &format!("project_docs {label}"),
@@ -1047,6 +1107,8 @@ pub enum SingleOutcome {
     Failed,
     /// Asked to stop before it was done; nothing of it was written.
     Stopped,
+    /// The give-up guard tripped, with why; nothing of it was written.
+    Cut(String),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1092,8 +1154,10 @@ async fn fetch_single(
                     stop,
                 )
                 .await?;
-                if !saved {
-                    return Ok(SingleOutcome::Stopped);
+                match saved {
+                    None => {}
+                    Some(Cut::Stopped) => return Ok(SingleOutcome::Stopped),
+                    Some(Cut::RateLimited(reason)) => return Ok(SingleOutcome::Cut(reason)),
                 }
                 info!(
                     event = "claude_fetch_single_ok",
@@ -1104,6 +1168,7 @@ async fn fetch_single(
                 return Ok(SingleOutcome::Fetched);
             }
             Err(_) if stop.requested() => return Ok(SingleOutcome::Stopped),
+            Err(ClaudeError::RateLimited(reason)) => return Ok(SingleOutcome::Cut(reason)),
             Err(ClaudeError::Forbidden(_)) => {
                 warn!(
                     event = "claude_fetch_single_forbidden",
@@ -1365,9 +1430,16 @@ fn pick_user_fields(acct: &Value) -> Value {
     Value::Object(obj)
 }
 
-/// Store one fetched conversation with the attachments it names. `false`
-/// when a stop cut the attachments short: nothing of it is written, so
-/// the next run finds it missing or stale and starts it over.
+/// Why the files of one conversation were not all tried.
+enum Cut {
+    Stopped,
+    /// The give-up guard tripped, with why.
+    RateLimited(String),
+}
+
+/// Store one fetched conversation with the attachments it names. A [`Cut`]
+/// when the attachments were cut short: nothing of it is written, so the
+/// next run finds it missing or stale and starts it over.
 #[allow(clippy::too_many_arguments)]
 async fn save_with_files(
     db: &RawDb,
@@ -1379,14 +1451,15 @@ async fn save_with_files(
     blake3_by_file: &mut HashMap<String, String>,
     now: &IsoOffsetTimestamp,
     stop: &StopFlag,
-) -> Result<bool> {
-    let Some(attach) = fetch_files(full, uuid, summary, blake3_by_file, stop).await else {
-        return Ok(false);
+) -> Result<Option<Cut>> {
+    let attach = match fetch_files(full, uuid, summary, blake3_by_file, stop).await {
+        Ok(attach) => attach,
+        Err(cut) => return Ok(Some(cut)),
     };
     save_conversation(db, org_uuid, org_name, uuid, full, now).await?;
     summary.fetched += 1;
     flush_files(db, &attach).await?;
-    Ok(true)
+    Ok(None)
 }
 
 /// The walk reaches a conversation's files only while it fetches that
@@ -1396,15 +1469,15 @@ async fn save_with_files(
 async fn retry_attachments(
     db: &RawDb,
     opts: &FetchOptions,
-    tried: &HashSet<String>,
     summary: &mut FetchSummary,
     blake3_by_file: &mut HashMap<String, String>,
+    walk: &mut Walk,
 ) -> Result<()> {
     let pending: Vec<String> = db
         .conversations_with_unfetched_attachments()
         .await?
         .into_iter()
-        .filter(|uuid| !tried.contains(uuid))
+        .filter(|uuid| !walk.attachments_tried.contains(uuid))
         .collect();
     if pending.is_empty() {
         return Ok(());
@@ -1421,11 +1494,15 @@ async fn retry_attachments(
         let Some(conv) = db.load_conversation_payload(uuid).await? else {
             continue;
         };
-        let Some(attach) =
-            fetch_files(&conv, uuid, summary, blake3_by_file, &opts.control.stop).await
-        else {
-            break;
-        };
+        let attach =
+            match fetch_files(&conv, uuid, summary, blake3_by_file, &opts.control.stop).await {
+                Ok(attach) => attach,
+                Err(Cut::Stopped) => break,
+                Err(Cut::RateLimited(reason)) => {
+                    walk.give_up("attachments", &reason);
+                    break;
+                }
+            };
         flush_files(db, &attach).await?;
         if let Some(sealer) = opts.sealer.as_ref() {
             sealer.wrote(1).await;
@@ -1436,18 +1513,19 @@ async fn retry_attachments(
 
 /// Every `chat_messages[].files[]` the conversation names, each once. A
 /// file we have bytes for is not fetched again; one that fails becomes
-/// its edge's `last_error`. `None` when a stop cut it short: what it
-/// fetched is dropped rather than recorded as failed.
+/// its edge's `last_error`, and one that is not there to fetch a warning
+/// the retry pass leaves alone. A [`Cut`] when a stop or the give-up
+/// guard ended it: what it fetched is dropped rather than recorded.
 async fn fetch_files(
     conv: &Value,
     conv_uuid: &str,
     summary: &mut FetchSummary,
     blake3_by_file: &mut HashMap<String, String>,
     stop: &StopFlag,
-) -> Option<CasEdgeAccumulator> {
+) -> std::result::Result<CasEdgeAccumulator, Cut> {
     let mut attach = CasEdgeAccumulator::new();
     let Some(messages) = conv.get("chat_messages").and_then(|v| v.as_array()) else {
-        return Some(attach);
+        return Ok(attach);
     };
     let mut seen: HashSet<String> = HashSet::new();
     let mut targets: Vec<Value> = Vec::new();
@@ -1482,14 +1560,19 @@ async fn fetch_files(
                 attach.add_fetched(conv_uuid, file_uuid, bytes, content_type, name);
                 summary.new_blobs += 1;
             }
-            Err(_) if stop.requested() => return None,
-            Err(reason) => {
+            Err(_) if stop.requested() => return Err(Cut::Stopped),
+            Err(FileError::RateLimited(reason)) => return Err(Cut::RateLimited(reason)),
+            Err(FileError::NotThere(reason)) => {
+                attach.add_skipped(conv_uuid, file_uuid, Reason::NotFound, reason);
+                summary.failed_blobs += 1;
+            }
+            Err(FileError::Failed(reason)) => {
                 attach.add_failed(conv_uuid, file_uuid, reason);
                 summary.failed_blobs += 1;
             }
         }
     }
-    Some(attach)
+    Ok(attach)
 }
 
 async fn flush_files(db: &RawDb, attach: &CasEdgeAccumulator) -> Result<()> {
@@ -1506,9 +1589,20 @@ async fn flush_files(db: &RawDb, attach: &CasEdgeAccumulator) -> Result<()> {
         .context("write a conversation's attachments")
 }
 
-/// One file's bytes and content type, or why there are none — which
-/// becomes the edge's problem.
-async fn download_one_file(file_obj: &Value) -> Result<(Vec<u8>, Option<String>), String> {
+/// Why a file has no bytes; the text becomes the edge's problem.
+enum FileError {
+    /// Nothing to fetch: claude.ai no longer has it, or the payload names
+    /// no URL. Trying again cannot help until the conversation changes,
+    /// and a refetch of it tries its files again.
+    NotThere(String),
+    /// The give-up guard tripped.
+    RateLimited(String),
+    /// Anything else, which the next run tries again.
+    Failed(String),
+}
+
+/// One file's bytes and content type, or why there are none.
+async fn download_one_file(file_obj: &Value) -> Result<(Vec<u8>, Option<String>), FileError> {
     let preview_path = file_obj
         .get("preview_url")
         .and_then(|v| v.as_str())
@@ -1520,7 +1614,7 @@ async fn download_one_file(file_obj: &Value) -> Result<(Vec<u8>, Option<String>)
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.is_empty())
         })
-        .ok_or("the file has no preview URL")?;
+        .ok_or_else(|| FileError::NotThere("the file has no preview URL".into()))?;
     let url = if preview_path.starts_with("http") {
         preview_path.to_string()
     } else {
@@ -1538,11 +1632,21 @@ async fn download_one_file(file_obj: &Value) -> Result<(Vec<u8>, Option<String>)
             let effective_mime = header_mime.as_deref().or(mime);
             Ok((resp.body, effective_mime.map(String::from)))
         }
-        Ok(resp) => Err(format!("HTTP {}: GET {url}", resp.status)),
+        Ok(resp) if matches!(resp.status, 404 | 410) => Err(FileError::NotThere(format!(
+            "HTTP {}, claude.ai no longer has it: GET {url}",
+            resp.status
+        ))),
+        Ok(resp) => Err(FileError::Failed(format!(
+            "HTTP {}: GET {url}",
+            resp.status
+        ))),
         // Its message carries the tape's path on this machine. The reason
         // leads: the sample is cut at 80 characters.
-        Err(HttpError::PlaybackMiss(_)) => Err(format!("no recorded response: GET {url}")),
-        Err(e) => Err(e.to_string()),
+        Err(HttpError::PlaybackMiss(_)) => Err(FileError::Failed(format!(
+            "no recorded response: GET {url}"
+        ))),
+        Err(e @ HttpError::GaveUp { .. }) => Err(FileError::RateLimited(e.to_string())),
+        Err(e) => Err(FileError::Failed(e.to_string())),
     }
 }
 

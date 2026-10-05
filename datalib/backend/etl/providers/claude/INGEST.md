@@ -82,28 +82,34 @@ after the listing, and the same UUID a moment later returns 200.
 
 ## When part of a sync fails
 
-Only the `/organizations` listing failing fails the step: it is the
-credential preflight, and with no orgs there is nothing to walk. Every
-other failure is a `problems` row, and the sync goes on with what it
-has. A store that will not take a read or a write still fails the step.
+Two things fail the step: the `/organizations` listing failing (it is
+the credential preflight, and with no orgs there is nothing to walk),
+and no org's conversation listing answering at all — every org refused
+or failed, which is a credential that stopped working inside the org
+listing's 6h cache, not a partial sync. Nothing is pruned on such a
+run. Every other failure is a `problems` row, and the sync goes on with
+what it has. A store that will not take a read or a write still fails
+the step.
 
 | what failed | row | cleared by |
 |---|---|---|
 | `/account`, with no user stored | `phase:account` | the next run, which asks again while there is no user |
 | one org's conversation listing (not a 403) | `listing:conversations org:<name>` | the next run that lists it; until then nothing of that org is pruned |
 | one org's project listing | `listing:projects org:<name>` | the next run that lists it |
-| one project's docs listing | `listing:project_docs <project>` (a warning for a 403) | the next listing of them: the sweep marker is stamped only on success, so a failed listing is due again |
+| one project's docs listing | `listing:project_docs <project>` (a warning for a 403) | the next listing of them: a failed listing clears the project's sweep marker, so it is due again even when its metadata was stored this run |
 | a configured `project_uuids` entry no listed org has | `config:project_uuids:<value>` | a run in which it matches, or the config dropping it |
 | a configured `conv_uuids` entry every org answers 404 or 403 for | `config:conv_uuids:<value>` | as above |
 | one conversation's detail fetch | `conversations:<id>` on its bookkeeping row | its next successful fetch: a conversation never fetched has no `updated_at`, so the next run queues it as missing |
 | one file | `claude_attachments:<conversation>#<file>`, with the real reason | the file landing; see Attachments |
+| the rate limit (the shared give-up guard tripped) | `phase:conversations`, `phase:projects` or `phase:attachments`, wherever it stopped | the next run that gets through; the walk stops there, since every later request would be refused too |
 | a conversation or project in a bulk export with no `uuid` | `phase:export` | the next export ingest without one |
 
 Render shows a `conversations:` or `claude_attachments:` row on the
 conversation's page. The `listing:`/`phase:` rows and the `config:` rows
 are each written once, at the end of a run, replacing the last run's,
-on both the listing path and the `conv_uuids` path. A run that was asked
-to stop writes neither, and records nothing about a request the stop
+on both the listing path and the `conv_uuids` path. A run the rate limit
+cut short does not rewrite the `config:` rows, since it did not check
+every configured entry. A run that was asked to stop writes neither, and records nothing about a request the stop
 refused: a conversation whose files the stop cut short is not written
 at all, so the next run starts it over.
 
@@ -246,6 +252,11 @@ unchanged one is not fetched again, so after the walk every
 conversation with such an edge is read back from the store and its
 files tried again from the file objects its payload carries.
 
+A file claude.ai answers `404` or `410` for, or one whose object names
+no URL, is not there to fetch rather than failed: its row is a
+`not_found` warning and the retry pass leaves it alone. It is asked for
+again only when its conversation changes and is refetched.
+
 ## Resume + prioritization
 
 There is no checkpoint file. On each run the downloader classifies
@@ -358,8 +369,8 @@ store already holds.
 Every request goes through the shared `latchkey_curl` chokepoint, which
 retries a `429` or `502`–`504`, honoring `Retry-After`, within the
 source's `download_params` give-up bounds. When it gives up, the
-request fails as `ClaudeError::Permanent`, like any other error, and is
-recorded as above.
+request fails as `ClaudeError::RateLimited` and the run does no more
+requests; see the table above.
 
 ## Sample data
 

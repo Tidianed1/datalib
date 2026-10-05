@@ -17,6 +17,7 @@ use datalib_etl::download_run::DownloadRun;
 use datalib_etl::http::LatchkeySettings;
 use datalib_etl::http::IMPERSONATE_MARKER_HEADER;
 use datalib_etl::latchkey::latchkey_curl_command;
+use datalib_problems::Reason;
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -203,16 +204,19 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 &mut client,
                 &db,
                 &opts,
-                &walk.attachments_tried,
                 &mut summary,
                 &mut blake3_by_file,
+                &mut walk,
             )
             .await?;
         }
         // A stop may have cut any of it short; the last run's rows stand
-        // until a run gets through.
+        // until a run gets through. A rate limit may have left named
+        // conversations unchecked, so their `config:` rows stand too.
         if !opts.control.stop.requested() {
-            download_problems::report(db.pool(), &walk.config_problems).await;
+            if !walk.rate_limited {
+                download_problems::report(db.pool(), &walk.config_problems).await;
+            }
             download_problems::report_run(db.pool(), &walk.run_problems).await;
         }
         Ok::<(), anyhow::Error>(())
@@ -236,6 +240,13 @@ struct Walk {
     attachments_tried: HashSet<String>,
     /// The give-up policy tripped; every further request would too.
     rate_limited: bool,
+}
+
+/// Why a conversation's attachments were not all tried.
+enum Cut {
+    Stopped,
+    /// The give-up guard tripped, with why.
+    RateLimited(String),
 }
 
 impl Walk {
@@ -272,7 +283,7 @@ async fn fetch_named(
         let target = datalib_etl::ids::normalize_id_token(raw);
         match client.get_conversation(&target).await {
             Ok(full) => {
-                if !save_conversation(
+                let cut = save_conversation(
                     client,
                     db,
                     opts,
@@ -282,9 +293,14 @@ async fn fetch_named(
                     blake3_by_file,
                     now,
                 )
-                .await?
-                {
-                    break;
+                .await?;
+                match cut {
+                    None => {}
+                    Some(Cut::Stopped) => break,
+                    Some(Cut::RateLimited(reason)) => {
+                        walk.rate_limited(summary.fetched, opts.conv_uuids.len() - i, &reason);
+                        break;
+                    }
                 }
                 walk.attachments_tried.insert(target.clone());
                 info!(event = "chatgpt_fetch_single_ok", raw = raw, id = %target, "fetched one conversation by id");
@@ -330,6 +346,7 @@ async fn fetch_listed(
         items: listing,
         complete: listing_complete,
         failed,
+        rate_limited,
     } = list_all_conversations(client, opts.max_pages, since_secs, &opts.progress)
         .instrument(info_span!("chatgpt_list"))
         .await;
@@ -344,6 +361,11 @@ async fn fetch_listed(
         }
         walk.run_problems
             .push(RunProblem::listing("conversations", e));
+        // Every detail fetch would be refused the same way.
+        if rate_limited {
+            walk.rate_limited = true;
+            return Ok(());
+        }
     }
     info!(
         event = "chatgpt_listing",
@@ -464,10 +486,16 @@ async fn fetch_listed(
         opts.progress.set_message(cid);
         match client.get_conversation(cid).await {
             Ok(full) => {
-                if !save_conversation(client, db, opts, cid, &full, summary, blake3_by_file, now)
-                    .await?
-                {
-                    break;
+                let cut =
+                    save_conversation(client, db, opts, cid, &full, summary, blake3_by_file, now)
+                        .await?;
+                match cut {
+                    None => {}
+                    Some(Cut::Stopped) => break,
+                    Some(Cut::RateLimited(reason)) => {
+                        walk.rate_limited(summary.fetched, ordered.len() - i, &reason);
+                        break;
+                    }
                 }
                 walk.attachments_tried.insert(cid.to_string());
                 if opts.sleep_between > Duration::ZERO {
@@ -499,9 +527,9 @@ async fn fetch_listed(
     Ok(())
 }
 
-/// Store one fetched conversation with its attachments, and seal. `false`
-/// when a stop cut the attachments short: nothing of it is written, so
-/// the next run finds it missing or stale and starts it over.
+/// Store one fetched conversation with its attachments, and seal. A
+/// [`Cut`] when the attachments were cut short: nothing of it is written,
+/// so the next run finds it missing or stale and starts it over.
 #[allow(clippy::too_many_arguments)]
 async fn save_conversation(
     client: &mut ChatGPTClient,
@@ -512,13 +540,13 @@ async fn save_conversation(
     summary: &mut FetchSummary,
     blake3_by_file: &mut HashMap<String, String>,
     now: &IsoOffsetTimestamp,
-) -> Result<bool> {
+) -> Result<Option<Cut>> {
     let full = canonicalize_conversation_payload(full);
-    let Some(attach) =
-        fetch_attachments(client, &full, summary, blake3_by_file, &opts.control.stop).await
-    else {
-        return Ok(false);
-    };
+    let attach =
+        match fetch_attachments(client, &full, summary, blake3_by_file, &opts.control.stop).await {
+            Ok(attach) => attach,
+            Err(cut) => return Ok(Some(cut)),
+        };
     let (title, update_time) = title_and_update_time(&full);
     let payload = serde_json::to_string(&full).context("serialize conversation")?;
     upsert_conversations(
@@ -541,7 +569,7 @@ async fn save_conversation(
     if let Some(sealer) = opts.sealer.as_ref() {
         sealer.wrote(1).await;
     }
-    Ok(true)
+    Ok(None)
 }
 
 /// The walk reaches a conversation's attachments only while it fetches
@@ -552,15 +580,15 @@ async fn retry_attachments(
     client: &mut ChatGPTClient,
     db: &RawDb,
     opts: &FetchOptions,
-    tried: &HashSet<String>,
     summary: &mut FetchSummary,
     blake3_by_file: &mut HashMap<String, String>,
+    walk: &mut Walk,
 ) -> Result<()> {
     let pending: Vec<String> = db
         .conversations_with_unfetched_attachments()
         .await?
         .into_iter()
-        .filter(|cid| !tried.contains(cid))
+        .filter(|cid| !walk.attachments_tried.contains(cid))
         .collect();
     if pending.is_empty() {
         return Ok(());
@@ -577,11 +605,23 @@ async fn retry_attachments(
         let Some(conv) = db.load_conversation_payload(cid).await? else {
             continue;
         };
-        let Some(attach) =
-            fetch_attachments(client, &conv, summary, blake3_by_file, &opts.control.stop).await
-        else {
-            break;
-        };
+        let attach =
+            match fetch_attachments(client, &conv, summary, blake3_by_file, &opts.control.stop)
+                .await
+            {
+                Ok(attach) => attach,
+                Err(Cut::Stopped) => break,
+                Err(Cut::RateLimited(reason)) => {
+                    walk.rate_limited = true;
+                    walk.run_problems.push(RunProblem::phase(
+                        "attachments",
+                        format!(
+                            "stopped at the rate limit; the rest is left for the next run: {reason}"
+                        ),
+                    ));
+                    break;
+                }
+            };
         flush_attachments(db, &attach).await?;
         if let Some(sealer) = opts.sealer.as_ref() {
             sealer.wrote(1).await;
@@ -781,22 +821,23 @@ fn attachment_targets(conv: &Value) -> Vec<(String, Option<String>, Option<Strin
 /// Pull every attachment + asset-pointer blob a conversation names. We
 /// skip a file whose bytes we already have (signed URLs rotate; bytes
 /// don't). A failure becomes the edge's `last_error` and does not fail
-/// the sync. `None` when a stop cut it short: what it fetched is dropped
-/// rather than recorded as failed.
+/// the sync; a file chatgpt.com no longer has is a warning the retry pass
+/// leaves alone. A [`Cut`] when a stop or the give-up guard ended it:
+/// what it fetched is dropped rather than recorded.
 async fn fetch_attachments(
     client: &mut ChatGPTClient,
     conv: &Value,
     summary: &mut FetchSummary,
     blake3_by_file: &mut HashMap<String, String>,
     stop: &datalib_etl::stop::StopFlag,
-) -> Option<CasEdgeAccumulator> {
+) -> std::result::Result<CasEdgeAccumulator, Cut> {
     let mut attach = CasEdgeAccumulator::new();
     let Some(cid) = conv
         .get("conversation_id")
         .or_else(|| conv.get("id"))
         .and_then(|v| v.as_str())
     else {
-        return Some(attach);
+        return Ok(attach);
     };
     for (file_id, name, mime) in attachment_targets(conv) {
         if let Some(blake3) = blake3_by_file.get(&file_id) {
@@ -811,14 +852,19 @@ async fn fetch_attachments(
                 attach.add_fetched(cid, &file_id, bytes, content_type, name.clone());
                 summary.new_blobs += 1;
             }
-            Err(_) if stop.requested() => return None,
-            Err(e) => {
-                attach.add_failed(cid, &file_id, format!("{e:#}"));
+            Err(_) if stop.requested() => return Err(Cut::Stopped),
+            Err(FileError::RateLimited(reason)) => return Err(Cut::RateLimited(reason)),
+            Err(FileError::Gone(reason)) => {
+                attach.add_skipped(cid, &file_id, Reason::NotFound, reason);
+                summary.failed_blobs += 1;
+            }
+            Err(FileError::Failed(reason)) => {
+                attach.add_failed(cid, &file_id, reason);
                 summary.failed_blobs += 1;
             }
         }
     }
-    Some(attach)
+    Ok(attach)
 }
 
 async fn flush_attachments(db: &RawDb, attach: &CasEdgeAccumulator) -> Result<()> {
@@ -859,11 +905,45 @@ async fn download_one_file(
     client: &mut ChatGPTClient,
     file_id: &str,
     mime: Option<&str>,
-) -> Result<(Vec<u8>, Option<String>)> {
-    let meta = client
+) -> std::result::Result<(Vec<u8>, Option<String>), FileError> {
+    let meta = match client
         .get(&format!("/backend-api/files/{file_id}/download"))
         .await
-        .map_err(|e| anyhow::anyhow!("file metadata: {e}"))?;
+    {
+        Ok(meta) => meta,
+        Err(ChatGPTError::RateLimited { reason, .. }) => {
+            return Err(FileError::RateLimited(reason))
+        }
+        Err(ChatGPTError::Permanent(msg))
+            if msg.contains("HTTP 404") || msg.contains("HTTP 410") =>
+        {
+            return Err(FileError::Gone(format!("file metadata: {msg}")))
+        }
+        Err(e) => return Err(FileError::Failed(format!("file metadata: {e}"))),
+    };
+    download_signed(client, &meta, file_id, mime)
+        .await
+        .map_err(|e| FileError::Failed(format!("{e:#}")))
+}
+
+/// Why a file has no bytes; the text becomes the edge's problem.
+enum FileError {
+    /// chatgpt.com no longer has it. Trying again cannot help until the
+    /// conversation changes, and a refetch of it tries its files again.
+    Gone(String),
+    /// The give-up guard tripped.
+    RateLimited(String),
+    /// Anything else, which the next run tries again.
+    Failed(String),
+}
+
+/// The second hop: the bytes behind the signed URL the metadata names.
+async fn download_signed(
+    client: &ChatGPTClient,
+    meta: &Value,
+    file_id: &str,
+    mime: Option<&str>,
+) -> Result<(Vec<u8>, Option<String>)> {
     let signed = match meta.get("download_url").and_then(|v| v.as_str()) {
         Some(s) if !s.is_empty() => s.to_string(),
         _ => anyhow::bail!("the file's metadata carries no download URL"),
@@ -924,6 +1004,8 @@ struct Listing {
     complete: bool,
     /// The page that failed and why. The pages before it are kept.
     failed: Option<String>,
+    /// The page failed because the give-up guard tripped.
+    rate_limited: bool,
 }
 
 #[instrument(skip_all, fields(max_pages, since_secs))]
@@ -938,10 +1020,12 @@ async fn list_all_conversations(
     let mut pages = 0usize;
     let mut complete = false;
     let mut failed = None;
+    let mut rate_limited = false;
     loop {
         let page = match client.list_conversations_page(offset, PAGE_SIZE).await {
             Ok(page) => page,
             Err(e) => {
+                rate_limited = matches!(e, ChatGPTError::RateLimited { .. });
                 failed = Some(format!("page at offset {offset}: {e}"));
                 break;
             }
@@ -1011,6 +1095,7 @@ async fn list_all_conversations(
         items,
         complete,
         failed,
+        rate_limited,
     }
 }
 

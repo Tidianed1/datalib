@@ -155,6 +155,9 @@ async fn part_of_a_sync_that_fails_is_a_problem_row() {
     a_named_conversation_that_fails_costs_only_itself().await;
     a_pruned_conversation_takes_its_problem_with_it().await;
     a_failed_attachment_says_why_and_is_tried_again_while_unchanged().await;
+    a_file_chatgpt_no_longer_has_is_not_asked_for_again().await;
+    a_rate_limit_on_a_file_ends_the_walk().await;
+    a_rate_limit_keeps_the_config_rows_it_did_not_recheck().await;
 }
 
 /// The rate limit used to end the walk with a `warn!` and a run that read
@@ -298,4 +301,69 @@ async fn a_failed_attachment_says_why_and_is_tried_again_while_unchanged() {
         .query("SELECT id, CAST(attempt_count AS TEXT) FROM chatgpt_attachments_bookkeeping")
         .await;
     assert_eq!(attempts, [("c-a#file-1".to_string(), "2".to_string())]);
+}
+
+fn with_file(id: &str) -> Value {
+    json!({
+        "id": id,
+        "update_time": 1.0,
+        "title": "Holodeck log",
+        "mapping": {"n1": {"message": {"metadata": {"attachments": [
+            {"id": "file-1", "name": "program.txt", "mime_type": "text/plain"}
+        ]}}}},
+    })
+}
+
+fn file_metadata() -> HttpRequest {
+    get("/backend-api/files/file-1/download")
+}
+
+/// A 404 on a file was retried every run, for good.
+async fn a_file_chatgpt_no_longer_has_is_not_asked_for_again() {
+    let acct = Account::new(&[with_file("c-a")]);
+    acct.answer(&file_metadata(), 404);
+    acct.run(&[]).await.unwrap();
+    let rows = acct
+        .query("SELECT scope_key, reason FROM problems ORDER BY scope_key")
+        .await;
+    assert_eq!(
+        rows,
+        [(
+            "chatgpt_attachments:c-a#file-1".to_string(),
+            "not_found".to_string()
+        )]
+    );
+
+    let s = acct.run(&[]).await.unwrap();
+    assert_eq!(
+        (s.skipped, s.failed_blobs),
+        (1, 0),
+        "an unchanged conversation's gone file is not asked for: {s:?}"
+    );
+}
+
+/// A rate limit on a file was an ordinary failure, so the walk went on
+/// with one refused request and one row per file after it.
+async fn a_rate_limit_on_a_file_ends_the_walk() {
+    let acct = Account::new(&[with_file("c-a"), with_file("c-b")]);
+    acct.answer(&file_metadata(), 429);
+    let s = acct.run(&[]).await.unwrap();
+    assert_eq!((s.fetched, s.failed_blobs), (0, 0), "{s:?}");
+    assert_eq!(acct.keys().await, ["phase:conversations"]);
+}
+
+/// A rate limit that ends a `conv_uuids` run before an entry leaves that
+/// entry's `config:` row from the last run standing.
+async fn a_rate_limit_keeps_the_config_rows_it_did_not_recheck() {
+    let acct = Account::new(&[conversation("c-a", 1.0), conversation("c-gone", 1.0)]);
+    acct.answer(&conversation_request("c-gone"), 404);
+    acct.run(&["c-a", "c-gone"]).await.unwrap();
+    assert_eq!(acct.keys().await, ["config:conv_uuids:c-gone"]);
+
+    acct.answer(&conversation_request("c-a"), 429);
+    acct.run(&["c-a", "c-gone"]).await.unwrap();
+    assert_eq!(
+        acct.keys().await,
+        ["config:conv_uuids:c-gone", "phase:conversations"]
+    );
 }

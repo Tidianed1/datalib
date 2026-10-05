@@ -122,6 +122,10 @@ an unchanged one is not fetched again, so after the walk every
 conversation with such an edge is read back from the store and its
 attachments tried again. The row clears when the blob lands.
 
+A file chatgpt.com answers `404` or `410` for is gone, not failed: its
+row is a `not_found` warning, and the retry pass leaves it alone. It is
+asked for again only when its conversation changes and is refetched.
+
 ### When part of a sync fails
 
 Only two things fail the step: `/me` failing (the credential is not
@@ -145,7 +149,11 @@ goes on with what it has:
   `ChatGPTError::RateLimited` — ends the walk, since every later request
   would be refused too, and records `phase:conversations` with how many
   were left. What was left is still missing or stale, so the next run's
-  skip-check queues it, and that run's report clears the row.
+  skip-check queues it, and that run's report clears the row. A rate
+  limit on an attachment ends the walk the same way, its conversation
+  unwritten; one in the attachment retry ends that pass as
+  `phase:attachments`. A run cut short like this does not rewrite the
+  `config:` rows, since it did not check every named conversation.
 - **A named conversation** (`conv_uuids`) that answers `404` is
   `config:conv_uuids:<value>`; any other failure is its
   `conversations:<id>` row, as above. Every named conversation is

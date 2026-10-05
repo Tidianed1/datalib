@@ -52,6 +52,16 @@ impl RawDb {
         Ok(Some(now.inner() - dt))
     }
 
+    /// Make the sweep `key` due, whatever its age.
+    pub async fn forget_sweep(&self, key: &str) -> Result<()> {
+        sqlx::query("DELETE FROM sync_scope_state WHERE scope = ?")
+            .bind(format!("claude:sweep:{key}"))
+            .execute(self.pool())
+            .await
+            .context("forget claude sweep marker")?;
+        Ok(())
+    }
+
     pub async fn record_sweep(&self, key: &str, now: &IsoOffsetTimestamp) -> Result<()> {
         let scope = format!("claude:sweep:{key}");
         dr::upsert_scope_state(self.pool(), &scope, &now.to_rfc3339())
@@ -238,14 +248,18 @@ impl RawDb {
             .transpose()
     }
 
-    /// Every conversation with an attachment whose last attempt left it
-    /// without bytes.
+    /// Every conversation with an attachment whose last attempt failed.
+    /// One that was not there to fetch is a skip, not a failure, and waits
+    /// for its conversation to change.
     pub async fn conversations_with_unfetched_attachments(&self) -> Result<Vec<String>> {
         sqlx::query_scalar(
             "SELECT DISTINCT a.conversation_uuid FROM claude_attachments a \
-             JOIN claude_attachments_bookkeeping b ON b.id = a.id \
-             WHERE b.last_error IS NOT NULL ORDER BY a.conversation_uuid",
+             JOIN problems p ON p.scope_kind = ? \
+                AND p.scope_key = 'claude_attachments:' || a.id \
+             WHERE p.reason = ? ORDER BY a.conversation_uuid",
         )
+        .bind(datalib_problems::ScopeKind::Entity.as_str())
+        .bind(datalib_problems::Reason::FetchFailed.as_str())
         .fetch_all(self.pool())
         .await
         .context("select conversations with unfetched attachments")
