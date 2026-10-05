@@ -257,6 +257,18 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     Ok(summary)
 }
 
+/// Reports what a snapshot feed skipped, if it read its file this run:
+/// `None` means the file was unchanged and last run's rows still hold.
+pub(crate) async fn report_skipped_if_read(
+    db: &RawDb,
+    part: &str,
+    skipped: Option<Vec<download_problems::SkippedRecord>>,
+) {
+    if let Some(skipped) = skipped {
+        download_problems::report_skipped(db.pool(), part, &skipped).await;
+    }
+}
+
 /// Runs one feed so that its failure, an error or a panic, costs only
 /// that feed: it becomes a `phase:<feed>` problem and the others run.
 async fn feed<T>(

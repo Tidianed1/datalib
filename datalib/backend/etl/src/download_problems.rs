@@ -389,6 +389,64 @@ pub async fn report_records(pool: &sqlx::SqlitePool, problems: &[RecordProblem])
     }
 }
 
+/// An entry the download read and chose not to store: no usable key, or
+/// a kind the mirror does not hold. Named by `entry`, whatever names it
+/// stably in the export (a URL, the entry's own text); the key hashes it,
+/// so the length and contents of `entry` never reach the sweep key.
+#[derive(Debug, Clone)]
+pub struct SkippedRecord {
+    pub entry: String,
+    pub problem: datalib_problems::Problem,
+}
+
+/// The sweep key's prefix of a [`report_skipped`] row.
+pub const SKIPPED_PREFIX: &str = "skipped:";
+
+/// What one `part` of a download (a feed, a file) skipped the last time
+/// it read its input. Replaces only that part's rows, so a part that did
+/// not re-read anything this run must not call it: its rows still hold.
+/// One log line with the counts, never one per record.
+pub async fn report_skipped(pool: &sqlx::SqlitePool, part: &str, skipped: &[SkippedRecord]) {
+    use datalib_problems::Outcome;
+    let mut seen = std::collections::HashSet::new();
+    let rows: Vec<(String, Outcome, datalib_problems::Problem)> = skipped
+        .iter()
+        .map(|s| {
+            let hash = blake3::hash(s.entry.as_bytes()).to_hex();
+            (format!("{SKIPPED_PREFIX}{part}:{}", &hash[..16]), s)
+        })
+        .filter(|(key, _)| seen.insert(key.clone()))
+        .map(|(key, s)| (key, Outcome::Dropped, s.problem.clone()))
+        .collect();
+    if !skipped.is_empty() {
+        let mut by_why: std::collections::BTreeMap<String, usize> = Default::default();
+        for s in skipped {
+            let why = s
+                .problem
+                .rule
+                .as_deref()
+                .unwrap_or(s.problem.reason.as_str());
+            *by_why.entry(why.to_string()).or_default() += 1;
+        }
+        let counts: Vec<String> = by_why.iter().map(|(k, n)| format!("{k}={n}")).collect();
+        tracing::warn!(
+            event = "records_skipped",
+            part,
+            skipped = skipped.len(),
+            by_reason = %counts.join(","),
+            "entries were read and not stored; each is a problems row",
+        );
+    }
+    let prefix = format!("{SKIPPED_PREFIX}{part}:");
+    if let Err(e) = replace_prefixed(pool, &[&prefix], &rows).await {
+        tracing::warn!(
+            error = %format!("{e:#}"),
+            part,
+            "could not record the entries that were skipped; the Manage row will not show them"
+        );
+    }
+}
+
 /// A configured entry upstream has sent nothing new for a while, named
 /// the way the config names it.
 #[derive(Debug, Clone)]
@@ -498,6 +556,66 @@ async fn replace_prefixed(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Takeout's 321 keyless saved places once reached only the log, one
+    /// identical line each. A part's report replaces that part's rows and
+    /// no other's, since a feed that skipped an unchanged file reports
+    /// nothing and its rows must stand.
+    #[tokio::test]
+    async fn skipped_entries_are_rows_replaced_per_part() {
+        use datalib_problems::{Problem, Reason, Severity};
+        let d = tempfile::tempdir().unwrap();
+        let pool = crate::doltlite_raw::open(&d.path().join("s.doltlite_db"), &[])
+            .await
+            .unwrap();
+        let keys = || async {
+            sqlx::query_as::<_, (String, String)>(
+                "SELECT scope_key, severity FROM problems ORDER BY scope_key",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        };
+        let keyless = |entry: &str| SkippedRecord {
+            entry: entry.to_string(),
+            problem: Problem::record(Reason::NoIdentity, entry),
+        };
+        let long = format!("https://maps.example/?q={}", "x".repeat(500));
+
+        report_skipped(
+            &pool,
+            "places",
+            &[keyless(&long), keyless("Ten Forward"), keyless(&long)],
+        )
+        .await;
+        report_skipped(
+            &pool,
+            "watch",
+            &[keyless("https://www.youtube.com/post/Ugk")],
+        )
+        .await;
+        let first = keys().await;
+        assert_eq!(first.len(), 3, "a repeated entry is one row: {first:?}");
+        assert!(first.iter().all(|(k, _)| k.len() <= 96), "{first:?}");
+        assert!(first.iter().all(|(_, s)| s == Severity::Error.as_str()));
+
+        report_skipped(&pool, "places", &[keyless("Ten Forward")]).await;
+        let second = keys().await;
+        assert_eq!(second.len(), 2, "{second:?}");
+        assert_eq!(
+            second
+                .iter()
+                .filter(|(k, _)| k.starts_with("skipped:watch:"))
+                .count(),
+            1
+        );
+
+        report_skipped(&pool, "places", &[]).await;
+        let third = keys().await;
+        assert_eq!(third.len(), 1, "{third:?}");
+        assert!(third[0].0.starts_with("skipped:watch:"));
+        pool.close().await;
+    }
 
     /// A record that would not fetch is a `problems` row keyed by the id
     /// upstream uses, and the next run's report replaces it — so one

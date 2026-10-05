@@ -468,6 +468,12 @@ fn drop_first_cell(html: String) -> String {
     format!("{}{}", &html[..first], &html[second..])
 }
 
+fn drop_last_cell(html: String) -> String {
+    let last = html.rfind("<div class=\"outer-cell").unwrap();
+    let end = html.rfind("</body>").unwrap();
+    format!("{}{}", &html[..last], &html[end..])
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_review_dropped_from_a_newer_export_is_gone() {
     let e = Export::new();
@@ -647,14 +653,82 @@ async fn a_feed_that_fails_is_a_problem_row_and_the_rest_land() {
     assert_eq!(s.youtube_watch_history, 3, "{s:?}");
 
     let db = RawDb::open(&e.db_path).await.unwrap();
-    let rows: Vec<(String, String, String)> =
-        sqlx::query_as("SELECT scope_key, severity, sample FROM problems")
-            .fetch_all(db.pool())
-            .await
-            .unwrap();
+    let rows: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT scope_key, severity, sample FROM problems WHERE scope_key LIKE 'phase:%'",
+    )
+    .fetch_all(db.pool())
+    .await
+    .unwrap();
     db.close().await;
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert_eq!(rows[0].0, "phase:maps_saved_places");
     assert_eq!(rows[0].1, "error");
     assert!(rows[0].2.starts_with("parse Saved Places.json"), "{rows:?}");
+}
+
+/// An entry read and not stored once reached only the log, one identical
+/// `warn!` per entry: 321 saved places with no key, 36 watch-history
+/// entries that are not videos. Each is now a `problems` row.
+#[tokio::test(flavor = "multi_thread")]
+async fn entries_read_and_not_stored_are_problem_rows() {
+    let (_work, summary, db_path) = run_all().await;
+    assert_eq!(summary.maps_saved_places, 2);
+    assert_eq!(summary.youtube_watch_history, 3);
+    let db = RawDb::open(&db_path).await.unwrap();
+    let rows: Vec<(String, String, String, Option<String>, String)> = sqlx::query_as(
+        "SELECT scope_key, severity, reason, rule, sample FROM problems \
+         WHERE scope_key LIKE 'skipped:%' ORDER BY scope_key",
+    )
+    .fetch_all(db.pool())
+    .await
+    .unwrap();
+    db.close().await;
+    let [place, watch] = rows.as_slice() else {
+        panic!("one row per skipped entry: {rows:?}");
+    };
+    assert!(
+        place.0.starts_with("skipped:maps_saved_places:"),
+        "{place:?}"
+    );
+    assert_eq!(
+        (place.1.as_str(), place.2.as_str()),
+        ("error", "no_identity")
+    );
+    assert!(place.4.contains("?q=Quark"), "{place:?}");
+    assert!(
+        watch.0.starts_with("skipped:youtube_watch_history:"),
+        "{watch:?}"
+    );
+    assert_eq!(watch.1, "warning");
+    assert_eq!(watch.3.as_deref(), Some("youtube_watch_not_a_video"));
+    assert!(watch.4.contains("/post/"), "{watch:?}");
+}
+
+/// A feed whose file is unchanged reads nothing and reports nothing, so
+/// what it skipped last time must still be a row.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unchanged_file_keeps_its_skipped_rows() {
+    let e = Export::new();
+    e.sync().await;
+    let skipped = || async {
+        let db = RawDb::open(&e.db_path).await.unwrap();
+        let n: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM problems WHERE scope_key LIKE 'skipped:%'")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        db.close().await;
+        n
+    };
+    assert_eq!(skipped().await, 2);
+    e.sync().await;
+    assert_eq!(skipped().await, 2);
+
+    e.rewrite(WATCH_HISTORY, drop_last_cell);
+    e.sync().await;
+    assert_eq!(
+        skipped().await,
+        1,
+        "the post left the export, so its row goes"
+    );
 }

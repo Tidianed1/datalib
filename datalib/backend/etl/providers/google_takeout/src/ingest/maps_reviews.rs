@@ -1,6 +1,8 @@
 //! `Maps (your places)/Reviews.json` walker.
 
+use datalib_etl::download_problems::SkippedRecord;
 use datalib_etl::fsscan;
+use datalib_problems::{Problem, Reason};
 
 use anyhow::{Context, Result};
 use datalib_etl::file_checkpoint::{self, SnapshotCounts};
@@ -20,7 +22,9 @@ pub async fn ingest(
     scan: &fsscan::Scan,
     progress: &Progress,
 ) -> Result<SnapshotCounts> {
+    let mut skipped = None;
     let n = file_checkpoint::ingest_snapshot(db.pool(), SCOPE, scan.file(FILE_REL), |bytes| {
+        let skipped = skipped.insert(Vec::new());
         let geo: Value = serde_json::from_slice(bytes).context("parse Reviews.json")?;
         let Some(features) = geo.get("features").and_then(|v| v.as_array()) else {
             warn!(
@@ -36,17 +40,21 @@ pub async fn ingest(
                 continue;
             };
             let date = props.get("date").and_then(|v| v.as_str()).unwrap_or("");
-            let ftid = props
+            let url = props
                 .get("google_maps_url")
                 .and_then(|v| v.as_str())
-                .and_then(extract_ftid)
                 .unwrap_or("");
+            let ftid = extract_ftid(url).unwrap_or("");
             if ftid.is_empty() || date.is_empty() {
-                warn!(
-                    event = "maps_review_missing_key",
-                    path = FILE_REL,
-                    "a review has no key; skipped it"
-                );
+                let (field, value) = if date.is_empty() {
+                    ("date", date)
+                } else {
+                    ("google_maps_url", url)
+                };
+                skipped.push(SkippedRecord {
+                    entry: f.to_string(),
+                    problem: Problem::field(field, Reason::NoIdentity, value),
+                });
                 continue;
             }
             let id = ns_id(&format!("maps_review:{ftid}:{date}"));
@@ -59,6 +67,7 @@ pub async fn ingest(
         Ok(Some(rows))
     })
     .await?;
+    super::report_skipped_if_read(db, "maps_reviews", skipped).await;
     progress.set_message(&format!("maps_reviews: {}", n.written));
     Ok(n)
 }

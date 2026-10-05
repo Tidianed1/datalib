@@ -6,13 +6,14 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{blake3_hex, CasInsert};
 use datalib_etl::bulk::bulk_upsert_in_tx;
+use datalib_etl::download_problems::{self, SkippedRecord};
 use datalib_etl::file_checkpoint;
 use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
 use datalib_etl::prune;
+use datalib_problems::{Problem, Reason};
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::Value;
-use tracing::warn;
 
 use super::db::RawDb;
 use super::schema_raw::MapsPhotoRow;
@@ -47,6 +48,7 @@ pub async fn ingest(
     let mut rows: Vec<MapsPhotoRow> = Vec::new();
     let mut cas_inserts_owned: Vec<PendingCas> = Vec::new();
     let mut done: Vec<&fsscan::ScannedFile> = Vec::new();
+    let mut skipped: Vec<SkippedRecord> = Vec::new();
     for f in changes
         .needs_reading_under(DIR_REL)
         .filter(|f| f.path.extension().and_then(|s| s.to_str()) == Some("json"))
@@ -65,7 +67,15 @@ pub async fn ingest(
                 done.push(f);
             }
             Err(e) => {
-                warn!(event = "maps_photo_failed", path = %f.path.display(), error = %e, "a maps photo could not be ingested");
+                // Not stamped, so it is read again next run, and its row
+                // is re-reported until it reads.
+                skipped.push(SkippedRecord {
+                    entry: f.rel.clone(),
+                    problem: Problem::record(
+                        Reason::FetchFailed,
+                        &format!("{}: {}", f.rel, e.root_cause()),
+                    ),
+                });
             }
         }
     }
@@ -94,6 +104,7 @@ pub async fn ingest(
         file_checkpoint::record_file(&mut tx, SCOPE, f).await?;
     }
     tx.commit().await.context("commit maps_photos tx")?;
+    download_problems::report_skipped(db.pool(), "maps_photos", &skipped).await;
 
     // A photo row is keyed by its sidecar's stem, so a gone sidecar takes
     // its row, unless a sidecar with that stem is still here.

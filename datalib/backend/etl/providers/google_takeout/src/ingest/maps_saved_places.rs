@@ -3,7 +3,9 @@
 //! GeoJSON `FeatureCollection`; one feature per saved/starred place.
 //! PK recipe: `uuidv5(NS, "maps_saved:{ftid_or_cid}:{date}")`.
 
+use datalib_etl::download_problems::SkippedRecord;
 use datalib_etl::fsscan;
+use datalib_problems::{Problem, Reason};
 
 use anyhow::{Context, Result};
 use datalib_etl::file_checkpoint::{self, SnapshotCounts};
@@ -23,7 +25,9 @@ pub async fn ingest(
     scan: &fsscan::Scan,
     progress: &Progress,
 ) -> Result<SnapshotCounts> {
+    let mut skipped = None;
     let n = file_checkpoint::ingest_snapshot(db.pool(), SCOPE, scan.file(FILE_REL), |bytes| {
+        let skipped = skipped.insert(Vec::new());
         let geo: Value = serde_json::from_slice(bytes).context("parse Saved Places.json")?;
         let Some(features) = geo.get("features").and_then(|v| v.as_array()) else {
             warn!(
@@ -45,11 +49,15 @@ pub async fn ingest(
                 .unwrap_or("");
             let key = extract_ftid_or_cid(url).unwrap_or("");
             if key.is_empty() || date.is_empty() {
-                warn!(
-                    event = "maps_saved_missing_key",
-                    path = FILE_REL,
-                    "a saved place has no key; skipped it"
-                );
+                let (field, value) = if date.is_empty() {
+                    ("date", date)
+                } else {
+                    ("google_maps_url", url)
+                };
+                skipped.push(SkippedRecord {
+                    entry: f.to_string(),
+                    problem: Problem::field(field, Reason::NoIdentity, value),
+                });
                 continue;
             }
             let id = ns_id(&format!("maps_saved:{key}:{date}"));
@@ -62,6 +70,7 @@ pub async fn ingest(
         Ok(Some(rows))
     })
     .await?;
+    super::report_skipped_if_read(db, "maps_saved_places", skipped).await;
     progress.set_message(&format!("maps_saved_places: {}", n.written));
     Ok(n)
 }
