@@ -180,7 +180,8 @@ datalib/
                    and apple_photos have no <p>_render.
     etl/sqlite_mirror/ the table-for-table SQLite→doltlite mirror engine.
     table/         `BulkUpsertable`, alone.
-    probe/         the "Test connection" report shape, alone.
+    probe/         what "Check connection" and a picker's "Load" ask
+                   and answer, alone.
     migrate_config/ `datalib-migrate-config`: rewrites the one retired
                    config shape into the current one.
     runtime/       the data-root layout, which build this is
@@ -643,6 +644,8 @@ upstream (block types, MIME types), free-form display text
 | what the loop made of a step (`steps.state`) | `StateKind` | `dag/src/supervisor/tick.rs` |
 | how a sync request ended | `RequestOutcome` | `dag/src/supervisor/store.rs` |
 | a browser-login attempt | `ConnectState` | `http/src/connect.rs` |
+| a probe the wizard polls | `ProbeState` | `http/src/probe.rs` |
+| the list a picker loads | `ProbeList` | `probe/src/lib.rs` (`datalib_probe`) |
 | the `grid_rows.provider` tag | `Provider` | `schema/src/providers.rs` |
 | what a step could not fully do to a record | `Outcome`, `Reason`, `ScopeKind`, `Severity`, `Stage` | `problems/src/lib.rs` (`datalib_problems`) |
 | a configured entry upstream does not have; a listing or phase a run could not do | `ProblemReason`, `RunProblemKind` | `etl/src/download_problems.rs` |

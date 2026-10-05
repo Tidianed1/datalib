@@ -1,13 +1,16 @@
-//! Read-only account probe: "do these credentials reach chatgpt.com, and
-//! which conversations does the account have?" One request for the
-//! account and a few listing pages — no conversation is ever
+//! Read-only account probe. Asked for the account, one request: "do
+//! these credentials reach chatgpt.com, and as whom?" Asked for the
+//! conversations, a few listing pages — no conversation is ever
 //! detail-fetched.
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use serde_json::Value;
 
 use datalib_etl_chatgpt_config::ChatgptConfig;
-use datalib_probe::{sort_newest_first, ProbeAccount, ProbeItem, ProbeItemKind, ProbeReport};
+use datalib_probe::{
+    sort_newest_first, OnProgress, ProbeAccount, ProbeAsk, ProbeItem, ProbeItemKind, ProbeList,
+    ProbeProgress, ProbeReport,
+};
 
 use crate::ingest::api::{ChatGPTClient, ChatGPTError};
 use crate::ingest::PAGE_SIZE;
@@ -17,7 +20,11 @@ use crate::ingest::PAGE_SIZE;
 /// crosses a pipe as one JSON document.
 const MAX_ITEMS: usize = 500;
 
-pub async fn probe(config: &ChatgptConfig) -> Result<ProbeReport> {
+pub async fn probe(
+    config: &ChatgptConfig,
+    ask: ProbeAsk,
+    progress: OnProgress<'_>,
+) -> Result<ProbeReport> {
     config.validate()?;
     if config.api.is_none() {
         return Err(anyhow!(
@@ -27,7 +34,22 @@ pub async fn probe(config: &ChatgptConfig) -> Result<ProbeReport> {
 
     let mut client = ChatGPTClient::with_latchkey(config.latchkey_settings.clone());
     let me = client.me().await.map_err(credential_hint)?;
+    match ask {
+        ProbeAsk::Account => Ok(build_report(&me, Vec::new(), None)),
+        ProbeAsk::List(ProbeList::Conversations) => {
+            let (items, total) = list_conversations(&mut client, progress).await?;
+            Ok(build_report(&me, items, total))
+        }
+        ProbeAsk::List(other) => bail!("a ChatGPT source has no `{}` list", other.as_str()),
+    }
+}
 
+/// The newest conversations, up to [`MAX_ITEMS`], and how many the
+/// account has in all when the listing says.
+async fn list_conversations(
+    client: &mut ChatGPTClient,
+    progress: OnProgress<'_>,
+) -> Result<(Vec<Value>, Option<u64>)> {
     let mut items: Vec<Value> = Vec::new();
     let mut total: Option<u64> = None;
     let mut offset = 0usize;
@@ -47,12 +69,15 @@ pub async fn probe(config: &ChatgptConfig) -> Result<ProbeReport> {
         }
         offset += page_items.len();
         items.extend(page_items);
+        progress(ProbeProgress {
+            done: items.len() as u64,
+            total: total.map(|t| t.min(MAX_ITEMS as u64)),
+        });
         if total.is_some_and(|t| offset as u64 >= t) {
             break;
         }
     }
-
-    Ok(build_report(&me, items, total))
+    Ok((items, total))
 }
 
 /// The report, from the account payload and the listing pages already
@@ -218,7 +243,7 @@ mod tests {
         let err = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap()
-            .block_on(probe(&cfg))
+            .block_on(probe(&cfg, ProbeAsk::Account, &|_| {}))
             .expect_err("nothing to connect to")
             .to_string();
         assert!(err.contains("nothing to connect to"), "{err}");

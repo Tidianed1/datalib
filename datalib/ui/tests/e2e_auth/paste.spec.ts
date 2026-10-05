@@ -11,9 +11,10 @@ import {
   test,
   TILE,
   wizard,
+  wizField,
 } from "./world";
 
-test("a pasted token is stored, then Check account reaches the workspace", async ({
+test("a pasted token is stored, then Check connection reaches the workspace", async ({
   page,
   world,
   internet,
@@ -25,17 +26,24 @@ test("a pasted token is stored, then Check account reaches the workspace", async
   await form.getByRole("button", { name: "Store in latchkey" }).click();
   await expect(form).toContainText("Stored in latchkey.");
 
-  // A successful paste checks the account by itself.
-  await expect(wizard(page).locator(".wiz-probe-ok")).toContainText("Reached");
-  // latchkey's own slack service put the token on the wire…
+  // A successful paste checks the connection by itself — one request,
+  // no listing.
+  await expect(wizard(page).locator(".wiz-probe-ok")).toContainText(
+    "Connected to picard in Enterprise",
+  );
+  expect(internet.to("slack.com", "/api/conversations.list")).toHaveLength(0);
+  // latchkey's own slack service put the token on the wire.
   for (const r of internet.to("slack.com")) {
     expect(r.headers.authorization).toBe(`Bearer ${TNG.slackToken}`);
   }
-  // …and the probe's listings left through curl-impersonate. Not
-  // `auth.test`: latchkey's own credential check sends that one too,
-  // through the router without datalib's marker, so as a plain curl.
-  const listings = internet.to("slack.com").filter((r) => r.path !== "/api/auth.test");
-  expect(listings).not.toHaveLength(0);
+
+  // The channel picker loads its own list, through curl-impersonate.
+  await wizField(page, "Channels").locator(".wiz-load-btn").click();
+  await expect(wizField(page, "Channels").locator(".wiz-load-done")).toContainText(
+    "3 channels from picard in Enterprise.",
+  );
+  const listings = internet.to("slack.com", "/api/conversations.list");
+  expect(listings).toHaveLength(2);
   for (const r of listings) expectImpersonated(r);
   // …and the config names no secret.
   await wizard(page).getByText("Review the TOML this writes").click();
@@ -47,11 +55,11 @@ test("a token stored on the command line beforehand just works", async ({ page, 
   world.latchkey("auth", "set", "slack", "-H", `Authorization: Bearer ${TNG.slackToken}`);
 
   await pickTile(page, TILE.slack);
-  await wizard(page).getByRole("button", { name: "Check account" }).click();
-  await expect(wizard(page).locator(".wiz-probe-ok")).toContainText("Reached");
+  await wizard(page).getByRole("button", { name: "Check connection" }).click();
+  await expect(wizard(page).locator(".wiz-probe-ok")).toContainText("Connected to");
 });
 
-test("a wrong token fails Check account in a sentence", async ({ page }) => {
+test("a wrong token fails Check connection in a sentence", async ({ page }) => {
   await pickTile(page, TILE.slack);
   await wizard(page).getByRole("tab", { name: "Paste a key" }).click();
   const form = wizard(page).locator(".wiz-paste");
@@ -61,4 +69,26 @@ test("a wrong token fails Check account in a sentence", async ({ page }) => {
   const failed = wizard(page).locator(".wiz-probe-failed");
   await expect(failed).toBeVisible();
   expectGlanceable(await failed.locator(".wiz-probe-headline").textContent(), "the headline");
+});
+
+/// A list that pages says how far it has got while it loads. The fake
+/// holds the second page until the spec has looked, so the half-loaded
+/// state is a state the spec waits for, not a race.
+test("a picker's list shows its progress while it loads", async ({ page, world, internet }) => {
+  world.latchkey("auth", "set", "slack", "-H", `Authorization: Bearer ${TNG.slackToken}`);
+  const release = internet.hold(
+    (r: { host: string; query: string }) =>
+      r.host === "slack.com" && r.query.includes("cursor=page-2"),
+  );
+  await pickTile(page, TILE.slack);
+  const channels = wizField(page, "Channels");
+  await channels.locator(".wiz-load-btn").click();
+
+  await expect(channels.locator(".wiz-load-status")).toContainText("Loading channels… 2 so far");
+  await expect(channels.locator(".wiz-load-bar")).toBeVisible();
+  release();
+  await expect(channels.locator(".wiz-load-done")).toContainText(
+    "3 channels from picard in Enterprise.",
+  );
+  await expect(channels.locator(".wiz-load-bar")).toHaveCount(0);
 });

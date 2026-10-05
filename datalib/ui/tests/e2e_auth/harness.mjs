@@ -81,12 +81,15 @@ function readBody(req) {
 /// machine.
 export async function startFakeInternet(sites = FAKE_SITES) {
   const requests = [];
+  /** @type {{ matches: (r: any) => boolean, released: Promise<void> }[]} */
+  const holds = [];
   const server = https.createServer(cert(), async (req, res) => {
     const host = (req.headers.host ?? "").replace(/:\d+$/, "");
     const url = new URL(req.url ?? "/", `https://${host}`);
     const body = await readBody(req);
     const seen = { host, method: req.method, path: url.pathname, query: url.search, headers: req.headers, body };
     requests.push(seen);
+    for (const hold of holds.filter((h) => h.matches(seen))) await hold.released;
     const reply = sites[host]?.(seen) ?? { status: 404, json: { error: `no fake for ${host}${url.pathname}` } };
     const headers = { ...(reply.headers ?? {}) };
     let payload = reply.text ?? "";
@@ -105,6 +108,15 @@ export async function startFakeInternet(sites = FAKE_SITES) {
   return {
     port,
     requests,
+    /// Keep every request `matches` accepts unanswered until the
+    /// returned function is called — so a spec can look at a page while
+    /// a list is half loaded, rather than racing it.
+    hold: (matches) => {
+      let release = () => {};
+      const released = new Promise((resolve) => (release = resolve));
+      holds.push({ matches, released });
+      return release;
+    },
     /// Requests that reached `host`, optionally on one path.
     to: (host, pathname) =>
       requests.filter((r) => r.host === host && (pathname === undefined || r.path === pathname)),

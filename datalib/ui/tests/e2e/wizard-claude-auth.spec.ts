@@ -9,6 +9,7 @@
 // Read-only: nothing here saves, so it runs against the shared fixture
 // root rather than a sandbox of its own.
 import { test, expect, type Page } from "@playwright/test";
+import { probeFailed } from "./probe-stub";
 
 const wizard = (page: Page) => page.getByRole("dialog");
 
@@ -130,23 +131,21 @@ test("a new source writes no account at all", async ({ page }) => {
   await expect(wizard(page).locator(".wiz-review pre")).not.toContainText("latchkey_settings");
 });
 
-/// An expired sign-in shows up as a failed Check account, and the
+/// An expired sign-in shows up as a failed Check connection, and the
 /// probe's own recipe names a terminal command. The button beside it is
 /// the fix, so the failure says so — and a login that then succeeds
 /// clears the failure it answered rather than leaving it on screen.
-test("a failed Check account points back at the login button", async ({ page }) => {
+test("a failed Check connection points back at the login button", async ({ page }) => {
   await openClaude(page, WITH_BROWSER);
   await page.route("**/api/probe", (route) =>
-    route.fulfill({
-      status: 502,
-      json: {
-        error:
-          "error: claude.ai credentials are not set up: GET /api/organizations -> HTTP 401\n" +
+    route.fulfill(
+      probeFailed(
+        "error: claude.ai credentials are not set up: GET /api/account -> HTTP 401\n" +
           "The credential is the `sessionKey` cookie.",
-      },
-    }),
+      ),
+    ),
   );
-  await wizard(page).getByRole("button", { name: "Check account" }).click();
+  await wizard(page).getByRole("button", { name: "Check connection" }).click();
   const failed = wizard(page).locator(".wiz-probe-failed");
   await expect(failed).toContainText("sign in again on the Web login tab");
 
@@ -174,7 +173,7 @@ test("behind a gateway there is no login button, only where to sign in", async (
   await expect(wizard(page)).not.toContainText("may log out your other claude.ai session");
   await expect(wizard(page)).not.toContainText("latchkey auth set");
   await expect(wizard(page)).toContainText("held by a latchkey gateway (http://gw.example:8080)");
-  // Check account still works there: the probe goes through
+  // Check connection still works there: the probe goes through
   // `latchkey curl`, which the gateway serves.
-  await expect(wizard(page).getByRole("button", { name: "Check account" })).toBeVisible();
+  await expect(wizard(page).getByRole("button", { name: "Check connection" })).toBeVisible();
 });

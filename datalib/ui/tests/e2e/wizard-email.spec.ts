@@ -1,7 +1,8 @@
-// Gmail and Fastmail: two wizard forms over one step type, and the
-// Connection block that fills their label pickers from the live account.
+// Gmail and Fastmail: two wizard forms over one step type, the
+// Connection block's check, and each label picker's own Load.
 import { test, expect, type Page } from "@playwright/test";
 import { expandGroup, pickRowMenu, MANAGE_WITH_CONFIG, savedConfig } from "./grid-helpers";
+import { probeAsk, probeDone, reportFor, type ProbeAsk } from "./probe-stub";
 
 const wizard = (page: Page) => page.getByRole("dialog");
 /// A field's own input. Descendant rather than direct child: a
@@ -17,6 +18,9 @@ const field = (page: Page, caption: string) =>
 const picker = (page: Page, caption: string) =>
   wizard(page).locator(`.wiz-field:has(> .wiz-label:text-is("${caption}")) .pick-grid`);
 const rows = (page: Page, caption: string) => picker(page, caption).locator(".slick-row");
+/// The button that loads one field's picker from the account.
+const load = (page: Page, caption: string) =>
+  wizard(page).locator(`.wiz-field:has(> .wiz-label:text-is("${caption}")) .wiz-load-btn`).click();
 /// Tick one row's checkbox — its label, which is what is drawn; the
 /// input itself is hidden. Scoped to the selection column's own cell
 /// so it cannot land on a cell that merely contains the text.
@@ -119,7 +123,10 @@ const FASTMAIL_PROBE = {
 /// Whatever the last probe was asked to authenticate with. Asserted on
 /// rather than merely stubbed: a probe sent the wrong params comes back
 /// looking perfectly healthy while describing a different mailbox.
-let lastProbeRequest: { type?: string; params?: Record<string, unknown> } = {};
+let lastProbeRequest: ProbeAsk = {};
+
+/// Both email lists are the one folder listing; the picker filters it.
+const EMAIL_LISTS = { labels: ["mailbox", "keyword"], mailboxes: ["mailbox", "keyword"] };
 
 async function stubBackend(page: Page) {
   await page.route("**/api/latchkey/google-gmail", (route) =>
@@ -129,9 +136,10 @@ async function stubBackend(page: Page) {
     route.fulfill({ json: FASTMAIL_SERVICE }),
   );
   await page.route("**/api/probe", (route) => {
-    lastProbeRequest = route.request().postDataJSON();
-    const params = (lastProbeRequest.params ?? {}) as Record<string, unknown>;
-    route.fulfill({ json: "gmail" in params ? GMAIL_PROBE : FASTMAIL_PROBE });
+    lastProbeRequest = probeAsk(route);
+    const params = lastProbeRequest.params ?? {};
+    const report = "gmail" in params ? GMAIL_PROBE : FASTMAIL_PROBE;
+    route.fulfill(probeDone(reportFor(report, lastProbeRequest, EMAIL_LISTS)));
   });
 }
 
@@ -193,7 +201,9 @@ test("Gmail and Fastmail are separate tiles over one step type", async ({ page }
   ).toBeDisabled();
 });
 
-test("a probe fills the label picker, and ticking a row writes the filter", async ({ page }) => {
+test("a check names the account; Load fills the label picker, and ticking writes the filter", async ({
+  page,
+}) => {
   await pickTile(page, "gmail", "Mirror a Gmail account through Google's API.");
 
   // The account list comes from latchkey, and says which credentials
@@ -218,17 +228,22 @@ test("a probe fills the label picker, and ticking a row writes the filter", asyn
     "picard@enterprise.gov",
   );
 
-  // Before the probe there is nothing to pick from, and the form says
+  // Before a load there is nothing to pick from, and the form says
   // so rather than showing an empty box.
   await expect(picker(page, "Download only these labels")).toHaveCount(0);
 
-  await wizard(page).getByRole("button", { name: "Check account" }).click();
-  await expect(wizard(page).locator(".wiz-probe-note")).toContainText(
-    "Reached picard@enterprise.gov",
+  // The check asks for the account alone, and fills no picker.
+  await wizard(page).getByRole("button", { name: "Check connection" }).click();
+  await expect(wizard(page).locator(".wiz-probe-ok")).toContainText(
+    "Connected to picard@enterprise.gov",
   );
+  expect(lastProbeRequest.list).toBeNull();
+  await expect(picker(page, "Download only these labels")).toHaveCount(0);
 
+  await load(page, "Download only these labels");
   // What the probe was sent has to be what Save would write: the
   // account, and the table that selects the Gmail download mode.
+  await expect.poll(() => lastProbeRequest.list).toBe("labels");
   expect(lastProbeRequest.type).toBe("email");
   expect(lastProbeRequest.params).toEqual({
     latchkey_settings: { account: "picard@enterprise.gov" },
@@ -261,7 +276,7 @@ test("a probe fills the label picker, and ticking a row writes the filter", asyn
 test("a typed label the account doesn't have is called out before saving", async ({ page }) => {
   await pickTile(page, "gmail", "Mirror a Gmail account through Google's API.");
   await field(page, "Download only these labels").fill("Inbox, Bridg/Logs");
-  await wizard(page).getByRole("button", { name: "Check account" }).click();
+  await load(page, "Download only these labels");
 
   // Gmail's downloader *refuses* a run whose filter names a label the
   // account lacks — an empty filter would mean "everything", so it
@@ -274,17 +289,15 @@ test("the render filter is offered folders, never flags", async ({ page }) => {
   await field(page, "Name").fill("Bridge mail");
   await pickAccount(page, "picard@enterprise.gov");
 
-  // One probe fills both pickers: the ingest step's, and the render
-  // step's under the Rendering heading. The render step holds no
-  // credentials of its own — the probe authenticates with what the
+  // The render step's picker loads its own list. The render step holds
+  // no credentials of its own — the probe authenticates with what the
   // ingest step will write.
-  await wizard(page).getByRole("button", { name: "Check account" }).click();
-  await expect
-    .poll(() => lastProbeRequest.params)
-    .toEqual({
-      latchkey_settings: { account: "picard@enterprise.gov" },
-      gmail: { user_id: "me" },
-    });
+  await load(page, "Render only these labels");
+  await expect.poll(() => lastProbeRequest.list).toBe("mailboxes");
+  expect(lastProbeRequest.params).toEqual({
+    latchkey_settings: { account: "picard@enterprise.gov" },
+    gmail: { user_id: "me" },
+  });
 
   // `Important`, `Starred` and `Unread` are labels on the wire and
   // flags in the schema, so they never become a mailbox row. Offering
@@ -316,8 +329,9 @@ test("the render filter is offered folders, never flags", async ({ page }) => {
 test("Fastmail writes its JMAP host without asking, and shows folder counts", async ({ page }) => {
   await pickTile(page, "fastmail", "Mirror a Fastmail mailbox over JMAP.");
   await pickAccount(page, "troi@betazed.example");
-  await wizard(page).getByRole("button", { name: "Check account" }).click();
+  await load(page, "Download only these folders");
 
+  await expect.poll(() => lastProbeRequest.list).toBe("labels");
   expect(lastProbeRequest.params).toEqual({
     latchkey_settings: { account: "troi@betazed.example" },
     jmap: { hostname: "api.fastmail.com" },

@@ -1,5 +1,6 @@
 // Thin fetch wrapper for the Datalib HTTP API.
 
+import type { ProbeNoun } from "./config/catalog";
 import type { FeedbackContext } from "./feedback/context";
 import { ApiError, errorDetail } from "./apiError";
 import { pushToast } from "./toasts";
@@ -1706,13 +1707,65 @@ export function latchkeyConnectStatus(id: string): Promise<ConnectAttempt> {
   return quietJson<ConnectAttempt>(`/api/latchkey/connect/${encodeURIComponent(id)}/status`);
 }
 
-/// Ask a provider what these credentials can reach. `params` is the
-/// **download** params, even when the caller is configuring a render
-/// step: that is where the credentials and the download mode live.
-export function probeSource(type: string, params: Record<string, unknown>): Promise<ProbeReport> {
-  return quietJson<ProbeReport>("/api/probe", {
+/// How far a picker's list has got: items fetched so far, and the
+/// total when the service says it. Mirrors `ProbeProgress` in
+/// datalib/backend/probe/src/lib.rs.
+export type ProbeProgress = { done: number; total: number | null };
+
+/// How one probe is going. Mirrors `ProbeState` / `ProbeStatus` in
+/// datalib/backend/http/src/probe.rs.
+export type ProbeState = "running" | "ok" | "failed";
+
+export type ProbeStatus = {
+  id: string;
+  status: ProbeState;
+  progress: ProbeProgress | null;
+  report: ProbeReport | null;
+  /// The step's own error chain, on `failed`.
+  error: string | null;
+};
+
+/// Start a probe: which account these credentials reach, and with
+/// `list` one of a picker's lists as well. `params` is the **download**
+/// params, even when the caller is configuring a render step: that is
+/// where the credentials and the download mode live. Answers with the
+/// probe's status, which may already be final.
+export function startProbe(
+  type: string,
+  params: Record<string, unknown>,
+  list: ProbeNoun | null,
+): Promise<ProbeStatus> {
+  return quietJson<ProbeStatus>("/api/probe", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ type, params }),
+    body: JSON.stringify({ type, params, list }),
   });
+}
+
+/// Poll one probe. The server drops a finished probe once it has been
+/// read, so read a final answer once and keep it.
+export function probeStatus(id: string): Promise<ProbeStatus> {
+  return quietJson<ProbeStatus>(`/api/probe/${encodeURIComponent(id)}`);
+}
+
+const PROBE_POLL_MS = 400;
+
+/// A probe from start to finish, telling `onProgress` how far a list
+/// has got on every poll. Rejects with the step's own error text.
+export async function runProbe(
+  type: string,
+  params: Record<string, unknown>,
+  list: ProbeNoun | null,
+  onProgress: (progress: ProbeProgress | null) => void = () => {},
+): Promise<ProbeReport> {
+  let status = await startProbe(type, params, list);
+  while (status.status === "running") {
+    onProgress(status.progress);
+    await new Promise((resolve) => setTimeout(resolve, PROBE_POLL_MS));
+    status = await probeStatus(status.id);
+  }
+  if (status.status === "failed" || !status.report) {
+    throw new Error(status.error ?? "the probe ended without an answer");
+  }
+  return status.report;
 }

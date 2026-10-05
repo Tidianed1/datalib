@@ -55,13 +55,14 @@ a file download is retried, rate-limited and replayed like an API call.
 what each is keyed by.
 
 The first three are also the whole of `datalib-step probe slack`
-(`src/probe.rs`), which is what the wizard's "Check account" runs:
-it lists every channel the account can see as a `channel` item and
-every DM as a `conversation` item (path = Slack's id, title = what the
-sync will call it), and the `channels` / `dm_conversations` pickers
-are built from that. It always asks for all four surfaces, whatever
-`dms` says — nothing is stored, and the DM picker has to be ready
-before the toggle is on.
+(`src/probe.rs`). The wizard's "Check connection" runs it for
+`auth.test` alone. Each picker's "Load" asks for one list:
+`--list channels` pages `conversations.list` for channels only, as
+`channel` items; `--list conversations` pages `users.list` and then
+`conversations.list` for `im,mpim`, as `conversation` items (path =
+Slack's id, title = what the sync will call it). The two never share
+a listing, so a workspace's directory is read only by someone who
+wants to pick DMs.
 
 ## Channels and DMs
 

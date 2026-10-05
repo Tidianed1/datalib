@@ -79,17 +79,18 @@ export type Field =
   /// count zeros. The label should therefore not say "(bytes)".
   | ({ kind: "bytes" } & FieldBase & { default?: number })
   | ({ kind: "string_list" } & FieldBase & {
-        /// Offer a picker built from `POST /api/probe`, alongside the
-        /// comma-separated box. Names *which* of the probe's items this
-        /// field takes: every label, only the ones a render filter can
-        /// match, an account's conversations (a Claude chat, a Slack
-        /// DM), or a workspace's channels.
+        /// Offer a picker, alongside the comma-separated box, that a
+        /// "Load" button fills from `POST /api/probe` with this list:
+        /// every label, only the ones a render filter can match, an
+        /// account's conversations (a Claude chat, a Slack DM), or a
+        /// workspace's channels.
         probe?: ProbeNoun;
       });
 
-/// What a `probe:` field is a picker *of*: which of the probe's items
-/// it takes. The wizard says `labels` and `mailboxes` in the source's
-/// own word for them (`CatalogEntry.mailboxNoun`), the rest as written.
+/// What a `probe:` field is a picker *of*: the list its "Load" asks the
+/// provider for. Mirrors `ProbeList` in datalib/backend/probe/src/lib.rs.
+/// The wizard says `labels` and `mailboxes` in the source's own word for
+/// them (`CatalogEntry.mailboxNoun`), the rest as written.
 export type ProbeNoun =
   "labels" | "mailboxes" | "conversations" | "channels" | "calendars" | "addressbooks";
 
@@ -174,9 +175,9 @@ export type CatalogEntry = {
   requiresOneOf?: string[];
   /// Params this entry always writes, with no field to edit them.
   preset?: Preset[];
-  /// Offer "Check account", and populate any `probe:` field from
-  /// what comes back. Requires a `datalib-step probe <type>` on the
-  /// backend side; see `datalib/backend/datalib_step/src/probe.rs`.
+  /// Offer "Check connection", and a "Load" on every `probe:` field.
+  /// Requires a `datalib-step probe <type>` on the backend side; see
+  /// `datalib/backend/datalib_step/src/probe.rs`.
   canProbe?: boolean;
   fields?: Field[];
 };

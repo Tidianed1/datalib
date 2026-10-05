@@ -41,6 +41,7 @@ pub mod lock;
 pub mod logging;
 pub mod loop_guard;
 pub mod manage;
+pub mod probe;
 pub mod prometheus;
 pub mod remote_media;
 pub mod request_log;
@@ -175,7 +176,8 @@ pub fn router(state: AppState) -> Router {
             "/api/latchkey/connect/{id}/status",
             get(connect::connect_status),
         )
-        .route("/api/probe", post(connect::probe))
+        .route("/api/probe", post(probe::start_probe))
+        .route("/api/probe/{id}", get(probe::probe_status))
         .route("/api/dag", get(get_dag))
         .route("/api/manage/rows", get(manage::get_manage_rows))
         // Prometheus's own path, so a scrape config needs nothing but the

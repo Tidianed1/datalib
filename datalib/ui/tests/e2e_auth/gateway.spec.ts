@@ -10,7 +10,7 @@ test.use({
   },
 });
 
-test("Check account goes through the gateway, and nothing offers to sign in here", async ({
+test("Check connection goes through the gateway, and nothing offers to sign in here", async ({
   page,
   world,
 }) => {
@@ -20,8 +20,8 @@ test("Check account goes through the gateway, and nothing offers to sign in here
   await expect(wizard(page).getByRole("tab", { name: "Paste a key" })).toHaveCount(0);
   await expect(wizard(page).getByRole("button", { name: "Sign in with browser" })).toHaveCount(0);
 
-  await wizard(page).getByRole("button", { name: "Check account" }).click();
-  await expect(wizard(page).locator(".wiz-probe-ok")).toContainText("Reached");
+  await wizard(page).getByRole("button", { name: "Check connection" }).click();
+  await expect(wizard(page).locator(".wiz-probe-ok")).toContainText("Connected to");
   // Every latchkey the backend ran was a gateway client.
   expect(world.latchkeyRuns().every((r) => r.gateway)).toBe(true);
 });

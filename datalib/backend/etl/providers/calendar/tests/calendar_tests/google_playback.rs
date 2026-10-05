@@ -2,6 +2,7 @@
 //! the one a live account returns; the events inside follow Google's API
 //! reference for `singleEvents=false` (see `INGEST.md`).
 
+use datalib_probe::{ProbeAsk, ProbeList};
 use std::path::Path;
 
 use datalib_etl::http::{HttpRequest, HttpResponse, LatchkeySettings, PLAYBACK_ENV};
@@ -166,7 +167,8 @@ async fn pages_then_syncs_and_survives_an_expired_token() {
     std::env::set_var(PLAYBACK_ENV, &one);
     let config: datalib_etl_calendar_config::CalendarConfig =
         serde_json::from_value(json!({"google": {}})).unwrap();
-    let report = datalib_etl_calendar::probe::probe(&config).await;
+    let report =
+        datalib_etl_calendar::probe::probe(&config, ProbeAsk::List(ProbeList::Calendars)).await;
     std::env::remove_var(PLAYBACK_ENV);
     let report = report.expect("probe under playback");
     assert_eq!(report.account.address.as_deref(), Some(PRIMARY));
