@@ -104,6 +104,13 @@ fn build_export(root: &Path) -> Result<()> {
     Ok(())
 }
 
+async fn problems(db: &RawDb) -> Vec<(String, String)> {
+    sqlx::query_as("SELECT scope_key, sample FROM problems ORDER BY scope_key")
+        .fetch_all(db.pool())
+        .await
+        .unwrap()
+}
+
 async fn rows(db: &RawDb, table: &str) -> Vec<serde_json::Value> {
     db.load_payloads(table).await.unwrap_or_default()
 }
@@ -509,6 +516,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             &db2,
             db2.cas().expect("the download handle has a CAS"),
             &Progress::noop(),
+            &Default::default(),
             50,
         )
         .await?;
@@ -526,6 +534,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             &db2,
             db2.cas().expect("the download handle has a CAS"),
             &Progress::noop(),
+            &Default::default(),
             50,
         )
         .await?;
@@ -563,6 +572,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             &db3,
             db3.cas().expect("the download handle has a CAS"),
             &Progress::noop(),
+            &Default::default(),
             1, // give up after a single consecutive failure
         )
         .await?;
@@ -570,8 +580,163 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         assert!(g.gave_up, "should give up at the limit, got {g:?}");
         assert_eq!(g.attempted, 1, "stopped after the first failure, got {g:?}");
 
+        // ── photos it could not fetch are a problem until they fetch ──
+        let with_photos = |db: &RawDb| FetchOptions {
+            db: db.clone(),
+            input_path: export.clone(),
+            fetch_photos: true,
+            photo_max_consecutive_failures: 1,
+            progress: Progress::noop(),
+            control: Default::default(),
+        };
+        std::env::set_var(PLAYBACK_ENV, &empty_pb);
+        ingest::fetch(with_photos(&db3)).await?;
+        std::env::remove_var(PLAYBACK_ENV);
+        let rows = problems(&db3).await;
+        assert_eq!(
+            rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
+            ["phase:photos"],
+            "{rows:?}"
+        );
+        std::env::set_var(PLAYBACK_ENV, &playback);
+        ingest::fetch(with_photos(&db3)).await?;
+        std::env::remove_var(PLAYBACK_ENV);
+        assert_eq!(problems(&db3).await, [], "they fetched, so the row is gone");
+
         Ok::<_, anyhow::Error>(())
     })?;
 
+    Ok(())
+}
+
+/// A CSV or an article that will not read is a `listing:` row naming the
+/// file, the rows an earlier read stored stay, and the next read that
+/// works clears the row.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_file_that_will_not_read_keeps_its_rows_and_is_a_problem_until_it_reads() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let export = tmp.path().join("export");
+    fs::create_dir_all(&export)?;
+    build_export(&export)?;
+    let articles = export.join("Articles").join("Articles");
+    fs::write(
+        articles.join("away-team.html"),
+        "<html><body><h1>Away team</h1></body></html>",
+    )?;
+    let raw_dir = tmp.path().join("raw");
+    fs::create_dir_all(&raw_dir)?;
+    let db = RawDb::open(&db_path_for(&raw_dir)).await?;
+    let fetch = || {
+        ingest::fetch(FetchOptions {
+            db: db.clone(),
+            input_path: export.clone(),
+            fetch_photos: false,
+            photo_max_consecutive_failures: 50,
+            progress: Progress::noop(),
+            control: Default::default(),
+        })
+    };
+    fetch().await?;
+    assert_eq!(rows(&db, "connections").await.len(), 2);
+    assert_eq!(rows(&db, "articles").await.len(), 2);
+
+    // Not UTF-8: neither file can be read as text.
+    let good_connections = fs::read(export.join("Connections.csv"))?;
+    fs::write(export.join("Connections.csv"), b"First Name\n\xff\xfe\n")?;
+    fs::write(articles.join("away-team.html"), b"<h1>\xff</h1>")?;
+    let s = fetch().await?;
+    assert_eq!(s.parse_errors, 2, "{s:?}");
+    assert_eq!(
+        rows(&db, "connections").await.len(),
+        2,
+        "the last read's rows stay"
+    );
+    assert_eq!(
+        rows(&db, "articles").await.len(),
+        2,
+        "the article that would not read keeps its row, the other is still there"
+    );
+    let keys: Vec<String> = problems(&db).await.into_iter().map(|r| r.0).collect();
+    assert_eq!(
+        keys,
+        [
+            "listing:articles Articles/Articles/away-team.html",
+            "listing:csv Connections.csv",
+        ]
+    );
+
+    fs::write(export.join("Connections.csv"), good_connections)?;
+    fs::write(articles.join("away-team.html"), "<h1>Away team, again</h1>")?;
+    fetch().await?;
+    assert_eq!(
+        problems(&db).await,
+        [],
+        "both read, so neither is a problem"
+    );
+    db.close().await;
+    Ok(())
+}
+
+/// An export path with nothing at it is not an empty export: the run
+/// fails rather than reporting success with nothing read.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_export_path_that_is_not_there_fails_the_run() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let db = RawDb::open(&db_path_for(tmp.path())).await?;
+    let got = ingest::fetch(FetchOptions {
+        db: db.clone(),
+        input_path: tmp.path().join("not-unpacked-yet"),
+        fetch_photos: false,
+        photo_max_consecutive_failures: 50,
+        progress: Progress::noop(),
+        control: Default::default(),
+    })
+    .await;
+    assert!(got.is_err(), "{got:?}");
+    db.close().await;
+    Ok(())
+}
+
+/// An article directory the walk could not read deletes no article.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_walk_error_deletes_no_article() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let export = tmp.path().join("export");
+    fs::create_dir_all(&export)?;
+    build_export(&export)?;
+    let db = RawDb::open(&db_path_for(tmp.path())).await?;
+    let fetch = || {
+        ingest::fetch(FetchOptions {
+            db: db.clone(),
+            input_path: export.clone(),
+            fetch_photos: false,
+            photo_max_consecutive_failures: 50,
+            progress: Progress::noop(),
+            control: Default::default(),
+        })
+    };
+    fetch().await?;
+    assert_eq!(rows(&db, "articles").await.len(), 1);
+
+    fs::create_dir_all(export.join("Articles/Drafts"))?;
+    fs::write(
+        export.join("Articles/Drafts/log.html"),
+        "<h1>Captain's log</h1>",
+    )?;
+    fs::remove_file(export.join("Articles/Articles/my-post.html"))?;
+    std::os::unix::fs::symlink(
+        export.join("nowhere"),
+        export.join("Articles/Articles/lost"),
+    )?;
+    fetch().await?;
+    assert_eq!(
+        rows(&db, "articles").await.len(),
+        2,
+        "the new one lands and the one the walk did not see stays"
+    );
+    let keys: Vec<String> = problems(&db).await.into_iter().map(|r| r.0).collect();
+    assert_eq!(keys, ["listing:files"]);
+    db.close().await;
     Ok(())
 }

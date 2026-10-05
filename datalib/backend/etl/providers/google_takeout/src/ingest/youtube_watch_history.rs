@@ -6,7 +6,6 @@ use anyhow::Result;
 use datalib_etl::file_checkpoint::{self, SnapshotCounts};
 use datalib_etl::progress::Progress;
 use serde_json::json;
-use tracing::warn;
 
 use super::db::RawDb;
 use super::mdl_html;
@@ -22,9 +21,12 @@ pub async fn ingest(
     scan: &fsscan::Scan,
     progress: &Progress,
 ) -> Result<SnapshotCounts> {
-    let n = file_checkpoint::ingest_snapshot(db.pool(), SCOPE, scan.file(FILE_REL), |bytes| {
+    let file = scan.file(FILE_REL);
+    let mut unusable = None;
+    let n = file_checkpoint::ingest_snapshot(db.pool(), SCOPE, file, |bytes| {
         let html = String::from_utf8_lossy(bytes);
         let mut rows: Vec<YoutubeWatchRow> = Vec::new();
+        let mut skipped: Vec<String> = Vec::new();
         for cell in mdl_html::iter_cells(&html) {
             let anchors = mdl_html::iter_anchors(cell);
             // The first anchor is the video; channel anchor is second
@@ -34,7 +36,7 @@ pub async fn ingest(
             };
             let video_id = video_id_from_url(&video_url).unwrap_or_default();
             if video_id.is_empty() {
-                warn!(event = "youtube_watch_skip_no_video_id", url = %video_url, "a watch-history entry has no video id; skipped it");
+                skipped.push(format!("{video_url} has no video id"));
                 continue;
             }
             let (channel_url, channel_title) = anchors
@@ -71,9 +73,11 @@ pub async fn ingest(
                 channel_id,
             });
         }
+        unusable = super::skipped_records(&skipped);
         Ok(Some(rows))
     })
     .await?;
+    super::record_unusable(db, SCOPE, file, unusable).await?;
     progress.set_message(&format!("youtube_watch_history: {}", n.written));
     Ok(n)
 }

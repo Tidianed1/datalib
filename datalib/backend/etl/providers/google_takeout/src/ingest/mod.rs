@@ -16,14 +16,16 @@ pub mod youtube_watch_history;
 
 pub use db::{db_path_for, RawDb};
 
-use datalib_etl::download_problems;
+use datalib_etl::download_problems::{self, RunProblem};
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan;
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use datalib_etl::control::DownloadControl;
+use datalib_etl::file_checkpoint;
 use datalib_etl::progress::Progress;
+use datalib_problems::{Outcome, Problem, Reason};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
@@ -144,10 +146,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 summary.maps_reviews = n.written;
                 summary.removed += n.removed;
             }
-            Err(e) => {
-                warn!(event = "google_takeout_feed_failed", feed = "maps_reviews", error = %e, "a feed of the export could not be ingested; continuing with the rest");
-                summary.parse_errors += 1;
-            }
+            Err(e) => feed_failed(&mut problems, &mut summary, "maps_reviews", e),
         }
     }
     if opts.sync.maps_saved_places {
@@ -156,10 +155,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 summary.maps_saved_places = n.written;
                 summary.removed += n.removed;
             }
-            Err(e) => {
-                warn!(event = "google_takeout_feed_failed", feed = "maps_saved_places", error = %e, "a feed of the export could not be ingested; continuing with the rest");
-                summary.parse_errors += 1;
-            }
+            Err(e) => feed_failed(&mut problems, &mut summary, "maps_saved_places", e),
         }
     }
     if opts.sync.maps_photos {
@@ -169,11 +165,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 summary.blobs_stored += s.blobs;
                 summary.removed += s.removed;
                 summary.files_removed += s.files_removed;
+                problems.extend(s.problems);
             }
-            Err(e) => {
-                warn!(event = "google_takeout_feed_failed", feed = "maps_photos", error = %e, "a feed of the export could not be ingested; continuing with the rest");
-                summary.parse_errors += 1;
-            }
+            Err(e) => feed_failed(&mut problems, &mut summary, "maps_photos", e),
         }
     }
     if opts.sync.youtube_watch_history {
@@ -182,10 +176,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 summary.youtube_watch_history = n.written;
                 summary.removed += n.removed;
             }
-            Err(e) => {
-                warn!(event = "google_takeout_feed_failed", feed = "youtube_watch_history", error = %e, "a feed of the export could not be ingested; continuing with the rest");
-                summary.parse_errors += 1;
-            }
+            Err(e) => feed_failed(&mut problems, &mut summary, "youtube_watch_history", e),
         }
     }
     if opts.sync.youtube_subscriptions {
@@ -194,10 +185,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 summary.youtube_subscriptions = n.written;
                 summary.removed += n.removed;
             }
-            Err(e) => {
-                warn!(event = "google_takeout_feed_failed", feed = "youtube_subscriptions", error = %e, "a feed of the export could not be ingested; continuing with the rest");
-                summary.parse_errors += 1;
-            }
+            Err(e) => feed_failed(&mut problems, &mut summary, "youtube_subscriptions", e),
         }
     }
     if opts.sync.google_chat {
@@ -210,11 +198,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 summary.blobs_stored += s.blobs_stored;
                 summary.removed += s.removed;
                 summary.files_removed += s.files_removed;
+                problems.extend(s.problems);
             }
-            Err(e) => {
-                warn!(event = "google_takeout_feed_failed", feed = "google_chat", error = %e, "a feed of the export could not be ingested; continuing with the rest");
-                summary.parse_errors += 1;
-            }
+            Err(e) => feed_failed(&mut problems, &mut summary, "google_chat", e),
         }
     }
     if opts.sync.gemini_apps {
@@ -225,10 +211,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 summary.blobs_stored += s.blobs_stored;
                 summary.removed += s.removed;
             }
-            Err(e) => {
-                warn!(event = "google_takeout_feed_failed", feed = "gemini_apps", error = %e, "a feed of the export could not be ingested; continuing with the rest");
-                summary.parse_errors += 1;
-            }
+            Err(e) => feed_failed(&mut problems, &mut summary, "gemini_apps", e),
         }
     }
     if opts.sync.google_voice {
@@ -241,15 +224,66 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 summary.blobs_stored += s.blobs_stored;
                 summary.removed += s.removed;
                 summary.files_removed += s.files_removed;
-                problems.extend(s.held_back);
+                problems.extend(s.problems);
             }
-            Err(e) => {
-                warn!(event = "google_takeout_feed_failed", feed = "google_voice", error = %e, "a feed of the export could not be ingested; continuing with the rest");
-                summary.parse_errors += 1;
-            }
+            Err(e) => feed_failed(&mut problems, &mut summary, "google_voice", e),
         }
     }
-    download_problems::report_run(db.pool(), &problems).await;
+    if !opts.control.stop.requested() {
+        download_problems::report_run(db.pool(), &problems).await;
+    }
 
     Ok(summary)
+}
+
+/// What a snapshot file's read could not use, said on the file:
+/// `ingest_snapshot` stamped it clean, and this restamps it with the one
+/// row the file keeps until it is read again. `None` when the read found
+/// nothing wrong, or did not happen because the file had not changed.
+pub(crate) async fn record_unusable(
+    db: &RawDb,
+    scope: &str,
+    file: Option<&fsscan::ScannedFile>,
+    unusable: Option<(Reason, String)>,
+) -> Result<()> {
+    let (Some(file), Some((reason, detail))) = (file, unusable) else {
+        return Ok(());
+    };
+    let mut tx = db
+        .pool()
+        .begin()
+        .await
+        .context("begin unusable-records tx")?;
+    file_checkpoint::record_file_with_problem(
+        &mut tx,
+        scope,
+        file,
+        Some((Outcome::Dropped, Problem::record(reason, &detail))),
+    )
+    .await?;
+    tx.commit().await.context("commit unusable-records tx")
+}
+
+/// The detail of a [`record_unusable`] row over records a read skipped.
+pub(crate) fn skipped_records(skipped: &[String]) -> Option<(Reason, String)> {
+    let first = skipped.first()?;
+    Some((
+        Reason::NoIdentity,
+        format!(
+            "{} records could not be used; first: {first}",
+            skipped.len()
+        ),
+    ))
+}
+
+/// A feed that failed as a whole stamped nothing, so the next run tries
+/// it again and its `phase:` row is the whole truth each run.
+fn feed_failed(
+    problems: &mut Vec<RunProblem>,
+    summary: &mut FetchSummary,
+    feed: &str,
+    e: anyhow::Error,
+) {
+    problems.push(RunProblem::phase(feed, format!("{e:#}")));
+    summary.parse_errors += 1;
 }

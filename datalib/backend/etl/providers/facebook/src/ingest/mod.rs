@@ -6,7 +6,7 @@
 pub mod mojibake;
 pub mod schema_raw;
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -15,14 +15,15 @@ use datalib_etl::blob_cas::{cas_path_for, load_blake3_index, BlobCas, CasEdgeAcc
 use datalib_etl::bulk::BulkUpsertable as _;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw::{self as dr};
-use datalib_etl::export_files::files_with_extension;
+use datalib_etl::download_problems::{self, RunProblem};
+use datalib_etl::export_files::ExportFiles;
 use datalib_etl::progress::Progress;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_macros::RawStoreHandle;
+use datalib_problems::Reason;
 use serde::Serialize;
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
-use tracing::warn;
 use uuid::Uuid;
 
 use schema_raw::{canonical_table, facebook_ns, media_ddl, MediaBlobRow};
@@ -149,11 +150,17 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     let mut summary = FetchSummary::default();
     let mut by_table: Tables = BTreeMap::new();
+    let export = ExportFiles::walk(&opts.input_path)?;
+    let mut problems = export.walk_problems();
+    // Chunks of one table share it (`album/0.json`, `album/1.json`), so a
+    // chunk that would not read leaves the whole table unpruned: its rows
+    // are not in this run's set, and absence from it means nothing.
+    let mut unread_tables: HashSet<String> = HashSet::new();
 
-    for path in files_with_extension(&opts.input_path, "json") {
-        let rel = relative(&opts.input_path, &path);
+    for path in export.with_extension("json") {
+        let rel = relative(&opts.input_path, path);
         let table = canonical_table(&rel);
-        match read_records(&path) {
+        match read_records(path) {
             Ok(records) => {
                 summary.files += 1;
                 let rows = by_table.entry(table.clone()).or_default();
@@ -168,7 +175,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 ));
             }
             Err(e) => {
-                warn!(event = "facebook_file_failed", file = %path.display(), table, error = %format!("{e:#}"), "an export file could not be ingested");
+                problems.push(RunProblem::listing(
+                    &format!("file {rel}"),
+                    format!("{e:#}"),
+                ));
+                unread_tables.insert(table);
                 summary.parse_errors += 1;
             }
         }
@@ -176,13 +187,14 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     let mut tx = db.pool().begin().await.context("begin facebook tx")?;
     for (table, rows) in &by_table {
-        upsert_and_prune(&mut tx, table, rows).await?;
+        let prune = export.errors.is_empty() && !unread_tables.contains(table);
+        upsert_and_prune(&mut tx, table, rows, prune).await?;
         summary.rows += rows.len();
     }
     tx.commit().await.context("commit facebook tx")?;
 
     // Media after the records are committed: an edge is additive, and a
-    // photo that fails to read costs a warning, never the rows.
+    // photo that fails to read costs its edge's problem, never the rows.
     // Through the handle's own CAS, so nothing here opens a second store.
     if let Some(cas) = db.cas() {
         store_media(
@@ -195,16 +207,21 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         )
         .await?;
     }
+    if !opts.control.stop.requested() {
+        download_problems::report_run(db.pool(), &problems).await;
+    }
     Ok(summary)
 }
 
-/// Upsert this run's rows and delete the ones the export no longer
-/// holds, in the caller's transaction, so a commit landing at any point
-/// sees either last run's table or this run's — never an emptied one.
+/// Upsert this run's rows and, when `prune`, delete the ones the export
+/// no longer holds, in the caller's transaction, so a commit landing at
+/// any point sees either last run's table or this run's — never an
+/// emptied one.
 async fn upsert_and_prune(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     table: &str,
     rows: &BTreeMap<String, Value>,
+    prune: bool,
 ) -> Result<()> {
     let ddl = dr::wire_payload_table_ddl(table, &[]);
     // Audited: `table` is `canonical_table`'s output — ASCII alphanumerics
@@ -214,11 +231,14 @@ async fn upsert_and_prune(
         .await
         .with_context(|| format!("create table {table}"))?;
 
-    let existing: Vec<String> =
+    let existing: Vec<String> = if prune {
         sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT id FROM {table}")))
             .fetch_all(&mut **tx)
             .await
-            .with_context(|| format!("list ids in {table}"))?;
+            .with_context(|| format!("list ids in {table}"))?
+    } else {
+        Vec::new()
+    };
     let gone: Vec<&String> = existing
         .iter()
         .filter(|id| !rows.contains_key(*id))
@@ -275,7 +295,10 @@ async fn store_media(
         .context("load media_blobs index")?;
     let mut acc = CasEdgeAccumulator::new();
     let mut pending_bytes = 0usize;
-    let mut missing: HashSet<String> = HashSet::new();
+    // A `uri` this run could not read, and the edge it leaves: skipped
+    // when the export left the file out, failed when it is there and
+    // would not read.
+    let mut unread: HashMap<String, (bool, String)> = HashMap::new();
 
     for rows in by_table.values() {
         for (id, record) in rows {
@@ -289,25 +312,39 @@ async fn store_media(
                     summary.media_known += 1;
                     continue;
                 }
-                if missing.contains(&uri) {
-                    acc.add_failed(id, &uri, "media file not in the export");
-                    continue;
+                if !unread.contains_key(&uri) {
+                    match std::fs::read(root.join(&uri)) {
+                        Ok(bytes) => {
+                            let hash = datalib_etl::blob_cas::blake3_hex(&bytes);
+                            pending_bytes += bytes.len();
+                            acc.add_fetched(
+                                id,
+                                &uri,
+                                bytes,
+                                guess_content_type(&uri),
+                                file_name(&uri),
+                            );
+                            known.insert(uri.clone(), hash);
+                            summary.media_stored += 1;
+                            continue;
+                        }
+                        Err(e) => {
+                            let not_found = e.kind() == std::io::ErrorKind::NotFound;
+                            let detail = if not_found {
+                                format!("media file not in the export: {e}")
+                            } else {
+                                format!("media file would not read: {e}")
+                            };
+                            unread.insert(uri.clone(), (not_found, detail));
+                            summary.media_missing += 1;
+                        }
+                    }
                 }
-                let path = root.join(&uri);
-                match std::fs::read(&path) {
-                    Ok(bytes) => {
-                        let hash = datalib_etl::blob_cas::blake3_hex(&bytes);
-                        pending_bytes += bytes.len();
-                        acc.add_fetched(id, &uri, bytes, guess_content_type(&uri), file_name(&uri));
-                        known.insert(uri.clone(), hash);
-                        summary.media_stored += 1;
-                    }
-                    Err(e) => {
-                        warn!(event = "facebook_media_missing", uri, error = %e, "a media file the export names is not there");
-                        missing.insert(uri.clone());
-                        acc.add_failed(id, &uri, "media file not in the export");
-                        summary.media_missing += 1;
-                    }
+                let (not_found, detail) = &unread[&uri];
+                if *not_found {
+                    acc.add_skipped(id, &uri, Reason::NotFound, detail.clone());
+                } else {
+                    acc.add_failed(id, &uri, detail.clone());
                 }
             }
             if pending_bytes >= MEDIA_FLUSH_BYTES {

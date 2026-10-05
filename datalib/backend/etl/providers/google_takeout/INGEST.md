@@ -48,6 +48,48 @@ string (`"maps_review:{ftid}:{date}"`, `"youtube:watch:{id}:{ts}"`);
 see `ns_id` in `schema_raw.rs` and
 [`docs/dev/entity_ids.md`](../../../../../docs/dev/entity_ids.md).
 
+## When part of a sync fails
+
+A feed reads only the files that changed since it last stamped them
+(`file_checkpoint`), so what failed has to be either read again next run
+or stamped with its problem. Each kind of failure is a `problems` row:
+
+- **A feed that fails as a whole** is a `phase:<feed>` row. It stamped
+  nothing, so the next run tries it again and the row goes with the run
+  that succeeds. The other feeds run regardless.
+- **A file that will not read or parse** — a Chat `user_info.json`,
+  `group_info.json` or `messages.json`, a Maps photo sidecar, a Voice
+  record, `Bills.html` or a greeting — is a `listing:<feed> <path>` row
+  and is left unstamped, so the next run reads it again. The rest of the
+  feed lands.
+- **Records a single-file feed cannot key** (a review or saved place
+  with no place id or date, a subscription row short of columns, a
+  watch with no video id), or a Maps file with no `features` list, are
+  one `file:google_takeout/<feed>:<path>` row. The file is stamped, so
+  the row stands until the file changes and is read again.
+- **A Chat or Gemini attachment** that is not in the export is a
+  `not_found` warning on its edge (`chat_attachments:<message>#<name>`,
+  `gemini_attachments:<activity>#<name>`), and one that is there but
+  will not read an error. The file naming it is stamped, so each run
+  looks again for every edge with no bytes, and the row goes when the
+  bytes land.
+- **A Maps photo whose media is missing or unreadable** lands its row
+  without bytes and a `maps_photos:<stem>` problem, and its sidecar is
+  left unstamped so the next run looks for the media again.
+- **A Voice attachment** that is missing or unreadable is a
+  `listing:voice <path>` row on the file naming it, which is left
+  unstamped: a Voice message names only the attachments it read, so
+  reading the file again is the only way to add one.
+- **Deletions are held back** when a walk had errors (`listing:files`)
+  or, for Voice, when files were removed or rewritten but one could not
+  be read (`listing:removed_records`). A rewritten Voice file keeps its
+  old stamp on such a run, so the next one still reads every file and
+  deletes what the rewrite dropped.
+
+Attachments are flushed before the files naming them are stamped, so a
+flush that fails leaves the files to be read again. A run that was
+stopped reports nothing, and clears nothing.
+
 ## Tests
 
 `tests/fixture_walk.rs` points the downloader at the checked-in

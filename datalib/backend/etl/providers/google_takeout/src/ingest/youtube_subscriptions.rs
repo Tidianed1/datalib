@@ -9,7 +9,6 @@ use anyhow::Result;
 use datalib_etl::file_checkpoint::{self, SnapshotCounts};
 use datalib_etl::progress::Progress;
 use serde_json::json;
-use tracing::warn;
 
 use super::db::RawDb;
 use super::schema_raw::YoutubeSubscriptionRow;
@@ -23,27 +22,26 @@ pub async fn ingest(
     scan: &fsscan::Scan,
     progress: &Progress,
 ) -> Result<SnapshotCounts> {
-    let n = file_checkpoint::ingest_snapshot(db.pool(), SCOPE, scan.file(FILE_REL), |bytes| {
+    let file = scan.file(FILE_REL);
+    let mut unusable = None;
+    let n = file_checkpoint::ingest_snapshot(db.pool(), SCOPE, file, |bytes| {
         let text = String::from_utf8_lossy(bytes);
         let mut rows: Vec<YoutubeSubscriptionRow> = Vec::new();
+        let mut skipped: Vec<String> = Vec::new();
         for (i, line) in text.lines().enumerate() {
             if i == 0 || line.trim().is_empty() {
                 continue;
             }
             let cells = split_csv_row(line);
             if cells.len() < 3 {
-                warn!(
-                    event = "youtube_subscriptions_short_row",
-                    row = i,
-                    line,
-                    "a subscriptions row is short; skipped it"
-                );
+                skipped.push(format!("line {} has {} of 3 columns", i + 1, cells.len()));
                 continue;
             }
             let channel_id = cells[0].trim().to_string();
             let channel_url = cells[1].trim().to_string();
             let channel_title = cells[2].trim().to_string();
             if channel_id.is_empty() {
+                skipped.push(format!("line {} has no channel id", i + 1));
                 continue;
             }
             let payload = json!({
@@ -59,9 +57,11 @@ pub async fn ingest(
                 channel_title: Some(channel_title),
             });
         }
+        unusable = super::skipped_records(&skipped);
         Ok(Some(rows))
     })
     .await?;
+    super::record_unusable(db, SCOPE, file, unusable).await?;
     progress.set_message(&format!("youtube_subscriptions: {}", n.written));
     Ok(n)
 }

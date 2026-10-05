@@ -5,8 +5,8 @@ use datalib_etl::fsscan;
 use anyhow::{Context, Result};
 use datalib_etl::file_checkpoint::{self, SnapshotCounts};
 use datalib_etl::progress::Progress;
+use datalib_problems::Reason;
 use serde_json::Value;
-use tracing::warn;
 
 use super::db::RawDb;
 use super::schema_raw::{ns_id, MapsReviewRow};
@@ -20,19 +20,22 @@ pub async fn ingest(
     scan: &fsscan::Scan,
     progress: &Progress,
 ) -> Result<SnapshotCounts> {
-    let n = file_checkpoint::ingest_snapshot(db.pool(), SCOPE, scan.file(FILE_REL), |bytes| {
+    let file = scan.file(FILE_REL);
+    let mut unusable = None;
+    let n = file_checkpoint::ingest_snapshot(db.pool(), SCOPE, file, |bytes| {
         let geo: Value = serde_json::from_slice(bytes).context("parse Reviews.json")?;
         let Some(features) = geo.get("features").and_then(|v| v.as_array()) else {
-            warn!(
-                event = "maps_reviews_no_features",
-                path = FILE_REL,
-                "the reviews file has no features list; nothing was ingested or deleted"
-            );
+            unusable = Some((
+                Reason::Undeserializable,
+                "the file has no features list, so nothing was ingested or deleted".to_string(),
+            ));
             return Ok(None);
         };
         let mut rows: Vec<MapsReviewRow> = Vec::with_capacity(features.len());
-        for f in features {
+        let mut skipped: Vec<String> = Vec::new();
+        for (i, f) in features.iter().enumerate() {
             let Some(props) = f.get("properties") else {
+                skipped.push(format!("review {i} has no properties"));
                 continue;
             };
             let date = props.get("date").and_then(|v| v.as_str()).unwrap_or("");
@@ -42,11 +45,7 @@ pub async fn ingest(
                 .and_then(extract_ftid)
                 .unwrap_or("");
             if ftid.is_empty() || date.is_empty() {
-                warn!(
-                    event = "maps_review_missing_key",
-                    path = FILE_REL,
-                    "a review has no key; skipped it"
-                );
+                skipped.push(format!("review {i} has no place id or no date"));
                 continue;
             }
             let id = ns_id(&format!("maps_review:{ftid}:{date}"));
@@ -56,9 +55,11 @@ pub async fn ingest(
                 when_ts: Some(date.to_string()),
             });
         }
+        unusable = super::skipped_records(&skipped);
         Ok(Some(rows))
     })
     .await?;
+    super::record_unusable(db, SCOPE, file, unusable).await?;
     progress.set_message(&format!("maps_reviews: {}", n.written));
     Ok(n)
 }
