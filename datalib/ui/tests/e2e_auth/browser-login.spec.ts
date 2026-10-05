@@ -92,6 +92,9 @@ test.describe("with no browser on the machine", () => {
     await expect(wizard(page).locator(".wiz-connect-status")).toContainText(
       "Getting a browser for the sign-in",
     );
+    // The button says what it is waiting on, too — not "the browser",
+    // which does not exist yet.
+    await expect(wizard(page).getByRole("button", { name: "Getting a browser…" })).toBeDisabled();
     world.releaseDownload();
     await expect(wizard(page)).toContainText("Connected.", LOGIN);
     const looks = world

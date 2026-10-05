@@ -1036,6 +1036,11 @@ async fn upsert_project_docs(
 /// claude.ai outage) passes through unembellished.
 pub fn credential_hint(e: ClaudeError) -> anyhow::Error {
     let s = e.to_string();
+    // Cloudflare's challenge is a 403 too, and no credential gets past
+    // it: a sign-in recipe would send the person after the wrong fix.
+    if s.contains(r#"cf-mitigated=Some("challenge")"#) {
+        return anyhow::anyhow!("claude.ai's bot protection blocked the request: {s}");
+    }
     let setup_problem = s.contains("No service matches URL")
         || s.to_ascii_lowercase().contains("no credentials")
         || s.contains("HTTP 401")
@@ -1712,6 +1717,18 @@ mod tests {
         let hint =
             credential_hint(ClaudeError::Permanent("HTTP 502 bad gateway".into())).to_string();
         assert_eq!(hint, "list orgs: HTTP 502 bad gateway");
+    }
+
+    /// Cloudflare's challenge is a 403 that no credential gets past; the
+    /// sign-in recipe would send the person after the wrong fix.
+    #[test]
+    fn a_cloudflare_challenge_gets_no_sign_in_recipe() {
+        let hint = credential_hint(ClaudeError::Forbidden(
+            r#"GET /account -> HTTP 403 cf-mitigated=Some("challenge")"#.into(),
+        ))
+        .to_string();
+        assert!(hint.contains("bot protection"), "{hint}");
+        assert!(!hint.contains("sessionKey"), "{hint}");
     }
 
     #[test]
