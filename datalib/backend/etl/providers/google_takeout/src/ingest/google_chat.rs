@@ -12,7 +12,6 @@ use datalib_etl::file_checkpoint;
 use datalib_etl::progress::Progress;
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::Value;
-use tracing::warn;
 
 use super::attachment_path;
 use super::db::RawDb;
@@ -145,26 +144,19 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
                                 // while keeping the full name in the
                                 // JSON, so resolve via prefix match
                                 // rather than an exact join (issue #64).
-                                let resolved = match attachment_path::resolve(
-                                    group_dir,
-                                    &export_name,
-                                ) {
-                                    attachment_path::Resolved::Exact(p)
-                                    | attachment_path::Resolved::Truncated(p) => p,
-                                    attachment_path::Resolved::Missing => {
-                                        warn!(
-                                            event = "chat_attachment_missing",
-                                            message_id = %owning,
-                                            "an attachment the message names is not in the export"
-                                        );
-                                        acc.add_failed(
-                                            &owning,
-                                            &export_name,
-                                            "attachment file missing on disk",
-                                        );
-                                        continue;
-                                    }
-                                };
+                                let resolved =
+                                    match attachment_path::resolve(group_dir, &export_name) {
+                                        attachment_path::Resolved::Exact(p)
+                                        | attachment_path::Resolved::Truncated(p) => p,
+                                        attachment_path::Resolved::Missing => {
+                                            acc.add_failed(
+                                                &owning,
+                                                &export_name,
+                                                "attachment file missing on disk",
+                                            );
+                                            continue;
+                                        }
+                                    };
                                 match std::fs::read(&resolved) {
                                     Ok(bytes) => {
                                         // Content type from the resolved
@@ -180,16 +172,10 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
                                         );
                                     }
                                     Err(e) => {
-                                        warn!(
-                                            event = "chat_attachment_unreadable",
-                                            message_id = %owning,
-                                            error = %e,
-                                            "an attachment could not be read"
-                                        );
                                         acc.add_failed(
                                             &owning,
                                             &export_name,
-                                            "attachment unreadable",
+                                            format!("attachment unreadable: {e}"),
                                         );
                                     }
                                 }

@@ -36,6 +36,21 @@ impl SourceRender for ChatgptRender {
         datalib_etl_chat_common::render::layout_params()
     }
 
+    /// A conversation is its own row; an attachment is its conversation's.
+    fn item_of_entity(&self, source_id: &str, table: &str, id: &str) -> Option<String> {
+        use datalib_etl::blob_cas::CasEdgeRow;
+        use datalib_etl::bulk::BulkUpsertable;
+        use datalib_etl_chatgpt::ingest::schema_raw::{ConversationAttachmentRow, ConversationRow};
+        let conversation = if table == ConversationRow::TABLE {
+            id
+        } else if table == ConversationAttachmentRow::TABLE {
+            ConversationAttachmentRow::owning_id_of(id)?
+        } else {
+            return None;
+        };
+        Some(crate::render::ids::conversation(source_id, conversation).uuid)
+    }
+
     async fn run(&self, raw_path: &Path, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse::parse, render::render_all};
         let parsed = parse(raw_path, ctx.name, ctx.raw_range())

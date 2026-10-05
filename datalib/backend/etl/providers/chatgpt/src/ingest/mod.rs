@@ -644,7 +644,6 @@ async fn fetch_attachments_for(
                 summary.failed_blobs += 1;
             }
             Err(e) => {
-                warn!(event = "chatgpt_media_unexpected_err", file_id = %file_id, error = %e, "a media download failed in a way this build does not classify");
                 attach.add_failed(cid, &file_id, e.to_string());
                 summary.failed_blobs += 1;
             }

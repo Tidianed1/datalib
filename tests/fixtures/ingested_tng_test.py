@@ -117,7 +117,15 @@ MAX_STAMP_MS = (1 << 48) - 1
 # is deliberately absent from the export. The third is the one record
 # built to fail: conversation `c0000006`'s reply carries
 # `created_at = "stardate 47988.1"`, which the claude renderer records as
-# a nulled `created_at` on that message.
+# a nulled `created_at` on that message. Google Takeout's three are
+# entries shaped like a real export's: an attachment its message names
+# and the export lacks, a watch-history entry that is not a video, a
+# saved place whose URL has no place id.
+#
+# A fetch row about an attachment names the grid row of what owns it,
+# so the screen can open it: the conversation for claude (minted from
+# the raw key), the message for Takeout (looked up by its upstream id,
+# since the message's uuid carries a date the raw key does not).
 POISONED_PROBLEM = (
     "6df47df9-b6ad-5372-942e-5db5e4d068bb"  # problem_uuid
     "|warning|parse|markdown"
@@ -133,18 +141,44 @@ CLAUDE_ATTACHMENT_WITHOUT_BYTES = (
     "|error|fetch|entity"
     "|claude_attachments:c0000004-1701-4d00-8000-00000000c004"
     "#f0000001-1701-4d00-8000-0000000f0001"
-    "|||fetch_failed|no bytes"
+    "|00000000-0000-89b3-8bed-0eecc97d45ce"  # conversation c0000004's row
+    "||fetch_failed|no bytes"
 )
 FACEBOOK_VIDEO_NOT_IN_EXPORT = (
     "22997b9d-2f29-5ffc-a555-7ab9b876a337"
     "|error|fetch|entity"
     "|media_blobs:459de207-00ca-5ade-a05e-095a6835da4d"
     "#your_facebook_activity/posts/media/videos/600000000000001.mp4"
-    "|||fetch_failed|media file not in the export"
+    "|||fetch_failed|media file not in the export: No such file or directory (os error 2)"
+)
+TAKEOUT_POST_NOT_A_VIDEO = (
+    "50d82e65-dc5d-522f-afdd-0ded04b3d8f0"
+    "|warning|fetch|entity"
+    "|skipped:youtube_watch_history:e81888464c90ec04"
+    "||videoUrl|deliberate_loss|https://www.youtube.com/post/UgkxTenForward"
+)
+TAKEOUT_CHAT_ATTACHMENT_NOT_IN_EXPORT = (
+    "931eca11-c3db-509c-b9d2-776e0c53d593"
+    "|error|fetch|entity"
+    "|chat_attachments:TNG-BRIDGE/T2/T2#risa-shore-leave.png"
+    "|0195683a-d140-87f9-bdf6-234da6d6880c"  # Riker's message
+    "||fetch_failed|attachment file missing on disk"
+)
+TAKEOUT_SAVED_PLACE_WITHOUT_KEY = (
+    "dd770a87-9dab-5b1f-8e08-7bb609755c6f"
+    "|error|fetch|entity"
+    "|skipped:maps_saved_places:51f2c2edc22052ee"
+    "||google_maps_url|no_identity"
+    "|http://maps.google.com/?q=Quark%27s+Bar,+Deep+Space+Nine"
 )
 EXPECTED_PROBLEMS = {
     "claude-api": [POISONED_PROBLEM, CLAUDE_ATTACHMENT_WITHOUT_BYTES],
     "facebook": [FACEBOOK_VIDEO_NOT_IN_EXPORT],
+    "google-takeout": [
+        TAKEOUT_POST_NOT_A_VIDEO,
+        TAKEOUT_CHAT_ATTACHMENT_NOT_IN_EXPORT,
+        TAKEOUT_SAVED_PLACE_WITHOUT_KEY,
+    ],
 }
 
 
@@ -1194,15 +1228,15 @@ class IngestedTngPipelineTest(unittest.TestCase):
             f"a placeholder; got {placeholders}",
         )
 
-        # Exactly three records in the TNG fixture may land in the problem
-        # sink: the one built to, and the two its downloads cannot fetch
-        # (`EXPECTED_PROBLEMS`). Every renderer drops-and-records a row
+        # Only the records in `EXPECTED_PROBLEMS` may land in the problem
+        # sink: the one built to fail, and the ones its downloads cannot
+        # fetch or skip. Every renderer drops-and-records a row
         # it cannot build instead of failing the step, which is what
         # stops one bad record from poisoning `grid_index` for every
         # other source — but the same change means a projection that
         # quietly started dropping rows would no longer show up as a
         # failure anywhere. Here it does: any row outside the expected
-        # three is a regression and the message names it. The poisoned
+        # rows is a regression and the message names it. The poisoned
         # row is what proves the sink works end to end — through the
         # real render, into the source's store, and copied into the
         # index — and every id is pinned so a later run mints the same
@@ -1212,7 +1246,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             problems1,
             EXPECTED_PROBLEMS,
             "the TNG fixture renders clean apart from its poisoned reply "
-            "and the two things its downloads cannot fetch; any other row "
+            "and the entries its downloads cannot fetch or skip; any other row "
             "here means a projection started dropping or nulling data",
         )
         self.assertEqual(
@@ -1220,6 +1254,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             sorted(row for rows in EXPECTED_PROBLEMS.values() for row in rows),
             "grid_index copies every source's problems into the index",
         )
+        self._assert_problems_reach_the_log(EXPECTED_PROBLEMS)
 
         # ── id-space guardrails ─────────────────────────────────
         # Every row uuid is unique. The PK makes this true by
@@ -1739,6 +1774,47 @@ class IngestedTngPipelineTest(unittest.TestCase):
             if docs:
                 rendered[step] = rendered.get(step, 0) + docs
         return rendered
+
+    def _assert_problems_reach_the_log(self, expected: dict[str, list[str]]) -> None:
+        """Every problem a step stores reaches its log at the row's level.
+
+        Once, most writers stored a row and logged nothing, and the rest
+        logged every row as a `warn!`. Each step now logs one
+        `problems_recorded` line per kind of problem with its `count`, at
+        its loudest row's level, and never a row's sample. So in run 1,
+        where every row is new, a source's counts at `error` and at
+        `warn` add up to its error and warning rows: a writer that skips
+        `datalib_problems::note_recorded`, or a level that drifts, fails
+        here by name.
+        """
+        store = self.workspace / "system" / "runs" / "runs.sqlite"
+        con = sqlite3.connect(f"file:{store}?mode=ro", uri=True)
+        try:
+            lines = con.execute(
+                "SELECT group_id, level, fields FROM log "
+                "WHERE run_id = (SELECT run_id FROM runs ORDER BY rowid LIMIT 1) "
+                "AND json_extract(fields, '$.event') = 'problems_recorded'"
+            ).fetchall()
+        finally:
+            con.close()
+        logged: dict[tuple[str, str], int] = {}
+        for group, level, fields in lines:
+            key = (group, level)
+            logged[key] = logged.get(key, 0) + json.loads(fields)["count"]
+            self.assertNotIn(
+                "sample", json.loads(fields), "a log line carries a sample"
+            )
+        stored: dict[tuple[str, str], int] = {}
+        for source, rows in expected.items():
+            for row in rows:
+                level = {"error": "error", "warning": "warn"}[row.split("|")[1]]
+                stored[(source, level)] = stored.get((source, level), 0) + 1
+        self.assertEqual(
+            logged,
+            stored,
+            "problems_recorded counts in run 1, per (source, level), against "
+            "the rows each source stored",
+        )
 
     # How often one message may repeat within one step attempt at `info`
     # or above before it counts as spam. The number is a policy, not a

@@ -305,7 +305,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 } else {
                     s.errors += 1;
                     s.phases_failed += 1;
-                    warn!(event = "garmin_phase_failed", phase = $name, error = %detail, "a phase of the download failed; continuing with the rest");
                     walk.problems.push(RunProblem::phase($name, detail));
                 }
             }
@@ -659,12 +658,6 @@ impl Walk<'_> {
             return;
         }
         s.errors += 1;
-        warn!(
-            event = "garmin_listing_incomplete",
-            listing = name,
-            reason = why,
-            "not an enumeration; the stored rows are kept, nothing is pruned"
-        );
         let problem = RunProblem::listing(name, why);
         if self.problems.iter().any(|p| p.key() == problem.key()) {
             return;

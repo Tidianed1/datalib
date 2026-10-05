@@ -652,7 +652,15 @@ fn carry_fetch_problems(
     source_id: &str,
     rows: Vec<ProblemRow>,
 ) -> Result<()> {
-    let items = items_of_entities(processors, source_id, &rows);
+    let mut items = items_of_entities(processors, source_id, &rows);
+    let upstream = upstream_of_entities(processors, &rows, &items);
+    let keys: Vec<(&str, String)> = upstream.iter().flatten().cloned().collect();
+    let found = store.grid_rows_by_upstream(&keys)?;
+    for (item, key) in items.iter_mut().zip(upstream) {
+        if let Some((kind, id)) = key {
+            *item = found.get(&(kind.to_string(), id)).cloned();
+        }
+    }
     let wanted: Vec<String> = items.iter().flatten().cloned().collect();
     let held = store.grid_rows_among(&wanted)?;
     store.replace_stage_problems(Stage::Fetch, &with_items(rows, items, &held))
@@ -678,6 +686,27 @@ fn items_of_entities(
             processors
                 .iter()
                 .find_map(|p| p.item_of_entity(source_id, table, id))
+        })
+        .collect()
+}
+
+/// For each problem no processor could mint a uuid for, the upstream
+/// key of its row, by the first processor that knows one.
+fn upstream_of_entities(
+    processors: &[Box<dyn RenderProcessor>],
+    rows: &[ProblemRow],
+    items: &[Option<String>],
+) -> Vec<Option<(&'static str, String)>> {
+    rows.iter()
+        .zip(items)
+        .map(|(row, item)| {
+            if item.is_some() || row.scope_kind != ScopeKind::Entity {
+                return None;
+            }
+            let (table, id) = raw_entity(&row.scope_key)?;
+            processors
+                .iter()
+                .find_map(|p| p.upstream_of_entity(table, id))
         })
         .collect()
 }

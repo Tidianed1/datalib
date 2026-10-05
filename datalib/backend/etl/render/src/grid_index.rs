@@ -360,6 +360,7 @@ async fn record_unreadable_store(
     .execute(&mut **conn)
     .await
     .with_context(|| format!("record that {}'s render store is unreadable", row.source_id))?;
+    datalib_schema::problems::note_recorded([row]);
     Ok(())
 }
 

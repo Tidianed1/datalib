@@ -6,6 +6,9 @@
 //! literal. The design — ids, severity, the copy rule, what reads the
 //! table — is `docs/dev/plans/problem_visibility.md`.
 
+mod recorded;
+pub use recorded::{log_recorded, note_recorded};
+
 use anyhow::{Context, Result};
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};

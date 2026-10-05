@@ -171,7 +171,8 @@ async fn google_chat_lands_groups_users_messages_and_attachments() {
     assert_eq!(summary.chat_groups, 1);
     assert_eq!(summary.chat_users, 1);
     assert_eq!(summary.chat_messages, 2);
-    assert_eq!(summary.chat_attachments, 1);
+    // The second is named by the message and absent from the export.
+    assert_eq!(summary.chat_attachments, 2);
     let db = RawDb::open(&db_path).await.unwrap();
     // The DM group key is the takeout directory name verbatim.
     let group_ids: Vec<String> = sqlx::query_scalar("SELECT id FROM chat_groups ORDER BY id")
@@ -179,11 +180,13 @@ async fn google_chat_lands_groups_users_messages_and_attachments() {
         .await
         .unwrap();
     assert_eq!(group_ids, vec!["DM TNG-BRIDGE"]);
-    // Attachment edge row exists with the CAS blake3 set.
-    let blake3: Option<String> = sqlx::query_scalar("SELECT blake3 FROM chat_attachments LIMIT 1")
-        .fetch_one(db.pool())
-        .await
-        .unwrap();
+    // The fetched attachment's edge row has the CAS blake3 set.
+    let blake3: Option<String> = sqlx::query_scalar(
+        "SELECT blake3 FROM chat_attachments WHERE export_name = 'course-laid-in.txt'",
+    )
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
     let blake3 = blake3.expect("blake3 set");
     let bytes: Vec<u8> = sqlx::query_scalar("SELECT bytes FROM cas_objects WHERE blake3 = ?")
         .bind(&blake3)
@@ -330,7 +333,7 @@ async fn a_deleted_chat_file_takes_its_records() {
     let e = Export::new();
     e.sync().await;
     assert_eq!(e.count("chat_messages").await, 2);
-    assert_eq!(e.count("chat_attachments").await, 1);
+    assert_eq!(e.count("chat_attachments").await, 2);
 
     e.remove(MESSAGES);
     let s = e.sync().await;

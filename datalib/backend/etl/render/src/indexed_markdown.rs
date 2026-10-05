@@ -556,6 +556,33 @@ impl IndexedMarkdownStore {
         })
     }
 
+    /// The grid row minted from each `(upstream_entity_kind, upstream_id)`
+    /// key, for the keys the store holds a row for.
+    pub fn grid_rows_by_upstream(
+        &self,
+        keys: &[(&str, String)],
+    ) -> Result<HashMap<(String, String), String>> {
+        blocking(async {
+            let mut guard = self.write_lock.acquire().await?;
+            let mut out = HashMap::new();
+            for (kind, id) in keys {
+                let uuid: Option<String> = sqlx::query_scalar(
+                    "SELECT uuid FROM grid_rows \
+                     WHERE upstream_entity_kind = ? AND upstream_id = ? LIMIT 1",
+                )
+                .bind(kind)
+                .bind(id)
+                .fetch_optional(&mut **guard.conn())
+                .await
+                .context("look up a grid row by its upstream key")?;
+                if let Some(uuid) = uuid {
+                    out.insert((kind.to_string(), id.clone()), uuid);
+                }
+            }
+            Ok(out)
+        })
+    }
+
     /// The newest `items` sample per subject in `source_measurements`:
     /// what the storage report compares its counts against to decide
     /// whether anything moved.
@@ -777,6 +804,7 @@ impl IndexedMarkdownStore {
                 .await
                 .with_context(|| format!("insert problem {}", p.problem_uuid))?;
         }
+        datalib_schema::problems::note_recorded(problems);
         Ok(())
     }
 

@@ -55,6 +55,14 @@ pub trait RenderProcessor: Send + Sync {
     fn item_of_entity(&self, _source_id: &str, _table: &str, _id: &str) -> Option<String> {
         None
     }
+
+    /// Where [`item_of_entity`](Self::item_of_entity) cannot mint the
+    /// uuid, because it embeds a stamp the raw key does not carry: the
+    /// row's `(upstream_entity_kind, upstream_id)`, which the driver
+    /// looks up in the store.
+    fn upstream_of_entity(&self, _table: &str, _id: &str) -> Option<(&'static str, String)> {
+        None
+    }
 }
 
 /// What a provider writes to render a source whose render wave is one
@@ -77,6 +85,11 @@ pub trait SourceRender: Send + Sync + 'static {
 
     /// See [`RenderProcessor::item_of_entity`].
     fn item_of_entity(&self, _source_id: &str, _table: &str, _id: &str) -> Option<String> {
+        None
+    }
+
+    /// See [`RenderProcessor::upstream_of_entity`].
+    fn upstream_of_entity(&self, _table: &str, _id: &str) -> Option<(&'static str, String)> {
         None
     }
 
@@ -122,6 +135,10 @@ impl<R: SourceRender> RenderProcessor for SourceRenderProcessor<R> {
 
     fn item_of_entity(&self, source_id: &str, table: &str, id: &str) -> Option<String> {
         self.render.item_of_entity(source_id, table, id)
+    }
+
+    fn upstream_of_entity(&self, table: &str, id: &str) -> Option<(&'static str, String)> {
+        self.render.upstream_of_entity(table, id)
     }
 }
 
