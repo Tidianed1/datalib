@@ -123,8 +123,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             }
         }
     }
-    download_problems::report_run(db.pool(), &run_problems).await;
-    dav_state::report_unstored(db.pool(), "contacts", &synced_ids).await;
+    // A stop leaves the rest unsynced; their last rows stand.
+    if !opts.control.stop.requested() {
+        download_problems::report_run(db.pool(), &run_problems).await;
+        dav_state::report_unstored(db.pool(), "contacts", &synced_ids).await;
+    }
     Ok(summary)
 }
 

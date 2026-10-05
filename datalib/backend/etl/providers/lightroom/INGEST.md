@@ -351,7 +351,11 @@ that newest state back on top as its last commit, whether or not it
 changed. That keeps things simple when a backup turns up late, older
 than what is already committed: it is replayed like any other, the
 history detours back to it for one commit, and the next commit returns
-to the present.
+to the present. When that last step does not land — the newest backup
+is gone from disk or will not mirror, or the run fails or is stopped
+first — HEAD is an older state and the newest backup is a problem on the
+Manage row; `scope_config`'s `head_behind` record, committed with the
+replayed backup, makes every later sync try again until it lands.
 
 - **Which file is a backup.** The folder is scanned with `fsscan`, so a
   backup already hashed costs a `stat`. Each entry in it is one backup:
@@ -388,15 +392,29 @@ to the present.
   for the comparison; earlier commits keep the filters they were made
   with.
 - **A folder with no backups fails the run**, as does one that cannot
-  be read (a backup drive that is not mounted).
+  be read (a backup drive that is not mounted). An entry inside it the
+  walk could not read is a `listing:backups` row (`listing:catalog` for
+  the live catalog's folder), and the rest is mirrored.
+- **A backup that will not mirror is a problem on that backup**, keyed
+  `record:lightroom_snapshots:<entry name>` — a zip that will not open,
+  a catalog that is not one — and the backups after it are still
+  mirrored. It is not in `lightroom_snapshots`, so every sync tries it
+  again, replaying it like a late backup once it mirrors, and HEAD ends
+  on the newest backup that did mirror. The exception is a failure
+  after the mirror engine has emptied the mirror's tables: committing
+  anything on top of that would publish half a catalog, so that fails
+  the run, and the next run's open discards the half-written state.
+- **A stopped run records no problems**, so the last complete run's
+  stand.
 
 A zip is unpacked into a temporary directory for the length of its
 mirror, so a run needs free space for one catalog at a time; the
 unpacked copy is read without a snapshot, since nothing else has it
 open. `tests/backups_folder.rs` covers the order, the dates, the
 messages, the ledger, a late older backup, the filter change, the live
-catalog on top, the unchanged catalog left unread and backups known by
-their bytes, against zipped copies of the TNG catalog.
+catalog on top, the unchanged catalog left unread, backups known by
+their bytes, a backup that will not mirror and a stopped run, against
+zipped copies of the TNG catalog.
 
 ## Store size and `gc`
 

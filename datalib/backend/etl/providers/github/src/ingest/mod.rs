@@ -11,18 +11,22 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use datalib_etl::bulk::BulkUpsertable;
 use datalib_etl::http::{
     default_retryability, HttpResponse, HttpService, LatchkeySettings, Retryability,
 };
 use datalib_etl_forge_ingest_common::{
-    get_change_request, sync, walk_children, Forge, ForgeClient, Listed, SyncOptions,
+    get_change_request, sync, walk_children, Fetched, Forge, ForgeClient, Listed, SyncOptions,
 };
+use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::{json, Value};
 use sqlx::SqlitePool;
 
 pub use datalib_etl_forge_ingest_common::PER_PAGE;
 pub use db::{block_on_load_all, db_path_for, LoadedChild, LoadedPullRequest, LoadedRaw, RawDb};
+
+use schema_raw::{pr_pk, PullRequestRow};
 
 pub const BASE: &str = "https://api.github.com";
 
@@ -53,7 +57,8 @@ pub struct FetchOptions {
     pub scopes: Vec<String>,
     /// On a non-empty store, only refetch PRs updated in the last N days.
     pub refresh_window_days: u32,
-    /// Safety cap on PR count (`None` = unbounded). Smoke-test convenience.
+    /// Most PRs to fetch this run (`None` = unbounded); the rest are owed
+    /// to later runs.
     pub max_prs: Option<usize>,
     /// Explicit PR targets. When non-empty, discovery is skipped and
     /// only these PRs are fetched. Each entry is `(repo_full_name,
@@ -66,12 +71,15 @@ pub struct FetchOptions {
     pub progress: datalib_etl::progress::Progress,
     /// Cross-provider knobs (the checkpoint cadence, the stop flag).
     pub control: datalib_etl::control::DownloadControl,
+    /// The run's pinned clock; a scope's cursor is stamped with it.
+    pub now: IsoOffsetTimestamp,
 }
 
 impl FetchOptions {
-    /// Every field defaulted except the store, which has none to give:
-    /// it is a live handle the caller opens and closes.
-    pub fn new(db: RawDb) -> Self {
+    /// Every field defaulted except the store and the clock, which have
+    /// none to give: a live handle the caller opens and closes, and the
+    /// run's pinned now.
+    pub fn new(db: RawDb, now: IsoOffsetTimestamp) -> Self {
         Self {
             latchkey: LatchkeySettings::default(),
             db,
@@ -83,6 +91,7 @@ impl FetchOptions {
             sleep_between: Duration::ZERO,
             progress: datalib_etl::progress::Progress::noop(),
             control: datalib_etl::control::DownloadControl::default(),
+            now,
         }
     }
 }
@@ -126,6 +135,7 @@ impl Forge for Github<'_> {
     type Summary = FetchSummary;
     const ITEM: &'static str = "PR";
     const SIGIL: char = '#';
+    const ITEM_TABLE: &'static str = PullRequestRow::TABLE;
     const SCOPE_CONFIG_KEY: &'static str = "github:download";
 
     fn pool(&self) -> &SqlitePool {
@@ -147,21 +157,11 @@ impl Forge for Github<'_> {
         _me: &Value,
         since: Option<&str>,
     ) -> Result<Vec<Value>> {
-        let mut q = format!("is:pr {scope}");
-        if let Some(s) = since {
-            q.push_str(&format!(" updated:>={s}"));
-        }
-        let url = format!(
-            "{BASE}/search/issues?q={}&per_page={PER_PAGE}&sort=updated&order=desc",
-            urlencoding::encode(&q)
-        );
-        Ok(client.paginate(&url).await?)
+        Ok(client.paginate(&search_url(scope, since)).await?)
     }
 
-    /// Search takes a date: the stamp is RFC 3339 in seconds precision,
-    /// so its 10-char prefix is the date.
     fn since_param(&self, stamp: String) -> String {
-        stamp.get(..10).unwrap_or(&stamp).to_string()
+        since_param(&stamp)
     }
 
     /// No `updated_at`: GitHub's listing is not trusted to skip a fetch.
@@ -176,6 +176,10 @@ impl Forge for Github<'_> {
         })
     }
 
+    fn item_key(&self, container: &str, number: u32) -> String {
+        pr_pk(container, number)
+    }
+
     async fn any_stored(&self) -> Result<bool> {
         self.db.any_pull_requests().await
     }
@@ -185,11 +189,12 @@ impl Forge for Github<'_> {
         client: &ForgeClient,
         cr: &Listed,
         summary: &mut FetchSummary,
-    ) -> Result<()> {
+    ) -> Result<Fetched> {
         let (repo, num) = (cr.container.as_str(), cr.number);
         let pr_url = format!("{BASE}/repos/{repo}/pulls/{num}");
-        let Some(pr_data) = get_change_request(client, &pr_url, "PR", cr).await else {
-            return Ok(());
+        let pr_data = match get_change_request(client, &pr_url).await? {
+            Ok(v) => v,
+            Err(miss) => return Ok(miss),
         };
         self.db.upsert_pull_request(repo, num, &pr_data).await?;
         summary.new_prs += 1;
@@ -197,14 +202,28 @@ impl Forge for Github<'_> {
         // Each of these endpoints returns the PR's *whole* child list, so
         // a child we hold that the list did not mention was deleted on
         // GitHub — a resolved review thread, a comment its author removed.
+        let mut shortfalls = Vec::new();
         for child in CHILDREN {
             let url = format!("{BASE}/repos/{repo}/{}", (child.path)(num));
-            let Some(listed) = walk_children(client, &url, cr, child.what).await else {
-                continue;
+            let listed = match walk_children(client, &url, child.what).await? {
+                Ok(listed) => listed,
+                Err(e) => {
+                    shortfalls.push(e);
+                    continue;
+                }
             };
+            let id_of = |v: &Value| v.get("id").and_then(|i| i.as_i64());
+            let without_id = listed.iter().filter(|v| id_of(v).is_none()).count();
+            if without_id > 0 {
+                shortfalls.push(format!(
+                    "{without_id} of its {} came back without an id",
+                    child.what
+                ));
+                continue;
+            }
             let keep: HashSet<String> = listed
                 .iter()
-                .filter_map(|v| v.get("id").and_then(|i| i.as_i64()))
+                .filter_map(id_of)
                 .map(|n| n.to_string())
                 .collect();
             self.db
@@ -216,7 +235,7 @@ impl Forge for Github<'_> {
                 .prune_pr_children(child.table, repo, num, &keep)
                 .await?;
         }
-        Ok(())
+        Ok(Fetched::from_shortfalls(shortfalls))
     }
 
     fn record_requests(&self, summary: &mut FetchSummary, requests: u64) {
@@ -254,6 +273,25 @@ const CHILDREN: [Child; 3] = [
     },
 ];
 
+/// The search-issues request for one discovery scope; `since` is a
+/// date, as [`since_param`] makes it.
+pub fn search_url(scope: &str, since: Option<&str>) -> String {
+    let mut q = format!("is:pr {scope}");
+    if let Some(s) = since {
+        q.push_str(&format!(" updated:>={s}"));
+    }
+    format!(
+        "{BASE}/search/issues?q={}&per_page={PER_PAGE}&sort=updated&order=desc",
+        urlencoding::encode(&q)
+    )
+}
+
+/// Search takes a date: the stamp is RFC 3339 in seconds precision, so
+/// its 10-char prefix is the date.
+pub fn since_param(stamp: &str) -> String {
+    stamp.get(..10).unwrap_or(stamp).to_string()
+}
+
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let client = ForgeClient::new(
         HttpService::Github,
@@ -276,6 +314,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             max_items: opts.max_prs,
             targets: &opts.targets,
             full_sync: opts.full_sync,
+            now: &opts.now,
+            stop: &opts.control.stop,
             sleep_between: opts.sleep_between,
             progress: &opts.progress,
             run_config,
@@ -305,6 +345,17 @@ pub fn parse_pr_ref(s: &str) -> Result<(String, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pr_key_splits_back_into_repo_and_number() {
+        assert_eq!(
+            datalib_etl_forge_ingest_common::split_item_key(
+                &pr_pk("o/r", 7),
+                <Github<'_> as Forge>::SIGIL
+            ),
+            Some(("o/r".to_string(), 7))
+        );
+    }
 
     #[test]
     fn parse_pr_ref_accepts_hash_form_and_url() {

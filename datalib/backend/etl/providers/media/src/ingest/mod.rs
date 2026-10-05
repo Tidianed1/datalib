@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+use datalib_etl::download_problems::{self, RecordProblem};
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan;
 use datalib_etl::fswalk;
@@ -127,7 +128,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // — evicted to iCloud — must not be read at all: it has a size and
     // an mtime, and touching a byte silently pulls the whole thing back
     // over the network.
-    let dataless_skipped = std::sync::atomic::AtomicUsize::new(0);
+    let dataless = std::sync::Mutex::new(Vec::new());
     let scan = fsscan::scan_with(
         &opts.cache,
         &opts.root,
@@ -139,8 +140,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         kind::accept,
         |path, meta| {
             if opts.skip_dataless && is_dataless(meta) {
-                dataless_skipped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 tracing::info!(path = %path.display(), "media_skipped_dataless");
+                dataless.lock().unwrap().push(path.to_path_buf());
                 return false;
             }
             true
@@ -148,13 +149,14 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     )
     .await?;
     summary.errors += scan.errors.len();
+    summary.dataless_skipped = dataless.into_inner().unwrap().len();
     // A file the scan found and did not read — evicted to the cloud, or
     // over `max_bytes` — is still there, so its rows stay.
-    for rel in &scan.present_unread {
+    let declined = scan.present_unread.clone();
+    for rel in &declined {
         prev.paths.remove(rel);
         prev.playlists.remove(rel);
     }
-    summary.dataless_skipped = dataless_skipped.into_inner();
     summary.entries_scanned = scan.files.len();
     summary.too_large = scan.stats.too_large;
     summary.hashed = scan.stats.hashed;
@@ -162,6 +164,12 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     opts.progress.set_length(Some(scan.files.len() as u64));
 
     let mut playlist_files = Vec::new();
+    let mut unread: Vec<RecordProblem> = Vec::new();
+    if !scan.errors.is_empty() || !declined.is_empty() {
+        for table in ["media_files", "media_playlists"] {
+            unread.extend(untried_records(opts.db.pool(), table, &scan, &declined).await?);
+        }
+    }
     let mut batch = WriteBatch::default();
     // Items identified during *this* scan, so N copies of one file are
     // parsed once rather than N times.
@@ -205,9 +213,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                         batch.visual.push(v);
                     }
                 }
+                // Retried every scan: an item that never identified is
+                // not in `known_items`.
                 Err(e) => {
                     summary.errors += 1;
-                    tracing::warn!(path = %f.rel, error = %e, "media_identify_failed");
+                    unread.push(RecordProblem::new("media_files", &f.rel, format!("{e:#}")));
                     continue;
                 }
             }
@@ -226,13 +236,20 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     opts.db.write_batch(&batch, &now).await?;
 
     if opts.playlists {
-        scan_playlists(&opts, &now, &playlist_files, &mut prev, &mut summary).await?;
+        scan_playlists(
+            &opts,
+            &now,
+            &playlist_files,
+            &mut prev,
+            &mut summary,
+            &mut unread,
+        )
+        .await?;
     }
 
     // Reconcile last. Whatever is still in the cache was never visited,
     // so it is a path that is gone — unless the walk reported errors, when
     // an unreadable folder's files look gone too, and nothing is deleted.
-    datalib_etl::download_problems::report_run(opts.db.pool(), &scan.walk_problems()).await;
     if scan.errors.is_empty() {
         let gone_files: Vec<String> = prev.paths.into_keys().collect();
         let gone_playlists: Vec<String> = prev.playlists.into_iter().collect();
@@ -243,7 +260,27 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 .await
                 .context("delete vanished playlists")?) as usize;
     }
+    // Every scan walks the whole tree and retries every file it could
+    // not read, so each set replaces the last scan's.
+    download_problems::report_run(opts.db.pool(), &scan.walk_problems()).await;
+    download_problems::report_records(opts.db.pool(), &unread).await;
     Ok(summary)
+}
+
+/// The last scan's `record:{table}:` rows on paths this scan did not try
+/// again — under an entry its walk could not read, or found and not read
+/// (dataless, or over `max_bytes`) — carried into this scan's set.
+async fn untried_records(
+    pool: &sqlx::SqlitePool,
+    table: &str,
+    scan: &fsscan::Scan,
+    declined: &[String],
+) -> Result<Vec<RecordProblem>> {
+    Ok(download_problems::earlier_records(pool, table, "")
+        .await?
+        .into_iter()
+        .filter(|r| declined.contains(&r.id) || scan.could_not_see(&r.id))
+        .collect())
 }
 
 /// A cloud placeholder: the file has a size but no allocated blocks, so its
@@ -337,6 +374,7 @@ async fn scan_playlists(
     files: &[fsscan::ScannedFile],
     prev: &mut db::PrevCache,
     summary: &mut FetchSummary,
+    unread: &mut Vec<RecordProblem>,
 ) -> Result<()> {
     let mut rows: Vec<MediaPlaylistRow> = Vec::new();
     let mut entries: Vec<MediaPlaylistEntryRow> = Vec::new();
@@ -346,19 +384,20 @@ async fn scan_playlists(
         if size == 0 || size > MAX_PLAYLIST_BYTES {
             continue;
         }
+        // Seen, whatever we decide about it below — an HLS manifest we
+        // skip, or one that would not read, is still not a playlist that
+        // vanished.
+        prev.playlists.remove(&f.rel);
         // No dataless check here: the scan's admit hook already refused
         // to read those, so they never reached this list.
         let bytes = match std::fs::read(&f.path) {
             Ok(b) => b,
             Err(e) => {
                 summary.errors += 1;
-                tracing::warn!(path = %f.rel, error = %e, "media_playlist_read_failed");
+                unread.push(RecordProblem::new("media_playlists", &f.rel, e.to_string()));
                 continue;
             }
         };
-        // Seen, whatever we decide about it below — an HLS manifest we
-        // skip is still not a playlist that vanished.
-        prev.playlists.remove(&f.rel);
 
         let parsed = playlist::parse(&bytes);
         if parsed.is_hls {

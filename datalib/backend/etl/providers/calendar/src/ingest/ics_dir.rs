@@ -7,11 +7,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_etl::control::DownloadControl;
-use datalib_etl::download_problems;
+use datalib_etl::download_problems::{self, RunProblem};
 use datalib_etl::file_checkpoint;
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
+use datalib_problems::{Outcome, Problem, Reason};
 use tracing::warn;
 
 use super::db::RawDb;
@@ -64,6 +65,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     opts.progress.set_length(Some(scan.files.len() as u64));
     opts.progress.inc(changes.unchanged as u64);
     let mut read: BTreeSet<&str> = BTreeSet::new();
+    let mut problems = scan.walk_problems();
     for f in changes.needs_reading_by_path() {
         if opts.control.stop.requested() {
             break;
@@ -73,13 +75,25 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         match ingest_one(db, &scan.given_resolved, &f.path, &mut summary).await {
             // Stamped only after a clean read, so a crash mid-file leaves
             // no cursor and the next run reads it again.
-            Ok(()) => {
-                file_checkpoint::record_file_pool(db.pool(), CHECKPOINT_SCOPE, f).await?;
+            Ok(without_uid) => {
+                let mut tx = db.pool().begin().await.context("begin ics stamp tx")?;
+                file_checkpoint::record_file_with_problem(
+                    &mut tx,
+                    CHECKPOINT_SCOPE,
+                    f,
+                    no_uid_problem(without_uid),
+                )
+                .await?;
+                tx.commit().await.context("commit ics stamp tx")?;
                 read.insert(f.rel.as_str());
             }
+            // Not stamped, so the next run reads it again.
             Err(e) => {
                 summary.errors += 1;
-                warn!(event = "calendar_ics_ingest_failed", path = %f.path.display(), error = %format!("{e:#}"), "an ics file could not be read");
+                problems.push(RunProblem::listing(
+                    &format!("ics {}", f.rel),
+                    format!("{e:#}"),
+                ));
             }
         }
         opts.progress.inc(1);
@@ -94,16 +108,35 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             .await?;
         summary.files_removed += 1;
     }
-    download_problems::report_run(db.pool(), &scan.walk_problems()).await;
+    // A stop leaves files unread; their last rows stand.
+    if !opts.control.stop.requested() {
+        download_problems::report_run(db.pool(), &problems).await;
+    }
     Ok(summary)
 }
 
+/// The `file:` row of a file whose events have no `UID`: nothing tells
+/// one apart from the next run's, so they are not stored.
+fn no_uid_problem(without_uid: usize) -> Option<(Outcome, Problem)> {
+    (without_uid > 0).then(|| {
+        (
+            Outcome::Dropped,
+            Problem::record(
+                Reason::NoIdentity,
+                &format!("{without_uid} events have no UID, so they cannot be stored"),
+            ),
+        )
+    })
+}
+
+/// Store one file's calendar; returns how many of its events had no
+/// `UID` and were left out.
 async fn ingest_one(
     db: &RawDb,
     root: &Path,
     file: &Path,
     summary: &mut FetchSummary,
-) -> Result<()> {
+) -> Result<usize> {
     let body = std::fs::read_to_string(file).with_context(|| format!("read {}", file.display()))?;
     let split = ical::split_file(&body);
     let calendar_id = calendar_id(root, file);
@@ -122,10 +155,7 @@ async fn ingest_one(
         time_zone: split.time_zone.clone(),
     }])
     .await?;
-    if split.events_without_uid > 0 {
-        summary.errors += split.events_without_uid;
-        warn!(event = "calendar_ics_event_without_uid", path = %file.display(), n = split.events_without_uid, "events with no UID cannot be told apart from one run to the next; skipped them");
-    }
+    summary.errors += split.events_without_uid;
 
     let existing = db.ics_uids(&calendar_id).await?;
     let rows: Vec<IcsObjectRow> = split
@@ -149,7 +179,8 @@ async fn ingest_one(
         .collect();
     gone.sort();
     summary.events_deleted += gone.len();
-    db.delete_ics_uids(&calendar_id, &gone).await
+    db.delete_ics_uids(&calendar_id, &gone).await?;
+    Ok(split.events_without_uid)
 }
 
 /// The file's path under the configured directory, without `.ics`:
@@ -232,6 +263,13 @@ mod tests {
                 .unwrap()
         }
 
+        async fn problems(&self) -> Vec<(String, String)> {
+            sqlx::query_as("SELECT scope_key, reason FROM problems ORDER BY scope_key")
+                .fetch_all(self.db.pool())
+                .await
+                .unwrap()
+        }
+
         async fn uids(&self) -> Vec<String> {
             sqlx::query_scalar("SELECT uid FROM ics_objects ORDER BY uid")
                 .fetch_all(self.db.pool())
@@ -297,6 +335,52 @@ mod tests {
         let second = e.fetch().await;
         assert_eq!(second.events_deleted, 0);
         assert_eq!(e.uids().await, vec!["dixon-hill", "red-alert"]);
+        e.db.close().await;
+    }
+
+    /// Events without a UID are a row on their file, standing until the
+    /// file is read again.
+    #[tokio::test]
+    async fn events_without_a_uid_are_a_row_on_their_file() {
+        let e = Env::new().await;
+        let path = e.input.path().join("Bridge.ics");
+        let no_uid = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\n\
+             DTSTART:23640101T090000Z\r\nSUMMARY:drill\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+        std::fs::write(&path, format!("{}{no_uid}", ics("red-alert"))).unwrap();
+        e.fetch().await;
+        assert_eq!(
+            e.problems().await,
+            [(
+                "file:calendar/ics:Bridge.ics".to_string(),
+                "no_identity".to_string()
+            )]
+        );
+
+        std::fs::write(&path, ics("red-alert")).unwrap();
+        e.fetch().await;
+        assert!(e.problems().await.is_empty());
+        e.db.close().await;
+    }
+
+    /// A file that will not read is a row, and is read again next run.
+    #[tokio::test]
+    async fn a_file_that_will_not_read_is_a_row() {
+        let e = Env::new().await;
+        let path = e.input.path().join("Holodeck.ics");
+        std::fs::write(&path, [0xff, 0xfe, 0x00]).unwrap();
+        e.fetch().await;
+        assert_eq!(
+            e.problems().await,
+            [(
+                "listing:ics Holodeck.ics".to_string(),
+                "fetch_failed".to_string()
+            )]
+        );
+
+        std::fs::write(&path, ics("dixon-hill")).unwrap();
+        e.fetch().await;
+        assert!(e.problems().await.is_empty());
+        assert_eq!(e.uids().await, vec!["dixon-hill"]);
         e.db.close().await;
     }
 

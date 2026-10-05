@@ -35,6 +35,10 @@ pub async fn ingest(
         let mut rows: Vec<MapsSavedPlaceRow> = Vec::with_capacity(features.len());
         for f in features {
             let Some(props) = f.get("properties") else {
+                skipped.push(SkippedRecord {
+                    entry: f.to_string(),
+                    problem: Problem::field("properties", Reason::NoIdentity, ""),
+                });
                 continue;
             };
             let date = props.get("date").and_then(|v| v.as_str()).unwrap_or("");

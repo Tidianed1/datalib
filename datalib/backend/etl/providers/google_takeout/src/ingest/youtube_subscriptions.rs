@@ -57,6 +57,10 @@ pub async fn ingest(
             let channel_url = cells[1].trim().to_string();
             let channel_title = cells[2].trim().to_string();
             if channel_id.is_empty() {
+                skipped.push(SkippedRecord {
+                    entry: line.to_string(),
+                    problem: Problem::field("Channel Id", Reason::NoIdentity, line),
+                });
                 continue;
             }
             let payload = json!({

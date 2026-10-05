@@ -50,6 +50,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             root: opts.input_path.join(dir),
             scope: cursor_scope(dir),
             rel_prefix: format!("{dir}/"),
+            // Only an older Codex made it.
+            optional: *dir == "archived_sessions",
         })
         .collect();
     let mut transcript_rows: Vec<TranscriptRow> = Vec::new();
@@ -67,6 +69,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 records: parsed.records.len(),
                 malformed_lines: parsed.stats.malformed,
                 is_subagent: parsed.meta.parent_thread_id.is_some(),
+                skipped: parsed.skipped.clone(),
             })
         },
     )
@@ -77,6 +80,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     bulk_upsert_entity_in_tx(&mut tx, &record_rows).await?;
     read.stamp(&mut tx).await?;
     tx.commit().await.context("commit codex tx")?;
+    read.report(db.pool()).await;
     Ok(summary)
 }
 

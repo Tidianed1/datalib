@@ -70,8 +70,20 @@ pub async fn ingest(
     };
     let under =
         |f: &fsscan::ScannedFile, dir: &str| fsscan::is_under(&f.rel, &format!("Voice/{dir}"));
-    let mut failed = 0usize;
+    // A file that would not read, or one an attachment of which would
+    // not, is left unstamped, so the next run reads it again and its row
+    // is re-reported until it reads.
     let mut skipped: Vec<SkippedRecord> = Vec::new();
+    let mut unread = |f: &fsscan::ScannedFile, reason: Reason, detail: String| {
+        skipped.push(SkippedRecord {
+            entry: f.rel.clone(),
+            problem: Problem::record(reason, &format!("{}: {detail}", f.rel)),
+        });
+    };
+    // Files that would not read at all; their records are unknown.
+    let mut failed = 0usize;
+    // Files that read, but an attachment of which did not.
+    let mut incomplete: Vec<&fsscan::ScannedFile> = Vec::new();
 
     let mut message_rows: Vec<VoiceMessageRow> = Vec::new();
     let mut bill_rows: Vec<VoiceBillRow> = Vec::new();
@@ -89,27 +101,33 @@ pub async fn ingest(
         } else {
             continue;
         };
-        let path = &f.path;
-        let consumed = ingest_record(
+        let mut missing: Vec<String> = Vec::new();
+        match ingest_record(
             folder,
-            path,
+            &f.path,
             &mut message_rows,
             &mut acc,
             &mut n_attachments,
-        )
-        .unwrap_or_else(|e| {
-            skipped.push(SkippedRecord {
-                entry: f.rel.clone(),
-                problem: Problem::record(
-                    Reason::Undeserializable,
-                    &format!("{}: {}", f.rel, e.root_cause()),
-                ),
-            });
-            failed += 1;
-            false
-        });
-        if consumed {
-            done.push(f);
+            &mut missing,
+        ) {
+            Ok(false) => {}
+            Ok(true) if missing.is_empty() => done.push(f),
+            Ok(true) => {
+                unread(
+                    f,
+                    Reason::FetchFailed,
+                    format!(
+                        "{} attachments could not be read; first: {}",
+                        missing.len(),
+                        missing[0]
+                    ),
+                );
+                incomplete.push(f);
+            }
+            Err(e) => {
+                unread(f, Reason::Undeserializable, e.root_cause().to_string());
+                failed += 1;
+            }
         }
     }
 
@@ -138,10 +156,7 @@ pub async fn ingest(
                 done.push(f);
             }
             Err(e) => {
-                skipped.push(SkippedRecord {
-                    entry: f.rel.clone(),
-                    problem: Problem::record(Reason::FetchFailed, &format!("{}: {e}", f.rel)),
-                });
+                unread(f, Reason::FetchFailed, e.to_string());
                 failed += 1;
             }
         }
@@ -173,10 +188,7 @@ pub async fn ingest(
                 done.push(f);
             }
             Err(e) => {
-                skipped.push(SkippedRecord {
-                    entry: f.rel.clone(),
-                    problem: Problem::record(Reason::FetchFailed, &format!("{}: {e}", f.rel)),
-                });
+                unread(f, Reason::FetchFailed, e.to_string());
                 failed += 1;
             }
         }
@@ -189,17 +201,19 @@ pub async fn ingest(
         "voice: {n_messages} messages / {n_bills} bills / {n_greetings} greetings",
     ));
 
-    let now = IsoOffsetTimestamp::now_local();
-    let mut tx = db.pool().begin().await.context("begin google_voice tx")?;
-    bulk_upsert_in_tx(&mut tx, &message_rows, &now).await?;
-    bulk_upsert_in_tx(&mut tx, &bill_rows, &now).await?;
-    bulk_upsert_in_tx(&mut tx, &greeting_rows, &now).await?;
-    for f in &done {
-        file_checkpoint::record_file(&mut tx, SCOPE, f).await?;
-    }
-    tx.commit().await.context("commit google_voice tx")?;
-    download_problems::report_skipped(db.pool(), "google_voice", &skipped).await;
+    // Whether this run may delete what no Voice file holds: only right
+    // after reading every one of them.
+    let deletes = read_all
+        && changes.walk_errors == 0
+        && super::product_exported(scan, "Voice")
+        && failed == 0;
+    // A rewritten file keeps its old stamp on a run that deleted nothing,
+    // so the next run still sees it rewritten and reads every file again.
+    let rewritten: HashSet<&str> = changes.modified.iter().map(|f| f.rel.as_str()).collect();
+    let stamp = |f: &&&fsscan::ScannedFile| deletes || !rewritten.contains(f.rel.as_str());
 
+    // The attachments land before the files that name them are stamped:
+    // a flush that fails leaves the files to be read again.
     let blobs_stored = acc.bundle_mut().cas_inserts().len();
     acc.flush(db.pool(), db.cas(), |owning, ref_id, blake3| {
         VoiceAttachmentRow {
@@ -211,6 +225,25 @@ pub async fn ingest(
     })
     .await?;
 
+    let now = IsoOffsetTimestamp::now_local();
+    let mut tx = db.pool().begin().await.context("begin google_voice tx")?;
+    bulk_upsert_in_tx(&mut tx, &message_rows, &now).await?;
+    bulk_upsert_in_tx(&mut tx, &bill_rows, &now).await?;
+    bulk_upsert_in_tx(&mut tx, &greeting_rows, &now).await?;
+    for f in done.iter().filter(stamp) {
+        file_checkpoint::record_file(&mut tx, SCOPE, f).await?;
+    }
+    // An incomplete file is read again next run. Its old stamp would say
+    // "rewritten" for good and make every run read every file, so once
+    // this run has read them all it goes, and the file reads as new.
+    if deletes {
+        for f in &incomplete {
+            file_checkpoint::forget_file(&mut tx, SCOPE, &f.rel).await?;
+        }
+    }
+    tx.commit().await.context("commit google_voice tx")?;
+    download_problems::report_skipped(db.pool(), "google_voice", &skipped).await;
+
     let mut summary = VoiceSummary {
         messages: n_messages,
         bills: n_bills,
@@ -219,29 +252,27 @@ pub async fn ingest(
         blobs_stored,
         ..VoiceSummary::default()
     };
-    if read_all && changes.walk_errors == 0 && super::product_exported(scan, "Voice") {
-        if failed == 0 {
-            let kept = Kept {
-                messages: message_rows
-                    .iter()
-                    .map(|r| r.id_and_payload.id.clone())
-                    .collect(),
-                bills: bill_rows
-                    .iter()
-                    .map(|r| r.id_and_payload.id.clone())
-                    .collect(),
-                greetings: greeting_rows
-                    .iter()
-                    .map(|r| r.id_and_payload.id.clone())
-                    .collect(),
-            };
-            summary.removed = prune_unseen(db, &kept, include_spam).await?;
-            let gone = changes.gone();
-            summary.files_removed = gone.len();
-            file_checkpoint::forget_files(db.pool(), SCOPE, &gone).await?;
-        } else if changes.may_have_dropped_records() {
-            summary.held_back = Some(fsscan::Scan::deletions_held_back(failed));
-        }
+    if deletes {
+        let kept = Kept {
+            messages: message_rows
+                .iter()
+                .map(|r| r.id_and_payload.id.clone())
+                .collect(),
+            bills: bill_rows
+                .iter()
+                .map(|r| r.id_and_payload.id.clone())
+                .collect(),
+            greetings: greeting_rows
+                .iter()
+                .map(|r| r.id_and_payload.id.clone())
+                .collect(),
+        };
+        summary.removed = prune_unseen(db, &kept, include_spam).await?;
+        let gone = changes.gone();
+        summary.files_removed = gone.len();
+        file_checkpoint::forget_files(db.pool(), SCOPE, &gone).await?;
+    } else if failed > 0 && changes.may_have_dropped_records() {
+        summary.held_back = Some(fsscan::Scan::deletions_held_back(failed));
     }
     Ok(summary)
 }
@@ -284,13 +315,16 @@ async fn prune_unseen(db: &RawDb, kept: &Kept, include_spam: bool) -> Result<usi
 /// Parse one `Calls/`/`Spam/` file into message rows + CAS edges.
 /// Returns `true` if the file was understood (and should be
 /// checkpointed), `false` if skipped (e.g. an attachment blob already
-/// owned by a sibling `.html`).
+/// owned by a sibling `.html`). An attachment that would not read adds
+/// no edge — a message names only the attachments it read — and is said
+/// in `missing`.
 fn ingest_record(
     folder: &str,
     path: &Path,
     rows: &mut Vec<VoiceMessageRow>,
     acc: &mut CasEdgeAccumulator,
     n_attachments: &mut usize,
+    missing: &mut Vec<String>,
 ) -> Result<bool> {
     let name = file_name(path);
     let stem = name.rsplit_once('.').map(|(s, _)| s).unwrap_or(&name);
@@ -308,12 +342,31 @@ fn ingest_record(
         match type_token.as_deref() {
             // Text thread / unnamed-type "Group Conversation" → hChatLog.
             Some("Text") | None => {
-                ingest_text_thread(folder, path, &label, &html, rows, acc, n_attachments);
+                ingest_text_thread(
+                    folder,
+                    path,
+                    &label,
+                    &html,
+                    rows,
+                    acc,
+                    n_attachments,
+                    missing,
+                );
                 Ok(true)
             }
             Some(tok) if CallKind::from_type_token(tok).is_some() => {
                 let kind = CallKind::from_type_token(tok).unwrap();
-                ingest_event(folder, path, &label, kind, &html, rows, acc, n_attachments);
+                ingest_event(
+                    folder,
+                    path,
+                    &label,
+                    kind,
+                    &html,
+                    rows,
+                    acc,
+                    n_attachments,
+                    missing,
+                );
                 Ok(true)
             }
             _ => Ok(false),
@@ -341,11 +394,13 @@ fn ingest_record(
             rows,
             acc,
             n_attachments,
+            missing,
         );
         Ok(true)
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn ingest_text_thread(
     folder: &str,
     path: &Path,
@@ -354,6 +409,7 @@ fn ingest_text_thread(
     rows: &mut Vec<VoiceMessageRow>,
     acc: &mut CasEdgeAccumulator,
     n_attachments: &mut usize,
+    missing: &mut Vec<String>,
 ) {
     let msgs = parse_chat_log(html);
     // Channel = the distinct non-me parties in this file.
@@ -393,12 +449,10 @@ fn ingest_text_thread(
                         *n_attachments += 1;
                         attachment_refs.push(ref_name);
                     }
-                    Err(e) => {
-                        acc.add_failed(&id, &ref_name, format!("attachment unreadable: {e}"));
-                    }
+                    Err(e) => missing.push(format!("read {}: {e}", blob_path.display())),
                 }
             } else {
-                acc.add_failed(&id, src, "attachment not found on disk");
+                missing.push(format!("{src} is not in the export"));
             }
         }
         let payload = json!({
@@ -437,6 +491,7 @@ fn ingest_event(
     rows: &mut Vec<VoiceMessageRow>,
     acc: &mut CasEdgeAccumulator,
     n_attachments: &mut usize,
+    missing: &mut Vec<String>,
 ) {
     let ev = parse_haudio(html);
     let tels: Vec<String> = ev.party.tel.iter().cloned().collect();
@@ -465,10 +520,10 @@ fn ingest_event(
                     *n_attachments += 1;
                     audio_ref = Some(ref_name);
                 }
-                Err(e) => {
-                    acc.add_failed(&id, &ref_name, format!("audio unreadable: {e}"));
-                }
+                Err(e) => missing.push(format!("read {}: {e}", blob_path.display())),
             }
+        } else {
+            missing.push(format!("{src} is not in the export"));
         }
     }
     let payload = json!({
@@ -506,6 +561,7 @@ fn ingest_orphan_audio(
     rows: &mut Vec<VoiceMessageRow>,
     acc: &mut CasEdgeAccumulator,
     n_attachments: &mut usize,
+    missing: &mut Vec<String>,
 ) {
     let party = Party {
         tel: label.starts_with('+').then(|| label.to_string()),
@@ -533,9 +589,7 @@ fn ingest_orphan_audio(
             );
             *n_attachments += 1;
         }
-        Err(e) => {
-            acc.add_failed(&id, &ref_name, format!("audio unreadable: {e}"));
-        }
+        Err(e) => missing.push(format!("read {}: {e}", path.display())),
     }
     let payload = json!({
         "id": id.clone(),

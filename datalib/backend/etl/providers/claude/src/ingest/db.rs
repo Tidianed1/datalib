@@ -9,6 +9,7 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use datalib_etl::doltlite_raw::{self as dr};
+use datalib_time::IsoOffsetTimestamp;
 
 use super::schema_raw::full_ddl;
 
@@ -27,7 +28,14 @@ impl RawDb {
         Ok(row.is_some())
     }
 
-    pub async fn sweep_age(&self, key: &str) -> Result<Option<chrono::Duration>> {
+    /// How long before `now` the sweep `key` last completed. `now` is the
+    /// run's pinned now: the answer decides whether a listing is
+    /// requested at all.
+    pub async fn sweep_age(
+        &self,
+        key: &str,
+        now: &IsoOffsetTimestamp,
+    ) -> Result<Option<chrono::Duration>> {
         let scope = format!("claude:sweep:{key}");
         let row = sqlx::query("SELECT last_seen_at_utc FROM sync_scope_state WHERE scope = ?")
             .bind(&scope)
@@ -40,15 +48,23 @@ impl RawDb {
             .context("read claude sweep timestamp")?;
         let dt = datalib_time::parse_strict(&s)
             .with_context(|| format!("parse claude sweep timestamp {s:?}"))?
-            .inner()
-            .with_timezone(&chrono::Utc);
-        Ok(Some(chrono::Utc::now() - dt))
+            .inner();
+        Ok(Some(now.inner() - dt))
     }
 
-    pub async fn record_sweep(&self, key: &str) -> Result<()> {
+    /// Make the sweep `key` due, whatever its age.
+    pub async fn forget_sweep(&self, key: &str) -> Result<()> {
+        sqlx::query("DELETE FROM sync_scope_state WHERE scope = ?")
+            .bind(format!("claude:sweep:{key}"))
+            .execute(self.pool())
+            .await
+            .context("forget claude sweep marker")?;
+        Ok(())
+    }
+
+    pub async fn record_sweep(&self, key: &str, now: &IsoOffsetTimestamp) -> Result<()> {
         let scope = format!("claude:sweep:{key}");
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-        dr::upsert_scope_state(self.pool(), &scope, &now)
+        dr::upsert_scope_state(self.pool(), &scope, &now.to_rfc3339())
             .await
             .context("record claude sweep marker")?;
         Ok(())
@@ -137,7 +153,8 @@ impl RawDb {
     }
 
     /// Delete this org's conversations that a **complete** listing of that
-    /// org did not name.
+    /// org did not name, with their attachment edges and the fetch
+    /// problems of both.
     ///
     /// Scoped to one `org_uuid`, and that scope is load-bearing twice over.
     /// An org whose listing 403'd was never enumerated, so it must not be
@@ -155,49 +172,97 @@ impl RawDb {
         org_uuid: &str,
         keep: &HashSet<String>,
     ) -> Result<usize> {
-        let held: Vec<String> =
-            sqlx::query_scalar("SELECT id FROM conversations WHERE org_uuid = ?")
-                .bind(org_uuid)
-                .fetch_all(self.pool())
-                .await
-                .context("list org conversation ids for prune")?;
-        let gone: Vec<String> = held
-            .iter()
-            .filter(|id| !keep.contains(*id))
-            .cloned()
-            .collect();
+        let held: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM conversations WHERE org_uuid = ?")
+            .bind(org_uuid)
+            .fetch_one(self.pool())
+            .await
+            .context("count org conversations for prune")?;
+        let gone = self
+            .prune_conversations_in(&[("org_uuid", org_uuid)], keep)
+            .await?;
+        datalib_etl::prune::record(
+            &format!("claude org {org_uuid} conversations"),
+            held as usize,
+            gone,
+        );
+        Ok(gone)
+    }
+
+    /// Delete the stubs of conversations whose every fetch failed — no
+    /// payload, so no org — that no listing names any more. Only for a
+    /// caller every org of which listed completely: a stub belongs to
+    /// whichever org listed it, and nothing records which.
+    pub async fn prune_unlisted_stubs(&self, listed: &HashSet<String>) -> Result<usize> {
+        let stubs: Vec<String> = sqlx::query_scalar(
+            "SELECT id FROM conversations WHERE org_uuid IS NULL AND payload IS NULL",
+        )
+        .fetch_all(self.pool())
+        .await
+        .context("list conversation stubs")?;
+        let gone: HashSet<&String> = stubs.iter().filter(|id| !listed.contains(*id)).collect();
         if gone.is_empty() {
             return Ok(0);
         }
+        let keep: HashSet<String> = sqlx::query_scalar::<_, String>("SELECT id FROM conversations")
+            .fetch_all(self.pool())
+            .await
+            .context("list conversation ids")?
+            .into_iter()
+            .filter(|id| !gone.contains(id))
+            .collect();
+        let n = self.prune_conversations_in(&[], &keep).await?;
+        datalib_etl::prune::record("claude conversation stubs", stubs.len(), n);
+        Ok(n)
+    }
+
+    async fn prune_conversations_in(
+        &self,
+        scope: &[(&str, &str)],
+        keep: &HashSet<String>,
+    ) -> Result<usize> {
         let mut tx = self.pool().begin().await.context("begin prune tx")?;
-        for chunk in gone.chunks(datalib_etl::bulk::SQL_CHUNK) {
-            let mut placeholders = String::new();
-            datalib_etl::bulk::push_placeholder_list(&mut placeholders, chunk.len());
-            for sql in [
-                format!(
-                    "DELETE FROM claude_attachments WHERE conversation_uuid IN ({placeholders})"
-                ),
-                format!("DELETE FROM conversations WHERE id IN ({placeholders})"),
-                format!("DELETE FROM conversations_bookkeeping WHERE id IN ({placeholders})"),
-            ] {
-                // Audited: static table names; the IN-list is a `?,?,?` run
-                // sized from the chunk and every id is bound.
-                let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
-                for id in chunk {
-                    q = q.bind(id.clone());
-                }
-                q.execute(&mut *tx)
-                    .await
-                    .context("prune claude conversations")?;
-            }
-        }
+        let gone =
+            datalib_etl::prune::prune_scope_in_tx(&mut tx, "conversations", scope, keep).await?;
+        datalib_etl::prune::delete_owned_in_tx(
+            &mut tx,
+            "claude_attachments",
+            "conversation_uuid",
+            &gone,
+        )
+        .await?;
         tx.commit().await.context("commit prune tx")?;
-        datalib_etl::prune::record(
-            &format!("claude org {org_uuid} conversations"),
-            held.len(),
-            gone.len(),
-        );
         Ok(gone.len())
+    }
+
+    /// The conversation as stored, `None` for one never fetched.
+    pub async fn load_conversation_payload(&self, id: &str) -> Result<Option<Value>> {
+        let payload: Option<Option<String>> =
+            sqlx::query_scalar("SELECT json(payload) FROM conversations WHERE id = ?")
+                .bind(id)
+                .fetch_optional(self.pool())
+                .await
+                .context("select one conversation")?;
+        payload
+            .flatten()
+            .map(|s| serde_json::from_str(&s).context("parse a stored conversation"))
+            .transpose()
+    }
+
+    /// Every conversation with an attachment whose last attempt failed.
+    /// One that was not there to fetch is a skip, not a failure, and waits
+    /// for its conversation to change.
+    pub async fn conversations_with_unfetched_attachments(&self) -> Result<Vec<String>> {
+        sqlx::query_scalar(
+            "SELECT DISTINCT a.conversation_uuid FROM claude_attachments a \
+             JOIN problems p ON p.scope_kind = ? \
+                AND p.scope_key = 'claude_attachments:' || a.id \
+             WHERE p.reason = ? ORDER BY a.conversation_uuid",
+        )
+        .bind(datalib_problems::ScopeKind::Entity.as_str())
+        .bind(datalib_problems::Reason::FetchFailed.as_str())
+        .fetch_all(self.pool())
+        .await
+        .context("select conversations with unfetched attachments")
     }
 
     pub async fn record_conversation_error(&self, id: &str, err: &str) -> Result<()> {
@@ -390,6 +455,10 @@ mod tests {
         datalib_time::parse_strict("2026-06-11T00:00:00-07:00").unwrap()
     }
 
+    fn later(minutes: i64) -> datalib_time::IsoOffsetTimestamp {
+        datalib_time::IsoOffsetTimestamp::from(now().inner() + chrono::Duration::minutes(minutes))
+    }
+
     fn make_user(id: &str, email: &str, name: &str) -> UserRow {
         UserRow {
             id_and_payload: WirePayload {
@@ -439,7 +508,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let db = RawDb::open(&d.path().join("a.doltlite_db")).await.unwrap();
         assert!(
-            db.sweep_age("orgs").await.unwrap().is_none(),
+            db.sweep_age("orgs", &now()).await.unwrap().is_none(),
             "a store that never completed a sweep must report no marker"
         );
     }
@@ -457,17 +526,14 @@ mod tests {
                 .unwrap();
             tx.commit().await.unwrap();
         }
-        db.record_sweep("orgs").await.unwrap();
+        db.record_sweep("orgs", &now()).await.unwrap();
 
         let age = db
-            .sweep_age("orgs")
+            .sweep_age("orgs", &later(5))
             .await
             .unwrap()
             .expect("marker recorded");
-        assert!(
-            age < chrono::Duration::minutes(1),
-            "a just-recorded sweep should be seconds old, got {age}"
-        );
+        assert_eq!(age, chrono::Duration::minutes(5));
         assert!(
             age < super::super::ORGS_TTL,
             "a just-recorded sweep must be inside the TTL"
@@ -486,8 +552,8 @@ mod tests {
     async fn record_sweep_is_idempotent() {
         let d = tempfile::tempdir().unwrap();
         let db = RawDb::open(&d.path().join("a.doltlite_db")).await.unwrap();
-        db.record_sweep("orgs").await.unwrap();
-        db.record_sweep("orgs").await.unwrap();
+        db.record_sweep("orgs", &now()).await.unwrap();
+        db.record_sweep("orgs", &now()).await.unwrap();
         let n: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM sync_scope_state WHERE scope = 'claude:sweep:orgs'",
         )
@@ -504,11 +570,55 @@ mod tests {
     async fn sweep_keys_are_namespaced() {
         let d = tempfile::tempdir().unwrap();
         let db = RawDb::open(&d.path().join("a.doltlite_db")).await.unwrap();
-        db.record_sweep("orgs").await.unwrap();
-        assert!(db.sweep_age("orgs").await.unwrap().is_some());
+        db.record_sweep("orgs", &now()).await.unwrap();
+        assert!(db.sweep_age("orgs", &now()).await.unwrap().is_some());
         assert!(
-            db.sweep_age("something-else").await.unwrap().is_none(),
+            db.sweep_age("something-else", &now())
+                .await
+                .unwrap()
+                .is_none(),
             "an unrelated key must not see the orgs marker"
         );
+    }
+
+    /// A sweep's age is measured from the run's now, not the wall clock:
+    /// whether `/organizations` is asked for again must be the same on
+    /// every replay of a run.
+    #[tokio::test]
+    async fn sweep_age_is_measured_from_the_runs_now() {
+        let d = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&d.path().join("a.doltlite_db")).await.unwrap();
+        db.record_sweep("orgs", &now()).await.unwrap();
+        let age = db.sweep_age("orgs", &later(7 * 60)).await.unwrap().unwrap();
+        assert!(age > super::super::ORGS_TTL, "{age}");
+    }
+
+    /// A conversation whose every fetch failed is an id-only stub with a
+    /// problem row. One no listing names any more goes, problem and all;
+    /// one still listed, and anything with a payload, stays.
+    #[tokio::test]
+    async fn an_unlisted_stub_goes_with_its_problem() {
+        let d = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&d.path().join("a.doltlite_db")).await.unwrap();
+        for id in ["stub-gone", "stub-listed"] {
+            db.record_conversation_error(id, "HTTP 500").await.unwrap();
+        }
+        sqlx::query("INSERT INTO conversations (id, payload) VALUES ('exported', jsonb('{}'))")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let listed: HashSet<String> = ["stub-listed".to_string()].into_iter().collect();
+        assert_eq!(db.prune_unlisted_stubs(&listed).await.unwrap(), 1);
+        let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM conversations ORDER BY id")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(ids, ["exported", "stub-listed"]);
+        let problems: Vec<String> =
+            sqlx::query_scalar("SELECT scope_key FROM problems ORDER BY scope_key")
+                .fetch_all(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(problems, ["conversations:stub-listed"]);
     }
 }

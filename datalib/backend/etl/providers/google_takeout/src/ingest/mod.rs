@@ -252,7 +252,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         .iter()
         .filter(|p| p.kind == RunProblemKind::Phase)
         .count();
-    download_problems::report_run(db.pool(), &problems).await;
+    if !opts.control.stop.requested() {
+        download_problems::report_run(db.pool(), &problems).await;
+    }
 
     Ok(summary)
 }

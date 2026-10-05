@@ -279,6 +279,12 @@ corpus that comes back empty says why in the step's own output.
 `SF_DATALESS` stat flag, which `std`'s `MetadataExt` does not expose;
 reaching it means a `libc` dependency, which has not seemed worth it.
 
+A file skipped this way keeps the rows an earlier scan wrote for it:
+declining to read a file is not finding it gone. Pinned by
+`a_dataless_file_keeps_its_row`, which makes the placeholder as a sparse
+file and passes without checking anything on a filesystem that gives
+one blocks.
+
 iCloud's eviction markers need no handling: they are named
 `.track.mp3.icloud`, so the extension filter never visits them.
 
@@ -373,6 +379,27 @@ Two things follow:
   until a scan completes. A row that outlives its file is corrected by
   the next full scan.
 
+## When part of a scan fails
+
+The scan goes on, and what it could not do is a `problems` row:
+
+- **An entry the walk could not read** (a folder it may not list, a
+  file that would not hash, a dangling link) means a path the walk did
+  not see may only be one it could not see, so **that scan deletes
+  nothing** and leaves a `listing:files` row. The next clean walk
+  deletes what is really gone and clears the row
+  (`a_walk_with_errors_deletes_nothing`).
+- **A media file that would not open or parse** is
+  `record:media_files:<path>`, and **a playlist that would not read**
+  `record:media_playlists:<path>`; either keeps the rows an earlier scan
+  wrote. An item that never identified is not in `media_items`, so every
+  scan tries it again, and the row goes with the first that succeeds.
+
+Both sets are replaced whole each scan, which is right because each
+scan walks the whole tree and retries everything it could not read —
+except a file it did not try: one under an entry its walk could not
+read, or declined as a cloud placeholder, keeps its row.
+
 Reconciliation is a **set difference, not a timestamp sweep**. The
 simpler `DELETE … WHERE last_seen_at <> <this run>` looks equivalent and
 is not: `DATALIB_DAG_NOW` is pinned per run, so two runs sharing a
@@ -430,6 +457,9 @@ that the item was once here. Pinned by
   fixture pipeline runs only sources that render.
   `download_only_sources_plan_a_download_and_no_render` in
   `datalib_step/src/dispatch.rs` covers the config and planning half.
+- **`skip_dataless` is exercised only where a sparse file has no
+  blocks** (APFS does; a filesystem that allocates them leaves
+  `a_dataless_file_keeps_its_row` checking nothing).
 - **A scan interrupted before its first flush loses that batch**, up to
   `BATCH_SIZE` files. Everything already flushed survives.
 

@@ -81,7 +81,8 @@ Plus `GET /v1/comments?block_id={page_id}` when `api.comments` is on
 (the default); one call returns the page's whole discussion set,
 including threads anchored to blocks inside it. A page whose
 `last_edited_time` has not moved since the stored row is not fetched
-again, but the walk still descends into its stored child pages.
+again — unless part of its last fetch failed (see "When part of a sync
+fails") — but the walk still descends into its stored child pages.
 
 **The block tree is not mirrored.** There is no `blocks` table and no
 block renderer. Notion renders the page; we store what it returns.
@@ -147,6 +148,69 @@ Truncation itself is rare: one page in a random 70, and that one a
 permanent `drive` embed. Size truncation is rarer still and sits in a
 few very large pages, which is why the cap is per page.
 
+## When part of a sync fails
+
+The step fails only when it can do nothing: the credential is refused
+(401) before anything was fetched, the first page of search results does
+not come back, the store will not take a write, or every page it tried
+failed. Anything smaller is a `problems` row, and the rest of the run
+goes on.
+
+Two things end the walk early without failing the step: the shared
+retry guard giving up on the service (every request after would give up
+too), and a 401 once pages have been fetched. The walk stops where it
+is, the run leaves one row (`phase:rate_limit` or `phase:credential`),
+and returns as a success so what it fetched is committed: the store
+commits only when the download succeeds. The resume cursor does not move
+and nothing past that point is marked failed, so the next run picks up
+the rest through search and the retry set.
+
+| what failed | its row | what clears it |
+|---|---|---|
+| a page object | `pages:<id>` | the page fetching |
+| a page's comments listing | `pages:<id>`, a warning (the page is stored) | the page fetching whole |
+| comments the credential may not read (403: an integration without the read-comments capability) | one `listing:comments`, a warning; comments are not asked for again that run, and no page is marked failed | a run that reads comments |
+| a page's body | `page_markdown:<id>` | the body fetching |
+| a truncated subtree's follow-up | `page_markdown:<id>`, a warning | the body fetching whole |
+| more subtrees than `MAX_HOLE_FOLLOWUPS` | `page_markdown:<id>`, a deliberate-loss warning | the page changing so it needs fewer |
+| an attachment's bytes | `notion_attachments:<page>#<slot>` | the bytes landing, or the body no longer linking it |
+| a user | `users:<id>` | the user fetching |
+| a configured root Notion has not got (404) or will not show (403) | `config:roots:<value>` | the root fetching, or leaving the config |
+| a search page after the first | `listing:search` | a search that reaches the resume cursor |
+
+Each of those clears only by being tried again, and upstream has not
+moved any of them, so a run fetches them again on its own:
+`RawDb::pages_to_refetch` names every page with a failed object, comments
+listing, body or attachment, plus any whose stored body is older than
+its stored object. Such a page is not skipped as unchanged, and in search
+mode it is queued beside what search named, since search names only what
+moved. An attachment is retried by fetching its page again because its
+signed URL lives only in the response that named it. A failed user is
+asked for again at the end of every run. The follow-up cap is left out:
+fetching the page again gets the same body.
+
+**A 404 is a deletion, not a failure.** Notion answers it for a page
+deleted or no longer shared with the credential. The ingest deletes
+nothing (see "Deletions"), so a page the store holds stays as it was;
+what goes is its failure rows and the reasons it was in the retry set,
+and a stub that never fetched goes whole (`RawDb::retire_page`). A body
+that answers 404 is marked current at the page's `last_edited_time`, so
+it is asked for again only once the page is edited; a user that answers
+404 loses its failure, an attachment its failed edge, and comments read
+as none. A configured root that answers 404 is still a `config:` row.
+
+A search cut short holds the resume cursor where it was, so the next run
+reads that window again. A page that failed does not hold it: it is in
+the retry set. A page fetched again only to fail again does not count
+toward "every page failed", so one page a 5xx keeps failing does not fail
+every steady-state run.
+
+The body is stored last, after the attachments, comments and users: a
+stop part-way through a page leaves its stored body behind its stored
+object, which puts it in the retry set. A request the transport refused
+because of the stop is not a problem, and a stopped run leaves the last
+run's `listing:` and `config:` rows standing.
+
 ## Most pages have no body
 
 In a random 70-page sample of a real workspace, **50 (71%) returned
@@ -192,7 +256,8 @@ seen on pages, people properties and comments are resolved with
 `GET /v1/users/{id}` and cached in `users`. One request per user, once
 ever. It has to work this way: `GET /v1/users` (list all) is not
 available to a personal access token. A user that cannot be read falls
-back to an id prefix rather than failing the page.
+back to an id prefix rather than failing the page, and is a `users:<id>`
+row until a later run reads it.
 
 **A comment names a `block_id` and carries no quote of what it is
 about.** So `GET /v1/blocks/{id}` runs for **commented blocks only** —

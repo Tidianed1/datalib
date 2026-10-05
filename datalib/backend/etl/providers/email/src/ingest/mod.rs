@@ -16,6 +16,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::bulk::bulk_upsert_in_tx;
+use datalib_etl::download_problems::{self, RunProblem};
 use datalib_etl::download_run::DownloadRun;
 use datalib_etl::http::LatchkeySettings;
 use datalib_etl::progress::{Progress, RunBar};
@@ -313,6 +314,15 @@ fn scope_config_blob(opts: &FetchOptions) -> Value {
 /// bar makes whatever the run turns out to hold.
 const PHASES: u64 = 5;
 
+/// The listing and phase names a `problems` row carries.
+const M_MAILBOX_GET: &str = "Mailbox/get";
+const M_EMAIL_QUERY: &str = "Email/query";
+const M_THREAD_GET: &str = "Thread/get";
+
+/// `.eml` downloads in a row that may fail before the run stops: past
+/// this many, something is wrong with every download, not with one.
+const BLOB_FAILURE_BUDGET: usize = 20;
+
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = opts.db.clone();
 
@@ -417,9 +427,21 @@ async fn run_sync(
         .unwrap_or_else(|| json!({}));
     upsert_account(db, &now, account_id, &account_payload).await?;
 
+    // What this run could not do as a whole; replaces the last run's
+    // rows once the run gets to the end.
+    let mut run_problems: Vec<RunProblem> = Vec::new();
+
     // ── mailboxes ───────────────────────────────────────────────────
     bar.doing("mailboxes");
-    sync_mailboxes(db, &now, session, account_id, opts, &mut summary).await?;
+    if let Err(e) = sync_mailboxes(db, &now, session, account_id, opts, &mut summary).await {
+        // The mailboxes an earlier listing stored still file the mail;
+        // with none stored there is nothing to file it under.
+        let stored = !db.mailbox_names(account_id).await?.is_empty();
+        if !api::is_upstream(&e) || !(stored || opts.control.stop.requested()) {
+            return Err(e);
+        }
+        run_problems.push(RunProblem::listing(M_MAILBOX_GET, format!("{e:#}")));
+    }
     bar.did(1);
 
     // Parse the mailbox tree once: both the extraction filter and the
@@ -457,7 +479,6 @@ async fn run_sync(
                     "no mailbox with this label path; check spelling / parent path",
                 ));
         }
-        datalib_etl::download_problems::report(db.pool(), &summary.problems).await;
         info!(
             event = "jmap_label_filter",
             requested = opts.only_mailbox_labels.len(),
@@ -466,6 +487,8 @@ async fn run_sync(
         );
         Some(resolved.ids)
     };
+    // Every run, so a filter corrected or removed takes its rows with it.
+    download_problems::report(db.pool(), &summary.problems).await;
 
     // Mailboxes newly admitted by a widened `only_extract_labels`.
     // `Email/changes` only reports what changed since the cursor, so
@@ -503,7 +526,8 @@ async fn run_sync(
 
     // ── emails (+ collect threadIds) ────────────────────────────────
     bar.doing("emails");
-    let touched_threads = sync_emails(
+    let mut touched_threads: HashSet<String> = HashSet::new();
+    if let Err(e) = sync_emails(
         db,
         opts.sealer.as_ref(),
         &now,
@@ -514,27 +538,51 @@ async fn run_sync(
         backfill.as_ref(),
         bar,
         &mut summary,
+        &mut touched_threads,
     )
-    .await?;
+    .await
+    {
+        // The walk stopped part-way: what it stored stays, nothing is
+        // pruned, and no state is saved, so the next run walks again.
+        let stored = db.holds_emails(account_id).await?;
+        if !api::is_upstream(&e) || !(stored || opts.control.stop.requested()) {
+            return Err(e);
+        }
+        run_problems.push(RunProblem::listing(M_EMAIL_QUERY, format!("{e:#}")));
+    }
     bar.did(1);
 
     // ── threads ─────────────────────────────────────────────────────
     bar.doing("threads");
-    sync_threads(
+    // A thread an earlier run could not get has emails and no row; its
+    // emails will not change to name it again.
+    touched_threads.extend(db.threads_without_a_row(account_id).await?);
+    if let Some(p) = sync_threads(
         db,
         &now,
         session,
         account_id,
+        opts,
         &touched_threads,
         &mut summary,
     )
-    .await?;
+    .await?
+    {
+        run_problems.push(p);
+    }
     bar.did(1);
 
     // ── blobs ───────────────────────────────────────────────────────
     bar.doing("blobs");
-    sync_blobs(db, session, account_id, opts, bar, &mut summary).await?;
+    let blobs = sync_blobs(db, session, account_id, opts, bar, &mut summary).await;
     bar.did(1);
+
+    // A stop may have cut any phase short; the last run's rows stand
+    // until a run gets through them.
+    if !opts.control.stop.requested() {
+        download_problems::report_run(db.pool(), &run_problems).await;
+    }
+    blobs?;
 
     info!(
         event = "jmap_download_complete",
@@ -682,13 +730,13 @@ async fn sync_emails(
     #[allow(clippy::option_option)] backfill: Option<&Option<HashSet<String>>>,
     bar: &RunBar,
     summary: &mut FetchSummary,
-) -> Result<HashSet<String>> {
+    touched_threads: &mut HashSet<String>,
+) -> Result<()> {
     let stored = if opts.full_resync {
         None
     } else {
         db.load_state(account_id, "Email").await?
     };
-    let mut touched_threads: HashSet<String> = HashSet::new();
 
     if let Some(since) = stored {
         match incremental_emails(
@@ -701,7 +749,7 @@ async fn sync_emails(
             mailbox_filter,
             bar,
             summary,
-            &mut touched_threads,
+            touched_threads,
         )
         .await
         {
@@ -719,12 +767,12 @@ async fn sync_emails(
                         scope.as_ref(),
                         bar,
                         summary,
-                        &mut touched_threads,
+                        touched_threads,
                     )
                     .await?;
                     prune_to_enumeration(db, account_id, scope.as_ref(), seen, summary).await?;
                 }
-                return Ok(touched_threads);
+                return Ok(());
             }
             Err(e) => warn!(
                 event = "jmap_email_changes_fallback",
@@ -743,11 +791,10 @@ async fn sync_emails(
         mailbox_filter,
         bar,
         summary,
-        &mut touched_threads,
+        touched_threads,
     )
     .await?;
-    prune_to_enumeration(db, account_id, mailbox_filter, seen, summary).await?;
-    Ok(touched_threads)
+    prune_to_enumeration(db, account_id, mailbox_filter, seen, summary).await
 }
 
 /// Delete the emails a finished, unfiltered `Email/query` walk did not
@@ -1065,24 +1112,39 @@ async fn sync_threads(
     now: &IsoOffsetTimestamp,
     session: &Session,
     account_id: &str,
+    opts: &FetchOptions,
     touched: &HashSet<String>,
     summary: &mut FetchSummary,
-) -> Result<()> {
-    if touched.is_empty() {
-        return Ok(());
+) -> Result<Option<RunProblem>> {
+    if touched.is_empty() || opts.control.stop.requested() {
+        return Ok(None);
     }
     // Sorted: `touched` is a hash set, so the same threads would
     // otherwise go out as a different request — batched differently
     // each run, and unmatchable by a recorded playback fixture.
     let mut ids: Vec<String> = touched.iter().cloned().collect();
     ids.sort_unstable();
+    // A batch that will not answer costs only its threads, and is the
+    // run's one `phase:` row.
+    let mut failed: Option<RunProblem> = None;
     for batch in ids.chunks(THREAD_GET_BATCH) {
-        let resp = call(
+        let resp = match call(
             session,
             "Thread/get",
             json!({"accountId": account_id, "ids": batch}),
         )
-        .await?;
+        .await
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                let terminal = api::is_terminal(&e);
+                failed.get_or_insert_with(|| RunProblem::phase(M_THREAD_GET, format!("{e:#}")));
+                if terminal {
+                    break;
+                }
+                continue;
+            }
+        };
         let list = jmap_list(&resp);
         // Build the whole batch's worth of rows up front, then bulk-
         // upsert in one tx. The per-thread `upsert_thread` call this
@@ -1101,7 +1163,7 @@ async fn sync_threads(
             db.save_state(account_id, "Thread", state).await?;
         }
     }
-    Ok(())
+    Ok(failed)
 }
 
 // Blobs
@@ -1118,6 +1180,9 @@ async fn sync_blobs(
     bar: &RunBar,
     summary: &mut FetchSummary,
 ) -> Result<()> {
+    if opts.control.stop.requested() {
+        return Ok(());
+    }
     let have_bytes = db.loaded_blob_ids().await?;
 
     // Build the to-fetch worklist: per-email `.eml` source only.
@@ -1167,10 +1232,11 @@ async fn sync_blobs(
             if let Some(sz) = job.advertised_size {
                 if sz as u64 > limit {
                     summary.blobs_oversize += 1;
-                    acc.add_failed(
+                    acc.add_skipped(
                         &job.owning_id,
                         &blob_id,
-                        format!(".eml {blob_id} exceeds size_limit {limit}"),
+                        datalib_problems::Reason::OverSizeLimit,
+                        format!("the .eml is {sz} bytes, over blob_size_limit_bytes ({limit})"),
                     );
                     continue;
                 }
@@ -1224,10 +1290,21 @@ async fn sync_blobs(
         }
     }
 
+    // What ends the phase early: a refused credential, a retry loop
+    // that gave up, or too many failures in a row. Walking on would
+    // fail every remaining `.eml` the same way, one row each.
+    let mut tripped: Option<anyhow::Error> = None;
+    let mut failures_in_a_row = 0usize;
     while let Some(joined) = set.join_next().await {
-        let (blob_id, owning_id, result) = joined.context("blob download task panicked")?;
+        let (blob_id, owning_id, result) = match joined {
+            Ok(outcome) => outcome,
+            Err(e) if e.is_cancelled() => continue,
+            Err(e) => return Err(anyhow!(e).context("blob download task panicked")),
+        };
+        let ending = tripped.is_some() || opts.control.stop.requested();
         match result {
             Ok((bytes, content_type)) => {
+                failures_in_a_row = 0;
                 acc.add_fetched(
                     &owning_id,
                     &blob_id,
@@ -1237,18 +1314,36 @@ async fn sync_blobs(
                 );
                 summary.blobs_downloaded += 1;
             }
+            // The run is ending, and a request the stop refused is no
+            // failure of this blob's.
+            Err(_) if ending => {}
+            Err(e) if api::is_terminal(&e) => {
+                summary.blobs_errored += 1;
+                tripped = Some(e.context(format!("downloading .eml {blob_id}")));
+                set.abort_all();
+            }
             Err(e) => {
                 summary.blobs_errored += 1;
-                acc.add_failed(&owning_id, &blob_id, e.to_string());
+                failures_in_a_row += 1;
+                acc.add_failed(&owning_id, &blob_id, format!("{e:#}"));
+                if failures_in_a_row >= BLOB_FAILURE_BUDGET {
+                    tripped = Some(e.context(format!(
+                        "{failures_in_a_row} .eml downloads failed in a row; the last was {blob_id}"
+                    )));
+                    set.abort_all();
+                }
             }
         }
         bar.did(1);
         // Backfill the freed slot so `concurrency` GETs stay in flight.
-        if let Some((blob_id, owning_id)) = pending.next() {
-            spawn_one(&mut set, blob_id, owning_id);
+        if tripped.is_none() && !opts.control.stop.requested() {
+            if let Some((blob_id, owning_id)) = pending.next() {
+                spawn_one(&mut set, blob_id, owning_id);
+            }
         }
     }
 
+    // What did land is kept either way.
     acc.flush(db.pool(), db.cas(), |email_id, blob_id, blake3| {
         EmlBlobRow {
             id: EmlBlobRow::pk_recipe(email_id, blob_id),
@@ -1258,7 +1353,10 @@ async fn sync_blobs(
         }
     })
     .await?;
-    Ok(())
+    match tripped {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
 }
 
 struct EmlJob {

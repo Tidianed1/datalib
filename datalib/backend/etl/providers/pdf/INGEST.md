@@ -25,8 +25,28 @@ fingerprint cache spares re-hashing it. Pinned by
 `rescan_reuses_hashes_and_is_idempotent` in `tests/pdf_e2e.rs`: a
 rescan hashes nothing and still retries the corrupt fixture.
 
-A scan truncates `pdf_paths` up front and rebuilds it, so deletions fall
-out; content already in `pdf_documents` is not identified again.
+A scan truncates `pdf_paths` once the walk is done and rebuilds it, so
+deletions fall out; content already in `pdf_documents` is not
+identified again.
+
+## When part of a scan fails
+
+The scan goes on, and what it could not do is a `problems` row:
+
+- **An entry the walk could not read** (a folder it may not list, a
+  file that would not hash, a dangling link) means a path the walk did
+  not see may only be one it could not see, so **that scan does not
+  truncate `pdf_paths`**: what it saw is upserted over what was there
+  and nothing falls out. It leaves a `listing:files` row; the next
+  clean walk truncates as usual and clears it
+  (`a_walk_with_errors_drops_no_path`).
+- **A document that would not identify** is
+  `record:pdf_paths:<path>`, with what the parser said. It is retried
+  every scan (above), and the scan that identifies it clears the row; a
+  scan that cannot see it (under an entry its walk could not read) keeps
+  it.
+  The fixture's `holodeck/corrupt.pdf` is one, on purpose. No grid row
+  carries it: a document that never identified never renders.
 
 ## Why no OCR yet
 
@@ -195,8 +215,8 @@ The same property makes the rows differ between machines, which is why
 
 ## Orphaned documents
 
-`pdf_paths` is truncated and rebuilt every scan, so a deleted file
-disappears on its own. `pdf_documents` is **not** truncated — it is
+`pdf_paths` is truncated and rebuilt every scan whose walk read the
+whole tree, so a deleted file disappears on its own. `pdf_documents` is **not** truncated — it is
 keyed on content, which has no notion of "no longer present," and
 dropping it would lose when the document was first seen
 (`pdf_documents_bookkeeping.fetched_at_utc`) and force a re-convert of

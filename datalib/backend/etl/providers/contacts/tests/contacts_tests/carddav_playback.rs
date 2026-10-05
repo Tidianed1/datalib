@@ -139,6 +139,21 @@ fn account_fixtures(root: &Path) {
 }
 
 async fn run(playback: &Path, store: &Path) -> ingest::FetchSummary {
+    run_with(playback, store, Default::default()).await
+}
+
+/// A run asked to stop before it syncs any address book.
+async fn run_stopped(playback: &Path, store: &Path) -> ingest::FetchSummary {
+    let control = datalib_etl::control::DownloadControl::default();
+    control.stop.request();
+    run_with(playback, store, control).await
+}
+
+async fn run_with(
+    playback: &Path,
+    store: &Path,
+    control: datalib_etl::control::DownloadControl,
+) -> ingest::FetchSummary {
     std::env::set_var(PLAYBACK_ENV, playback);
     let db = RawDb::open(&db_path_for(store)).await.expect("open store");
     let summary = ingest::fetch(ingest::FetchOptions {
@@ -147,7 +162,7 @@ async fn run(playback: &Path, store: &Path) -> ingest::FetchSummary {
         server_url: format!("{HOST}/"),
         addressbooks: vec!["Bridge".to_string()],
         progress: Default::default(),
-        control: Default::default(),
+        control,
     })
     .await;
     db.commit_all("test").await.expect("commit");
@@ -458,6 +473,10 @@ async fn what_a_sync_could_not_store_is_a_problem_row_until_it_is_stored() {
         problem_keys(&store).await,
         vec!["listing:addressbook Bridge".to_string(), unstored.clone()]
     );
+    // A run that stopped before the address book has not synced it again.
+    let before = problem_keys(&store).await;
+    run_stopped(&two, &store).await;
+    assert_eq!(problem_keys(&store).await, before);
     run(&three, &store).await;
     assert_eq!(problem_keys(&store).await, vec![unstored]);
     let fourth = run(&four, &store).await;

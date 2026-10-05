@@ -271,7 +271,13 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // all share. The run still returns `Ok` after a failed phase: the
     // step driver commits and reports the store's problem counts only on
     // `Ok`, so `Err` here would hide the very rows that say what failed.
-    let account = fetch_account(&mut client, &db).await?;
+    let (account, settings_failed) = fetch_account(&mut client, &db, &opts.control.stop).await?;
+    if settings_failed.is_some() {
+        s.errors += 1;
+        s.listings_failed += 1;
+    }
+    db.repair_shared_file_hashes(api.activity_files(), api.wellness_files())
+        .await?;
     let mut walk = Walk {
         db: &db,
         client: &mut client,
@@ -284,7 +290,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         sealer: opts.sealer.as_ref(),
         progress,
         stop: &opts.control.stop,
-        problems: Vec::new(),
+        problems: settings_failed.into_iter().collect(),
     };
 
     // A stop makes every request after it fail at once. None of those
@@ -397,7 +403,12 @@ fn listing_array(
     }
 }
 
-async fn fetch_account(client: &mut GarminClient, db: &RawDb) -> Result<Account> {
+/// The account, and the problem of a user-settings fetch that failed.
+async fn fetch_account(
+    client: &mut GarminClient,
+    db: &RawDb,
+    stop: &StopFlag,
+) -> Result<(Account, Option<RunProblem>)> {
     let profile = match client
         .get_json("/userprofile-service/socialProfile")
         .await
@@ -422,24 +433,37 @@ async fn fetch_account(client: &mut GarminClient, db: &RawDb) -> Result<Account>
         },
         display_name: Some(display_name.clone()),
     }];
-    if let Fetched::Some(settings) = client
+    // The settings are not needed for anything else the run does, so a
+    // failure costs only them: the stored row stays.
+    let mut settings_failed = None;
+    match client
         .get_json("/userprofile-service/userprofile/user-settings")
         .await
-        .context("garmin user-settings")?
     {
-        rows.push(AccountRow {
+        Ok(Fetched::Some(settings)) => rows.push(AccountRow {
             id_and_payload: WirePayload {
                 id: ACCOUNT_USER_SETTINGS.into(),
                 payload: settings.to_string(),
             },
             display_name: Some(display_name.clone()),
-        });
+        }),
+        Ok(Fetched::Nothing) => {}
+        Err(e) if is_auth(&e) => return Err(e.context("garmin user-settings")),
+        Err(e) if stop.requested() => {
+            info!(event = "garmin_user_settings_stopped", error = %format!("{e:#}"), "user-settings ended on the stop");
+        }
+        Err(e) => {
+            settings_failed = Some(RunProblem::listing("user_settings", format!("{e:#}")));
+        }
     }
     upsert(db, &rows).await?;
-    Ok(Account {
-        display_name,
-        profile_pk,
-    })
+    Ok((
+        Account {
+            display_name,
+            profile_pk,
+        },
+        settings_failed,
+    ))
 }
 
 async fn upsert<T: datalib_etl::bulk::BulkUpsertable>(db: &RawDb, rows: &[T]) -> Result<()> {
@@ -524,12 +548,15 @@ struct ActivityWork {
 /// What the activity loop fetches, listed activities first. A detail is
 /// fetched when the listing changed or no detail is stored — failed,
 /// interrupted, or never asked — including for an activity older than
-/// this run's listing window. A FIT file is only sought for a listed
-/// activity: a manual one has none and answers 404 every time.
+/// this run's listing window. A FIT file is sought for a listed activity
+/// that has none stored, and for any activity whose FIT fetch failed:
+/// beyond the window only those, since a manual activity has no file
+/// and answers 404 every time.
 fn activity_work(
     listed: &[&str],
     changed: &HashSet<String>,
     without_detail: &[String],
+    failed_files: &HashSet<String>,
     wants_file: impl Fn(&str) -> bool,
 ) -> Vec<ActivityWork> {
     let missing: HashSet<&str> = without_detail.iter().map(String::as_str).collect();
@@ -538,21 +565,22 @@ fn activity_work(
         .map(|id| ActivityWork {
             id: id.to_string(),
             detail: changed.contains(*id) || missing.contains(id),
-            file: wants_file(id),
+            file: wants_file(id) || failed_files.contains(*id),
         })
         .filter(|w| w.detail || w.file)
         .collect();
     let listed: HashSet<&str> = listed.iter().copied().collect();
-    work.extend(
-        without_detail
-            .iter()
-            .filter(|id| !listed.contains(id.as_str()))
-            .map(|id| ActivityWork {
-                id: id.clone(),
-                detail: true,
-                file: false,
-            }),
-    );
+    let unlisted: std::collections::BTreeSet<&str> = without_detail
+        .iter()
+        .chain(failed_files)
+        .map(String::as_str)
+        .filter(|id| !listed.contains(id))
+        .collect();
+    work.extend(unlisted.into_iter().map(|id| ActivityWork {
+        id: id.to_string(),
+        detail: missing.contains(id),
+        file: failed_files.contains(id),
+    }));
     work
 }
 
@@ -821,7 +849,6 @@ impl Walk<'_> {
             Err(_) if self.stopping() => Ok(Day::Stopped),
             Err(e) => {
                 s.errors += 1;
-                warn!(event = "garmin_day_failed", metric, date = %d, error = %format!("{e:#}"), "a day could not be fetched");
                 record_error(self.db, "garmin_daily", &id, &format!("{e:#}")).await?;
                 Ok(Day::Failed)
             }
@@ -957,9 +984,24 @@ impl Walk<'_> {
 
         let listed_ids: Vec<&str> = rows.iter().map(|r| r.id_and_payload.id.as_str()).collect();
         let without_detail = self.db.activities_without_detail().await?;
-        let to_fetch = activity_work(&listed_ids, &changed, &without_detail, |id| {
-            self.api.activity_files() && !stored_files.contains_key(id)
-        });
+        let (failed_files, unreadable_files) = if self.api.activity_files() {
+            self.db.activities_with_failed_files().await?
+        } else {
+            Default::default()
+        };
+        // A file that came back unreadable would come back the same; it
+        // is asked for again only once its activity changes.
+        let to_fetch = activity_work(
+            &listed_ids,
+            &changed,
+            &without_detail,
+            &failed_files,
+            |id| {
+                self.api.activity_files()
+                    && !stored_files.contains_key(id)
+                    && (!unreadable_files.contains(id) || changed.contains(id))
+            },
+        );
         self.progress.set_length(Some(to_fetch.len() as u64));
         let mut edges = CasEdgeAccumulator::new();
         for work in &to_fetch {
@@ -1012,6 +1054,7 @@ impl Walk<'_> {
                 }
             }
             if work.file {
+                let fit_ref = file_ref(id, FILE_KIND_FIT);
                 match self
                     .client
                     .get_bytes(&format!("/download-service/files/activity/{id}"))
@@ -1021,7 +1064,7 @@ impl Walk<'_> {
                         Ok(fit) => {
                             edges.add_fetched(
                                 id,
-                                FILE_KIND_FIT,
+                                &fit_ref,
                                 fit,
                                 Some("application/vnd.ant.fit".into()),
                                 Some(format!("{id}_ACTIVITY.fit")),
@@ -1030,15 +1073,24 @@ impl Walk<'_> {
                         }
                         Err(e) => {
                             s.errors += 1;
-                            edges.add_failed(id, FILE_KIND_FIT, format!("{e:#}"));
+                            edges.add_failed(id, &fit_ref, format!("{UNREADABLE_FIT}: {e:#}"));
                         }
                     },
+                    // A file that failed before and now is not there at
+                    // all has nothing left to retry.
+                    Ok(Fetched::Nothing)
+                        if failed_files.contains(id) || unreadable_files.contains(id) =>
+                    {
+                        self.db
+                            .forget_file_edges("garmin_activity_files", &[fit_ref])
+                            .await?;
+                    }
                     Ok(Fetched::Nothing) => {}
                     Err(e) if is_auth(&e) => return Err(e),
                     Err(_) if self.stopping() => break,
                     Err(e) => {
                         s.errors += 1;
-                        edges.add_failed(id, FILE_KIND_FIT, format!("{e:#}"));
+                        edges.add_failed(id, &fit_ref, format!("{e:#}"));
                     }
                 }
             }
@@ -1075,49 +1127,97 @@ impl Walk<'_> {
         }
         let start = self.resume_from(CURSOR_WELLNESS).await?;
         let stored = self.db.stored_wellness_files().await?;
-        let mut day = start;
+        let failed = self.db.failed_wellness_days().await?;
         let mut edges = CasEdgeAccumulator::new();
+        // The cursor walks past a day that failed, so a failed day behind
+        // it is asked for here or never.
+        let mut behind: Vec<NaiveDate> = failed
+            .iter()
+            .filter_map(|d| date(d).ok())
+            .filter(|d| *d < start)
+            .collect();
+        behind.sort();
+        for day in behind {
+            if self.wellness_day(day, &failed, &mut edges, s).await? == DaysEnd::Stopped {
+                break;
+            }
+        }
+        let mut day = start;
+        let mut cursor_at = None;
         while day <= self.end && !self.stopping() {
             let d = ymd(day);
             // Unlike the JSON metrics a day's bundle does not get
             // corrected after the fact, so one already stored is left
             // alone even inside the refresh window.
-            if !stored.contains_key(&d) {
-                self.progress.set_message(&format!("garmin: wellness {d}"));
-                match self
-                    .client
-                    .get_bytes(&format!("/download-service/files/wellness/{d}"))
-                    .await
-                {
-                    Ok(Fetched::Some(zip)) => {
-                        edges.add_fetched(
-                            &d,
-                            FILE_KIND_WELLNESS_ZIP,
-                            zip,
-                            Some("application/zip".into()),
-                            Some(format!("{d}_wellness.zip")),
-                        );
-                        s.wellness_files += 1;
-                    }
-                    Ok(Fetched::Nothing) => {}
-                    Err(e) if is_auth(&e) => return Err(e),
-                    Err(_) if self.stopping() => break,
-                    Err(e) => {
-                        s.errors += 1;
-                        edges.add_failed(&d, FILE_KIND_WELLNESS_ZIP, format!("{e:#}"));
-                    }
-                }
-                if edges.bundle_mut().len() >= 20 {
-                    flush_wellness_files(self.db, &edges).await?;
-                    edges = CasEdgeAccumulator::new();
-                    self.wrote(20).await;
-                }
+            if (!stored.contains_key(&d) || failed.contains(&d))
+                && self.wellness_day(day, &failed, &mut edges, s).await? == DaysEnd::Stopped
+            {
+                break;
             }
-            self.db.set_cursor(CURSOR_WELLNESS, &d).await?;
+            cursor_at = Some(d);
+            if edges.bundle_mut().len() >= 20 {
+                edges = self.flush_wellness(edges, &mut cursor_at).await?;
+            }
             day += Duration::days(1);
         }
-        flush_wellness_files(self.db, &edges).await?;
+        self.flush_wellness(edges, &mut cursor_at).await?;
         Ok(())
+    }
+
+    async fn wellness_day(
+        &mut self,
+        day: NaiveDate,
+        failed: &HashSet<String>,
+        edges: &mut CasEdgeAccumulator,
+        s: &mut FetchSummary,
+    ) -> Result<DaysEnd> {
+        let d = ymd(day);
+        let zip_ref = file_ref(&d, FILE_KIND_WELLNESS_ZIP);
+        self.progress.set_message(&format!("garmin: wellness {d}"));
+        match self
+            .client
+            .get_bytes(&format!("/download-service/files/wellness/{d}"))
+            .await
+        {
+            Ok(Fetched::Some(zip)) => {
+                edges.add_fetched(
+                    &d,
+                    &zip_ref,
+                    zip,
+                    Some("application/zip".into()),
+                    Some(format!("{d}_wellness.zip")),
+                );
+                s.wellness_files += 1;
+            }
+            Ok(Fetched::Nothing) if failed.contains(&d) => {
+                self.db
+                    .forget_file_edges("garmin_wellness_files", &[zip_ref])
+                    .await?;
+            }
+            Ok(Fetched::Nothing) => {}
+            Err(e) if is_auth(&e) => return Err(e),
+            Err(_) if self.stopping() => return Ok(DaysEnd::Stopped),
+            Err(e) => {
+                s.errors += 1;
+                edges.add_failed(&d, &zip_ref, format!("{e:#}"));
+            }
+        }
+        Ok(DaysEnd::Done)
+    }
+
+    /// Write the bundles gathered so far, then move the cursor to the
+    /// last day walked: a cursor never runs ahead of the files behind it.
+    async fn flush_wellness(
+        &mut self,
+        mut edges: CasEdgeAccumulator,
+        cursor_at: &mut Option<String>,
+    ) -> Result<CasEdgeAccumulator> {
+        flush_wellness_files(self.db, &edges).await?;
+        self.wrote(edges.bundle_mut().len() as u64).await;
+        if let Some(d) = cursor_at.take() {
+            self.db.set_cursor(CURSOR_WELLNESS, &d).await?;
+        }
+        Ok(CasEdgeAccumulator::new())
     }
 
     // ── whole-account listings ───────────────────────────────────────
@@ -1133,10 +1233,12 @@ impl Walk<'_> {
                 item_listing_path(kind.name, &display_name, profile_pk.as_deref(), offset)
             };
             let Some(first_page) = path(0) else {
-                warn!(
-                    event = "garmin_gear_skipped",
-                    "socialProfile carries no profileId"
-                );
+                // Not counted in `errors`: it is the account's shape, the
+                // same every run, and would hold back the scope record.
+                self.problems.push(RunProblem::listing(
+                    kind.name,
+                    "socialProfile carries no profileId, which the gear listing is keyed on",
+                ));
                 continue;
             };
             let Listed {
@@ -1195,13 +1297,23 @@ impl Walk<'_> {
     }
 }
 
+/// How the stored error of a FIT that downloaded but could not be read
+/// begins, so the retry can tell it from one that did not download.
+pub const UNREADABLE_FIT: &str = "the download held no readable FIT file";
+
+/// The CAS bundle keys its blobs by ref id, so each record's file needs
+/// a ref of its own; the edge row's id is that ref.
+fn file_ref(owner: &str, file_kind: &str) -> String {
+    format!("{owner}#{file_kind}")
+}
+
 async fn flush_activity_files(db: &RawDb, edges: &CasEdgeAccumulator) -> Result<()> {
     edges
-        .flush(db.pool(), db.cas(), |activity_id, file_kind, blake3| {
+        .flush(db.pool(), db.cas(), |activity_id, file_ref, blake3| {
             ActivityFileRow {
-                id: format!("{activity_id}#{file_kind}"),
+                id: file_ref.to_string(),
                 activity_id: activity_id.to_string(),
-                file_kind: file_kind.to_string(),
+                file_kind: FILE_KIND_FIT.to_string(),
                 blake3: blake3.map(str::to_string),
             }
         })
@@ -1210,11 +1322,11 @@ async fn flush_activity_files(db: &RawDb, edges: &CasEdgeAccumulator) -> Result<
 
 async fn flush_wellness_files(db: &RawDb, edges: &CasEdgeAccumulator) -> Result<()> {
     edges
-        .flush(db.pool(), db.cas(), |calendar_date, file_kind, blake3| {
+        .flush(db.pool(), db.cas(), |calendar_date, file_ref, blake3| {
             WellnessFileRow {
-                id: format!("{calendar_date}#{file_kind}"),
+                id: file_ref.to_string(),
                 calendar_date: calendar_date.to_string(),
-                file_kind: file_kind.to_string(),
+                file_kind: FILE_KIND_WELLNESS_ZIP.to_string(),
                 blake3: blake3.map(str::to_string),
             }
         })
@@ -1399,14 +1511,20 @@ mod tests {
 
     /// A listed activity whose detail is missing is fetched even when
     /// its listing did not change; an older one outside the listing gets
-    /// its detail and no FIT file; one with both in place is left alone.
+    /// its detail, and its FIT file only when that fetch failed before;
+    /// one with both in place is left alone.
     #[test]
-    fn activity_work_fetches_every_missing_detail_and_only_listed_files() {
+    fn activity_work_fetches_every_missing_detail_and_every_failed_file() {
         let changed: HashSet<String> = ["2".to_string()].into();
         let without_detail = ["1".to_string(), "9".to_string()];
-        let work = activity_work(&["1", "2", "3", "4"], &changed, &without_detail, |id| {
-            id == "4"
-        });
+        let failed_files: HashSet<String> = ["3".to_string(), "8".to_string()].into();
+        let work = activity_work(
+            &["1", "2", "3", "4"],
+            &changed,
+            &without_detail,
+            &failed_files,
+            |id| id == "4",
+        );
         let w = |id: &str, detail, file| ActivityWork {
             id: id.into(),
             detail,
@@ -1417,7 +1535,9 @@ mod tests {
             [
                 w("1", true, false),
                 w("2", true, false),
+                w("3", false, true),
                 w("4", false, true),
+                w("8", false, true),
                 w("9", true, false)
             ]
         );

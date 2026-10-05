@@ -91,6 +91,7 @@ impl DataProcessor for ClaudeIngest {
             progress: ctx.progress.clone(),
             control: ctx.control.clone(),
             sealer: Some(session.sealer()),
+            now: Some(ctx.now.to_string()),
         })
         .await?;
         let summary = format!(

@@ -109,6 +109,66 @@ list comes off every email and its row goes, the same as one
 and was not narrowed by `only_extract_labels` prunes the emails it did
 not list, and the threads left with none.
 
+## When part of a sync fails
+
+Whatever part of a sync fails becomes a row in `problems`, and the
+sync goes on with the rest. A row clears only when a later run tries
+the same thing again and it works. The step fails only when nothing
+useful is left to do: the store will not take a write, the credential
+is refused, or the first listing fails with nothing stored to fall
+back on.
+
+**JMAP.**
+
+- A `Mailbox/get` that fails is a `listing:Mailbox/get` row. The
+  mailboxes an earlier run stored still file the mail.
+- An `Email/query` walk that stops on an error is a
+  `listing:Email/query` row. The emails it stored stay. Nothing is
+  pruned, and no state token is saved, so the next run walks again.
+- A `Thread/get` that fails is a `phase:Thread/get` row. The next run
+  asks for every thread that has emails and no row of its own, even
+  though none of those emails changed.
+- An `.eml` that does not download is an `email_blobs:<edge id>` row,
+  and every run tries again any `.eml` it does not hold. One over
+  `blob_size_limit_bytes` is a warning (`over_size_limit`), not a
+  failure.
+- Some download failures end the blobs phase with an error: a refused
+  credential (401/403), a retry loop that gave up, or twenty failures in
+  a row. Any of these would fail every remaining `.eml` the same way.
+  What downloaded before is kept.
+
+**Gmail API.**
+
+- A message that would not fetch is a `record:gmail_messages:<Gmail id>`
+  row. The next run asks for it by id, even when the cursor has moved
+  past it.
+- A message that fetched but would not store gets the same row. A Gmail
+  message's bytes never change, so fetching it again with the same build
+  would only spend 20 quota units for the same answer. The build that
+  failed is kept under `gmail:<account>:unstorable:<id>` in
+  `sync_scope_state`, and only a different build (version or git hash)
+  asks for the message again. A message deleted upstream drops its row.
+- A message whose `.eml` was over the limit is a warning on its `.eml`.
+  Once the limit allows it, a later run fetches the message again. If
+  Gmail answers 404 for it then, the message was deleted, and it goes.
+- A run that never reached an earlier failure, because it was stopped,
+  hit the budget, or hit an error, keeps that failure's row.
+- A `messages.list` walk that fails is a
+  `listing:messages.list <label>` row. The other labels are still
+  walked, nothing is pruned, and the cursor is held.
+- A refused credential, a spent daily quota, or a retry loop that gave
+  up ends the run with an error. What was fetched before it is kept.
+
+**mbox.** A file that will not open, or whose read fails part-way, is a
+`listing:mbox <file>` row. It is not stamped, so the next run reads it
+again. Messages that will not parse are one `file:email/mbox:<file>`
+row on their file, which stands until the file is read again. While
+either kind of problem is present, the run deletes no message.
+Rewritten files are then left unstamped, so the next run reads every
+file again and prunes once all of them read cleanly. On a run that
+reads every message, an `only_extract_labels` entry that no message
+carries becomes a `config:` row.
+
 ## Rate limits
 
 Fastmail doesn't 429 us in practice — JMAP's batch shape (one
@@ -119,9 +179,11 @@ HTTP layer (`datalib_etl::http::default_retryability`).
 
 ## Tests
 
-**Nothing exercises the real JMAP wire format**: there is no JMAP
-fixture, playback test or live test (`playback_roundtrip.rs` is an empty
-placeholder). `tests/email_tests/jmap_render.rs` builds a parsed store in
+**Nothing exercises the real JMAP wire format**: there is no recorded
+JMAP fixture or live test (`playback_roundtrip.rs` is an empty
+placeholder). `jmap_full_resync_prunes.rs`, `jmap_progress_countdown.rs`
+and `jmap_run_problems.rs` replay hand-written answers in the shapes
+RFC 8621 gives. `tests/email_tests/jmap_render.rs` builds a parsed store in
 memory with real `.eml` bytes and renders it; `jmap_mbox.rs` runs the
 mbox mode end to end over `tests/fixtures/mbox/star_trek.mbox`.
 

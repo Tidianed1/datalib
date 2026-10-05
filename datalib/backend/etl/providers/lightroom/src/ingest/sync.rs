@@ -9,7 +9,7 @@ use anyhow::{bail, Context, Result};
 use sqlx::sqlite::SqlitePool;
 
 use datalib_etl::doltlite_raw as dr;
-use datalib_etl::download_problems::{RecordProblem, RunProblem};
+use datalib_etl::download_problems::{self, RecordProblem, RunProblem};
 use datalib_etl::file_checkpoint::{self, INGESTED_FILES_TABLE};
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan::{self, Scan, ScanOptions};
@@ -24,6 +24,13 @@ use super::unpack::{self, is_catalog, is_zip};
 /// `scope_config`'s key for the filters the newest commit was mirrored
 /// under.
 const SCOPE: &str = "backups";
+
+/// `scope_config`'s key for whether HEAD is behind the newest backup the
+/// store holds: an older backup was replayed and the newest has not been
+/// put back on top yet. Written before each backup's commit and cleared
+/// once the newest is HEAD, so a run that fails or stops in between leaves
+/// the next one to finish the job.
+const HEAD_BEHIND: &str = "head_behind";
 
 /// `file_checkpoint`'s scope for the live catalog's files.
 const CATALOG_CURSOR: &str = "lightroom/catalog";
@@ -49,6 +56,9 @@ pub struct SyncRun {
     pub problems: Vec<RecordProblem>,
     /// A folder the scan could not read in full.
     pub run_problems: Vec<RunProblem>,
+    /// The run was asked to stop before it was done, so its problems are
+    /// not the whole truth and must not replace the last run's.
+    pub stopped: bool,
 }
 
 impl SyncRun {
@@ -71,6 +81,17 @@ impl SyncRun {
             s.push_str(&last.summary());
         }
         s
+    }
+
+    /// Record the run's problems, replacing the last run's, unless it was
+    /// stopped. Every run re-plans every backup and re-walks both inputs,
+    /// so a complete run's set is the whole truth.
+    pub async fn report(&self, pool: &SqlitePool) {
+        if self.stopped {
+            return;
+        }
+        download_problems::report_records(pool, &self.problems).await;
+        download_problems::report_run(pool, &self.run_problems).await;
     }
 }
 
@@ -103,6 +124,8 @@ pub async fn run(
     let scope = scope_of(&options);
     let recorded = scope_config::load(pool, SCOPE).await?;
     let filters_changed = recorded.as_ref().is_some_and(|r| r != &scope);
+    let mut head_behind =
+        scope_config::load(pool, HEAD_BEHIND).await? == Some(serde_json::json!(true));
 
     let mut run = SyncRun::default();
 
@@ -115,7 +138,7 @@ pub async fn run(
             let scan = fsscan::scan(cache, dir, &opts, |p| is_zip(p) || is_catalog(p))
                 .await
                 .with_context(|| format!("scan the backups folder {}", dir.display()))?;
-            run.run_problems.extend(scan.walk_problems());
+            run.run_problems.extend(scan.walk_problems_as("backups"));
             let plan = backups::plan(backups::entries(&scan.files), &ledger);
             if plan.found.is_empty() {
                 bail!(
@@ -135,12 +158,24 @@ pub async fn run(
         .map(|(name, why)| RecordProblem::new(LEDGER, name, why))
         .collect();
 
+    // Backups that would not mirror this run: problems, retried next run
+    // since the ledger does not hold them, and never what HEAD ends on.
+    let mut failed: Vec<&str> = Vec::new();
     for backup in &plan.ingest {
         if stop.requested() {
+            run.stopped = true;
             return Ok(run);
         }
-        let stats = mirror_backup(pool, backup, &options, progress).await?;
+        let Some(stats) =
+            mirror_backup(pool, backup, &options, progress, &mut run.problems).await?
+        else {
+            failed.push(&backup.name);
+            continue;
+        };
         options.gc = false;
+        if inputs.catalog.is_none() {
+            set_head_behind(pool, &mut head_behind, true).await?;
+        }
         let hash = fsscan::hex(&backup.file.blake3);
         backups::record(pool, &backup.name, backup.taken_at, &backup.file.rel, &hash).await?;
         let msg = format!(
@@ -156,17 +191,19 @@ pub async fn run(
         run.last = Some(stats);
     }
     if stop.requested() {
+        run.stopped = true;
         return Ok(run);
     }
 
     // HEAD has to end on the newest state. With a catalog, that is the
     // catalog, mirrored below. Without one it is the newest backup, which
     // needs mirroring again when a backup older than it was replayed
-    // after it, or when the filters changed and no new backup carries
-    // them. Dated now: the reason is now, not when the backup was taken.
+    // after it — this run or one that did not get as far — or when the
+    // filters changed and no new backup carries them. Dated now: the
+    // reason is now, not when the backup was taken.
     let again = if inputs.catalog.is_some() {
         None
-    } else if !run.mirrored.is_empty() {
+    } else if !run.mirrored.is_empty() || head_behind {
         Some("to put the newest back on top")
     } else if filters_changed {
         Some("under new filters")
@@ -180,20 +217,26 @@ pub async fn run(
             .iter()
             .map(|b| (b.taken_at, b.name.as_str()))
             .chain(ledger.iter().map(|h| (h.taken_at, h.snapshot.as_str())))
+            .filter(|(_, name)| !failed.contains(name))
             .max();
         let last = run.mirrored.last().map(String::as_str);
         match newest {
             Some((_, name)) if Some(name) == last => {}
             Some((_, name)) => match plan.found.iter().find(|b| b.name == name) {
                 Some(backup) => {
-                    let stats = mirror_backup(pool, backup, &options, progress).await?;
-                    let msg = format!(
-                        "download {label}: backup {}, mirrored again {why}\n\n{}",
-                        backup.file.rel,
-                        stats.summary()
-                    );
-                    dr::commit_run(pool, &msg).await?;
-                    run.last = Some(stats);
+                    match mirror_backup(pool, backup, &options, progress, &mut run.problems).await?
+                    {
+                        Some(stats) => {
+                            let msg = format!(
+                                "download {label}: backup {}, mirrored again {why}\n\n{}",
+                                backup.file.rel,
+                                stats.summary()
+                            );
+                            dr::commit_run(pool, &msg).await?;
+                            run.last = Some(stats);
+                        }
+                        None => newest_missing = true,
+                    }
                 }
                 None => {
                     newest_missing = true;
@@ -212,6 +255,10 @@ pub async fn run(
         }
     }
 
+    if inputs.catalog.is_none() {
+        set_head_behind(pool, &mut head_behind, newest_missing).await?;
+    }
+
     // Record the filters once HEAD is mirrored under them. An absent
     // record is taken as a match: it is a store from before the record,
     // or a first run.
@@ -221,7 +268,7 @@ pub async fn run(
 
     if let Some(catalog) = inputs.catalog {
         let scan = scan_catalog(cache, catalog).await?;
-        run.run_problems.extend(scan.walk_problems());
+        run.run_problems.extend(scan.walk_problems_as("catalog"));
         let changes =
             scan.changes_since(&file_checkpoint::load_cursor(pool, CATALOG_CURSOR).await?);
         // A backup committed this run is HEAD now, so the catalog goes
@@ -249,15 +296,48 @@ pub async fn run(
     Ok(run)
 }
 
+/// `None` for a backup that would not mirror — a zip that will not
+/// open, a catalog that is not one — after recording it in `problems`,
+/// so one bad backup does not hold up every backup after it.
+///
+/// That holds only while the failure left the working set as it found
+/// it. Past the point where the engine empties the mirror, the working
+/// set is half a catalog, and committing the next backup on top of it
+/// would publish that; so the step fails, and the next writer's open
+/// discards what was left.
 async fn mirror_backup(
     pool: &SqlitePool,
     backup: &Backup,
     options: &MirrorOptions,
     progress: &Progress,
-) -> Result<MirrorStats> {
-    unpack::mirror_file(pool, &backup.file.path, options, progress)
+    problems: &mut Vec<RecordProblem>,
+) -> Result<Option<MirrorStats>> {
+    let before = working_set(pool).await?;
+    let err = match unpack::mirror_file(pool, &backup.file.path, options, progress).await {
+        Ok(stats) => return Ok(Some(stats)),
+        Err(e) => e.context(format!("mirror backup {}", backup.file.rel)),
+    };
+    if working_set(pool).await? != before {
+        return Err(err);
+    }
+    problems.push(RecordProblem::new(LEDGER, &backup.name, format!("{err:#}")));
+    Ok(None)
+}
+
+async fn set_head_behind(pool: &SqlitePool, recorded: &mut bool, behind: bool) -> Result<()> {
+    if *recorded != behind {
+        scope_config::store(pool, HEAD_BEHIND, &serde_json::json!(behind)).await?;
+        *recorded = behind;
+    }
+    Ok(())
+}
+
+/// What is uncommitted, table by table.
+async fn working_set(pool: &SqlitePool) -> Result<Vec<(String, String)>> {
+    sqlx::query_as("SELECT table_name, status FROM dolt_status ORDER BY table_name")
+        .fetch_all(pool)
         .await
-        .with_context(|| format!("mirror backup {}", backup.file.rel))
+        .context("read dolt_status")
 }
 
 /// The live catalog's own file and its `-wal`, where Lightroom keeps

@@ -17,6 +17,7 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use datalib_etl::control::DownloadControl;
+use datalib_etl::download_problems::{self, RecordProblem};
 use datalib_etl::fingerprint_cache::{CachedTree, Fingerprint, FingerprintCache};
 use datalib_etl::fswalk::StampKind;
 use datalib_etl::progress::Progress;
@@ -195,7 +196,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     let (
         mut summary,
-        walker_errors,
+        mut walker_errors,
         counters,
         phase_walk,
         phase_write_total,
@@ -218,7 +219,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // all in the same pre-commit working tree, so it lands in the one
     // scan commit the orchestrator makes.
     if !opts.no_stamp {
-        summary.stamped_directories = stamp_directories(&db, &opts.root).await?;
+        summary.stamped_directories =
+            stamp_directories(&db, &opts.root, &mut walker_errors).await?;
         if summary.stamped_directories > 0 {
             warn!(
                 event = "fsindex_stamping_active",
@@ -288,15 +290,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     db.write_scan_meta(&scan_meta, &now).await?;
     let phase_scan_meta = scan_meta_start.elapsed();
 
-    // Walker errors (unreadable entries, non-utf8 names, …). fsindex
-    // has no `_bookkeeping` sidecar to record them in — and there's no
-    // retry model that would consult one. They're logged here and
-    // counted in the `fsindex_phase_breakdown` event (`stat_errors`,
-    // `read_errors`, `non_utf8_paths`), which is all the durable
-    // evidence the scanner needs.
-    for err in &walker_errors {
-        warn!(event = "fsindex_entry_error", id = %err.id, error = %err.message, "an entry could not be recorded");
-    }
+    // Every run re-walks the whole tree, so this run's set is the whole
+    // truth and replaces the last one's.
+    report_records(&db, &mut walker_errors).await;
 
     // The commit and gc happen in the standalone binary, not here:
     // `fetch` stays commit-free per the framework's commit-lifecycle rule.
@@ -564,11 +560,30 @@ async fn streaming_pipeline(
     ))
 }
 
+/// One `problems` row per entry, for the first error it had: the walk
+/// and the stamping pass can both fail on one folder's options file, and
+/// two rows on one key would collide.
+async fn report_records(db: &RawDb, errors: &mut Vec<walker::WalkerError>) {
+    let mut seen = std::collections::HashSet::new();
+    errors.retain(|e| seen.insert((e.table, e.id.clone())));
+    let problems: Vec<RecordProblem> = errors
+        .iter()
+        .map(|e| RecordProblem::new(e.table, &e.id, &e.message))
+        .collect();
+    download_problems::report_records(db.pool(), &problems).await;
+}
+
 /// Post-write stamping pass. The scan has already streamed every row
 /// into `files` and `dirs`; here we walk `dirs` and, for any one
 /// whose `.fsindex.yaml` cascade enables `stamp_me_with_uuid`, ensure
-/// it carries a UUID breadcrumb and `UPDATE` its `identity_uuid`.
-async fn stamp_directories(db: &RawDb, root: &std::path::Path) -> Result<usize> {
+/// it carries a UUID breadcrumb and `UPDATE` its `identity_uuid`. A
+/// folder whose breadcrumb will not read or write is an error of its
+/// own and the rest are still stamped.
+async fn stamp_directories(
+    db: &RawDb,
+    root: &std::path::Path,
+    errors: &mut Vec<walker::WalkerError>,
+) -> Result<usize> {
     let mut count = 0_usize;
     for id in db.dir_ids().await? {
         let dir = if id.is_empty() {
@@ -580,7 +595,13 @@ async fn stamp_directories(db: &RawDb, root: &std::path::Path) -> Result<usize> 
         if !cascade.effective().stamp_me_with_uuid {
             continue;
         }
-        let mut yaml = options::load_at(&dir)?.unwrap_or_default();
+        let mut yaml = match options::load_at(&dir) {
+            Ok(y) => y.unwrap_or_default(),
+            Err(e) => {
+                errors.push(stamp_error(&id, e));
+                continue;
+            }
+        };
         let uuid = match &yaml.identity {
             Some(identity) => identity.uuid.clone(),
             None => {
@@ -596,8 +617,10 @@ async fn stamp_directories(db: &RawDb, root: &std::path::Path) -> Result<usize> 
                     stamper_version: 1,
                     originally_at,
                 });
-                options::write_breadcrumb(&dir, &yaml)
-                    .with_context(|| format!("write breadcrumb {}", dir.display()))?;
+                if let Err(e) = options::write_breadcrumb(&dir, &yaml) {
+                    errors.push(stamp_error(&id, e));
+                    continue;
+                }
                 info!(event = "fsindex_stamped", path = %dir.display(), uuid = %uuid, "stamped a directory with a uuid");
                 count += 1;
                 uuid
@@ -606,6 +629,14 @@ async fn stamp_directories(db: &RawDb, root: &std::path::Path) -> Result<usize> 
         db.set_identity_uuid(&id, &uuid).await?;
     }
     Ok(count)
+}
+
+fn stamp_error(id: &str, e: anyhow::Error) -> walker::WalkerError {
+    walker::WalkerError {
+        table: "dirs",
+        id: id.to_string(),
+        message: format!("could not stamp: {e:#}"),
+    }
 }
 
 fn new_uuid() -> String {

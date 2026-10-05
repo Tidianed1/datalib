@@ -48,6 +48,8 @@ impl DataProcessor for GitlabIngest {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
+        let now = datalib_time::parse_strict(ctx.now)
+            .with_context(|| format!("gitlab: run stamp {:?}", ctx.now))?;
         let entity_db = ingest::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
@@ -77,7 +79,7 @@ impl DataProcessor for GitlabIngest {
             sleep_between: Duration::ZERO,
             progress: ctx.progress.clone(),
             control: ctx.control.clone(),
-            ..ingest::FetchOptions::new(db)
+            ..ingest::FetchOptions::new(db, now)
         })
         .await?;
         let summary = format!(

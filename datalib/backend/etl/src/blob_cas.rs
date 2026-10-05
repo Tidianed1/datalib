@@ -997,7 +997,7 @@ impl CasEdgeAccumulator {
             }
         }
 
-        flush_cas_edges(pool, cas, &self.bundle.cas_inserts(), &rows, &error_stamps).await
+        flush_cas_edges(pool, cas, &self.bundle.cas_inserts(), rows, &error_stamps).await
     }
 }
 
@@ -1017,7 +1017,7 @@ pub async fn flush_cas_edges<T: crate::bulk::BulkUpsertable>(
     pool: &SqlitePool,
     cas: &BlobCas,
     cas_inserts: &[CasInsert<'_>],
-    rows: &[T],
+    rows: Vec<T>,
     errors: &[BlobNotFetched],
 ) -> Result<()> {
     if rows.is_empty() && cas_inserts.is_empty() && errors.is_empty() {
@@ -1035,9 +1035,16 @@ pub async fn flush_cas_edges<T: crate::bulk::BulkUpsertable>(
         .with_context(|| format!("begin flush_cas_edges {} tx", T::TABLE))?;
     // Every edge gets its row, but only one that landed is stamped
     // fetched: the stamp is how a later failure tells a stale copy from a
-    // record that never arrived.
-    crate::bulk::bulk_upsert_entity_in_tx(&mut tx, rows).await?;
+    // record that never arrived. An edge that failed this time but already
+    // points at bytes keeps them: a failed read is not news that the file
+    // changed, and writing it again would leave the bytes unreachable.
     let not_fetched: HashSet<&str> = errors.iter().map(|e| e.ref_id.as_str()).collect();
+    let holding = edges_holding_bytes::<T>(&mut tx, &not_fetched).await?;
+    let rows: Vec<T> = rows
+        .into_iter()
+        .filter(|r| !holding.contains(r.id()))
+        .collect();
+    crate::bulk::bulk_upsert_entity_in_tx(&mut tx, &rows).await?;
     crate::bulk::bulk_upsert_bookkeeping(
         &mut tx,
         T::TABLE,
@@ -1074,6 +1081,35 @@ pub async fn flush_cas_edges<T: crate::bulk::BulkUpsertable>(
         .await
         .with_context(|| format!("commit flush_cas_edges {} tx", T::TABLE))?;
     Ok(())
+}
+
+/// Which of `ids` already have a stored edge that points at bytes.
+async fn edges_holding_bytes<T: crate::bulk::BulkUpsertable>(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    ids: &HashSet<&str>,
+) -> Result<HashSet<String>> {
+    let ids: Vec<&str> = ids.iter().copied().collect();
+    let mut out = HashSet::new();
+    for chunk in ids.chunks(crate::bulk::SQL_CHUNK) {
+        let mut placeholders = String::new();
+        crate::bulk::push_placeholder_list(&mut placeholders, chunk.len());
+        let sql = format!(
+            "SELECT id FROM {} WHERE blake3 IS NOT NULL AND id IN ({placeholders})",
+            T::TABLE
+        );
+        // Audited: the table is the row type's `&'static str`; the IN-list
+        // is a `?,?,?` run sized from the chunk and every id is bound.
+        let mut q = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql));
+        for id in chunk {
+            q = q.bind(*id);
+        }
+        out.extend(
+            q.fetch_all(&mut **tx)
+                .await
+                .with_context(|| format!("edges of {} that hold bytes", T::TABLE))?,
+        );
+    }
+    Ok(out)
 }
 
 // Tests
@@ -1502,9 +1538,10 @@ mod tests {
     }
 
     /// A blob that never landed is dropped, an error; one that landed on
-    /// an earlier flush and failed now is stale, a warning. The flush
-    /// used to stamp every edge fetched before recording its failure, so
-    /// both read as warnings.
+    /// an earlier flush and failed now is stale, a warning, and keeps the
+    /// bytes it had. The flush used to stamp every edge fetched before
+    /// recording its failure, so both read as warnings; and then wrote the
+    /// failed edge's NULL over the stored hash.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_failed_blob_is_an_error_until_it_has_landed_once() {
         let d = tempdir().unwrap();
@@ -1535,6 +1572,16 @@ mod tests {
         assert_eq!(
             fetch_problem(&pool, "w1#landed").await,
             ("warning".to_string(), "ok".to_string())
+        );
+        let kept: Option<String> =
+            sqlx::query_scalar("SELECT blake3 FROM widget_blobs WHERE id = 'w1#landed'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            kept,
+            Some(blake3_hex(b"bytes")),
+            "a failed read keeps the edge on the bytes it already had"
         );
 
         cas.close().await;
