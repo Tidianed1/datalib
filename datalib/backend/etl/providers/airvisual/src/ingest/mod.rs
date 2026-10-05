@@ -13,17 +13,19 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use sqlx::{Sqlite, Transaction};
-use tracing::{info, warn};
+use tracing::info;
 
 use datalib_etl::bulk::bulk_upsert_entity_in_tx;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw as dr;
+use datalib_etl::download_problems::{self, RecordProblem, RunProblem};
 use datalib_etl::file_checkpoint;
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan::{self, ScannedFile};
 use datalib_etl::progress::Progress;
 
 use datalib_etl_airvisual_config::AirvisualDevice;
+use datalib_problems::{Outcome, Problem, Reason};
 
 use schema_raw::{
     cursor_scope, full_ddl, AirvisualDeviceRow, AirvisualSampleRow, AirvisualUnplacedSampleRow,
@@ -75,20 +77,20 @@ pub struct DeviceInfo {
     pub timezone: Option<String>,
 }
 
-pub fn read_device_info(root: &Path) -> DeviceInfo {
+/// What the folder says about its device. A folder without the file
+/// says nothing, which is not an error; a file that will not read or
+/// parse is, since what it would have said is unknown.
+pub fn read_device_info(root: &Path) -> std::result::Result<DeviceInfo, String> {
     let path = root.join(LATEST_JSON);
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return DeviceInfo::default();
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(DeviceInfo::default()),
+        Err(e) => return Err(format!("read {LATEST_JSON}: {e}")),
     };
-    let v: serde_json::Value = match serde_json::from_str(&text) {
-        Ok(v) => v,
-        Err(e) => {
-            warn!(event = "airvisual_latest_json_unreadable", path = %path.display(), error = %e, "could not read the device's latest.json");
-            return DeviceInfo::default();
-        }
-    };
+    let v: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("parse {LATEST_JSON}: {e}"))?;
     let s = |v: &serde_json::Value| v.as_str().map(str::to_string);
-    DeviceInfo {
+    Ok(DeviceInfo {
         node_name: s(&v["settings"]["node_name"]),
         serial_number: s(&v["serial_number"]),
         // The Pro reports `"model": 30` as a number; keep the text form.
@@ -100,7 +102,7 @@ pub fn read_device_info(root: &Path) -> DeviceInfo {
         app_version: s(&v["status"]["app_version"]),
         system_version: s(&v["status"]["system_version"]),
         timezone: s(&v["settings"]["timezone"]),
-    }
+    })
 }
 
 /// Who this device is: its serial from the config or the folder, and
@@ -126,41 +128,105 @@ pub fn identify(dev: &AirvisualDevice, info: &DeviceInfo) -> Result<Identity> {
     Ok(Identity { id, name })
 }
 
+/// The raw table a [`RecordProblem`] about one of a device's files names;
+/// the id is `<device>/<path under its folder>`.
+pub const FILES_TABLE: &str = "airvisual_files";
+
+/// What a run could not read, reported once at its end. Every run reads
+/// every device and re-reads every file it could not stamp, so each set
+/// is the whole truth for the run that collected it.
+#[derive(Default)]
+struct Problems {
+    devices: Vec<RunProblem>,
+    files: Vec<RecordProblem>,
+}
+
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = opts.db;
     let mut s = FetchSummary {
         devices: opts.devices.len(),
         ..Default::default()
     };
+    let mut problems = Problems::default();
     for dev in &opts.devices {
-        if let Err(e) = fetch_device(&db, dev, &opts.cache, &opts.progress, &mut s).await {
-            s.errors += 1;
-            warn!(event = "airvisual_device_failed", path = %dev.path.display(), error = %format!("{e:#}"), "this device's directory could not be read");
+        if opts.control.stop.requested() {
+            break;
         }
+        fetch_device(&db, dev, &opts.cache, &opts.progress, &mut s, &mut problems).await?;
+    }
+    if opts.control.stop.requested() {
+        info!(
+            event = "airvisual_stopped",
+            "told to stop; the problems stay as the last run left them"
+        );
+    } else {
+        download_problems::report_run(db.pool(), &problems.devices).await;
+        download_problems::report_records(db.pool(), &problems.files).await;
     }
     Ok(s)
 }
 
+/// One device's folder. A folder that cannot be read costs that device
+/// and leaves a `listing:device <name>` row; only the store failing is
+/// an `Err`.
 async fn fetch_device(
     db: &RawDb,
     dev: &AirvisualDevice,
     cache: &FingerprintCache,
     progress: &Progress,
     s: &mut FetchSummary,
+    problems: &mut Problems,
 ) -> Result<()> {
     let root = dev.path();
+    let label = format!(
+        "device {}",
+        dev.name
+            .clone()
+            .unwrap_or_else(|| dev.path.display().to_string())
+    );
+    let mut device_failed = |s: &mut FetchSummary, detail: String| {
+        s.errors += 1;
+        problems.devices.push(RunProblem::listing(&label, detail));
+    };
     let started = std::time::Instant::now();
-    let info = read_device_info(&root);
-    let who = identify(dev, &info)?;
+    let (info, info_error) = match read_device_info(&root) {
+        Ok(info) => (info, None),
+        Err(e) => (DeviceInfo::default(), Some(e)),
+    };
+    let who = match identify(dev, &info) {
+        Ok(who) => who,
+        Err(e) => {
+            let detail = match &info_error {
+                Some(why) => format!("{e:#}; {why}"),
+                None => format!("{e:#}"),
+            };
+            device_failed(s, detail);
+            return Ok(());
+        }
+    };
     let scope = cursor_scope(&who.id);
     let identified_ms = started.elapsed().as_millis();
 
-    let scan = fsscan::scan(cache, &root, &fsscan::ScanOptions::default(), |p| {
+    let scan = match fsscan::scan(cache, &root, &fsscan::ScanOptions::default(), |p| {
         p.file_name()
             .and_then(|n| n.to_str())
             .is_some_and(|n| n.ends_with(HISTORY_SUFFIX))
     })
-    .await?;
+    .await
+    {
+        Ok(scan) => scan,
+        Err(e) => {
+            device_failed(s, format!("{e:#}"));
+            return Ok(());
+        }
+    };
+    let file_problem = |rel: &str, detail: String| {
+        RecordProblem::new(FILES_TABLE, &format!("{}/{rel}", who.id), detail)
+    };
+    if let Some(why) = &info_error {
+        s.errors += 1;
+        problems.files.push(file_problem(LATEST_JSON, why.clone()));
+    }
     info!(
         event = "airvisual_scan",
         device = %who.id,
@@ -171,9 +237,9 @@ async fn fetch_device(
         "scanned the export tree"
     );
     s.errors += scan.errors.len();
-    for e in &scan.errors {
-        warn!(event = "airvisual_walk_error", path = %e.path.display(), error = %e.error, "an entry could not be walked");
-    }
+    problems
+        .devices
+        .extend(scan.walk_problems_as(&format!("files {}", who.id)));
 
     let prev = file_checkpoint::load_cursor(db.pool(), &scope).await?;
     let changes = scan.changes_since(&prev);
@@ -187,36 +253,38 @@ async fn fetch_device(
     let mut todo: Vec<&ScannedFile> = changes.needs_reading().collect();
     todo.sort_by(|a, b| a.rel.cmp(&b.rel));
     let mut tx = db.pool().begin().await?;
-    upsert_device(&mut tx, &who, &info).await?;
+    upsert_device(&mut tx, &who, &info, info_error.is_none()).await?;
     for f in todo {
         let file_started = std::time::Instant::now();
-        match ingest_one(&mut tx, &who.id, &scope, f).await {
-            Ok((stats, timing)) => {
-                s.lines += stats.lines;
-                s.samples += stats.samples;
-                s.sentinels += stats.sentinels;
-                s.clock_unset += stats.clock_unset;
-                s.bad_lines += stats.bad_lines;
-                info!(
-                    event = "airvisual_file",
-                    device = %who.id,
-                    file = %f.rel,
-                    lines = stats.lines,
-                    samples = stats.samples,
-                    clock_unset = stats.clock_unset,
-                    bad_lines = stats.bad_lines,
-                    read_ms = timing.read_ms,
-                    parse_ms = timing.parse_ms,
-                    upsert_ms = timing.upsert_ms,
-                    total_ms = file_started.elapsed().as_millis(),
-                    "ingested one measurement file"
-                );
-            }
+        let read = match read_one(f) {
+            Ok(read) => read,
             Err(e) => {
+                // Not stamped, so the next run reads it again.
                 s.errors += 1;
-                warn!(event = "airvisual_file_failed", device = %who.id, file = %f.rel, error = %format!("{e:#}"), "this measurement file could not be ingested");
+                problems.files.push(file_problem(&f.rel, format!("{e:#}")));
+                continue;
             }
-        }
+        };
+        let (stats, timing) = write_one(&mut tx, &who.id, &scope, f, read).await?;
+        s.lines += stats.lines;
+        s.samples += stats.samples;
+        s.sentinels += stats.sentinels;
+        s.clock_unset += stats.clock_unset;
+        s.bad_lines += stats.bad_lines;
+        info!(
+            event = "airvisual_file",
+            device = %who.id,
+            file = %f.rel,
+            lines = stats.lines,
+            samples = stats.samples,
+            clock_unset = stats.clock_unset,
+            bad_lines = stats.bad_lines,
+            read_ms = timing.read_ms,
+            parse_ms = timing.parse_ms,
+            upsert_ms = timing.upsert_ms,
+            total_ms = file_started.elapsed().as_millis(),
+            "ingested one measurement file"
+        );
     }
     sqlx::query(
         "UPDATE airvisual_devices SET last_ts_ms =
@@ -234,11 +302,14 @@ async fn fetch_device(
 
 /// Write the device row only when it would change, so a run that finds
 /// nothing new leaves the store as it was and the render has nothing
-/// to redo.
+/// to redo. When the folder's description could not be read
+/// (`info_known` false) a stored row is left as it is rather than
+/// blanked.
 async fn upsert_device(
     tx: &mut Transaction<'_, Sqlite>,
     who: &Identity,
     info: &DeviceInfo,
+    info_known: bool,
 ) -> Result<()> {
     let row = AirvisualDeviceRow {
         id: who.id.clone(),
@@ -265,6 +336,9 @@ async fn upsert_device(
     .bind(&row.id)
     .fetch_optional(&mut **tx)
     .await?;
+    if !info_known && stored.is_some() {
+        return Ok(());
+    }
     let same = stored
         .as_ref()
         .is_some_and(|(name, model, mac, app, sys, tz)| {
@@ -281,8 +355,6 @@ async fn upsert_device(
     bulk_upsert_entity_in_tx(tx, &[row]).await
 }
 
-/// Parse one file and write its rows and its cursor stamp into the
-/// device's transaction.
 /// Where one file's time went, for the `airvisual_file` event.
 struct FileTiming {
     read_ms: u128,
@@ -290,18 +362,42 @@ struct FileTiming {
     upsert_ms: u128,
 }
 
-async fn ingest_one(
-    tx: &mut Transaction<'_, Sqlite>,
-    device: &str,
-    scope: &str,
-    f: &ScannedFile,
-) -> Result<(parse::ParseStats, FileTiming)> {
+struct ReadFile {
+    parsed: parse::Parsed,
+    read_ms: u128,
+    parse_ms: u128,
+}
+
+/// Read and parse one file. An `Err` costs that file and nothing else.
+fn read_one(f: &ScannedFile) -> Result<ReadFile> {
     let t = std::time::Instant::now();
     let body =
         std::fs::read_to_string(&f.path).with_context(|| format!("read {}", f.path.display()))?;
     let read_ms = t.elapsed().as_millis();
     let parsed = parse::parse(&body, &f.rel).with_context(|| format!("parse {}", f.rel))?;
-    let parse_ms = t.elapsed().as_millis() - read_ms;
+    Ok(ReadFile {
+        parsed,
+        read_ms,
+        parse_ms: t.elapsed().as_millis() - read_ms,
+    })
+}
+
+/// Write one parsed file's rows and its cursor stamp into the device's
+/// transaction.
+async fn write_one(
+    tx: &mut Transaction<'_, Sqlite>,
+    device: &str,
+    scope: &str,
+    f: &ScannedFile,
+    read: ReadFile,
+) -> Result<(parse::ParseStats, FileTiming)> {
+    let t = std::time::Instant::now();
+    let ReadFile {
+        parsed,
+        read_ms,
+        parse_ms,
+    } = read;
+    let problem = bad_lines_problem(&parsed);
     let rows: Vec<AirvisualSampleRow> = parsed
         .samples
         .into_iter()
@@ -323,8 +419,8 @@ async fn ingest_one(
         .collect();
     schema_raw::upsert_samples(tx, &rows).await?;
     bulk_upsert_entity_in_tx(tx, &unplaced).await?;
-    file_checkpoint::record_file(tx, scope, f).await?;
-    let upsert_ms = t.elapsed().as_millis() - read_ms - parse_ms;
+    file_checkpoint::record_file_with_problem(tx, scope, f, problem).await?;
+    let upsert_ms = t.elapsed().as_millis();
     Ok((
         parsed.stats,
         FileTiming {
@@ -332,6 +428,27 @@ async fn ingest_one(
             parse_ms,
             upsert_ms,
         },
+    ))
+}
+
+/// The file's one problem row, when some of its lines could not be
+/// used: it stands until the file changes and is read again.
+fn bad_lines_problem(parsed: &parse::Parsed) -> Option<(Outcome, Problem)> {
+    let first = parsed.first_bad.as_deref()?;
+    let (bad, dropped) = (parsed.stats.bad_lines, parsed.lines_dropped);
+    let outcome = if dropped > 0 {
+        Outcome::Dropped
+    } else {
+        Outcome::Nulled
+    };
+    Some((
+        outcome,
+        Problem::record(
+            Reason::Undeserializable,
+            &format!(
+                "{bad} lines could not be read whole ({dropped} not stored at all); first: {first}"
+            ),
+        ),
     ))
 }
 
@@ -414,6 +531,18 @@ mod tests {
 
     async fn count(pool: &SqlitePool, sql: &'static str) -> i64 {
         sqlx::query_scalar(sql).fetch_one(pool).await.unwrap()
+    }
+
+    /// Every `problems` row, `(scope_key, sample)`.
+    async fn problems(pool: &SqlitePool) -> Vec<(String, String)> {
+        sqlx::query_as("SELECT scope_key, sample FROM problems ORDER BY scope_key")
+            .fetch_all(pool)
+            .await
+            .unwrap()
+    }
+
+    fn keys(rows: &[(String, String)]) -> Vec<&str> {
+        rows.iter().map(|r| r.0.as_str()).collect()
     }
 
     #[tokio::test]
@@ -684,6 +813,146 @@ mod tests {
             .await
             .unwrap();
         assert_eq!((s.devices, s.errors, s.samples), (1, 1, 0));
+        let rows = problems(e.db.pool()).await;
+        assert_eq!(
+            keys(&rows),
+            [format!("listing:device {}", e.root.display())],
+            "the failed device is a row, not only a log line"
+        );
+        assert!(rows[0].1.contains("no `serial`"), "{rows:?}");
+
+        std::fs::write(
+            e.root.join(LATEST_JSON),
+            latest_json("KITCHEN01", "kitchen"),
+        )
+        .unwrap();
+        let s = fetch(opts(&e, vec![device(&e.root, None, None)]))
+            .await
+            .unwrap();
+        assert_eq!((s.errors, s.samples), (0, 1));
+        assert!(problems(e.db.pool()).await.is_empty());
+        e.db.close().await;
+    }
+
+    /// A file that will not parse is left unstamped and read again next
+    /// run; until it reads, it is a row naming it.
+    #[tokio::test]
+    async fn a_file_that_will_not_parse_is_a_problem_until_it_reads() {
+        let e = env().await;
+        let f = e.root.join("archive1/202501_AirVisual_values.txt");
+        std::fs::write(&f, "Stardate;Warp factor;\n47634.4;9.2;\n").unwrap();
+        std::fs::write(
+            e.root.join("202609_AirVisual_values.txt"),
+            format!("{HEADER}{}", line(1788220836, "1.0", "425")),
+        )
+        .unwrap();
+        let s = fetch(opts(&e, kitchen(&e))).await.unwrap();
+        assert_eq!((s.errors, s.samples), (1, 1), "the other file still landed");
+        let rows = problems(e.db.pool()).await;
+        assert_eq!(
+            keys(&rows),
+            ["record:airvisual_files:KITCHEN01/archive1/202501_AirVisual_values.txt"]
+        );
+        assert!(rows[0].1.contains("no Timestamp column"), "{rows:?}");
+
+        std::fs::write(&f, format!("{HEADER}{}", line(1736185260, "3.0", "500"))).unwrap();
+        let s = fetch(opts(&e, kitchen(&e))).await.unwrap();
+        assert_eq!((s.errors, s.samples), (0, 1));
+        assert!(problems(e.db.pool()).await.is_empty());
+        e.db.close().await;
+    }
+
+    /// A folder the walk cannot enter is named, and the rest is read.
+    #[tokio::test]
+    async fn an_unreadable_folder_is_a_problem_until_it_reads() {
+        use std::os::unix::fs::PermissionsExt;
+        let e = env().await;
+        std::fs::write(
+            e.root.join("archive1/202501_AirVisual_values.txt"),
+            format!("{HEADER}{}", line(1736185260, "3.0", "500")),
+        )
+        .unwrap();
+        std::fs::write(
+            e.root.join("202609_AirVisual_values.txt"),
+            format!("{HEADER}{}", line(1788220836, "1.0", "425")),
+        )
+        .unwrap();
+        let archive = e.root.join("archive1");
+        std::fs::set_permissions(&archive, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let s = fetch(opts(&e, kitchen(&e))).await;
+        std::fs::set_permissions(&archive, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let s = s.unwrap();
+        assert_eq!((s.errors, s.samples), (1, 1), "{s:?}");
+        let rows = problems(e.db.pool()).await;
+        assert_eq!(keys(&rows), ["listing:files KITCHEN01"]);
+        assert!(rows[0].1.starts_with("1 entries"), "{rows:?}");
+
+        let s = fetch(opts(&e, kitchen(&e))).await.unwrap();
+        assert_eq!((s.errors, s.samples), (0, 1));
+        assert!(problems(e.db.pool()).await.is_empty());
+        e.db.close().await;
+    }
+
+    /// A `latest_config_measurements.json` that will not parse used to
+    /// read as an empty one, and the device row's model, firmware and
+    /// timezone were overwritten with nothing.
+    #[tokio::test]
+    async fn an_unreadable_description_leaves_the_device_row_alone() {
+        let e = env().await;
+        let json = e.root.join(LATEST_JSON);
+        std::fs::write(&json, latest_json("KITCHEN01", "kitchen")).unwrap();
+        std::fs::write(
+            e.root.join("202609_AirVisual_values.txt"),
+            format!("{HEADER}{}", line(1788220836, "1.0", "425")),
+        )
+        .unwrap();
+        fetch(opts(&e, kitchen(&e))).await.unwrap();
+
+        std::fs::write(&json, r#"{"serial_number": "KITCH"#).unwrap();
+        let s = fetch(opts(&e, kitchen(&e))).await.unwrap();
+        assert_eq!(s.errors, 1);
+        let tz: Option<String> = sqlx::query_scalar("SELECT timezone FROM airvisual_devices")
+            .fetch_one(e.db.pool())
+            .await
+            .unwrap();
+        assert_eq!(tz.as_deref(), Some("Europe/Zurich"));
+        assert_eq!(
+            keys(&problems(e.db.pool()).await),
+            ["record:airvisual_files:KITCHEN01/latest_config_measurements.json"]
+        );
+
+        std::fs::write(&json, latest_json("KITCHEN01", "kitchen")).unwrap();
+        fetch(opts(&e, kitchen(&e))).await.unwrap();
+        assert!(problems(e.db.pool()).await.is_empty());
+        e.db.close().await;
+    }
+
+    /// A line that will not parse costs that line; the file is stamped,
+    /// so the loss is a row on the file until it is read again.
+    #[tokio::test]
+    async fn lines_that_do_not_parse_are_the_files_problem_until_it_changes() {
+        let e = env().await;
+        let f = e.root.join("archive1/202501_AirVisual_values.txt");
+        std::fs::write(
+            &f,
+            format!(
+                "{HEADER}{}2025/01/06;18:41:10;17361;3.0;\n",
+                line(1736185260, "3.0", "500")
+            ),
+        )
+        .unwrap();
+        let s = fetch(opts(&e, kitchen(&e))).await.unwrap();
+        assert_eq!((s.errors, s.bad_lines, s.samples), (0, 1, 1));
+        let rows = problems(e.db.pool()).await;
+        assert_eq!(
+            keys(&rows),
+            ["file:airvisual/export/KITCHEN01:archive1/202501_AirVisual_values.txt"]
+        );
+        assert!(rows[0].1.contains("line 3"), "{rows:?}");
+
+        std::fs::write(&f, format!("{HEADER}{}", line(1736185260, "3.0", "500"))).unwrap();
+        fetch(opts(&e, kitchen(&e))).await.unwrap();
+        assert!(problems(e.db.pool()).await.is_empty());
         e.db.close().await;
     }
 }

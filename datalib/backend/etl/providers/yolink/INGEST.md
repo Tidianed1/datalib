@@ -7,6 +7,7 @@ from `us.yosmart.com/download/...` into a doltlite raw store:
 <data_root>/<group>/ingest/entities.doltlite_db
   yolink_devices    one row per configured device + its resume cursor (last_ts_ms)
   yolink_readings   one row per sample, keyed device#ts_ms#metric
+  yolink_windows    one row per window that failed and has not fetched since, keyed device#start_ms#end_ms
 ```
 
 Each device is walked forward from its configured `start` date in
@@ -15,13 +16,41 @@ Each device is walked forward from its configured `start` date in
 newest stored reading less that overlap. Each window is a signed-URL CSV
 fetched with `curl`; the signing scheme is in `src/ingest/mod.rs`
 (`build_signed_url`), reverse-engineered from YoLink's Android client,
-since the public API exposes no historical CSVs. A failed window is
-skipped and the walk goes on; thirty failures in a row abandon the
-device for the run.
+since the public API exposes no historical CSVs. The walk ends at the
+run's pinned now (`DATALIB_DAG_NOW`), not the clock, and stops at the
+next window when the step is told to stop. What a failed window leaves
+is below.
 
 Moving a device's `start` earlier re-walks it from the new start (the
 starts are recorded in `sync_scope_config`); moving it later than the
 stored cursor skips the gap, with a warning.
+
+## When part of a sync fails
+
+Only the store failing fails the step. Everything else costs the thing
+that failed, as a row in the store's `problems` table:
+
+| what | key | when it clears |
+| --- | --- | --- |
+| a window that could not be fetched or parsed | `yolink_windows:<device>#<start_ms>#<end_ms>` | a later run asks for that window again and it fetches |
+| a device that cannot be walked (a `start` that is not a date), or one abandoned after thirty failed windows in a row | `listing:<device>` | the next run that walks it |
+| a device with no reading in the last day | `silent:<device>` | it reports again |
+
+A failed window is a `yolink_windows` row. The walk goes on past it, and
+since the next run resumes from the newest reading, a window that failed
+behind it is asked for again only because its row is there: every run
+first retries the rows behind its resume point, then walks forward, and
+a window that fetches loses its row. A row ahead of the resume point is
+walked again by the forward walk, and goes once that walk has reached
+the end without failing it again. A window refused with a client error
+(not a timeout or a rate limit) that ends before the device's first
+stored reading is a `start` that predates the device: nothing is
+recorded for it. A failed window retried after YoLink has expired it
+answers empty and clears, so the readings it held are gone; retry
+within the retention window below.
+
+The `listing:` and `silent:` rows are replaced whole at the end of each
+run; a run told to stop leaves them as the last run did.
 
 ## Upstream history expires. The mirror is the only durable copy.
 

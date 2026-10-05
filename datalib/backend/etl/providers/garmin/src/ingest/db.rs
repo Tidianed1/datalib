@@ -91,6 +91,17 @@ impl RawDb {
                 }
                 q.execute(&mut *tx).await?;
             }
+            // A row that is gone cannot fail to fetch any more.
+            // Audited: `placeholders` is a `?,?,?` run sized from the
+            // chunk; every key is bound.
+            let mut q = sqlx::query(sqlx::AssertSqlSafe(format!(
+                "DELETE FROM problems WHERE scope_kind = ? AND scope_key IN ({placeholders})"
+            )))
+            .bind(datalib_problems::ScopeKind::Entity.as_str());
+            for id in chunk {
+                q = q.bind(format!("{table}:{id}"));
+            }
+            q.execute(&mut *tx).await?;
         }
         tx.commit().await?;
         Ok(())
@@ -195,6 +206,87 @@ impl RawDb {
                 ))
             })
             .collect())
+    }
+
+    /// The activities whose FIT fetch failed last time it was tried.
+    pub async fn activities_with_failed_files(&self) -> Result<HashSet<String>> {
+        let ids: Vec<String> = sqlx::query_scalar(
+            "SELECT f.activity_id FROM garmin_activity_files f \
+             JOIN garmin_activity_files_bookkeeping b ON b.id = f.id \
+             WHERE b.last_error IS NOT NULL",
+        )
+        .fetch_all(self.pool())
+        .await
+        .context("select garmin_activity_files that failed")?;
+        Ok(ids.into_iter().collect())
+    }
+
+    /// The days whose wellness bundle failed last time it was tried.
+    pub async fn failed_wellness_days(&self) -> Result<HashSet<String>> {
+        let days: Vec<String> = sqlx::query_scalar(
+            "SELECT f.calendar_date FROM garmin_wellness_files f \
+             JOIN garmin_wellness_files_bookkeeping b ON b.id = f.id \
+             WHERE b.last_error IS NOT NULL",
+        )
+        .fetch_all(self.pool())
+        .await
+        .context("select garmin_wellness_files that failed")?;
+        Ok(days.into_iter().collect())
+    }
+
+    /// Drop file edges, with their sidecars and problems.
+    pub async fn forget_file_edges(&self, table: &'static str, ids: &[String]) -> Result<()> {
+        self.delete_ids(table, ids).await
+    }
+
+    /// A file is one record's own, so a hash two records' edges share is
+    /// one an earlier build wrote wrongly: it keyed every file of a batch
+    /// under one ref, and each edge got the last file's hash. Those edges
+    /// lose the hash and are stamped failed, which is what makes the walks
+    /// fetch them again. Returns how many edges.
+    pub async fn unstick_shared_file_hashes(&self) -> Result<usize> {
+        let mut n = 0;
+        for (table, owner, what) in [
+            ("garmin_activity_files", "activity_id", "activity"),
+            ("garmin_wellness_files", "calendar_date", "day"),
+        ] {
+            // Audited: `table` and `owner` are literals from the list above.
+            let ids: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                "SELECT id FROM {table} WHERE blake3 IN \
+                 (SELECT blake3 FROM {table} WHERE blake3 IS NOT NULL \
+                  GROUP BY blake3 HAVING COUNT(DISTINCT {owner}) > 1) ORDER BY id"
+            )))
+            .fetch_all(self.pool())
+            .await
+            .with_context(|| format!("find shared hashes in {table}"))?;
+            if ids.is_empty() {
+                continue;
+            }
+            tracing::warn!(
+                event = "garmin_shared_file_hash",
+                table,
+                edges = ids.len(),
+                "file edges carried another record's hash; fetching them again"
+            );
+            let err = format!(
+                "the stored hash was another {what}'s file, written by an earlier build; \
+                 fetching it again"
+            );
+            let mut tx = self.pool().begin().await?;
+            for id in &ids {
+                // Audited: `table` is a literal from the list above; `id` is bound.
+                sqlx::query(sqlx::AssertSqlSafe(format!(
+                    "UPDATE {table} SET blake3 = NULL WHERE id = ?"
+                )))
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+                dr::record_object_error(&mut tx, table, id, &err).await?;
+            }
+            tx.commit().await?;
+            n += ids.len();
+        }
+        Ok(n)
     }
 
     /// Every stored activity with no detail payload: its fetch failed,

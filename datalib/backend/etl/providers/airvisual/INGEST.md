@@ -96,7 +96,9 @@ adds one is noticed rather than silently dropped.
 **The month being written ends in a block of NULs** the device has
 reserved; the parser trims them. A line cut short by a concurrent write
 costs that line (`airvisual_bad_line`, counted as `bad_lines`), not the
-file, and the file is re-read next run because its hash moved.
+file, and the file is re-read next run because its hash moved. A file
+with bad lines carries one `problems` row saying how many and which was
+first, until it is read again (see "When part of a run fails").
 
 **Sampling is uneven by design.** The interval follows the Pro's
 sensor-mode schedule: on this unit 10 s, 5 min and 15 min all appear,
@@ -158,6 +160,25 @@ while the others ingest. The same file also gives `model`,
 the device row, which is written only when one of those changes
 (`upsert_device`), so an unchanged run writes nothing and re-renders
 nothing.
+
+## When part of a run fails
+
+Only the store failing fails the step. Everything else costs the thing
+that failed, and is a row in the store's `problems` table:
+
+| what | key | when it clears |
+| --- | --- | --- |
+| a device folder that could not be read at all, or has no serial | `listing:device <name or path>` | the next run that reads it |
+| entries the walk of a folder could not read | `listing:files <serial>` | the next run whose walk is clean |
+| a history file that would not read or parse, or a `latest_config_measurements.json` that would not | `record:airvisual_files:<serial>/<path>` | the next run that reads it |
+| lines in a read file that could not be used | `file:airvisual/export/<serial>:<path>` | the file changes and is read again |
+
+A history file that failed is not stamped, so every run tries it again,
+and every run reads every device; the first three kinds are therefore
+replaced whole at the end of each run. A run told to stop leaves them
+as the last run did. A description that will not parse leaves the
+device row as it was rather than blanking its model, firmware and
+timezone.
 
 ## The TNG fixture
 

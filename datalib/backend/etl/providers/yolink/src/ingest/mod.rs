@@ -9,6 +9,7 @@
 
 pub mod schema_raw;
 
+use std::collections::HashSet;
 use std::process::Stdio;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -21,10 +22,14 @@ use tracing::{info, warn};
 
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::control::DownloadControl;
+use datalib_etl::doltlite_raw as dr;
+use datalib_etl::download_problems::{self, RunProblem};
 use datalib_etl::progress::{Progress, RunBar};
 use datalib_etl_yolink_config::{YolinkDevice, YolinkSync};
 
-use schema_raw::{full_ddl, YolinkDeviceRow, YolinkReadingRow};
+use schema_raw::{
+    full_ddl, window_id_recipe, YolinkDeviceRow, YolinkReadingRow, YOLINK_WINDOWS_TABLE,
+};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -182,6 +187,9 @@ pub struct FetchOptions {
     /// construction").
     pub db: RawDb,
     pub sync: YolinkSync,
+    /// The run's pinned now, in epoch ms: where every walk ends and what
+    /// silence is measured against.
+    pub now_ms: i64,
     pub progress: Progress,
     pub control: DownloadControl,
 }
@@ -194,7 +202,10 @@ pub struct FetchSummary {
     /// actually CHANGED, check `dolt diff` against the prior commit —
     /// that's the universal source of truth.
     pub readings: usize,
+    /// Devices that could not be planned or were abandoned.
     pub errors: usize,
+    /// Windows that failed this run; each is a `yolink_windows` row.
+    pub windows_failed: usize,
     pub requests: usize,
 }
 
@@ -225,10 +236,45 @@ fn prior_start_for(prior: Option<&serde_json::Value>, name: &str) -> Option<Stri
         .map(str::to_string)
 }
 
+/// Where one window's CSV comes from: YoLink over `curl` in a run, canned
+/// answers in a test.
+pub(crate) trait WindowSource {
+    async fn csv(&self, dev: &YolinkDevice, start_ms: i64, end_ms: i64) -> Result<String>;
+}
+
+struct Curl;
+
+impl WindowSource for Curl {
+    async fn csv(&self, dev: &YolinkDevice, start_ms: i64, end_ms: i64) -> Result<String> {
+        curl(&build_signed_url(dev, start_ms, end_ms)?).await
+    }
+}
+
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    fetch_from(opts, &Curl).await
+}
+
+/// One device's share of the run: where its forward walk begins, and the
+/// windows an earlier run failed.
+struct Plan<'a> {
+    dev: &'a YolinkDevice,
+    cursor: i64,
+    /// Failed windows that start behind the cursor: asked for again
+    /// before the forward walk.
+    retry: Vec<(i64, i64)>,
+    /// Failed windows the forward walk will cover again. Dropped once it
+    /// has, unless it failed them again.
+    ahead: Vec<String>,
+}
+
+pub(crate) async fn fetch_from<S: WindowSource>(
+    opts: FetchOptions,
+    src: &S,
+) -> Result<FetchSummary> {
     // Built before `opts.db` is moved out below.
     let scope_cfg = scope_config_blob(&opts.sync);
     let db = opts.db;
+    let stop = &opts.control.stop;
     let overlap_ms = opts.sync.overlap_minutes.unwrap_or(DEFAULT_OVERLAP_MINUTES) * 60_000;
     let stride_ms = opts.sync.window_days.unwrap_or(DEFAULT_WINDOW_DAYS) * 86_400_000;
     let window_ms = stride_ms.saturating_add(overlap_ms);
@@ -236,7 +282,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         devices: opts.sync.devices.len(),
         ..Default::default()
     };
-    let now_ms = Utc::now().timestamp_millis();
+    let now_ms = opts.now_ms;
+    let mut problems: Vec<RunProblem> = Vec::new();
     // Diff the per-device `start` dates against the ones that produced
     // the stored resume cursors. `None` (fresh store, or one written before
     // `sync_scope_config` existed) plans no backfill.
@@ -248,29 +295,58 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut plans = Vec::with_capacity(opts.sync.devices.len());
     for dev in &opts.sync.devices {
         let prior_start = prior_start_for(prior_scope_cfg.as_ref(), &dev.name);
-        match plan_device(&db, dev, prior_start.as_deref(), overlap_ms).await {
-            Ok(cursor) => plans.push((dev, cursor)),
-            Err(e) => {
+        match plan_device(&db, dev, prior_start.as_deref(), overlap_ms).await? {
+            Ok(cursor) => {
+                let (retry, ahead): (Vec<_>, Vec<_>) = failed_windows(db.pool(), &dev.name)
+                    .await?
+                    .into_iter()
+                    .partition(|(_, start, _)| *start < cursor);
+                plans.push(Plan {
+                    dev,
+                    cursor,
+                    retry: retry.into_iter().map(|(_, s, e)| (s, e)).collect(),
+                    ahead: ahead.into_iter().map(|(id, _, _)| id).collect(),
+                });
+            }
+            Err(why) => {
                 s.errors += 1;
-                warn!(event = "yolink_device_failed", device = %dev.name, error = %format!("{e:#}"), "a device could not be fetched");
+                problems.push(RunProblem::listing(&dev.name, why));
             }
         }
     }
     let requests: u64 = plans
         .iter()
-        .map(|(_, cursor)| window_count(*cursor, now_ms, stride_ms))
+        .map(|p| p.retry.len() as u64 + window_count(p.cursor, now_ms, stride_ms))
         .sum();
     let bar = RunBar::new(&opts.progress, requests);
 
-    for (dev, cursor) in plans {
-        bar.doing(&format!("yolink: {}", dev.name));
-        if let Err(e) =
-            walk_device(&db, dev, cursor, stride_ms, window_ms, now_ms, &bar, &mut s).await
-        {
-            s.errors += 1;
-            warn!(event = "yolink_device_failed", device = %dev.name, error = %format!("{e:#}"), "a device could not be fetched");
+    for plan in &plans {
+        bar.doing(&format!("yolink: {}", plan.dev.name));
+        let walk = Walk {
+            db: &db,
+            src,
+            dev: plan.dev,
+            bar: &bar,
+            stop,
+        };
+        match walk.run(plan, stride_ms, window_ms, now_ms, &mut s).await? {
+            WalkEnd::Done | WalkEnd::Stopped => {}
+            WalkEnd::Abandoned(why) => {
+                s.errors += 1;
+                problems.push(RunProblem::listing(&plan.dev.name, why));
+            }
         }
     }
+    // A stopped run did not reach every device, so it has no verdict on
+    // the ones it missed, and leaves the last run's rows standing.
+    if stop.requested() {
+        info!(
+            event = "yolink_stopped",
+            "told to stop; the run-level problems stay as the last run left them"
+        );
+        return Ok(s);
+    }
+    download_problems::report_run(db.pool(), &problems).await;
     let mut silent = Vec::new();
     for dev in &opts.sync.devices {
         let last: Option<i64> =
@@ -280,13 +356,13 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 .await
                 .with_context(|| format!("last reading of {}", dev.name))?;
         if let Some(detail) = silence(last, now_ms) {
-            silent.push(datalib_etl::download_problems::SilentEntry {
+            silent.push(download_problems::SilentEntry {
                 name: dev.name.clone(),
                 detail,
             });
         }
     }
-    datalib_etl::download_problems::report_silent(db.pool(), &silent).await;
+    download_problems::report_silent(db.pool(), &silent).await;
     // Record the config only when every device succeeded: a device that
     // errored hasn't covered its widened `start`, and the blob is one
     // row for all of them.
@@ -318,7 +394,7 @@ fn silence(last_ts_ms: Option<i64>, now_ms: i64) -> Option<String> {
     ))
 }
 
-/// How many windows `walk_device` requests walking from `cursor` to
+/// How many windows the forward walk requests from `cursor` to
 /// `now_ms`: one per stride, the last one cut short at `now_ms`.
 fn window_count(cursor: i64, now_ms: i64, stride_ms: i64) -> u64 {
     if cursor >= now_ms {
@@ -349,8 +425,7 @@ enum CursorNote {
 
 /// Where this run should begin walking for one device.
 ///
-/// Pure so the config-change branches are testable without a transport;
-/// `walk_device` shells out to curl.
+/// Pure so the config-change branches are testable without a transport.
 fn resume_cursor(
     stored_ms: Option<i64>,
     start_ms: i64,
@@ -373,18 +448,21 @@ fn resume_cursor(
     }
 }
 
-/// Record the device and decide where this run's walk of it begins.
+/// Record the device and decide where this run's walk of it begins. The
+/// inner `Err` is a device that cannot be walked; the outer, the store.
 async fn plan_device(
     db: &RawDb,
     dev: &YolinkDevice,
     prior_start: Option<&str>,
     overlap_ms: i64,
-) -> Result<i64> {
-    let start_ms = NaiveDate::parse_from_str(&dev.start, "%Y-%m-%d")
-        .with_context(|| format!("device {:?} start", dev.name))?
-        .and_hms_opt(0, 0, 0)
-        .map(|dt| Utc.from_utc_datetime(&dt).timestamp_millis())
-        .unwrap();
+) -> Result<std::result::Result<i64, String>> {
+    let start_ms = match NaiveDate::parse_from_str(&dev.start, "%Y-%m-%d") {
+        Ok(d) => d
+            .and_hms_opt(0, 0, 0)
+            .map(|dt| Utc.from_utc_datetime(&dt).timestamp_millis())
+            .unwrap(),
+        Err(e) => return Ok(Err(format!("start {:?}: {e}", dev.start))),
+    };
     let device_row = YolinkDeviceRow {
         id: dev.name.clone(),
         family_device_id: dev.family_device_id.clone(),
@@ -434,83 +512,218 @@ async fn plan_device(
         ),
         CursorNote::Normal => {}
     }
-    Ok(cursor_start)
+    Ok(Ok(cursor_start))
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn walk_device(
-    db: &RawDb,
-    dev: &YolinkDevice,
-    mut cursor: i64,
-    stride_ms: i64,
-    window_ms: i64,
-    now_ms: i64,
-    bar: &RunBar,
-    s: &mut FetchSummary,
-) -> Result<()> {
-    info!(event = "yolink_begin", device = %dev.name, cursor, now_ms, "fetching one device");
+/// How one device's walk ended.
+#[derive(Debug, PartialEq, Eq)]
+enum WalkEnd {
+    Done,
+    Stopped,
+    /// Too many windows in a row failed; the rest of the walk is left
+    /// for the next run.
+    Abandoned(String),
+}
 
-    // Tolerate per-window failures (a single 4xx or transient curl error
-    // shouldn't take out an entire device's backfill — common when the
-    // configured `start` predates when the device was deployed). Advance
-    // the cursor on failure and keep marching. Hard-fail only after
-    // CONSECUTIVE_FAILURE_BUDGET in a row, so a stuck credential or
-    // bad URL still surfaces instead of silently looping for years.
-    const CONSECUTIVE_FAILURE_BUDGET: u32 = 30;
-    let mut consecutive_failures: u32 = 0;
+/// How one window came out.
+enum WindowEnd {
+    Fetched,
+    Failed,
+    /// Refused before the device's first reading: a window from before
+    /// it was deployed, which has nothing to retry.
+    BeforeDeployment,
+}
 
-    while cursor < now_ms {
-        let end = cursor.saturating_add(window_ms).min(now_ms);
-        let url = build_signed_url(dev, cursor, end)?;
-        let window_result = async {
-            let body = curl(&url).await.context("curl")?;
-            s.requests += 1;
-            s.windows += 1;
-            let rows = parse(&body, &dev.kind).context("parse")?;
-            let upserted = upsert_readings(db.pool(), &dev.name, &rows).await?;
-            Ok::<_, anyhow::Error>(upserted)
-        }
-        .await;
-        bar.did(1);
-        let upserted = match window_result {
-            Ok(v) => {
-                consecutive_failures = 0;
-                v
+struct Walk<'a, S> {
+    db: &'a RawDb,
+    src: &'a S,
+    dev: &'a YolinkDevice,
+    bar: &'a RunBar,
+    stop: &'a datalib_etl::stop::StopFlag,
+}
+
+impl<S: WindowSource> Walk<'_, S> {
+    async fn run(
+        &self,
+        plan: &Plan<'_>,
+        stride_ms: i64,
+        window_ms: i64,
+        now_ms: i64,
+        s: &mut FetchSummary,
+    ) -> Result<WalkEnd> {
+        let dev = self.dev;
+        info!(event = "yolink_begin", device = %dev.name, cursor = plan.cursor, retry = plan.retry.len(), now_ms, "fetching one device");
+        let mut first_reading: Option<i64> =
+            sqlx::query_scalar("SELECT MIN(ts_ms) FROM yolink_readings WHERE device_name = ?")
+                .bind(&dev.name)
+                .fetch_one(self.db.pool())
+                .await?;
+        let mut failed_now: HashSet<String> = HashSet::new();
+
+        for &(start, end) in &plan.retry {
+            if self.stop.requested() {
+                return self.finish(WalkEnd::Stopped).await;
             }
-            Err(e) => {
-                consecutive_failures += 1;
-                warn!(
-                    event = "yolink_window_failed",
-                    device = %dev.name,
-                    cursor, end,
-                    consecutive_failures,
-                    error = %format!("{e:#}"),
-                    "a window of one device's history could not be fetched"
-                );
-                if consecutive_failures >= CONSECUTIVE_FAILURE_BUDGET {
-                    return Err(e.context(format!(
-                        "{} aborted after {consecutive_failures} consecutive window failures (last window {cursor}..{end})",
-                        dev.name
-                    )));
+            match self.window(start, end, &mut first_reading, s).await? {
+                WindowEnd::Failed => {
+                    failed_now.insert(window_id_recipe(&dev.name, start, end));
                 }
-                cursor = cursor.saturating_add(stride_ms).max(cursor + 1);
-                continue;
+                WindowEnd::Fetched | WindowEnd::BeforeDeployment => {
+                    forget_window(self.db.pool(), &window_id_recipe(&dev.name, start, end)).await?;
+                }
             }
-        };
-        s.readings += upserted;
-        info!(event = "yolink_window", device = %dev.name, cursor, end, upserted, "fetching one window of a device's history");
-        cursor = cursor.saturating_add(stride_ms).max(cursor + 1);
+        }
+
+        // A run of failures is tolerated (a transient error, or a window
+        // from before the device was deployed); one this long is a stuck
+        // credential or a dead device, and stops the walk rather than
+        // spending a request on every week of history.
+        const CONSECUTIVE_FAILURE_BUDGET: u32 = 30;
+        let mut consecutive_failures: u32 = 0;
+        let ahead: HashSet<&str> = plan.ahead.iter().map(String::as_str).collect();
+        let mut cursor = plan.cursor;
+        while cursor < now_ms {
+            if self.stop.requested() {
+                return self.finish(WalkEnd::Stopped).await;
+            }
+            let end = cursor.saturating_add(window_ms).min(now_ms);
+            let id = window_id_recipe(&dev.name, cursor, end);
+            match self.window(cursor, end, &mut first_reading, s).await? {
+                WindowEnd::Failed => {
+                    failed_now.insert(id);
+                    consecutive_failures += 1;
+                    if consecutive_failures >= CONSECUTIVE_FAILURE_BUDGET {
+                        let why = format!(
+                            "abandoned after {consecutive_failures} consecutive window failures \
+                             (last window {cursor}..{end}); the rest is walked next run"
+                        );
+                        warn!(event = "yolink_device_abandoned", device = %dev.name, %why);
+                        return self.finish(WalkEnd::Abandoned(why)).await;
+                    }
+                }
+                WindowEnd::Fetched | WindowEnd::BeforeDeployment => {
+                    consecutive_failures = 0;
+                }
+            }
+            cursor = cursor.saturating_add(stride_ms).max(cursor + 1);
+        }
+        // The walk reached now, so every failed window ahead of its start
+        // was asked for again; the ones that did not fail again are done.
+        for id in ahead {
+            if !failed_now.contains(id) {
+                forget_window(self.db.pool(), id).await?;
+            }
+        }
+        self.finish(WalkEnd::Done).await
     }
 
-    sqlx::query(
-        "UPDATE yolink_devices SET last_ts_ms =
-            (SELECT MAX(ts_ms) FROM yolink_readings WHERE device_name = ?)
-         WHERE id = ?",
+    /// One window: fetched and written, or recorded as failed. Only the
+    /// store failing is an `Err`.
+    async fn window(
+        &self,
+        start: i64,
+        end: i64,
+        first_reading: &mut Option<i64>,
+        s: &mut FetchSummary,
+    ) -> Result<WindowEnd> {
+        let dev = self.dev;
+        let fetched = async {
+            let body = self.src.csv(dev, start, end).await.context("curl")?;
+            parse(&body, &dev.kind).context("parse")
+        }
+        .await;
+        s.requests += 1;
+        s.windows += 1;
+        self.bar.did(1);
+        let rows = match fetched {
+            Ok(rows) => rows,
+            Err(e) if refused_before_deployment(&e, end, *first_reading) => {
+                info!(event = "yolink_window_before_deployment", device = %dev.name, start, end, error = %format!("{e:#}"), "refused before the device's first reading; nothing to retry");
+                return Ok(WindowEnd::BeforeDeployment);
+            }
+            Err(e) => {
+                s.windows_failed += 1;
+                let err = format!("{e:#}");
+                warn!(event = "yolink_window_failed", device = %dev.name, start, end, error = %err, "a window of one device's history could not be fetched");
+                record_window_failure(self.db.pool(), &dev.name, start, end, &err).await?;
+                return Ok(WindowEnd::Failed);
+            }
+        };
+        if let Some(earliest) = rows.iter().map(|r| r.ts_ms).min() {
+            *first_reading = Some(first_reading.map_or(earliest, |f| f.min(earliest)));
+        }
+        let upserted = upsert_readings(self.db.pool(), &dev.name, &rows).await?;
+        s.readings += upserted;
+        info!(event = "yolink_window", device = %dev.name, start, end, upserted, "fetched one window of a device's history");
+        Ok(WindowEnd::Fetched)
+    }
+
+    /// The device's resume point is its newest reading, however the walk
+    /// ended: what landed is behind it, what did not is a window row.
+    async fn finish(&self, end: WalkEnd) -> Result<WalkEnd> {
+        sqlx::query(
+            "UPDATE yolink_devices SET last_ts_ms =
+                (SELECT MAX(ts_ms) FROM yolink_readings WHERE device_name = ?)
+             WHERE id = ?",
+        )
+        .bind(&self.dev.name)
+        .bind(&self.dev.name)
+        .execute(self.db.pool())
+        .await?;
+        Ok(end)
+    }
+}
+
+/// A window YoLink refused with a client error, ending before the
+/// device's first stored reading: a configured `start` that predates the
+/// device. A timeout or a rate limit is not that.
+fn refused_before_deployment(e: &anyhow::Error, end_ms: i64, first_reading: Option<i64>) -> bool {
+    let refused = e
+        .downcast_ref::<HttpStatus>()
+        .is_some_and(|HttpStatus(code)| (400..500).contains(code) && ![408, 429].contains(code));
+    refused && first_reading.is_none_or(|first| end_ms <= first)
+}
+
+/// Every failed window of one device: `(id, start_ms, end_ms)`.
+async fn failed_windows(pool: &SqlitePool, device: &str) -> Result<Vec<(String, i64, i64)>> {
+    sqlx::query_as(
+        "SELECT id, start_ms, end_ms FROM yolink_windows WHERE device_name = ? ORDER BY start_ms",
     )
-    .bind(&dev.name)
-    .bind(&dev.name)
-    .execute(db.pool())
+    .bind(device)
+    .fetch_all(pool)
+    .await
+    .with_context(|| format!("failed windows of {device}"))
+}
+
+async fn record_window_failure(
+    pool: &SqlitePool,
+    device: &str,
+    start_ms: i64,
+    end_ms: i64,
+    err: &str,
+) -> Result<()> {
+    let id = window_id_recipe(device, start_ms, end_ms);
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        "INSERT INTO yolink_windows (id, device_name, start_ms, end_ms) VALUES (?, ?, ?, ?) \
+         ON CONFLICT(id) DO NOTHING",
+    )
+    .bind(&id)
+    .bind(device)
+    .bind(start_ms)
+    .bind(end_ms)
+    .execute(&mut *tx)
     .await?;
+    dr::record_object_error(&mut tx, YOLINK_WINDOWS_TABLE, &id, err).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// A window that fetched, or that never will: its row, sidecar and
+/// problem go.
+async fn forget_window(pool: &SqlitePool, id: &str) -> Result<()> {
+    datalib_etl::prune::prune_scope(pool, YOLINK_WINDOWS_TABLE, &[("id", id)], &HashSet::new())
+        .await?;
     Ok(())
 }
 
@@ -574,14 +787,33 @@ async fn curl(url: &str) -> Result<String> {
         .context("spawn curl")?
         .wait_with_output()
         .await?;
-    out.status.success().then_some(()).ok_or_else(|| {
-        anyhow!(
-            "curl exit {}: {}",
-            out.status,
-            String::from_utf8_lossy(&out.stderr).trim()
-        )
-    })?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let e = anyhow!("curl exit {}: {}", out.status, stderr.trim());
+        return Err(match http_status_of(&stderr) {
+            Some(code) => anyhow::Error::new(HttpStatus(code)).context(e.to_string()),
+            None => e,
+        });
+    }
     String::from_utf8(out.stdout).context("response not UTF-8")
+}
+
+/// The HTTP status a request was refused with.
+#[derive(Debug)]
+pub(crate) struct HttpStatus(pub u16);
+
+impl std::fmt::Display for HttpStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "HTTP {}", self.0)
+    }
+}
+
+impl std::error::Error for HttpStatus {}
+
+/// `curl -f`'s "The requested URL returned error: 404" → 404.
+fn http_status_of(stderr: &str) -> Option<u16> {
+    let (_, rest) = stderr.split_once("returned error: ")?;
+    rest.get(..3)?.parse().ok()
 }
 
 // ── tests ───────────────────────────────────────────────────────────
@@ -820,5 +1052,302 @@ mod scope_config_tests {
         // resume cursor must not warn on every single run.
         let (_, note) = resume_cursor(Some(10 * HOUR), 50 * HOUR, HOUR, false, false);
         assert_eq!(note, CursorNote::Normal);
+    }
+}
+
+#[cfg(test)]
+mod walk_tests {
+    use super::*;
+    use datalib_etl::stop::StopFlag;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    const DAY: i64 = 86_400_000;
+    const DEVICE: &str = "warp-core-coolant";
+
+    fn day(n: i64) -> i64 {
+        Utc.with_ymd_and_hms(2369, 4, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_millis()
+            + n * DAY
+    }
+
+    fn device(name: &str, start: &str) -> YolinkDevice {
+        YolinkDevice {
+            name: name.into(),
+            kind: "watermeter".into(),
+            start: start.into(),
+            family_device_id: "0123456789abcdef0123456789abcdef".into(),
+            device_udid: "fedcba9876543210fedcba9876543210".into(),
+        }
+    }
+
+    fn sync(devices: Vec<YolinkDevice>, window_days: i64) -> YolinkSync {
+        YolinkSync {
+            overlap_minutes: None,
+            window_days: Some(window_days),
+            devices,
+        }
+    }
+
+    /// A meter that reads once a day at noon from `deployed`, and a
+    /// transport that fails the windows it is told to.
+    struct Fake {
+        deployed: i64,
+        /// Window start → the status it is refused with, or `None` for a
+        /// connection that drops.
+        failing: Mutex<HashMap<i64, Option<u16>>>,
+        fail_all: bool,
+        asked: Mutex<Vec<(i64, i64)>>,
+        stop_at: Option<(usize, StopFlag)>,
+    }
+
+    impl Fake {
+        fn new() -> Self {
+            Self {
+                deployed: day(0),
+                failing: Mutex::new(HashMap::new()),
+                fail_all: false,
+                asked: Mutex::new(Vec::new()),
+                stop_at: None,
+            }
+        }
+
+        fn asked(&self) -> Vec<(i64, i64)> {
+            std::mem::take(&mut *self.asked.lock().unwrap())
+        }
+    }
+
+    impl WindowSource for Fake {
+        async fn csv(&self, _dev: &YolinkDevice, start: i64, end: i64) -> Result<String> {
+            let n = {
+                let mut asked = self.asked.lock().unwrap();
+                asked.push((start, end));
+                asked.len()
+            };
+            if let Some((at, stop)) = &self.stop_at {
+                if n >= *at {
+                    stop.request();
+                }
+            }
+            let failing = self.failing.lock().unwrap().get(&start).copied();
+            if let Some(status) = failing.or(self.fail_all.then_some(None)) {
+                return Err(match status {
+                    Some(code) => anyhow::Error::new(HttpStatus(code)),
+                    None => anyhow!("connection reset by peer"),
+                });
+            }
+            let mut csv = String::from("Device Id,Time,Water Meter(GAL),Water Consumption(GAL)\n");
+            let mut noon = self.deployed + DAY / 2;
+            while noon < end {
+                if noon >= start {
+                    let t = Utc.timestamp_millis_opt(noon).unwrap();
+                    csv.push_str(&format!(
+                        "d88b,{},{}.0,1.0\n",
+                        t.format("%Y/%m/%d %H:%M:%S+0000"),
+                        (noon - self.deployed) / DAY
+                    ));
+                }
+                noon += DAY;
+            }
+            Ok(csv)
+        }
+    }
+
+    struct Store {
+        _dir: tempfile::TempDir,
+        db: RawDb,
+    }
+
+    impl Store {
+        async fn new() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let db = RawDb::open(&dir.path().join("yl.doltlite_db"))
+                .await
+                .unwrap();
+            Self { _dir: dir, db }
+        }
+
+        async fn run(&self, fake: &Fake, sync: &YolinkSync, now_ms: i64) -> FetchSummary {
+            let stop = fake
+                .stop_at
+                .as_ref()
+                .map_or_else(StopFlag::new, |(_, s)| s.clone());
+            let opts = FetchOptions {
+                db: self.db.clone(),
+                sync: sync.clone(),
+                now_ms,
+                progress: Progress::noop(),
+                control: DownloadControl {
+                    stop,
+                    ..Default::default()
+                },
+            };
+            fetch_from(opts, fake).await.unwrap()
+        }
+
+        async fn problems(&self) -> Vec<(String, String)> {
+            sqlx::query_as("SELECT scope_key, sample FROM problems ORDER BY scope_key")
+                .fetch_all(self.db.pool())
+                .await
+                .unwrap()
+        }
+
+        async fn count(&self, sql: &'static str) -> i64 {
+            sqlx::query_scalar(sql)
+                .fetch_one(self.db.pool())
+                .await
+                .unwrap()
+        }
+    }
+
+    fn keys(rows: &[(String, String)]) -> Vec<&str> {
+        rows.iter().map(|r| r.0.as_str()).collect()
+    }
+
+    fn window_key(start: i64, end: i64) -> String {
+        format!("yolink_windows:{}", window_id_recipe(DEVICE, start, end))
+    }
+
+    const FIVE_MIN: i64 = 300_000;
+
+    /// The walk resumes from the newest reading, so a window that failed
+    /// behind it was never asked for again, and YoLink forgets history
+    /// after about two months.
+    #[tokio::test]
+    async fn a_failed_window_behind_the_resume_point_is_fetched_again() {
+        let st = Store::new().await;
+        let cfg = sync(vec![device(DEVICE, "2369-04-01")], 7);
+        let fake = Fake::new();
+        fake.failing.lock().unwrap().insert(day(7), None);
+        let s = st.run(&fake, &cfg, day(28)).await;
+        assert_eq!((s.windows, s.windows_failed, s.errors), (4, 1, 0), "{s:?}");
+        let failed = window_key(day(7), day(14) + FIVE_MIN);
+        assert_eq!(keys(&st.problems().await), [failed.as_str()]);
+        assert_eq!(
+            st.count("SELECT COUNT(DISTINCT ts_ms) FROM yolink_readings")
+                .await,
+            21,
+            "the failed week is missing"
+        );
+        fake.asked();
+
+        fake.failing.lock().unwrap().clear();
+        let s = st.run(&fake, &cfg, day(29)).await;
+        assert_eq!((s.windows_failed, s.errors), (0, 0), "{s:?}");
+        assert!(
+            fake.asked().contains(&(day(7), day(14) + FIVE_MIN)),
+            "the failed window is asked for again"
+        );
+        assert!(st.problems().await.is_empty(), "{:?}", st.problems().await);
+        assert_eq!(
+            st.count("SELECT COUNT(DISTINCT ts_ms) FROM yolink_readings")
+                .await,
+            29
+        );
+        assert_eq!(st.count("SELECT COUNT(*) FROM yolink_windows").await, 0);
+    }
+
+    /// A configured `start` before the device existed is refused; that
+    /// window has nothing to retry and is no problem. A refusal once the
+    /// device has readings is.
+    #[tokio::test]
+    async fn a_refusal_before_the_first_reading_is_not_a_failure() {
+        let st = Store::new().await;
+        let cfg = sync(vec![device(DEVICE, "2369-04-01")], 7);
+        let mut fake = Fake::new();
+        fake.deployed = day(7);
+        fake.failing.lock().unwrap().insert(day(0), Some(404));
+        fake.failing.lock().unwrap().insert(day(14), Some(404));
+        let s = st.run(&fake, &cfg, day(28)).await;
+        assert_eq!((s.windows_failed, s.errors), (1, 0), "{s:?}");
+        assert_eq!(
+            keys(&st.problems().await),
+            [window_key(day(14), day(21) + FIVE_MIN).as_str()]
+        );
+    }
+
+    /// A device whose `start` is not a date cannot be walked; it costs
+    /// that device, as a row, not only a log line.
+    #[tokio::test]
+    async fn a_device_that_cannot_be_planned_is_a_listing_row() {
+        let st = Store::new().await;
+        let cfg = sync(
+            vec![
+                device("holodeck-3", "stardate 47457.1"),
+                device(DEVICE, "2369-04-01"),
+            ],
+            7,
+        );
+        let s = st.run(&Fake::new(), &cfg, day(28)).await;
+        assert_eq!(s.errors, 1, "{s:?}");
+        assert_eq!(
+            st.count("SELECT COUNT(DISTINCT ts_ms) FROM yolink_readings")
+                .await,
+            28
+        );
+        let rows = st.problems().await;
+        assert!(keys(&rows).contains(&"listing:holodeck-3"), "{rows:?}");
+    }
+
+    /// Thirty failures in a row abandon the device for the run, as a
+    /// row. The windows it failed lie ahead of where the next run starts,
+    /// so that run's walk asks for them again and they go once it has.
+    #[tokio::test]
+    async fn an_abandoned_device_is_a_listing_row_and_its_windows_clear_when_walked() {
+        let st = Store::new().await;
+        let cfg = sync(vec![device(DEVICE, "2369-04-01")], 1);
+        let mut fake = Fake::new();
+        fake.fail_all = true;
+        let s = st.run(&fake, &cfg, day(40)).await;
+        assert_eq!((s.windows, s.errors), (30, 1), "{s:?}");
+        let rows = st.problems().await;
+        let listing = rows
+            .iter()
+            .find(|r| r.0 == format!("listing:{DEVICE}"))
+            .unwrap_or_else(|| panic!("{rows:?}"));
+        assert!(listing.1.contains("abandoned after 30"), "{rows:?}");
+        assert_eq!(st.count("SELECT COUNT(*) FROM yolink_windows").await, 30);
+
+        fake.fail_all = false;
+        let s = st.run(&fake, &cfg, day(40)).await;
+        assert_eq!((s.windows, s.windows_failed, s.errors), (40, 0, 0), "{s:?}");
+        assert!(st.problems().await.is_empty(), "{:?}", st.problems().await);
+        assert_eq!(st.count("SELECT COUNT(*) FROM yolink_windows").await, 0);
+    }
+
+    /// A stop ends the walk at the next window, and a stopped run says
+    /// nothing about the devices it did not reach: here the device would
+    /// read as gone quiet, its newest reading weeks before the run.
+    #[tokio::test]
+    async fn a_stop_ends_the_walk_and_leaves_the_run_level_rows() {
+        let st = Store::new().await;
+        let cfg = sync(vec![device(DEVICE, "2369-04-01")], 7);
+        let mut fake = Fake::new();
+        fake.stop_at = Some((1, StopFlag::new()));
+        let s = st.run(&fake, &cfg, day(28)).await;
+        assert_eq!(s.windows, 1, "{s:?}");
+        assert!(st.problems().await.is_empty(), "{:?}", st.problems().await);
+        assert_eq!(
+            st.count("SELECT last_ts_ms FROM yolink_devices").await,
+            day(6) + DAY / 2,
+            "the next run resumes after what landed"
+        );
+    }
+
+    #[test]
+    fn curls_refusal_names_its_status() {
+        assert_eq!(
+            http_status_of("curl: (22) The requested URL returned error: 404"),
+            Some(404)
+        );
+        assert_eq!(http_status_of("curl: (6) Could not resolve host"), None);
+    }
+
+    #[test]
+    fn a_window_id_names_its_device() {
+        let id = window_id_recipe("deck#7 freezer", 1, 2);
+        assert_eq!(schema_raw::device_of_window_id(&id), Some("deck#7 freezer"));
+        assert_eq!(schema_raw::device_of_window_id("nonsense"), None);
     }
 }
