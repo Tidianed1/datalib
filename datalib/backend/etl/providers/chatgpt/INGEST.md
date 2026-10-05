@@ -141,7 +141,9 @@ goes on with what it has:
 - **A listing page that fails** after the first keeps the pages before
   it. The walk is then incomplete, so nothing is pruned, and the run
   records `listing:conversations`. Every run lists again, so the next
-  clean listing clears it.
+  clean listing clears it. A `200` whose body has no `items` array is
+  a failed page too, the first one included: only an `items` that is
+  an empty array says the listing has ended.
 - **A rate limit** — a `429` is retried with `Retry-After`, or
   exponential backoff when the header is absent, inside the shared
   `latchkey_curl` chokepoint; when that gives up,

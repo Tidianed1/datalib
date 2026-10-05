@@ -415,14 +415,20 @@ impl RawDb {
         .await
     }
 
-    /// Delete this channel's stored messages inside a **fully re-walked**
-    /// `ts` range that the walk did not return — messages deleted on Slack.
+    /// Delete this channel's stored top-level messages inside a **fully
+    /// re-walked** `ts` range that the walk did not return — messages
+    /// deleted on Slack — each with the replies of its thread.
     ///
     /// Slack has no changes cursor and no tombstones: a deleted message
     /// simply stops appearing in `conversations.history`. The only way to
     /// see that is to re-walk a range and compare, which the trailing
     /// `refresh_window_days` pass already does for its own reasons. This
     /// turns that walk's by-product into the answer.
+    ///
+    /// Only rows history could have returned are judged. It lists a
+    /// thread's root and never its replies, so a reply's absence from the
+    /// walk says nothing; a reply goes only with its root, since nothing
+    /// asks for the replies of a root that is no longer listed.
     ///
     /// Both bounds are inclusive and must be the exact bounds the walk
     /// used. A range wider than what was walked deletes messages that were
@@ -434,9 +440,9 @@ impl RawDb {
         latest_ts: &str,
         seen_ts: &HashSet<String>,
     ) -> Result<usize> {
-        let stored: Vec<(String, String)> = sqlx::query_as(
-            "SELECT id, ts FROM messages \
-             WHERE channel_id = ? AND ts >= ? AND ts <= ?",
+        let top_level: Vec<(String, String)> = sqlx::query_as(
+            "SELECT ts, thread_root_uuid FROM messages \
+             WHERE channel_id = ? AND ts >= ? AND ts <= ? AND is_thread_root = 1",
         )
         .bind(channel_id)
         .bind(oldest_ts)
@@ -445,19 +451,35 @@ impl RawDb {
         .await
         .with_context(|| format!("list stored messages in {channel_id} window"))?;
 
-        let gone: Vec<String> = stored
+        let gone_roots: Vec<&(String, String)> = top_level
             .iter()
-            .filter(|(_, ts)| !seen_ts.contains(ts))
-            .map(|(id, _)| id.clone())
+            .filter(|(ts, _)| !seen_ts.contains(ts))
             .collect();
-        if gone.is_empty() {
+        if gone_roots.is_empty() {
             return Ok(0);
         }
+        let mut gone: Vec<String> = Vec::new();
+        for (_, thread) in &gone_roots {
+            let in_thread: Vec<String> =
+                sqlx::query_scalar("SELECT id FROM messages WHERE thread_root_uuid = ?")
+                    .bind(thread)
+                    .fetch_all(self.pool())
+                    .await
+                    .with_context(|| format!("list the messages of thread {thread}"))?;
+            gone.extend(in_thread);
+        }
         self.delete_messages(&gone).await?;
+        for (ts, _) in &gone_roots {
+            sqlx::query("DELETE FROM replies_pages WHERE id = ?")
+                .bind(super::schema_raw::replies_page_id_recipe(channel_id, ts))
+                .execute(self.pool())
+                .await
+                .with_context(|| format!("forget the replies walk of thread {ts}"))?;
+        }
         datalib_etl::prune::record(
             &format!("slack channel {channel_id} history window"),
-            stored.len(),
-            gone.len(),
+            top_level.len(),
+            gone_roots.len(),
         );
         Ok(gone.len())
     }

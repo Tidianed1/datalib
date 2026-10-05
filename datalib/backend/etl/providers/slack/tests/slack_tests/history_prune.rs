@@ -7,14 +7,14 @@
 
 use std::path::Path;
 
-use datalib_etl_slack::ingest::FetchOptions;
-use datalib_etl_slack::recorded::History;
+use datalib_etl_slack::ingest::{db_path_for, FetchOptions, RawDb};
+use datalib_etl_slack::recorded::{record_call, History};
 use serde_json::{json, Value};
 
 use crate::support::{fetch_into, msg, record_general, stored_ts, Tree};
 
-/// Far enough back that `refresh_window_days: 3650` covers every message
-/// here, so the window pass re-walks the whole channel.
+/// Far enough back that `refresh_window_days: WHOLE_CHANNEL_DAYS` covers
+/// every message here, so the window pass re-walks the whole channel.
 ///
 /// Deliberately in the 10-digit-epoch era. Slack timestamps are compared
 /// as *strings* throughout this provider — in the window bounds and in the
@@ -31,6 +31,51 @@ const TS_C: &str = "1700000200.000000";
 /// downloader sends on a cold start, and (because the refresh window
 /// reaches further back than it) the window pass's `oldest` too.
 const SINCE_TS: &str = "1577836800.000000";
+
+/// The window is counted back from the wall clock, so it is set a century
+/// wide: no calendar date puts its start after `SINCE`, which is what keeps
+/// the window pass's `oldest` at `SINCE_TS` and the recorded call matching.
+const WHOLE_CHANNEL_DAYS: i64 = 36500;
+
+/// Two replies on the thread rooted at `TS_A`, both between the channel's
+/// oldest and newest top-level messages.
+const TS_REPLY_1: &str = "1700000050.000000";
+const TS_REPLY_2: &str = "1700000150.000000";
+
+fn thread_root() -> Value {
+    json!({"ts": TS_A, "user": "U1", "text": "status report", "thread_ts": TS_A,
+           "reply_count": 2, "latest_reply": TS_REPLY_2})
+}
+
+/// The cold start of a channel whose first message is a two-reply thread:
+/// history lists the root and not the replies, which only
+/// `conversations.replies` returns.
+fn write_cold_start_with_thread(api: &Path) {
+    History::from("C1", SINCE_TS)
+        .record(api, json!([thread_root(), msg(TS_B, "b"), msg(TS_C, "c")]))
+        .unwrap();
+    record_call(
+        api,
+        "conversations.replies",
+        json!({"channel": "C1", "ts": TS_A, "limit": "200"}),
+        json!({"ok": true, "has_more": false, "messages": [
+            thread_root(),
+            {"ts": TS_REPLY_1, "user": "U1", "text": "shields holding", "thread_ts": TS_A},
+            {"ts": TS_REPLY_2, "user": "U1", "text": "all nominal", "thread_ts": TS_A},
+        ]}),
+    )
+    .unwrap();
+}
+
+/// What `replies_pages` holds as the newest reply of the `TS_A` thread.
+async fn recorded_latest_reply(out: &Path) -> Option<String> {
+    let db = RawDb::open(&db_path_for(out)).await.unwrap();
+    let by_thread = db.latest_reply_by_thread().await.unwrap();
+    db.close().await;
+    by_thread
+        .get(&("C1".to_string(), TS_A.to_string()))
+        .cloned()
+}
 
 /// The cold start: all three messages from `SINCE`.
 fn write_cold_start(api: &Path) {
@@ -94,7 +139,7 @@ async fn a_message_missing_from_a_rewalked_window_is_deleted() {
         "run 1 mirrors all three",
     );
 
-    let pruned = run_fetch(&t.out, 3650).await;
+    let pruned = run_fetch(&t.out, WHOLE_CHANNEL_DAYS).await;
     assert_eq!(pruned, 1, "the run must report the deletion it acted on");
     assert_eq!(
         stored_ts(&t.out),
@@ -156,7 +201,7 @@ async fn a_truncated_walk_prunes_nothing() {
     t.serve();
 
     run_fetch(&t.out, 0).await;
-    let pruned = run_fetch(&t.out, 3650).await;
+    let pruned = run_fetch(&t.out, WHOLE_CHANNEL_DAYS).await;
 
     assert_eq!(pruned, 0, "a walk that stopped short licenses no deletion");
     assert_eq!(
@@ -165,4 +210,76 @@ async fn a_truncated_walk_prunes_nothing() {
         "B and C were never reached by the walk, so their absence from it \
          says nothing about whether Slack still has them",
     );
+}
+
+/// A refresh window deleted every thread reply inside it: history lists a
+/// thread's root and never its replies, so the replies were absent from
+/// the re-walk and read as deleted — and stayed gone, because the thread's
+/// `latest_reply` had not moved and the reply pass skipped it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_rewalked_window_keeps_the_replies_of_a_thread_it_lists() {
+    let t = Tree::new();
+    record_general(&t.api);
+
+    write_cold_start_with_thread(&t.api);
+    // Run 2: nothing upstream changed. The window re-serves the same three
+    // top-level messages, the root with the same `latest_reply`.
+    write_nothing_new(&t.api);
+    write_window(
+        &t.api,
+        json!([thread_root(), msg(TS_B, "b"), msg(TS_C, "c")]),
+        false,
+    );
+
+    t.serve();
+
+    let everything = vec![
+        TS_A.to_string(),
+        TS_REPLY_1.to_string(),
+        TS_B.to_string(),
+        TS_REPLY_2.to_string(),
+        TS_C.to_string(),
+    ];
+    run_fetch(&t.out, 0).await;
+    assert_eq!(stored_ts(&t.out), everything, "run 1 mirrors the thread");
+
+    let pruned = run_fetch(&t.out, WHOLE_CHANNEL_DAYS).await;
+    assert_eq!(pruned, 0, "nothing was deleted upstream");
+    assert_eq!(
+        stored_ts(&t.out),
+        everything,
+        "history never lists a reply, so a reply's absence from it says nothing",
+    );
+    assert_eq!(
+        recorded_latest_reply(&t.out).await.as_deref(),
+        Some(TS_REPLY_2),
+        "the thread is recorded as current through a reply that is still stored",
+    );
+}
+
+/// A thread whose root is gone from the re-walked window goes whole: with
+/// the root deleted nothing would ever ask for its replies again, so
+/// leaving them would strand them, along with a `replies_pages` row that
+/// vouches for a thread we no longer hold.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_thread_root_missing_from_a_rewalked_window_takes_its_replies() {
+    let t = Tree::new();
+    record_general(&t.api);
+
+    write_cold_start_with_thread(&t.api);
+    write_nothing_new(&t.api);
+    write_window(&t.api, json!([msg(TS_B, "b"), msg(TS_C, "c")]), false);
+
+    t.serve();
+
+    run_fetch(&t.out, 0).await;
+    let pruned = run_fetch(&t.out, WHOLE_CHANNEL_DAYS).await;
+
+    assert_eq!(pruned, 3, "the root and its two replies");
+    assert_eq!(
+        stored_ts(&t.out),
+        vec![TS_B.to_string(), TS_C.to_string()],
+        "the replies of a deleted root go with it",
+    );
+    assert_eq!(recorded_latest_reply(&t.out).await, None);
 }

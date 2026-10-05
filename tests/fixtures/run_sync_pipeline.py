@@ -865,7 +865,10 @@ def _source_config(
         # `im` / `mpim` envelope at all. Leaving it off would mean the
         # DM surfaces are in the fixture but never mirrored, rendered,
         # indexed, or asserted on.
-        source["api"] = {"media": False, "dms": True}
+        #
+        # No refresh pass: its window is measured from the wall clock,
+        # so its request would differ by the day and miss the tape.
+        source["api"] = {"media": False, "dms": True, "refresh_window_days": 0}
     elif type_str == "beeper":
         # `sources` here is the canonical-network list that filters
         # which rooms get ingested. `path` points at the materialized

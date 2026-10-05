@@ -127,9 +127,8 @@ reactions on already-stored messages get picked up; it never narrows a
 run's range. Setting it to 7 on a fresh store still walks everything
 from `since`, and setting it on an existing store only adds API calls.
 
-Its default also differs by entry point: the `slack-ingest` CLI
-defaults to `DEFAULT_REFRESH_WINDOW_DAYS` (30), while a config-driven
-run (`params.sync`) treats an unset value as 0 — no refresh pass.
+Unset, it is `DEFAULT_REFRESH_WINDOW_DAYS` (30), for a configured
+source and for the `slack-ingest` CLI alike. `0` turns the pass off.
 
 ## Resume
 
@@ -152,11 +151,22 @@ and that is worth knowing before you rely on it.
 ### Top-level messages: inside the refresh window, and only there
 
 `refresh_window_days` makes every run re-walk the last N days of each
-channel. Anything we hold in that range that the re-walk did not return
-has been deleted upstream, so we delete our copy.
+channel. A top-level message we hold in that range that the re-walk did
+not return has been deleted upstream, so we delete our copy.
 
-**It defaults to off** (`0`), so out of the box we notice nothing. Set it
-to how far back you want deletions caught:
+Only top-level messages are judged this way. `conversations.history`
+lists a thread's root and never its replies, so a reply missing from the
+re-walk is not evidence of anything and is left alone. The one way the
+window removes a reply is with its root: when a root is gone, its
+replies and the thread's `replies_pages` row go with it, because nothing
+would ever ask for that thread again. A reply that was also sent to the
+channel (`thread_broadcast`) does appear in history, but it is stored as
+a reply and treated as one here.
+
+It defaults to 30 days. Without it we would notice nothing: no deleted
+message, no edit, and no new reply on a thread whose root is older than
+the newest message we hold. Set it to how far back you want those
+caught, or to `0` to turn the pass off:
 
 ```toml
 [steps.params.api]

@@ -122,6 +122,7 @@ impl DataProcessor for EmailIngest {
                         only_mailbox_labels: self.only_extract_labels.clone(),
                         blob_size_limit_bytes: self.blob_size_limit_bytes,
                         blob_download_concurrency: sync.blob_download_concurrency,
+                        blob_flush_bytes: None,
                         progress: ctx.progress.clone(),
                         control: ctx.control.clone(),
                     })

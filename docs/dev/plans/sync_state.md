@@ -1,6 +1,6 @@
 # Sync state: what is owed is what upstream listed, minus what we hold
 
-**Status: decided 2026-10-05; nothing built.** This is the design and
+**Status: decided 2026-10-05; step 0 of §7 is built.** This is the design and
 the order of work. It came out of the audit in
 [`audits/2026-10-05_loose_ends.md`](../audits/2026-10-05_loose_ends.md)
 and a read of the four downloads with the most resume state (Slack,
@@ -150,18 +150,20 @@ progress.
 
 ## 5. What this does not fix
 
-Each is a property of the upstream and needs its own answer.
+Each is a property of the upstream. We take a well-formed answer at its
+word and do not add requests to check it: a wrong deletion in a raw
+store is recoverable from doltlite history. A malformed answer is a
+different thing, and is not a listing at all (C1 in §6).
 
 - **A listing that is not complete.** Notion's search by edit time never
   reports a deletion and can miss a page shared late. Only a periodic
-  full pass catches those.
+  full pass would catch those.
 - **Paging by offset.** Garmin's activity list can skip an item when
-  something is deleted mid-walk, which makes a live activity look gone.
-  Require absence from two complete listings before deleting, or list
-  again before the delete.
+  something is deleted mid-walk, which makes a live activity look gone
+  until the next run lists it again. Accepted.
 - **Nothing reports the change.** Slack has no listing that says an old
-  thread got a new reply. A refresh window is the only producer (§7,
-  step 2).
+  thread got a new reply. A refresh window is the only producer, which
+  is why it defaults to 30 days.
 
 ## 6. Bugs this closes
 
@@ -176,19 +178,19 @@ first and watched failing.
 | # | Bug | Evidence | Closed by |
 |---|---|---|---|
 | S1 | A history walk interrupted after its first page loses everything older, for good. History is newest-first; the failed walk is caught and the run succeeds, so page 1 is sealed; the next run resumes from the newest stored message. | traced; page order from Slack's docs. `mod.rs:1176`, `:1207`, `:1746-1749`; `db.rs:551-571` | coverage per channel, written with each page |
-| S2 | The refresh-window prune deletes thread replies: it compares every stored message in the window with what history returned, and history does not return replies. | suspected: rests on history omitting replies, which the docs do not state. `db.rs:437-446`, `mod.rs:988-992` | per-page absence over top-level messages only |
+| S2 | The refresh-window prune deleted thread replies: it compared every stored message in the window with what history returned, and history does not return replies. | **fixed in step 0**, with a test that failed first (2 replies deleted with nothing changed upstream) | — |
 | S3 | A thread root stored without its replies is not listed again. | traced. `mod.rs:1064-1085` | root's listed newest-reply stamp vs the stamp its replies were fetched for |
 | S4 | A thread's retry mark is erased when a refresh re-writes its root, before the retry. | traced. `bulk.rs:83` | no retry mark |
 | S5 | Attachment rows are lost on a stop mid-page, on a failed flush (a `warn!` only), and on a kill before the flush. | traced. `api.rs:353`, `mod.rs:872-874` | the edge row is written with the message; its bytes are owed |
 | S6 | One permanently failing channel means the `since`/`media` record is never written, so a media-on full walk repeats every run. | traced. `mod.rs:1782-1789` | no record |
 | S7 | Channels and users are never pruned; a channel left upstream fails every run. | traced | a complete `conversations.list` deletes by absence |
-| S8 | With `refresh_window_days = 0`, the default for a configured source, a new reply on an old thread is never seen. | traced. `processor.rs:91` | default of 30 (step 2), after S2 |
+| S8 | With `refresh_window_days = 0`, then the default for a configured source, a new reply on an old thread was never seen. | **fixed in step 0**: the default is 30 | — |
 
 ### Email (`etl/providers/email/src/ingest/`)
 
 | # | Bug | Evidence | Closed by |
 |---|---|---|---|
-| E1 | JMAP: when the body-download phase gives up (20 failures in a row, a refused credential), every body downloaded in that run is discarded: the phase flushes, then returns an error. | traced. `mod.rs:1357-1368`, `:595` | bodies written and sealed as they land; a give-up is a problem row and `Ok` |
+| E1 | JMAP: when the body-download phase gave up (20 failures in a row, a refused credential), every body downloaded in that run was discarded: the phase flushed, then returned an error. | **fixed in step 0**, with tests that failed first: bodies are written and sealed as they land, and a give-up is a `phase:eml_download` row and `Ok` | — |
 | E2 | JMAP: any error in `Email/changes` triggers a re-download of the whole account, not only "cannot calculate changes". | traced. `mod.rs:787-792` | the delta only lists; a failed fetch leaves an item owed |
 | E3 | JMAP: a widened label filter whose backfill fails is recorded as satisfied and never retried. | traced. `mod.rs:563-567`, `:399-404` | no record; the wider filter lists more |
 | E4 | JMAP: the Email state token is saved before the prune it ends. Unreachable today only because an error discards the unsealed tail. | traced. `mod.rs:1065-1067` vs `:783`/`:807` | token and deletions in one transaction |
@@ -206,7 +208,7 @@ first and watched failing.
 | N2 | `max_pages` moves the search mark past pages it never fetched, with no problem row. | traced. `mod.rs:510-512`, `:1207-1210` | the mark only bounds the listing; unfetched pages are owed |
 | N3 | One seal per run: a kill loses the whole run. | traced. `processor.rs:63` | seal as pages land |
 | N4 | The search mark is exclusive at equal seconds, so a page edited in the same minute as the mark can be missed. | compare traced; impact suspected (Notion's rounding, from memory). `mod.rs:487` | inclusive compare |
-| N5 | Deletions are never learned in search mode. | traced. `mod.rs:460` | not closed (§5); a periodic full pass |
+| N5 | Deletions are never learned in search mode. | traced. `mod.rs:460` | not closed (§5) |
 | N6 | In roots mode `<database>` children are parsed and never walked; the `databases` config has no reader. `INGEST.md:71-72` says otherwise. | traced | walk them, or correct the doc |
 | N7 | An anchor fetch failure reaches only `debug!`. | traced. `mod.rs:664-669` | an owed item |
 
@@ -220,24 +222,22 @@ first and watched failing.
 | G4 | A widened `since` plus one permanently failing day re-walks all history every run. | traced. `mod.rs:266-270`, `:343`, `:590-592` | no cursor, no record |
 | G5 | A failed token exchange mid-run is not treated as an auth failure; each metric burns ten days as failed. | traced. `auth.rs:251-258`, `mod.rs:1336-1339` | type the error; fix with step 1 |
 | G6 | Today's wellness bundle is fetched once and never again, though the day is not over. | suspected; needs a live check. `mod.rs:1149-1156` | "held" means fetched after the day ended |
-| G7 | Offset paging while the list shrinks can prune a live activity. | suspected; depends on Garmin's order | not closed (§5) |
+| G7 | Offset paging while the list shrinks can prune a live activity. | suspected; depends on Garmin's order | accepted (§5) |
 | Y1 | A device that stops reporting is re-requested from its last reading to now on every run, growing without bound: an empty window leaves no trace. | traced. `yolink mod.rs:746-757`, `:659-687` | a row per window, empty or not |
 
 ### ChatGPT and Claude
 
 | # | Bug | Evidence | Closed by |
 |---|---|---|---|
-| C1 | ChatGPT: a listing page with no `items` key reads as a complete, empty listing and prunes every conversation. | re-read twice. `chatgpt/src/ingest/mod.rs:1033-1066`, `:385-391` | a missing array is an error; fix now (step 0) |
+| C1 | ChatGPT: a listing page with no `items` key read as a complete, empty listing and pruned every conversation. | **fixed in step 0**, with a test that failed first (all three conversations pruned) | — |
 | C2 | ChatGPT and Claude: the conversation row and its freshness stamp are committed before its attachment rows. Harmless while an error discards the unsealed tail, which is why sealing at an error was taken back out of #1008. | traced. `chatgpt mod.rs:566-578`; `claude mod.rs:1467-1469` | attachments are listed in the conversation's transaction |
 
 ## 7. Order of work
 
 Each step is a PR. A bug's test is written first and watched failing.
 
-**Step 0 — fixes that should not wait.** Small, independent of the
-design: C1 (a prune on a malformed page), E1 (a download phase that
-throws away its own work), S2's test (to learn whether the prune really
-deletes replies, before anything turns the refresh window on).
+**Step 0 — fixes that should not wait. Done.** C1, E1, S2, and with S2
+settled, S8.
 
 **Step 1 — Garmin.** It needs no new stored state: days are listed by
 the calendar and held as rows, an empty day included; activity detail
@@ -254,9 +254,8 @@ This step builds the two shared pieces:
 
 **Step 2 — Slack.** The test of ranges: coverage per channel, deletion
 by absence per page, threads owed by newest-reply stamp, attachment
-bytes owed by edge. Closes S1–S7. Then `refresh_window_days` defaults to
-30 for a configured source (S8). The default must not change before S2
-is settled, because the refresh window is what runs that prune.
+bytes owed by edge. Closes S1 and S3–S7. The refresh window still
+measures from the wall clock; it should take the run's pinned now.
 
 **Step 3 — email.** Both deltas become "list, then advance the token".
 Closes E2–E9.

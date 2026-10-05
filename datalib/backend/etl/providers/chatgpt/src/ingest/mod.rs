@@ -1014,7 +1014,8 @@ async fn download_signed(
 struct Listing {
     items: Vec<Value>,
     /// True only when the walk ran out of conversations rather than out of
-    /// permission to look: it reached `total`, or a page came back empty.
+    /// permission to look: it reached `total`, or a page's `items` came
+    /// back an empty array.
     complete: bool,
     /// The page that failed and why. The pages before it are kept.
     failed: Option<String>,
@@ -1044,11 +1045,13 @@ async fn list_all_conversations(
                 break;
             }
         };
-        let page_items: Vec<Value> = page
-            .get("items")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
+        let page_items = match page_items(&page) {
+            Ok(page_items) => page_items,
+            Err(e) => {
+                failed = Some(format!("page at offset {offset}: {e}"));
+                break;
+            }
+        };
         let total = page.get("total").and_then(|v| v.as_u64());
         info!(
             event = "chatgpt_listing_page",
@@ -1110,6 +1113,19 @@ async fn list_all_conversations(
         complete,
         failed,
         rate_limited,
+    }
+}
+
+/// A 200 that is not a listing page is no evidence the listing ended:
+/// read as an empty page it would make the walk complete and prune
+/// everything the pages before it did not name.
+fn page_items(page: &Value) -> std::result::Result<Vec<Value>, String> {
+    match page.get("items") {
+        Some(Value::Array(items)) => Ok(items.clone()),
+        _ => {
+            let preview: String = page.to_string().chars().take(120).collect();
+            Err(format!("answered with no `items` array: {preview}"))
+        }
     }
 }
 

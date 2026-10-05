@@ -332,7 +332,7 @@ dm_conversations = ["D024BE7LH", "https://enterprise.slack.com/archives/G0ABC12D
                             # already have history, to pick up edits and
                             # reactions. NOT a range bound — it only adds
                             # work on top of the walk from `since`. Unset
-                            # here means no refresh pass.
+                            # is 30; 0 turns the pass off.
                             #
                             # It is also the only way we notice a DELETED
                             # message: Slack has no tombstones, so a
