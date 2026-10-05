@@ -33,7 +33,7 @@ that failed, as a row in the store's `problems` table:
 | what | key | when it clears |
 | --- | --- | --- |
 | a window that could not be fetched or parsed | `yolink_windows:<device>#<start_ms>#<end_ms>` | a later run asks for that window again and it fetches, or it is retired (below) |
-| a device that cannot be walked (a `start` that is not a date), or one abandoned after thirty failed windows in a row | `listing:<device>` | the next run that walks it |
+| a device that cannot be walked (a `start` that is not a date), one abandoned after thirty failed windows in a row, or one with no reading at all whose windows YoLink refused (most likely a wrong id) | `listing:<device>` | the next run that walks it, or for the refusals, the first run that gets it a reading |
 | a device with no reading in the last day | `silent:<device>` | it reports again |
 
 A failed window is a `yolink_windows` row. The walk goes on past it, and
@@ -45,13 +45,20 @@ walked again by the forward walk, and goes once that walk has reached
 the end without failing it again. The retries count toward the same
 thirty-in-a-row budget as the forward walk.
 
-Some failures have nothing a retry could fetch, and leave no row (or
-lose the one they had): a 404 or 410; a client error (not a timeout or
-a rate limit) on a window ending before the device's first stored
-reading, which is a `start` that predates the device; and a window
+Some failures of a device that has readings have nothing a retry could
+fetch, and leave no row (or lose the one they had): a 404 or 410; a
+client error (not a timeout or a rate limit) on a window ending before
+the device's first reading, which is a `start` that predates the
+device; and a window
 ending more than 66 days before the run, the history YoLink keeps
 (below). A window of a device the config no longer names is dropped
-too, since no run asks for it. A failed window retried after YoLink has
+too, since no run asks for it. A device with no reading at all cannot
+tell a window from before it was deployed from an id YoLink does not
+know, so its refused windows leave no window rows (they would be asked
+for every run) but count toward the budget, and if the walk still has
+no reading at its end the device gets the `listing:` row above. Once a
+run gets a reading, the refusals before it are the time before the
+device was deployed and say nothing. A failed window retried after YoLink has
 expired it but before that cut-off answers empty and clears; either
 way the readings it held are gone, so retry within the retention
 window.

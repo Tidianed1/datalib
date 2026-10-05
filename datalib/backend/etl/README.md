@@ -678,8 +678,10 @@ on the run where the input shrank.
 A feed whose one file is its whole table (Takeout's Maps reviews, YouTube
 subscriptions, …) goes through `file_checkpoint::ingest_snapshot`: a
 changed file is upserted and the table pruned to what it lists, in one
-transaction. A parser that finds no list at all returns `None` and deletes
-nothing. A file missing from the scan deletes nothing either: for an export,
+transaction. A file the parser cannot read as a whole list — no list at
+all, or entries none of which it could read — is an error: nothing is
+stored or deleted, and the file is not marked read. A file missing from
+the scan deletes nothing either: for an export,
 a product left out of the request looks exactly like that. Takeout's
 folder feeds hold to the same rule one level up (`product_exported`).
 
@@ -708,5 +710,7 @@ invisible — in one place rather than once per provider.
 "dataless": it has a size and an mtime, and reading one byte silently pulls
 the whole thing back over the network. Only the stat can see that, so
 `scan_with` takes a veto consulted after the stat and before any read. A
-refused file is absent from the results and leaves the cache untouched, so
+refused file is absent from `files` and leaves the cache untouched, so
 nothing later mistakes "we declined to look" for "we looked and it was empty".
+It is listed in `present_unread`, as is a file over `max_bytes`: both are
+there, so a source keyed by path keeps their rows.

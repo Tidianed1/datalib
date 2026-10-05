@@ -149,14 +149,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     )
     .await?;
     summary.errors += scan.errors.len();
-    let dataless = dataless.into_inner().unwrap();
-    summary.dataless_skipped = dataless.len();
-    // Declining to read a file is not finding it gone: its rows stay as
-    // the last scan that could read it left them.
-    let declined: Vec<String> = dataless
-        .iter()
-        .map(|path| rel_under(&scan.root, path))
-        .collect();
+    summary.dataless_skipped = dataless.into_inner().unwrap().len();
+    // A file the scan found and did not read — evicted to the cloud, or
+    // over `max_bytes` — is still there, so its rows stay.
+    let declined = scan.present_unread.clone();
     for rel in &declined {
         prev.paths.remove(rel);
         prev.playlists.remove(rel);
@@ -252,9 +248,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     }
 
     // Reconcile last. Whatever is still in the cache was never visited,
-    // so it is a path that is gone — unless the walk could not read part
-    // of the tree, where an unvisited path may only be one it could not
-    // see, and nothing is deleted.
+    // so it is a path that is gone — unless the walk reported errors, when
+    // an unreadable folder's files look gone too, and nothing is deleted.
     if scan.errors.is_empty() {
         let gone_files: Vec<String> = prev.paths.into_keys().collect();
         let gone_playlists: Vec<String> = prev.playlists.into_iter().collect();
@@ -273,8 +268,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 }
 
 /// The last scan's `record:{table}:` rows on paths this scan did not try
-/// again — under an entry its walk could not read, or declined as
-/// dataless — carried into this scan's set.
+/// again — under an entry its walk could not read, or found and not read
+/// (dataless, or over `max_bytes`) — carried into this scan's set.
 async fn untried_records(
     pool: &sqlx::SqlitePool,
     table: &str,
@@ -286,17 +281,6 @@ async fn untried_records(
         .into_iter()
         .filter(|r| declined.contains(&r.id) || scan.could_not_see(&r.id))
         .collect())
-}
-
-/// `path`'s id under the scan root, the way [`fsscan::ScannedFile::rel`]
-/// spells it.
-fn rel_under(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .unwrap_or(path)
-        .components()
-        .map(|c| c.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
 }
 
 /// A cloud placeholder: the file has a size but no allocated blocks, so its

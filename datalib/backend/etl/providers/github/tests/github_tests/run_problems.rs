@@ -78,7 +78,11 @@ async fn run(
         ..FetchOptions::new(db.clone(), crate::tng_now())
     };
     let summary = fetch(tweak(opts)).await.map_err(|e| format!("{e:#}"));
-    db.commit_all("test").await.unwrap();
+    // As the processor does: a run that fails commits nothing, and the
+    // next open of the store drops what it wrote.
+    if summary.is_ok() {
+        db.commit_all("test").await.unwrap();
+    }
     db.close().await;
     summary
 }
@@ -294,29 +298,69 @@ async fn a_pr_that_is_gone_stops_being_retried() {
     );
 }
 
-/// When the shared retry loop gives up, the run ends there: the PRs
-/// after it are not each tried and failed, and nothing is recorded
-/// against them.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_give_up_ends_the_run() {
-    let d = tempdir().unwrap();
-    let out = d.path().join("out");
-    let pb = tape(&d.path().join("one"), &[1, 2, 3]);
+/// The PR's detail page answers 503: retryable, so it spends the retry
+/// loop's budget.
+fn unavailable(pb: &Path, num: u32) {
     let mut unavailable = json_response(&json!({"message": "Service Unavailable"}));
     unavailable.status = 503;
     write_fixture(
-        &pb,
-        &HttpRequest::get(HttpService::Github, format!("{BASE}/repos/{REPO}/pulls/2")),
+        pb,
+        &HttpRequest::get(
+            HttpService::Github,
+            format!("{BASE}/repos/{REPO}/pulls/{num}"),
+        ),
         &unavailable,
     )
     .unwrap();
+}
+
+/// When the shared retry loop gives up, the requests stop there — the
+/// PRs after it are not each tried and failed — but the run keeps what
+/// it fetched: a `phase:` row says it stopped short, the cursors stay,
+/// and the next run fetches the rest and clears the row.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_give_up_keeps_what_it_fetched() {
+    let d = tempdir().unwrap();
+    let out = d.path().join("out");
+    let pb = tape(&d.path().join("one"), &[1, 2, 3, 4]);
+    unavailable(&pb, 3);
     // One failed request spends the whole budget.
     let quick = Duration::from_millis(1);
     let guard = RetryGuard::new(Duration::from_secs(3600), 1, quick, quick, StopFlag::new());
-    let result = datalib_etl::retry::scope(guard, run(&out, &pb, |o| o)).await;
+    datalib_etl::retry::scope(guard, run(&out, &pb, |o| o))
+        .await
+        .expect("a give-up keeps what the run fetched");
 
-    assert!(result.is_err(), "a give-up fails the step");
-    assert_eq!(stored_prs(&out), [1]);
-    assert_eq!(problems(&out).await, [], "PR 3 was never asked for");
+    assert_eq!(stored_prs(&out), [1, 2]);
+    assert_eq!(problems(&out).await, [row("phase:fetch", "error")]);
     assert_eq!(cursors(&out).await, []);
+
+    let pb = tape(&d.path().join("two"), &[1, 2, 3, 4]);
+    run(&out, &pb, |o| o).await.unwrap();
+    assert_eq!(stored_prs(&out), [1, 2, 3, 4]);
+    assert_eq!(problems(&out).await, []);
+}
+
+/// A PR that fails every run is tried every run, but does not count
+/// against `max_prs`: the rest still get through, one capped run at a
+/// time.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pr_that_always_fails_does_not_starve_the_cap() {
+    let d = tempdir().unwrap();
+    let out = d.path().join("out");
+    let pb = tape(&d.path().join("one"), &[1, 2, 3]);
+    fs::remove_file(tape_of(&pb, &format!("{BASE}/repos/{REPO}/pulls/1"))).unwrap();
+    let capped = |o: FetchOptions| FetchOptions {
+        max_prs: Some(1),
+        ..o
+    };
+
+    for _ in 0..3 {
+        run(&out, &pb, capped).await.unwrap();
+    }
+    assert_eq!(stored_prs(&out), [2, 3]);
+    assert_eq!(
+        problems(&out).await,
+        [row(&format!("pull_requests:{REPO}#1"), "error")]
+    );
 }

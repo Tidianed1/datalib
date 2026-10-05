@@ -696,6 +696,16 @@ impl RawDb {
         Ok(out)
     }
 
+    /// What the last run said under a run-level problem `key`, if anything.
+    pub async fn run_problem_sample(&self, key: &str) -> Result<Option<String>> {
+        sqlx::query_scalar("SELECT sample FROM problems WHERE scope_kind = ? AND scope_key = ?")
+            .bind(datalib_problems::ScopeKind::Entity.as_str())
+            .bind(key)
+            .fetch_optional(self.pool())
+            .await
+            .context("read a run problem")
+    }
+
     pub async fn failed_user_ids(&self) -> Result<Vec<String>> {
         dr::failed_ids(self.pool(), "users").await
     }

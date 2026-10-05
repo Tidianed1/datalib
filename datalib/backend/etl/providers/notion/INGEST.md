@@ -151,15 +151,25 @@ few very large pages, which is why the cap is per page.
 ## When part of a sync fails
 
 The step fails only when it can do nothing: the credential is refused
-(401), the shared retry guard gives up on the service (every request
-after would give up too), the first page of search results does not come
-back, the store will not take a write, or every page it tried failed.
-Anything smaller is a `problems` row, and the rest of the run goes on.
+(401) before anything was fetched, the first page of search results does
+not come back, the store will not take a write, or every page it tried
+failed. Anything smaller is a `problems` row, and the rest of the run
+goes on.
+
+Two things end the walk early without failing the step: the shared
+retry guard giving up on the service (every request after would give up
+too), and a 401 once pages have been fetched. The walk stops where it
+is, the run leaves one row (`phase:rate_limit` or `phase:credential`),
+and returns as a success so what it fetched is committed: the store
+commits only when the download succeeds. The resume cursor does not move
+and nothing past that point is marked failed, so the next run picks up
+the rest through search and the retry set.
 
 | what failed | its row | what clears it |
 |---|---|---|
 | a page object | `pages:<id>` | the page fetching |
 | a page's comments listing | `pages:<id>`, a warning (the page is stored) | the page fetching whole |
+| comments the credential may not read (403: an integration without the read-comments capability) | one `listing:comments`, a warning; comments are not asked for again that run, and no page is marked failed | a run that reads comments |
 | a page's body | `page_markdown:<id>` | the body fetching |
 | a truncated subtree's follow-up | `page_markdown:<id>`, a warning | the body fetching whole |
 | more subtrees than `MAX_HOLE_FOLLOWUPS` | `page_markdown:<id>`, a deliberate-loss warning | the page changing so it needs fewer |

@@ -193,22 +193,28 @@ pub async fn sync<F: Forge>(
                     full,
                     prior_scope_cfg.as_ref(),
                 )
-                .await?,
+                .await,
             )
         } else {
             None
         };
-        let keys: Vec<Listed> = match &discovery {
-            Some(found) => with_retries(found.keys.clone(), failed_items(forge).await?),
+        // A give-up in discovery ends the run's requests there.
+        let mut gave_up = discovery.as_ref().and_then(|found| found.gave_up.clone());
+        let keys: Vec<Planned> = match &discovery {
+            Some(_) if gave_up.is_some() => Vec::new(),
+            Some(found) => with_retries(found.keys.clone(), retries(forge).await?),
             // Named directly: no listing, so nothing to compare against —
             // always fetched, and nothing else is.
             None => opts
                 .targets
                 .iter()
-                .map(|(container, number)| Listed {
-                    container: container.clone(),
-                    number: *number,
-                    updated_at: String::new(),
+                .map(|(container, number)| Planned {
+                    cr: Listed {
+                        container: container.clone(),
+                        number: *number,
+                        updated_at: String::new(),
+                    },
+                    capped: true,
                 })
                 .collect(),
         };
@@ -226,9 +232,10 @@ pub async fn sync<F: Forge>(
 
         let cap = opts.max_items.unwrap_or(usize::MAX);
         let mut fetched = 0usize;
+        let mut attempted = 0usize;
         let mut owed: Vec<String> = Vec::new();
         opts.progress.set_length(Some(keys.len() as u64));
-        for cr in &keys {
+        for Planned { cr, capped } in &keys {
             if opts.stop.requested() {
                 break;
             }
@@ -242,12 +249,36 @@ pub async fn sync<F: Forge>(
                 forge.record_skipped(&mut summary);
                 continue;
             }
-            if fetched == cap {
-                owed.push(key);
-                continue;
+            if *capped {
+                if fetched == cap {
+                    owed.push(key);
+                    continue;
+                }
+                fetched += 1;
             }
-            fetched += 1;
-            let outcome = forge.fetch_one(client, cr, &mut summary).await?;
+            attempted += 1;
+            let outcome = match forge.fetch_one(client, cr, &mut summary).await {
+                Ok(outcome) => outcome,
+                // No request after this one will fare better; what is
+                // already fetched is kept, and the next run picks up here.
+                Err(e) if is_give_up(&e) => {
+                    if discovery.is_none() {
+                        record_failure(pool, F::ITEM_TABLE, &key, &format!("{e:#}")).await?;
+                    }
+                    gave_up = Some(RunProblem::phase(
+                        "fetch",
+                        format!(
+                            "the retry loop gave up after {} of {} {}s ({e:#}); \
+                             the rest is fetched next run",
+                            attempted - 1,
+                            keys.len(),
+                            F::ITEM
+                        ),
+                    ));
+                    break;
+                }
+                Err(e) => return Err(e),
+            };
             // After a stop every request fails at once; that is not
             // something the change request did.
             if opts.stop.requested() {
@@ -281,6 +312,14 @@ pub async fn sync<F: Forge>(
         let Some(found) = discovery else {
             return Ok(false);
         };
+        // A run that gave up did not reach all it listed: its cursors stay
+        // put so the next run lists it again.
+        if let Some(gave_up) = gave_up {
+            let mut problems = found.problems;
+            problems.push(gave_up);
+            datalib_etl::download_problems::report_run(pool, &problems).await;
+            return Ok(false);
+        }
         // What the cap left is owed before the cursors move past it: the
         // next run retries it like a failure.
         record_owed(
@@ -314,60 +353,122 @@ pub async fn sync<F: Forge>(
     Ok(summary)
 }
 
-/// Every change request an earlier run failed on or left over its cap,
-/// then the listing. A retried one goes first, so a capped run works
-/// through what it owes before what is new, and is fetched whatever its
-/// listed `updated_at` says: the stored copy is the incomplete one.
-fn with_retries(keys: Vec<Listed>, failed: Vec<(String, u32)>) -> Vec<Listed> {
-    let failed: HashSet<(String, u32)> = failed.into_iter().collect();
-    let (mut retried, mut fresh): (Vec<Listed>, Vec<Listed>) = keys
+/// One change request this run means to fetch, and whether it counts
+/// against `max_items`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Planned {
+    cr: Listed,
+    capped: bool,
+}
+
+/// What earlier runs left to do: change requests whose fetch failed,
+/// and ones a cap left over.
+#[derive(Debug, Default)]
+struct Retries {
+    failed: Vec<(String, u32)>,
+    owed: Vec<(String, u32)>,
+}
+
+/// The failures, then what a cap left over, then the rest of the
+/// listing. A failure is tried every run but does not count against the
+/// cap, so one that fails every time cannot starve the rest; what is
+/// owed goes before what is new, so capped runs work through it. A
+/// retried one is fetched whatever its listed `updated_at` says: the
+/// stored copy is the incomplete one.
+fn with_retries(keys: Vec<Listed>, retries: Retries) -> Vec<Planned> {
+    let failed: HashSet<(String, u32)> = retries.failed.into_iter().collect();
+    let owed: HashSet<(String, u32)> = retries
+        .owed
         .into_iter()
-        .partition(|cr| failed.contains(&(cr.container.clone(), cr.number)));
-    let listed: HashSet<(String, u32)> = retried
+        .filter(|key| !failed.contains(key))
+        .collect();
+    let listed: HashSet<(String, u32)> = keys
         .iter()
         .map(|cr| (cr.container.clone(), cr.number))
         .collect();
-    for cr in &mut retried {
-        cr.updated_at.clear();
+    let unlisted = |set: &HashSet<(String, u32)>| -> Vec<Listed> {
+        set.iter()
+            .filter(|key| !listed.contains(*key))
+            .map(|(container, number)| Listed {
+                container: container.clone(),
+                number: *number,
+                updated_at: String::new(),
+            })
+            .collect()
+    };
+    let mut groups: [Vec<Listed>; 3] = [unlisted(&failed), unlisted(&owed), Vec::new()];
+    for mut cr in keys {
+        let key = (cr.container.clone(), cr.number);
+        let group = if failed.contains(&key) {
+            0
+        } else if owed.contains(&key) {
+            1
+        } else {
+            2
+        };
+        if group < 2 {
+            cr.updated_at.clear();
+        }
+        groups[group].push(cr);
     }
-    retried.extend(failed.into_iter().filter(|key| !listed.contains(key)).map(
-        |(container, number)| Listed {
-            container,
-            number,
-            updated_at: String::new(),
-        },
-    ));
-    let by_key = |a: &Listed, b: &Listed| (&a.container, a.number).cmp(&(&b.container, b.number));
-    retried.sort_by(by_key);
-    fresh.sort_by(by_key);
-    retried.extend(fresh);
-    retried
+    let mut out = Vec::new();
+    for (group, mut crs) in groups.into_iter().enumerate() {
+        crs.sort_by(|a, b| (&a.container, a.number).cmp(&(&b.container, b.number)));
+        out.extend(crs.into_iter().map(|cr| Planned {
+            cr,
+            capped: group > 0,
+        }));
+    }
+    out
 }
 
-/// The change requests whose last fetch failed or was left over a cap.
-/// Read from the sidecar
-/// alone: a change request that never fetched has no data row, because
-/// its table's promoted columns cannot be null.
-async fn failed_items<F: Forge>(forge: &F) -> Result<Vec<(String, u32)>> {
+/// What earlier runs left to do, read from the sidecar alone: a change
+/// request that never fetched has no data row, because its table's
+/// promoted columns cannot be null. Its problem row says which kind it
+/// is.
+async fn retries<F: Forge>(forge: &F) -> Result<Retries> {
     use anyhow::Context as _;
+    use datalib_problems::{Reason, ScopeKind, Stage};
     use sqlx::Row as _;
     let table = F::ITEM_TABLE;
-    let sql =
-        format!("SELECT id FROM {table}_bookkeeping WHERE last_error IS NOT NULL ORDER BY id");
-    // Audited: `table` is a `&'static str` constant of the provider.
+    let sql = format!(
+        "SELECT b.id, p.reason FROM {table}_bookkeeping b \
+         LEFT JOIN problems p ON p.scope_kind = ? AND p.stage = ? \
+             AND p.scope_key = '{table}:' || b.id \
+         WHERE b.last_error IS NOT NULL ORDER BY b.id"
+    );
+    // Audited: `table` is a `&'static str` constant of the provider; the
+    // scope kind and stage are bound.
     let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(ScopeKind::Entity.as_str())
+        .bind(Stage::Fetch.as_str())
         .fetch_all(forge.pool())
         .await
-        .with_context(|| format!("select the failed rows of {table}"))?;
-    let mut out = Vec::with_capacity(rows.len());
+        .with_context(|| format!("select the unfinished rows of {table}"))?;
+    let mut out = Retries::default();
     for row in rows {
-        let id: String = row.try_get("id").context("failed row id")?;
-        match split_item_key(&id, F::SIGIL) {
-            Some(key) => out.push(key),
-            None => tracing::warn!(table, id, "a failed row whose id names no change request"),
+        let id: String = row.try_get("id").context("unfinished row id")?;
+        let reason: Option<String> = row.try_get("reason").context("unfinished row reason")?;
+        let Some(key) = split_item_key(&id, F::SIGIL) else {
+            tracing::warn!(
+                table,
+                id,
+                "an unfinished row whose id names no change request"
+            );
+            continue;
+        };
+        if reason.as_deref() == Some(Reason::OverSizeLimit.as_str()) {
+            out.owed.push(key);
+        } else {
+            out.failed.push(key);
         }
     }
     Ok(out)
+}
+
+fn is_give_up(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<ForgeError>()
+        .is_some_and(ForgeError::gave_up)
 }
 
 /// `(container, number)` back out of an [`Forge::item_key`].
@@ -447,6 +548,9 @@ struct Discovery {
     /// One `listing:search <scope>` per scope whose search failed and
     /// was stepped over.
     problems: Vec<RunProblem>,
+    /// Set when the shared retry loop gave up: the searches stopped
+    /// there, and nothing is fetched this run.
+    gave_up: Option<RunProblem>,
 }
 
 async fn discover<F: Forge>(
@@ -457,10 +561,11 @@ async fn discover<F: Forge>(
     state: &HashMap<String, String>,
     full: bool,
     prior: Option<&Value>,
-) -> Result<Discovery> {
+) -> Discovery {
     let mut newest: HashMap<(String, u32), String> = HashMap::new();
     let mut new_state: HashMap<String, String> = HashMap::new();
     let mut problems: Vec<RunProblem> = Vec::new();
+    let mut gave_up = None;
     for scope in opts.scopes {
         if opts.stop.requested() {
             break;
@@ -477,11 +582,18 @@ async fn discover<F: Forge>(
         tracing::info!(scope, since, "searching {}s", F::ITEM);
         let results = match forge.search(client, scope, me, since.as_deref()).await {
             Ok(v) => v,
+            Err(e) if is_give_up(&e) => {
+                gave_up = Some(RunProblem::phase(
+                    "search",
+                    format!(
+                        "the retry loop gave up searching {scope} ({e:#}); \
+                         nothing was fetched, and the next run searches again"
+                    ),
+                ));
+                break;
+            }
             Err(e) => {
                 let forge_error = e.downcast_ref::<ForgeError>();
-                if forge_error.is_some_and(ForgeError::gave_up) {
-                    return Err(e);
-                }
                 let name = format!("search {scope}");
                 let refused = forge_error.is_some_and(ForgeError::refused);
                 problems.push(if refused {
@@ -513,11 +625,12 @@ async fn discover<F: Forge>(
         })
         .collect();
     keys.sort_by(|a, b| (&a.container, a.number).cmp(&(&b.container, b.number)));
-    Ok(Discovery {
+    Discovery {
         keys,
         new_state,
         problems,
-    })
+        gave_up,
+    }
 }
 
 /// A change request's own record, or what [`Forge::fetch_one`] comes to
@@ -626,27 +739,48 @@ mod tests {
         }
     }
 
+    fn planned(container: &str, number: u32, updated_at: &str, capped: bool) -> Planned {
+        Planned {
+            cr: listed(container, number, updated_at),
+            capped,
+        }
+    }
+
+    fn key(container: &str, number: u32) -> (String, u32) {
+        (container.to_string(), number)
+    }
+
     /// A change request whose discussions would not list was stored
     /// whole otherwise, so its listed `updated_at` matches the store and
-    /// the skip would step over it forever: the retry must clear it.
-    /// Retries go first, so a capped run pays off what it owes before
-    /// it takes on more.
+    /// the skip would step over it forever: a retry must clear it.
+    /// Failures go first and do not count against the cap, so one that
+    /// fails every run cannot starve the rest; what a cap left over goes
+    /// next, so capped runs pay it off before taking on more.
     #[test]
-    fn a_failed_one_is_fetched_whether_or_not_the_listing_names_it() {
+    fn retries_go_first_and_only_owed_ones_count_against_the_cap() {
         let keys = vec![
+            listed("starfleet/enterprise", 3, "2369-04-14T00:00:00Z"),
             listed("starfleet/enterprise", 2, "2369-04-14T00:00:00Z"),
             listed("starfleet/enterprise", 1, "2369-04-14T00:00:00Z"),
         ];
-        let failed = vec![
-            ("starfleet/enterprise".to_string(), 2),
-            ("starfleet/defiant".to_string(), 74205),
-        ];
+        let retries = Retries {
+            failed: vec![
+                key("starfleet/enterprise", 2),
+                key("starfleet/defiant", 74205),
+            ],
+            owed: vec![
+                key("starfleet/enterprise", 3),
+                key("starfleet/enterprise", 9),
+            ],
+        };
         assert_eq!(
-            with_retries(keys, failed),
+            with_retries(keys, retries),
             vec![
-                listed("starfleet/defiant", 74205, ""),
-                listed("starfleet/enterprise", 2, ""),
-                listed("starfleet/enterprise", 1, "2369-04-14T00:00:00Z"),
+                planned("starfleet/defiant", 74205, "", false),
+                planned("starfleet/enterprise", 2, "", false),
+                planned("starfleet/enterprise", 3, "", true),
+                planned("starfleet/enterprise", 9, "", true),
+                planned("starfleet/enterprise", 1, "2369-04-14T00:00:00Z", true),
             ]
         );
     }

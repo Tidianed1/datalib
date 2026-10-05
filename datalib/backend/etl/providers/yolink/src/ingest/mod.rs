@@ -343,7 +343,7 @@ pub(crate) async fn fetch_from<S: WindowSource>(
         };
         match walk.run(plan, stride_ms, window_ms, now_ms, &mut s).await? {
             WalkEnd::Done | WalkEnd::Stopped => {}
-            WalkEnd::Abandoned(why) => {
+            WalkEnd::Abandoned(why) | WalkEnd::Refused(why) => {
                 s.errors += 1;
                 problems.push(RunProblem::listing(&plan.dev.name, why));
             }
@@ -535,6 +535,9 @@ enum WalkEnd {
     /// Too many windows in a row failed; the rest of the walk is left
     /// for the next run.
     Abandoned(String),
+    /// The device has no reading and YoLink refused its windows: most
+    /// likely a wrong id, which no window row would say.
+    Refused(String),
 }
 
 /// How one window came out.
@@ -543,6 +546,33 @@ enum WindowEnd {
     Failed,
     /// Nothing a retry could fetch; see [`nothing_to_retry`].
     NothingThere,
+    /// Refused (the status) while the device has no reading at all:
+    /// not a window row, which would be retried for ever, but the
+    /// device's own row if nothing else comes back.
+    Refused(u16),
+}
+
+/// What the refusals of a device with no reading come to: `None` once it
+/// has one, the refusals then being the time before it was deployed.
+struct Refusals {
+    asked: u32,
+    refused: u32,
+    status: Option<u16>,
+}
+
+impl Refusals {
+    fn verdict(&self, first_reading: Option<i64>) -> Option<String> {
+        let status = self.status.filter(|_| first_reading.is_none())?;
+        Some(if self.refused == self.asked {
+            format!("every window was refused (HTTP {status}); check the device id and its start")
+        } else {
+            format!(
+                "{} of {} windows were refused (HTTP {status}) and the device has no reading \
+                 yet; check the device id and its start",
+                self.refused, self.asked
+            )
+        })
+    }
 }
 
 struct Walk<'a, S> {
@@ -585,15 +615,31 @@ impl<S: WindowSource> Walk<'_, S> {
                 .await?;
         let mut failed_now: HashSet<String> = HashSet::new();
         let mut consecutive_failures: u32 = 0;
+        let mut refusals = Refusals {
+            asked: 0,
+            refused: 0,
+            status: None,
+        };
 
         for &(start, end) in &plan.retry {
             if self.stop.requested() {
                 return self.finish(WalkEnd::Stopped).await;
             }
+            refusals.asked += 1;
             match self.window(start, end, &mut first_reading, s).await? {
                 WindowEnd::Failed => {
                     failed_now.insert(window_id_recipe(&dev.name, start, end));
                     if let Some(why) = failed_once(&mut consecutive_failures, start, end) {
+                        let why = refusals.verdict(first_reading).unwrap_or(why);
+                        return self.finish(WalkEnd::Abandoned(why)).await;
+                    }
+                }
+                WindowEnd::Refused(status) => {
+                    refusals.refused += 1;
+                    refusals.status = Some(status);
+                    forget_window(self.db.pool(), &window_id_recipe(&dev.name, start, end)).await?;
+                    if let Some(why) = failed_once(&mut consecutive_failures, start, end) {
+                        let why = refusals.verdict(first_reading).unwrap_or(why);
                         return self.finish(WalkEnd::Abandoned(why)).await;
                     }
                 }
@@ -612,10 +658,20 @@ impl<S: WindowSource> Walk<'_, S> {
             }
             let end = cursor.saturating_add(window_ms).min(now_ms);
             let id = window_id_recipe(&dev.name, cursor, end);
+            refusals.asked += 1;
             match self.window(cursor, end, &mut first_reading, s).await? {
                 WindowEnd::Failed => {
                     failed_now.insert(id);
                     if let Some(why) = failed_once(&mut consecutive_failures, cursor, end) {
+                        let why = refusals.verdict(first_reading).unwrap_or(why);
+                        return self.finish(WalkEnd::Abandoned(why)).await;
+                    }
+                }
+                WindowEnd::Refused(status) => {
+                    refusals.refused += 1;
+                    refusals.status = Some(status);
+                    if let Some(why) = failed_once(&mut consecutive_failures, cursor, end) {
+                        let why = refusals.verdict(first_reading).unwrap_or(why);
                         return self.finish(WalkEnd::Abandoned(why)).await;
                     }
                 }
@@ -632,7 +688,10 @@ impl<S: WindowSource> Walk<'_, S> {
                 forget_window(self.db.pool(), id).await?;
             }
         }
-        self.finish(WalkEnd::Done).await
+        match refusals.verdict(first_reading) {
+            Some(why) => self.finish(WalkEnd::Refused(why)).await,
+            None => self.finish(WalkEnd::Done).await,
+        }
     }
 
     /// One window: fetched and written, or recorded as failed. Only the
@@ -656,6 +715,9 @@ impl<S: WindowSource> Walk<'_, S> {
         let rows = match fetched {
             Ok(rows) => rows,
             Err(e) => {
+                if let Some(status) = refusal(&e).filter(|_| first_reading.is_none()) {
+                    return Ok(WindowEnd::Refused(status));
+                }
                 if let Some(why) = nothing_to_retry(&e, end, *first_reading, self.horizon_ms) {
                     info!(event = "yolink_window_nothing_there", device = %dev.name, start, end, why, error = %format!("{e:#}"), "a window failed with nothing a retry could fetch");
                     return Ok(WindowEnd::NothingThere);
@@ -691,23 +753,30 @@ impl<S: WindowSource> Walk<'_, S> {
     }
 }
 
-/// Why a failed window has nothing a retry could fetch, or `None` when a
-/// retry might: YoLink said it is not there (404, 410); it refused a
-/// window ending before the device's first stored reading, which is a
-/// configured `start` that predates the device (not a timeout or a rate
-/// limit); or the window ends before the history YoLink keeps.
+/// The status YoLink refused a window with: a client error, not a
+/// timeout or a rate limit.
+fn refusal(e: &anyhow::Error) -> Option<u16> {
+    e.downcast_ref::<HttpStatus>()
+        .map(|HttpStatus(code)| *code)
+        .filter(|c| (400..500).contains(c) && ![408, 429].contains(c))
+}
+
+/// Why a failed window of a device that has readings has nothing a retry
+/// could fetch, or `None` when a retry might: YoLink said it is not there
+/// (404, 410); it refused a window ending before the device's first
+/// reading, which is a configured `start` that predates the device; or
+/// the window ends before the history YoLink keeps.
 fn nothing_to_retry(
     e: &anyhow::Error,
     end_ms: i64,
     first_reading: Option<i64>,
     horizon_ms: i64,
 ) -> Option<&'static str> {
-    let status = e.downcast_ref::<HttpStatus>().map(|HttpStatus(code)| *code);
+    let status = refusal(e);
     if matches!(status, Some(404 | 410)) {
         return Some("not there upstream");
     }
-    let refused = status.is_some_and(|c| (400..500).contains(&c) && ![408, 429].contains(&c));
-    if refused && first_reading.is_none_or(|first| end_ms <= first) {
+    if status.is_some() && first_reading.is_some_and(|first| end_ms <= first) {
         return Some("before the device's first reading");
     }
     (end_ms <= horizon_ms).then_some("older than the history YoLink keeps")
@@ -1329,6 +1398,39 @@ mod walk_tests {
         fake.failing.lock().unwrap().insert(day(14), Some(404));
         let s = st.run(&fake, &cfg, day(29)).await;
         assert_eq!(s.windows_failed, 0, "{s:?}");
+        assert!(st.problems().await.is_empty(), "{:?}", st.problems().await);
+        assert_eq!(st.count("SELECT COUNT(*) FROM yolink_windows").await, 0);
+    }
+
+    /// A device with no reading at all whose every window is refused is
+    /// most likely a wrong id; reading that as "not deployed yet" said
+    /// nothing, run after run. It is a row on the device, and the row
+    /// goes on the run that first gets a reading, the earlier refusals
+    /// then being the time before it was deployed.
+    #[tokio::test]
+    async fn a_device_whose_every_window_is_refused_is_a_listing_row() {
+        let st = Store::new().await;
+        let cfg = sync(vec![device(DEVICE, "2369-04-01")], 7);
+        let mut fake = Fake::new();
+        fake.deployed = day(21);
+        for d in [0, 7, 14, 21] {
+            fake.failing.lock().unwrap().insert(day(d), Some(403));
+        }
+        let s = st.run(&fake, &cfg, day(28)).await;
+        assert_eq!((s.windows, s.errors), (4, 1), "{s:?}");
+        let rows = st.problems().await;
+        let listing = format!("listing:{DEVICE}");
+        assert_eq!(
+            keys(&rows),
+            [listing.as_str(), &format!("silent:{DEVICE}")],
+            "{rows:?}"
+        );
+        assert!(rows[0].1.contains("HTTP 403"), "{rows:?}");
+        assert_eq!(st.count("SELECT COUNT(*) FROM yolink_windows").await, 0);
+
+        fake.failing.lock().unwrap().remove(&day(21));
+        let s = st.run(&fake, &cfg, day(28)).await;
+        assert_eq!(s.errors, 0, "{s:?}");
         assert!(st.problems().await.is_empty(), "{:?}", st.problems().await);
         assert_eq!(st.count("SELECT COUNT(*) FROM yolink_windows").await, 0);
     }
