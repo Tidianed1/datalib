@@ -50,7 +50,11 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
     let mut rows: Vec<GeminiActivityRow> = Vec::new();
     let mut n_attachments: usize = 0;
 
-    for cell in mdl_html::iter_cells(&html) {
+    let cells: Vec<&str> = mdl_html::iter_cells(&html).collect();
+    if cells.is_empty() {
+        return Err(super::unknown_layout(FILE_REL, "holds no activity cells"));
+    }
+    for cell in cells {
         let text = mdl_html::strip_tags(cell);
         let when_str = mdl_html::last_timestamp_chunk(cell);
         let when_ts = when_str.as_deref().and_then(time_parser::parse_mdl_grid);

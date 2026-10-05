@@ -277,9 +277,9 @@ async fn problem_keys(store: &Path) -> Vec<String> {
 
 /// A whole listing may delete what it does not name only if it named
 /// everything it listed. An event it could not identify (no `id`) used to
-/// be skipped and the stored copy deleted, and a reply with no `items`
-/// read as an empty calendar (audit 2026-10-02 §4). Either now deletes
-/// nothing and says why on the calendar's row.
+/// be skipped and the stored copy deleted (audit 2026-10-02 §4). The
+/// listing now deletes nothing and says why on the calendar's row, and
+/// the next listing that names everything deletes as before.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_whole_listing_it_cannot_fully_read_deletes_nothing() {
     let d = tempfile::tempdir().expect("tempdir");
@@ -315,13 +315,9 @@ async fn a_whole_listing_it_cannot_fully_read_deletes_nothing() {
     fixture(
         &two,
         &url,
-        page(json!([series, moved_without_id]), None, None),
+        page(json!([series.clone(), moved_without_id]), None, None),
     );
-    fixture(
-        &three,
-        &url,
-        json_response(&json!({"kind": "calendar#events", "nextSyncToken": "s3"})),
-    );
+    fixture(&three, &url, page(json!([series]), None, None));
 
     run_in(&one, &store, Some(window)).await;
     let stored = ids(&store).await;
@@ -334,7 +330,7 @@ async fn a_whole_listing_it_cannot_fully_read_deletes_nothing() {
     assert_eq!(problem_keys(&store).await, vec![listing.clone()]);
 
     let third = run_in(&three, &store, Some(window)).await;
-    assert_eq!(third.events_deleted, 0, "{third:?}");
-    assert_eq!(ids(&store).await, stored);
-    assert_eq!(problem_keys(&store).await, vec![listing]);
+    assert_eq!(third.events_deleted, 1, "{third:?}");
+    assert_eq!(ids(&store).await, vec![format!("{PRIMARY}#staff01")]);
+    assert_eq!(problem_keys(&store).await, Vec::<String>::new());
 }

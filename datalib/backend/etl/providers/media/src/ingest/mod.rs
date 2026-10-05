@@ -148,8 +148,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     )
     .await?;
     summary.errors += scan.errors.len();
-    for e in &scan.errors {
-        tracing::warn!(path = %e.path.display(), error = %e.error, "media_walk_error");
+    // A file the scan found and did not read — evicted to the cloud, or
+    // over `max_bytes` — is still there, so its rows stay.
+    for rel in &scan.present_unread {
+        prev.paths.remove(rel);
+        prev.playlists.remove(rel);
     }
     summary.dataless_skipped = dataless_skipped.into_inner();
     summary.entries_scanned = scan.files.len();
@@ -227,15 +230,19 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     }
 
     // Reconcile last. Whatever is still in the cache was never visited,
-    // so it is a path that is gone.
-    let gone_files: Vec<String> = prev.paths.into_keys().collect();
-    let gone_playlists: Vec<String> = prev.playlists.into_iter().collect();
-    summary.removed = (opts.db.delete_files(&gone_files).await?
-        + opts
-            .db
-            .delete_playlists(&gone_playlists)
-            .await
-            .context("delete vanished playlists")?) as usize;
+    // so it is a path that is gone — unless the walk reported errors, when
+    // an unreadable folder's files look gone too, and nothing is deleted.
+    datalib_etl::download_problems::report_run(opts.db.pool(), &scan.walk_problems()).await;
+    if scan.errors.is_empty() {
+        let gone_files: Vec<String> = prev.paths.into_keys().collect();
+        let gone_playlists: Vec<String> = prev.playlists.into_iter().collect();
+        summary.removed = (opts.db.delete_files(&gone_files).await?
+            + opts
+                .db
+                .delete_playlists(&gone_playlists)
+                .await
+                .context("delete vanished playlists")?) as usize;
+    }
     Ok(summary)
 }
 

@@ -70,12 +70,14 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         let label = cal.display_name.as_deref().unwrap_or(&cal.id);
         opts.progress
             .set_message(&format!("syncing calendar {label}"));
-        if let Err(e) = sync_calendar(db, &cal.id, opts.window.as_ref(), lk, &mut summary).await {
-            summary.errors += 1;
-            problems.push(RunProblem::listing(
-                &format!("calendar {label}"),
-                format!("{e:#}"),
-            ));
+        let listing = format!("calendar {label}");
+        match sync_calendar(db, &cal.id, opts.window.as_ref(), lk, &mut summary).await {
+            Ok(None) => {}
+            Ok(Some(held_back)) => problems.push(RunProblem::listing(&listing, held_back)),
+            Err(e) => {
+                summary.errors += 1;
+                problems.push(RunProblem::listing(&listing, format!("{e:#}")));
+            }
         }
     }
     download_problems::report_run(db.pool(), &problems).await;
@@ -136,14 +138,16 @@ pub(crate) fn calendar_row(c: &Value) -> Option<CalendarRow> {
 
 /// One calendar: the changes since its sync token, or everything when
 /// it has none. A full listing is the calendar as it is, so what it
-/// does not name is dropped.
+/// does not name is dropped — unless it listed an event it could not
+/// identify, which could be any stored one; then nothing is, and the
+/// returned reason says why.
 async fn sync_calendar(
     db: &RawDb,
     calendar_id: &str,
     window: Option<&Window>,
     lk: &LatchkeySettings,
     summary: &mut FetchSummary,
-) -> Result<()> {
+) -> Result<Option<String>> {
     // Google refuses a sync token beside a time bound, so a windowed
     // calendar is listed whole every run, and keeps no token for a later
     // unwindowed run to resume from.
@@ -186,13 +190,21 @@ async fn sync_calendar(
             break str_of(&v, "nextSyncToken");
         }
     };
-    if full {
+    let held_back = (full && seen.unidentified > 0).then(|| {
+        format!(
+            "the listing named {} event(s) with no id, which could be any stored event, \
+             so nothing it did not name was deleted",
+            seen.unidentified
+        )
+    });
+    if full && held_back.is_none() {
         let gone: Vec<String> = known.difference(&seen.listed).cloned().collect();
         summary.events_deleted += gone.len();
         db.delete_google_events(calendar_id, &gone).await?;
     }
     let next_sync = next_sync.filter(|_| window.is_none());
-    db.set_sync_token(calendar_id, next_sync.as_deref()).await
+    db.set_sync_token(calendar_id, next_sync.as_deref()).await?;
+    Ok(held_back)
 }
 
 /// The listing of one window: every event with some part inside it —
@@ -248,6 +260,7 @@ async fn apply(
     for item in items {
         let Some(row) = GoogleEventRow::new(calendar_id, item) else {
             summary.errors += 1;
+            seen.unidentified += 1;
             continue;
         };
         if row.status.as_deref() == Some("cancelled") && row.recurring_event_id.is_none() {
@@ -295,6 +308,8 @@ struct Seen {
     listed: HashSet<String>,
     /// Series the listing deleted.
     cancelled: HashSet<String>,
+    /// Events listed without an id, which no stored row can be matched to.
+    unidentified: usize,
 }
 
 async fn get_json(url: &str, lk: &LatchkeySettings) -> Result<Value> {
