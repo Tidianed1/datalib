@@ -129,7 +129,9 @@ rust_library(
 
 rust_test(
     name = "http_unittests",
-    size = "small",
+    # Not `small`: the watch tests guard each filesystem event for 60s,
+    # which fseventsd needs on a busy disk (see `DEADLINE` in watch.rs).
+    size = "medium",
     crate = ":datalib_http",
     edition = "2021",
     proc_macro_deps = [

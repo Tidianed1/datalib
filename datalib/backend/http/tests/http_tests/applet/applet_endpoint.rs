@@ -390,7 +390,8 @@ async fn a_hand_edit_reaches_the_registry_through_the_watcher() {
         datalib_http::applets::watch_config(state.applets.clone(), state.root_tx.subscribe());
     let app = router(state);
     // A write before the watch reports is a write nobody hears.
-    tokio::time::timeout(std::time::Duration::from_secs(10), ready.wait())
+    // A hang guard: fseventsd can hold events back for over 10s on a busy disk.
+    tokio::time::timeout(std::time::Duration::from_secs(60), ready.wait())
         .await
         .expect("the watch never reported ready");
 
@@ -400,12 +401,22 @@ async fn a_hand_edit_reaches_the_registry_through_the_watcher() {
     std::fs::write(&tmp_file, config_for(&["first", "second"])).unwrap();
     std::fs::rename(&tmp_file, tmp.path().join("config.toml")).unwrap();
 
-    tokio::time::timeout(std::time::Duration::from_secs(30), reloaded.changed())
+    // Until the edit shows, not just the first reload: on a busy disk
+    // fseventsd can hand over an earlier write's event after the watch
+    // is ready, and the reload it causes may read the config before the
+    // rename above.
+    let reached = async {
+        loop {
+            reloaded.changed().await.unwrap();
+            let (_, view) = get_json(&app, "/api/frontend").await;
+            if view["namespaces"]["second"].is_object() {
+                return;
+            }
+        }
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(60), reached)
         .await
-        .expect("the watcher never reached the registry")
-        .unwrap();
-    let (_, view) = get_json(&app, "/api/frontend").await;
-    assert!(view["namespaces"]["second"].is_object(), "{view}");
+        .expect("the watcher never brought the edit to the registry");
     let (status, _) = get_json(&app, "/applet/second/channels").await;
     assert_eq!(status, StatusCode::OK);
 }
