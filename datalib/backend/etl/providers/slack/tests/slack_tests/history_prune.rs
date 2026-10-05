@@ -70,11 +70,14 @@ fn write_cold_start_with_thread(api: &Path) {
 /// What `replies_pages` holds as the newest reply of the `TS_A` thread.
 async fn recorded_latest_reply(out: &Path) -> Option<String> {
     let db = RawDb::open(&db_path_for(out)).await.unwrap();
-    let by_thread = db.latest_reply_by_thread().await.unwrap();
+    let held: Option<Option<String>> =
+        sqlx::query_scalar("SELECT latest_reply FROM replies_pages WHERE thread_ts = ?")
+            .bind(TS_A)
+            .fetch_optional(db.pool())
+            .await
+            .unwrap();
     db.close().await;
-    by_thread
-        .get(&("C1".to_string(), TS_A.to_string()))
-        .cloned()
+    held.flatten()
 }
 
 /// The cold start: all three messages from `SINCE`.
@@ -84,7 +87,7 @@ fn write_cold_start(api: &Path) {
         .unwrap();
 }
 
-/// The forward walk from the watermark, which finds nothing new.
+/// The walk of what is newer than `C`, which finds nothing.
 fn write_nothing_new(api: &Path) {
     History {
         inclusive: false,
@@ -125,7 +128,7 @@ async fn a_message_missing_from_a_rewalked_window_is_deleted() {
 
     // Run 1: cold start, three messages.
     write_cold_start(&t.api);
-    // Run 2: the forward walk from the watermark finds nothing new, then
+    // Run 2: the walk of what is newer finds nothing, then
     // the refresh window re-walks `[since, C]` — and B is gone from it.
     write_nothing_new(&t.api);
     write_window(&t.api, json!([msg(TS_A, "a"), msg(TS_C, "c")]), false);
@@ -153,10 +156,9 @@ async fn a_message_missing_from_a_rewalked_window_is_deleted() {
 /// nothing may be deleted.
 ///
 /// Without this, "prune what the walk did not return" would delete every
-/// message below the resume watermark on every run — the forward walk
-/// starts at the watermark and returns nothing older, which is
-/// indistinguishable from "everything older was deleted" to any check that
-/// does not know the walk's bounds.
+/// stored message on every run: the walk of what is newer returns nothing
+/// older, which is indistinguishable from "everything older was deleted"
+/// to any check that does not know the walk's bounds.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn no_refresh_window_means_no_prune() {
     let t = Tree::new();
@@ -282,4 +284,44 @@ async fn a_thread_root_missing_from_a_rewalked_window_takes_its_replies() {
         "the replies of a deleted root go with it",
     );
     assert_eq!(recorded_latest_reply(&t.out).await, None);
+}
+
+/// A window that takes two pages is judged a page at a time: each page
+/// lists a stretch whole, down to its own oldest message, so what it
+/// lacks there is deleted with that page. The message the first page
+/// ends on is the first page's, and its absence from the second says
+/// nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_window_of_two_pages_deletes_page_by_page() {
+    let t = Tree::new();
+    record_general(&t.api);
+
+    write_cold_start(&t.api);
+    write_nothing_new(&t.api);
+    let window = json!({"channel": "C1", "include_all_metadata": "true", "inclusive": "true",
+                        "limit": "200", "oldest": SINCE_TS, "latest": TS_C});
+    record_call(
+        &t.api,
+        "conversations.history",
+        window.clone(),
+        json!({"ok": true, "messages": [msg(TS_C, "c")], "has_more": true,
+               "response_metadata": {"next_cursor": "page2"}}),
+    )
+    .unwrap();
+    let mut second_page = window;
+    second_page["cursor"] = json!("page2");
+    record_call(
+        &t.api,
+        "conversations.history",
+        second_page,
+        json!({"ok": true, "messages": [msg(TS_A, "a")], "has_more": false}),
+    )
+    .unwrap();
+
+    t.serve();
+
+    run_fetch(&t.out, 0).await;
+    let pruned = run_fetch(&t.out, WHOLE_CHANNEL_DAYS).await;
+    assert_eq!(pruned, 1, "B, which the second page's stretch lacks");
+    assert_eq!(stored_ts(&t.out), vec![TS_A.to_string(), TS_C.to_string()],);
 }

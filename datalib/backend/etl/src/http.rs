@@ -525,7 +525,15 @@ where
                         });
                     }
                 }
-                playback::lookup(req, &root).await
+                match crate::interrupt::before_request().await {
+                    Some(crate::interrupt::Strike::Interrupted) => {
+                        return Err(HttpError::Interrupted {
+                            service: req.service,
+                            url: req.url.clone(),
+                        });
+                    }
+                    None => playback::lookup(req, &root).await,
+                }
             }
         };
 
@@ -888,7 +896,7 @@ fn canonical_url(url: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// Serializes the tests that point `PLAYBACK_ENV` at a fixture dir.
@@ -898,7 +906,7 @@ mod tests {
     /// flip it into live mode — the cause of the intermittent
     /// `retries_429_then_gives_up_per_guard` failures in CI.
     #[allow(clippy::await_holding_lock)]
-    async fn with_playback<T>(
+    pub(crate) async fn with_playback<T>(
         root: &std::path::Path,
         body: impl std::future::Future<Output = T>,
     ) -> T {

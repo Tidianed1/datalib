@@ -1267,6 +1267,10 @@ channels_bookkeeping
     last_error
     volatile_payload
     tz_offset
+coverage
+    scope
+    lo
+    hi
 messages
     id
     payload
@@ -1509,6 +1513,10 @@ yolink_windows_bookkeeping
     tz_offset
 
 == garmin/raw ==
+coverage
+    scope
+    lo
+    hi
 garmin_account
     id
     payload
@@ -1527,6 +1535,7 @@ garmin_activities
     start_time_gmt
     activity_type
     name
+    listing_hash
 garmin_activities_bookkeeping
     id
     fetched_at_utc
@@ -1538,6 +1547,7 @@ garmin_activities_bookkeeping
 garmin_activity_details
     id
     payload
+    listing_hash
 garmin_activity_details_bookkeeping
     id
     fetched_at_utc
@@ -1551,6 +1561,7 @@ garmin_activity_files
     activity_id
     file_kind
     blake3
+    listing_hash
 garmin_activity_files_bookkeeping
     id
     fetched_at_utc
@@ -1564,6 +1575,7 @@ garmin_daily
     payload
     metric
     calendar_date
+    fetched_on
 garmin_daily_bookkeeping
     id
     fetched_at_utc
@@ -1617,6 +1629,7 @@ garmin_wellness_files
     calendar_date
     file_kind
     blake3
+    fetched_on
 garmin_wellness_files_bookkeeping
     id
     fetched_at_utc

@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 
 use datalib_etl::http::LatchkeySettings;
@@ -50,17 +50,16 @@ impl DataProcessor for SlackIngest {
         &self.id
     }
 
-    /// Seals at the end of each channel, after that channel's prune rather
-    /// than before it: `export_channel` only prunes a window it walked to
-    /// completion, so what a consumer reads is a settled channel and not
-    /// one still carrying messages this run is about to delete. A channel
-    /// that failed seals nothing. Between channels the store is the
-    /// previous snapshot plus what this run has walked -- a superset.
+    /// Seals at the end of each channel.
     fn streams_output(&self) -> bool {
         true
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
+        let now = datalib_time::parse_strict(ctx.now)
+            .with_context(|| format!("slack: run stamp {:?}", ctx.now))?
+            .inner()
+            .with_timezone(&chrono::Utc);
         let entity_db = ingest::db_path_for(&self.raw_path);
         let mut db = ingest::RawDb::open(&entity_db).await?;
         let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
@@ -98,6 +97,7 @@ impl DataProcessor for SlackIngest {
                 dm_conversations: self.sync.dm_conversations.clone(),
                 blob_size_limit_bytes: self.blob_size_limit_bytes,
                 latchkey: self.latchkey.clone(),
+                now,
                 progress: ctx.progress.clone(),
                 control: ctx.control.clone(),
             })

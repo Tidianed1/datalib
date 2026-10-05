@@ -7,11 +7,12 @@ use datalib_source_common::{LatchkeySettings, SourceCommon};
 use serde::{Deserialize, Serialize};
 
 /// Where the per-day walk starts when the config names no `since`.
-/// A year covers what a first-time user usually wants to see, and the
-/// value is recorded in the store, so widening it later backfills.
+/// A year covers what a first-time user usually wants to see; the start
+/// it gives is recorded in the store, and a `since` set earlier later on
+/// backfills.
 pub const DEFAULT_SINCE_DAYS: i64 = 365;
 
-/// How many days before each metric's cursor a run re-fetches. A watch
+/// How many days after a day ends a run still re-fetches it. A watch
 /// syncs when it feels like it, and Garmin recomputes sleep, HRV and
 /// training status for a day after that day ends, so the trailing week
 /// is re-read rather than trusted.
@@ -50,7 +51,7 @@ pub struct GarminApi {
     /// stops growing — what a golden test wants.
     #[serde(default)]
     pub until: Option<String>,
-    /// Days before each metric's cursor to re-fetch every run. Default 7.
+    /// Days after a day ends that every run fetches it again. Default 7.
     #[serde(default)]
     pub refresh_days: Option<i64>,
     /// Which per-day metrics to mirror. Default: every one the provider

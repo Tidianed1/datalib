@@ -8,7 +8,7 @@ use anyhow::{anyhow, bail, Result};
 use serde_json::Value;
 
 use datalib_etl::events;
-use datalib_etl::http::{latchkey_curl, HttpRequest, HttpService, LatchkeySettings};
+use datalib_etl::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
 
 pub const TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -40,7 +40,8 @@ pub fn req_get_bytes(url: &str) -> HttpRequest {
 
 #[derive(thiserror::Error, Debug)]
 pub enum GarminError {
-    /// 401/403: Garmin refused the credential latchkey sent.
+    /// 401/403: Garmin refused the credential latchkey sent; or latchkey
+    /// would not send one at all, which every later request would share.
     #[error("unauthorized: {0}")]
     Auth(String),
     #[error("{0}")]
@@ -79,7 +80,7 @@ impl GarminClient {
         let req = build(&url).latchkey(self.latchkey.clone());
         let resp = latchkey_curl(&req)
             .await
-            .map_err(|e| GarminError::Permanent(e.to_string()))?;
+            .map_err(|e| transport_error(e, path))?;
         self.network_seconds += (resp.duration_ms as f64) / 1000.0;
         self.requests += 1;
         events::item_fetched(&url, resp.body.len() as u64, resp.duration_ms);
@@ -128,6 +129,47 @@ impl GarminClient {
     }
 }
 
+/// latchkey exits 1 when it will not send the request at all: no
+/// credential, or the plugin could not mint a bearer. curl's own failures
+/// (DNS, a refused connection, a timeout) have codes of their own.
+fn transport_error(e: HttpError, path: &str) -> GarminError {
+    match e {
+        HttpError::Curl { exit: 1, .. } | HttpError::Spawn { .. } => {
+            GarminError::Auth(format!("GET {path}: {e}"))
+        }
+        other => GarminError::Permanent(other.to_string()),
+    }
+}
+
 fn preview(body: &[u8]) -> String {
     String::from_utf8_lossy(body).chars().take(300).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn curl_exit(exit: i32) -> HttpError {
+        HttpError::Curl {
+            service: HttpService::Garmin,
+            url: "https://connectapi.garmin.com/hrv-service/hrv/2369-04-14".into(),
+            exit,
+            stderr: "Error: No credentials found for garmin.".into(),
+        }
+    }
+
+    /// A request latchkey would not send (no credential, or the bearer
+    /// exchange failed) must end the run, not record every day of every
+    /// metric as failed before giving up.
+    #[test]
+    fn a_request_latchkey_will_not_send_is_an_auth_failure() {
+        let e = transport_error(curl_exit(1), "/hrv-service/hrv/2369-04-14");
+        assert!(matches!(e, GarminError::Auth(_)), "{e}");
+    }
+
+    #[test]
+    fn a_network_failure_is_not_an_auth_failure() {
+        let e = transport_error(curl_exit(7), "/hrv-service/hrv/2369-04-14");
+        assert!(matches!(e, GarminError::Permanent(_)), "{e}");
+    }
 }
