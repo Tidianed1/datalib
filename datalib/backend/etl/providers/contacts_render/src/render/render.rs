@@ -27,8 +27,9 @@ use datalib_schema::providers::Provider;
 /// moved; to 5 when labels came from `X-ABLabel` and every `TYPE`,
 /// `CREATED` became `created_at`, and groups listed their members; to 7
 /// when a card listed the groups it is in, and to 8 when its `CATEGORIES`
-/// joined them.
-pub const RENDER_VERSION: u32 = 9;
+/// joined them; to 10 when a `+1` number without ten digits after the 1
+/// stopped having a handle.
+pub const RENDER_VERSION: u32 = 10;
 
 /// Every card by `(addressbook, UID)`, for a group to name its members.
 type Cards<'a> = HashMap<(&'a str, &'a str), &'a ParsedContact>;

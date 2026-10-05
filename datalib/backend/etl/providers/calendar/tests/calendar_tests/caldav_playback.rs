@@ -324,3 +324,199 @@ async fn a_window_queries_the_time_range_and_keeps_no_token() {
         Some("tng-reception@enterprise.test")
     );
 }
+
+/// The `<response>` RFC 6578 §3.6 has a server send for the collection
+/// itself when it stops a listing short.
+fn cut_short() -> String {
+    format!(
+        "<response><href>{BRIDGE}</href><status>HTTP/1.1 507 Insufficient Storage</status>\
+         <error><number-of-matches-within-limits/></error></response>"
+    )
+}
+
+async fn problem_keys(store: &Path) -> Vec<String> {
+    let db = RawDb::open(&db_path_for(store))
+        .await
+        .expect("reopen store");
+    let keys: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems ORDER BY scope_key")
+        .fetch_all(db.pool())
+        .await
+        .expect("query problems");
+    db.close().await;
+    keys
+}
+
+async fn stored_uids(store: &Path) -> Option<String> {
+    scalar(
+        store,
+        "SELECT group_concat(uid, ',') FROM (SELECT uid FROM ics_objects ORDER BY uid)",
+    )
+    .await
+}
+
+/// Both events stored by a whole listing that came back complete.
+fn first_listing(root: &Path) {
+    fixture(
+        root,
+        HttpMethod::Report,
+        &format!("{HOST}{BRIDGE}"),
+        "1",
+        &dav::body_sync_collection(""),
+        xml(
+            207,
+            &multistatus(&format!(
+                "{}{}<sync-token>data:,100</sync-token>",
+                resource(&format!("{BRIDGE}staff.ics"), "\"s1\"", STAFF),
+                resource(&format!("{BRIDGE}reception.ics"), "\"r1\"", RECEPTION),
+            )),
+        ),
+    );
+}
+
+/// The stored token has expired, so the calendar is listed whole again;
+/// the server stops that listing short and then will not move past the
+/// point it stopped. Absence from a listing that never finished says
+/// nothing, so the reception it never reached stays (audit 2026-10-02
+/// §4).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_sync_listing_cut_short_deletes_nothing() {
+    let d = tempfile::tempdir().expect("tempdir");
+    let (one, two, store) = (
+        d.path().join("one"),
+        d.path().join("two"),
+        d.path().join("store"),
+    );
+    std::fs::create_dir_all(&store).unwrap();
+    let bridge = format!("{HOST}{BRIDGE}");
+    account_fixtures(&one);
+    first_listing(&one);
+    account_fixtures(&two);
+    fixture(
+        &two,
+        HttpMethod::Report,
+        &bridge,
+        "1",
+        &dav::body_sync_collection("data:,100"),
+        xml(
+            403,
+            r#"<?xml version="1.0"?><error xmlns="DAV:"><valid-sync-token/></error>"#,
+        ),
+    );
+    fixture(
+        &two,
+        HttpMethod::Report,
+        &bridge,
+        "1",
+        &dav::body_sync_collection(""),
+        xml(
+            207,
+            &multistatus(&format!(
+                "{}{}<sync-token>data:,200</sync-token>",
+                resource(&format!("{BRIDGE}staff.ics"), "\"s1\"", STAFF),
+                cut_short(),
+            )),
+        ),
+    );
+    fixture(
+        &two,
+        HttpMethod::Report,
+        &bridge,
+        "1",
+        &dav::body_sync_collection("data:,200"),
+        xml(
+            207,
+            &multistatus(&format!(
+                "{}<sync-token>data:,200</sync-token>",
+                cut_short()
+            )),
+        ),
+    );
+
+    run(&one, &store).await;
+    let second = run(&two, &store).await;
+    assert_eq!(second.events_deleted, 0, "{second:?}");
+    assert_eq!(
+        stored_uids(&store).await.as_deref(),
+        Some("tng-reception@enterprise.test,tng-staff@enterprise.test")
+    );
+    assert_eq!(
+        problem_keys(&store).await,
+        vec!["listing:calendar Bridge Duty".to_string()]
+    );
+}
+
+/// A server with no `sync-collection` is listed with `calendar-query`,
+/// whole or over a window, every run; a reply it cut short prunes
+/// nothing either.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_query_listing_cut_short_deletes_nothing() {
+    let window = datalib_etl_calendar::ingest::Window {
+        start: chrono::NaiveDate::from_ymd_opt(2026, 1, 1),
+        end: None,
+    };
+    for window in [None, Some(window)] {
+        let d = tempfile::tempdir().expect("tempdir");
+        let (one, two, store) = (
+            d.path().join("one"),
+            d.path().join("two"),
+            d.path().join("store"),
+        );
+        std::fs::create_dir_all(&store).unwrap();
+        let bridge = format!("{HOST}{BRIDGE}");
+        let query = match &window {
+            Some(w) => dav::body_query_window(w),
+            None => dav::BODY_QUERY_ALL_EVENTS.to_string(),
+        };
+        for (root, listed) in [
+            (
+                &one,
+                format!(
+                    "{}{}",
+                    resource(&format!("{BRIDGE}staff.ics"), "\"s1\"", STAFF),
+                    resource(&format!("{BRIDGE}reception.ics"), "\"r1\"", RECEPTION),
+                ),
+            ),
+            (
+                &two,
+                format!(
+                    "{}{}",
+                    resource(&format!("{BRIDGE}staff.ics"), "\"s1\"", STAFF),
+                    cut_short(),
+                ),
+            ),
+        ] {
+            account_fixtures(root);
+            fixture(
+                root,
+                HttpMethod::Report,
+                &bridge,
+                "1",
+                &dav::body_sync_collection(""),
+                xml(501, ""),
+            );
+            fixture(
+                root,
+                HttpMethod::Report,
+                &bridge,
+                "1",
+                &query,
+                xml(207, &multistatus(&listed)),
+            );
+        }
+
+        let first = run_in(&one, &store, window).await;
+        assert_eq!(first.events_new, 2, "{window:?}: {first:?}");
+        let second = run_in(&two, &store, window).await;
+        assert_eq!(second.events_deleted, 0, "{window:?}: {second:?}");
+        assert_eq!(
+            stored_uids(&store).await.as_deref(),
+            Some("tng-reception@enterprise.test,tng-staff@enterprise.test"),
+            "{window:?}"
+        );
+        assert_eq!(
+            problem_keys(&store).await,
+            vec!["listing:calendar Bridge Duty".to_string()],
+            "{window:?}"
+        );
+    }
+}

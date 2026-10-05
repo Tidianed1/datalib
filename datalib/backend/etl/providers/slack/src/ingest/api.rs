@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use serde_json::Value;
-use tracing::{debug, instrument, warn};
+use tracing::{debug, instrument};
 
 use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::events;
@@ -361,13 +361,6 @@ async fn download_one_file(
                 Ok(resp) => format!("HTTP {}", resp.status),
                 Err(e) => e.to_string(),
             };
-            warn!(
-                event = "slack_media_failed",
-                file_id = file_id,
-                name = name.unwrap_or(""),
-                error = %failure,
-                "a file could not be downloaded"
-            );
             attach.add_failed(message_uuid, file_id, failure);
             return Ok("error");
         }

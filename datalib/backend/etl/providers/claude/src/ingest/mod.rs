@@ -1484,7 +1484,6 @@ async fn fetch_files(
             }
             Err(_) if stop.requested() => return None,
             Err(reason) => {
-                warn!(event = "claude_media_failed", file_uuid = %file_uuid, error = %reason, "a file could not be downloaded");
                 attach.add_failed(conv_uuid, file_uuid, reason);
                 summary.failed_blobs += 1;
             }

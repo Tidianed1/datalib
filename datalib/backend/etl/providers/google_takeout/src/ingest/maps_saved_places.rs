@@ -3,15 +3,17 @@
 //! GeoJSON `FeatureCollection`; one feature per saved/starred place.
 //! PK recipe: `uuidv5(NS, "maps_saved:{ftid_or_cid}:{date}")`.
 
+use datalib_etl::download_problems::SkippedRecord;
 use datalib_etl::fsscan;
+use datalib_problems::{Problem, Reason};
 
 use anyhow::{Context, Result};
 use datalib_etl::file_checkpoint::{self, SnapshotCounts};
 use datalib_etl::progress::Progress;
-use datalib_problems::Reason;
 use serde_json::Value;
 
 use super::db::RawDb;
+use super::no_features_list;
 use super::schema_raw::{ns_id, MapsSavedPlaceRow};
 use datalib_etl::doltlite_raw::WirePayload;
 
@@ -23,23 +25,20 @@ pub async fn ingest(
     scan: &fsscan::Scan,
     progress: &Progress,
 ) -> Result<SnapshotCounts> {
-    let file = scan.file(FILE_REL);
-    let n = file_checkpoint::ingest_snapshot(db.pool(), SCOPE, file, |bytes| {
+    let mut skipped = None;
+    let n = file_checkpoint::ingest_snapshot(db.pool(), SCOPE, scan.file(FILE_REL), |bytes| {
+        let skipped = skipped.insert(Vec::new());
         let geo: Value = serde_json::from_slice(bytes).context("parse Saved Places.json")?;
         let Some(features) = geo.get("features").and_then(|v| v.as_array()) else {
-            return Ok((
-                None,
-                super::unusable(
-                    Reason::Undeserializable,
-                    "the file has no features list, so nothing was ingested or deleted".to_string(),
-                ),
-            ));
+            return Ok((None, Some(no_features_list())));
         };
         let mut rows: Vec<MapsSavedPlaceRow> = Vec::with_capacity(features.len());
-        let mut skipped: Vec<String> = Vec::new();
-        for (i, f) in features.iter().enumerate() {
+        for f in features {
             let Some(props) = f.get("properties") else {
-                skipped.push(format!("place {i} has no properties"));
+                skipped.push(SkippedRecord {
+                    entry: f.to_string(),
+                    problem: Problem::field("properties", Reason::NoIdentity, ""),
+                });
                 continue;
             };
             let date = props.get("date").and_then(|v| v.as_str()).unwrap_or("");
@@ -49,7 +48,15 @@ pub async fn ingest(
                 .unwrap_or("");
             let key = extract_ftid_or_cid(url).unwrap_or("");
             if key.is_empty() || date.is_empty() {
-                skipped.push(format!("place {i} has no place id or no date"));
+                let (field, value) = if date.is_empty() {
+                    ("date", date)
+                } else {
+                    ("google_maps_url", url)
+                };
+                skipped.push(SkippedRecord {
+                    entry: f.to_string(),
+                    problem: Problem::field(field, Reason::NoIdentity, value),
+                });
                 continue;
             }
             let id = ns_id(&format!("maps_saved:{key}:{date}"));
@@ -59,9 +66,10 @@ pub async fn ingest(
                 when_ts: Some(date.to_string()),
             });
         }
-        Ok((Some(rows), super::skipped_records(&skipped)))
+        Ok((Some(rows), None))
     })
     .await?;
+    super::report_skipped_if_read(db, "maps_saved_places", skipped).await;
     progress.set_message(&format!("maps_saved_places: {}", n.written));
     Ok(n)
 }

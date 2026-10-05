@@ -7,12 +7,12 @@ use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{blake3_hex, CasInsert};
 use datalib_etl::bulk::{bulk_upsert_entity_in_tx, bulk_upsert_in_tx};
 use datalib_etl::doltlite_raw::{record_object_error, record_object_skipped};
-use datalib_etl::download_problems::RunProblem;
+use datalib_etl::download_problems::{self, SkippedRecord};
 use datalib_etl::file_checkpoint;
 use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
 use datalib_etl::prune;
-use datalib_problems::Reason;
+use datalib_problems::{Problem, Reason};
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::Value;
 
@@ -37,9 +37,6 @@ pub struct MapsPhotosSummary {
     /// Photos whose sidecar is gone.
     pub removed: usize,
     pub files_removed: usize,
-    /// Sidecars that would not read or parse. Each is left unstamped, so
-    /// the next run reads it again and this is the whole truth each run.
-    pub problems: Vec<RunProblem>,
 }
 
 /// A photo whose sidecar read but whose media did not: the row lands
@@ -67,7 +64,7 @@ pub async fn ingest(
     let mut without_media: Vec<(MapsPhotoRow, MediaProblem)> = Vec::new();
     let mut cas_inserts_owned: Vec<PendingCas> = Vec::new();
     let mut done: Vec<&fsscan::ScannedFile> = Vec::new();
-    let mut problems: Vec<RunProblem> = Vec::new();
+    let mut skipped: Vec<SkippedRecord> = Vec::new();
     for f in changes
         .needs_reading_under(DIR_REL)
         .filter(|f| f.path.extension().and_then(|s| s.to_str()) == Some("json"))
@@ -88,10 +85,15 @@ pub async fn ingest(
                 }
             }
             Ok(None) => done.push(f),
-            Err(e) => problems.push(RunProblem::listing(
-                &format!("maps_photos {}", f.rel),
-                format!("{e:#}"),
-            )),
+            // Not stamped, so it is read again next run, and its row is
+            // re-reported until it reads.
+            Err(e) => skipped.push(SkippedRecord {
+                entry: f.rel.clone(),
+                problem: Problem::record(
+                    Reason::FetchFailed,
+                    &format!("{}: {}", f.rel, e.root_cause()),
+                ),
+            }),
         }
     }
 
@@ -134,6 +136,7 @@ pub async fn ingest(
         file_checkpoint::record_file(&mut tx, SCOPE, f).await?;
     }
     tx.commit().await.context("commit maps_photos tx")?;
+    download_problems::report_skipped(db.pool(), "maps_photos", &skipped).await;
 
     // A photo row is keyed by its sidecar's stem, so a row whose stem no
     // sidecar here carries is gone — read as "not exported" when the
@@ -159,7 +162,6 @@ pub async fn ingest(
         blobs: blob_count,
         removed,
         files_removed: gone.len(),
-        problems,
     })
 }
 

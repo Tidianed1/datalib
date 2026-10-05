@@ -8,10 +8,10 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::bulk::bulk_upsert_in_tx;
-use datalib_etl::download_problems::RunProblem;
+use datalib_etl::download_problems::{self, SkippedRecord};
 use datalib_etl::file_checkpoint;
 use datalib_etl::progress::Progress;
-use datalib_problems::Reason;
+use datalib_problems::{Problem, Reason};
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::Value;
 
@@ -35,9 +35,6 @@ pub struct ChatSummary {
     pub removed: usize,
     /// Export files that are gone since the last run.
     pub files_removed: usize,
-    /// Files that would not read or parse. Each is left unstamped, so the
-    /// next run reads it again and this is the whole truth each run.
-    pub problems: Vec<RunProblem>,
 }
 
 /// The name of the directory a scanned file sits in — a Chat user id
@@ -61,12 +58,17 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
     let prev = file_checkpoint::load_cursor(db.pool(), SCOPE).await?;
     let changes = scan.changes_since(&prev);
     let mut summary = ChatSummary::default();
-    let mut problems: Vec<RunProblem> = Vec::new();
+    // A file that will not read or parse is left unstamped, so the next
+    // run reads it again and its row is re-reported until it reads.
+    let mut skipped: Vec<SkippedRecord> = Vec::new();
     let mut unread = |f: &fsscan::ScannedFile, e: anyhow::Error| {
-        problems.push(RunProblem::listing(
-            &format!("google_chat {}", f.rel),
-            format!("{e:#}"),
-        ));
+        skipped.push(SkippedRecord {
+            entry: f.rel.clone(),
+            problem: Problem::record(
+                Reason::Undeserializable,
+                &format!("{}: {}", f.rel, e.root_cause()),
+            ),
+        });
     };
 
     // ── Users ──────────────────────────────────────────────────────
@@ -210,6 +212,7 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
         file_checkpoint::record_file(&mut tx, SCOPE, f).await?;
     }
     tx.commit().await.context("commit google_chat tx")?;
+    download_problems::report_skipped(db.pool(), "google_chat", &skipped).await;
 
     for (group, kept) in &messages_by_group {
         summary.removed += delete_group_messages(db, group, kept).await?;
@@ -257,7 +260,6 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
     summary.messages = n_messages;
     summary.attachments = n_attachments;
     summary.blobs_stored = blobs_stored;
-    summary.problems = problems;
     Ok(summary)
 }
 

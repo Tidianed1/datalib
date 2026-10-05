@@ -3,7 +3,9 @@
 //! Three-column CSV: `Channel Id,Channel Url,Channel Title`. PK is
 //! `Channel Id` verbatim. Not event-shaped; `when_ts` stays NULL.
 
+use datalib_etl::download_problems::SkippedRecord;
 use datalib_etl::fsscan;
+use datalib_problems::{Problem, Reason};
 
 use anyhow::Result;
 use datalib_etl::file_checkpoint::{self, SnapshotCounts};
@@ -22,25 +24,31 @@ pub async fn ingest(
     scan: &fsscan::Scan,
     progress: &Progress,
 ) -> Result<SnapshotCounts> {
-    let file = scan.file(FILE_REL);
-    let n = file_checkpoint::ingest_snapshot(db.pool(), SCOPE, file, |bytes| {
+    let mut skipped = None;
+    let n = file_checkpoint::ingest_snapshot(db.pool(), SCOPE, scan.file(FILE_REL), |bytes| {
+        let skipped = skipped.insert(Vec::new());
         let text = String::from_utf8_lossy(bytes);
         let mut rows: Vec<YoutubeSubscriptionRow> = Vec::new();
-        let mut skipped: Vec<String> = Vec::new();
         for (i, line) in text.lines().enumerate() {
             if i == 0 || line.trim().is_empty() {
                 continue;
             }
             let cells = split_csv_row(line);
             if cells.len() < 3 {
-                skipped.push(format!("line {} has {} of 3 columns", i + 1, cells.len()));
+                skipped.push(SkippedRecord {
+                    entry: line.to_string(),
+                    problem: Problem::record(Reason::Undeserializable, line),
+                });
                 continue;
             }
             let channel_id = cells[0].trim().to_string();
             let channel_url = cells[1].trim().to_string();
             let channel_title = cells[2].trim().to_string();
             if channel_id.is_empty() {
-                skipped.push(format!("line {} has no channel id", i + 1));
+                skipped.push(SkippedRecord {
+                    entry: line.to_string(),
+                    problem: Problem::field("Channel Id", Reason::NoIdentity, line),
+                });
                 continue;
             }
             let payload = json!({
@@ -56,9 +64,10 @@ pub async fn ingest(
                 channel_title: Some(channel_title),
             });
         }
-        Ok((Some(rows), super::skipped_records(&skipped)))
+        Ok((Some(rows), None))
     })
     .await?;
+    super::report_skipped_if_read(db, "youtube_subscriptions", skipped).await;
     progress.set_message(&format!("youtube_subscriptions: {}", n.written));
     Ok(n)
 }

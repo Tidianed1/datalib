@@ -1,6 +1,8 @@
 //! `YouTube and YouTube Music/history/watch-history.html` walker.
 
+use datalib_etl::download_problems::SkippedRecord;
 use datalib_etl::fsscan;
+use datalib_problems::{Problem, Severity};
 
 use anyhow::Result;
 use datalib_etl::file_checkpoint::{self, SnapshotCounts};
@@ -21,11 +23,11 @@ pub async fn ingest(
     scan: &fsscan::Scan,
     progress: &Progress,
 ) -> Result<SnapshotCounts> {
-    let file = scan.file(FILE_REL);
-    let n = file_checkpoint::ingest_snapshot(db.pool(), SCOPE, file, |bytes| {
+    let mut skipped = None;
+    let n = file_checkpoint::ingest_snapshot(db.pool(), SCOPE, scan.file(FILE_REL), |bytes| {
+        let skipped = skipped.insert(Vec::new());
         let html = String::from_utf8_lossy(bytes);
         let mut rows: Vec<YoutubeWatchRow> = Vec::new();
-        let mut skipped: Vec<String> = Vec::new();
         for cell in mdl_html::iter_cells(&html) {
             let anchors = mdl_html::iter_anchors(cell);
             // The first anchor is the video; channel anchor is second
@@ -35,7 +37,17 @@ pub async fn ingest(
             };
             let video_id = video_id_from_url(&video_url).unwrap_or_default();
             if video_id.is_empty() {
-                skipped.push(format!("{video_url} has no video id"));
+                // A community post, an ad's redirect link, an account
+                // page: entries the history lists that are not videos.
+                skipped.push(SkippedRecord {
+                    entry: cell.to_string(),
+                    problem: Problem::lossy(
+                        "youtube_watch_not_a_video",
+                        Some("videoUrl".to_string()),
+                        &video_url,
+                    )
+                    .severity(Severity::Warning),
+                });
                 continue;
             }
             let (channel_url, channel_title) = anchors
@@ -72,9 +84,10 @@ pub async fn ingest(
                 channel_id,
             });
         }
-        Ok((Some(rows), super::skipped_records(&skipped)))
+        Ok((Some(rows), None))
     })
     .await?;
+    super::report_skipped_if_read(db, "youtube_watch_history", skipped).await;
     progress.set_message(&format!("youtube_watch_history: {}", n.written));
     Ok(n)
 }

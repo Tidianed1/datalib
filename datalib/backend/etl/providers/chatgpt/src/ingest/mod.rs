@@ -813,9 +813,7 @@ async fn fetch_attachments(
             }
             Err(_) if stop.requested() => return None,
             Err(e) => {
-                let reason = format!("{e:#}");
-                warn!(event = "chatgpt_media_failed", file_id = %file_id, error = %reason, "a file could not be downloaded");
-                attach.add_failed(cid, &file_id, reason);
+                attach.add_failed(cid, &file_id, format!("{e:#}"));
                 summary.failed_blobs += 1;
             }
         }

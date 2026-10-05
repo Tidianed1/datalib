@@ -1616,16 +1616,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 format!("no channel by that name among {} listed", listed.len()),
             ));
         }
-        if !plan.unmatched_dms.is_empty() {
-            // Silence here would be indistinguishable from "that
-            // conversation has no messages".
-            warn!(
-                event = "slack_dm_conversations_unmatched",
-                entries = %plan.unmatched_dms.join(", "),
-                "no direct message matches these `dm_conversations` entries — \
-                 they will not be mirrored",
-            );
-        }
         for spec in &plan.unmatched_dms {
             grand.problems.push(DownloadProblem::not_found(
                 "dm_conversations",

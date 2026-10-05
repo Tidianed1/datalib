@@ -9,11 +9,13 @@ pub use db::{db_path_for, RawDb};
 
 use anyhow::{Context, Result};
 use datalib_etl::control::DownloadControl;
+use datalib_etl::dav::sync::{CollectionSync, Page};
+use datalib_etl::download_problems::{self, RecordProblem, RunProblem};
 use datalib_etl::http::LatchkeySettings;
 use datalib_etl::progress::Progress;
-use tracing::{info, warn};
+use tracing::info;
 
-use api::{DavError, Multistatus};
+use api::ContactProps;
 use datalib_etl::dav::absolutize;
 use db::{addressbook_pk, ContactRow};
 
@@ -86,7 +88,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     }
     summary.addressbooks = books.len();
 
-    // ── Per-addressbook sync ──────────────────────────────────────
+    let mut run_problems: Vec<RunProblem> = Vec::new();
+    let mut record_problems: Vec<RecordProblem> = Vec::new();
     for book in &books {
         let named = book
             .display_name
@@ -95,33 +98,39 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         if !opts.addressbooks.is_empty() && !named {
             continue;
         }
+        if opts.control.stop.requested() {
+            break;
+        }
         let book_id = addressbook_pk(&account_id, &book.href);
-        let prev_token = db.sync_token(&book_id).await?.unwrap_or_default();
         opts.progress
             .set_message(&format!("syncing addressbook {}", book.href));
-        match sync_addressbook(
+        let synced = sync_addressbook(
             &db,
             &book_id,
             &book.url,
-            &prev_token,
             &mut summary,
+            &mut record_problems,
             &opts.latchkey,
         )
-        .await
-        {
-            Ok(()) => {}
+        .await;
+        let listing = format!(
+            "addressbook {}",
+            book.display_name.as_deref().unwrap_or(&book.href)
+        );
+        match synced {
+            Ok(None) => {}
+            Ok(Some(cut_short)) => run_problems.push(RunProblem::listing(
+                &listing,
+                format!("{cut_short}; nothing was deleted"),
+            )),
             Err(e) => {
                 summary.errors += 1;
-                warn!(
-                    event = "carddav_addressbook_sync_failed",
-                    addressbook = %book.href,
-                    error = %e,
-                    "an addressbook could not be synced"
-                );
+                run_problems.push(RunProblem::listing(&listing, format!("{e:#}")));
             }
         }
     }
-
+    download_problems::report_run(db.pool(), &run_problems).await;
+    download_problems::report_records(db.pool(), &record_problems).await;
     Ok(summary)
 }
 
@@ -231,67 +240,76 @@ async fn list_addressbooks(
     Ok(out)
 }
 
+/// Keeps one address book in step with `sync-collection` from its
+/// stored token. Returns why the listing stopped short, if it did; then
+/// nothing it did not name is deleted.
 async fn sync_addressbook(
     db: &RawDb,
     book_id: &str,
     book_url: &str,
-    prev_token: &str,
     summary: &mut FetchSummary,
+    problems: &mut Vec<RecordProblem>,
     latchkey: &LatchkeySettings,
+) -> Result<Option<String>> {
+    let token = db.sync_token(book_id).await?;
+    let mut sync = CollectionSync::new(&api::KIND, book_url, token, None, latchkey);
+    let listed = store_pages(db, book_id, &mut sync, summary, problems).await;
+    summary.requests += sync.requests();
+    listed?;
+    let outcome = sync.finish();
+    let stored = db.contact_hrefs(book_id).await?;
+    for href in outcome.unlisted(&stored) {
+        db.delete_contact(book_id, href).await?;
+        summary.contacts_deleted += 1;
+    }
+    Ok(outcome.cut_short().map(str::to_string))
+}
+
+async fn store_pages(
+    db: &RawDb,
+    book_id: &str,
+    sync: &mut CollectionSync<'_>,
+    summary: &mut FetchSummary,
+    problems: &mut Vec<RecordProblem>,
 ) -> Result<()> {
-    summary.requests += 1;
-    let body = api::body_sync_collection(prev_token);
-    let ms = match api::report(book_url, &body, latchkey).await {
-        Ok(ms) => ms,
-        Err(DavError::Http {
-            status: 403 | 405 | 501,
-            ..
-        }) => {
-            // Server explicitly doesn't support sync-collection.
-            // Fall back to a multiget over what we already have plus
-            // a discovery walk. Not implemented yet — record the
-            // error and move on.
-            warn!(
-                event = "carddav_sync_collection_unsupported",
-                addressbook_url = %book_url,
-                "the server does not support sync-collection; walking whole"
-            );
-            return Ok(());
-        }
-        Err(e) => return Err(anyhow::anyhow!("sync-collection REPORT: {e}")),
-    };
-    apply_multistatus(db, book_id, &ms, summary).await?;
-    if let Some(token) = &ms.sync_token {
-        db.set_sync_token(book_id, token).await?;
+    while let Some(page) = sync.next_page::<ContactProps>().await? {
+        let token = page.token.clone();
+        apply(db, book_id, page, summary, problems).await?;
+        db.set_sync_token(book_id, token.as_deref()).await?;
     }
     Ok(())
 }
 
-async fn apply_multistatus(
+/// Store what one page changed and drop what it deleted.
+async fn apply(
     db: &RawDb,
     book_id: &str,
-    ms: &Multistatus,
+    page: Page<ContactProps>,
     summary: &mut FetchSummary,
+    problems: &mut Vec<RecordProblem>,
 ) -> Result<()> {
-    let changed = api::changed_contacts(ms);
-    let deleted = api::deleted_hrefs(ms);
-
-    // Pre-fetch existing etags so we can tell `new` from `updated`.
     let existing = db.contact_etags_by_href(book_id).await?;
-
-    let mut rows: Vec<ContactRow> = Vec::with_capacity(changed.len());
-    for (href, (etag, vcard)) in &changed {
+    for href in &page.unfetched {
+        summary.errors += 1;
+        problems.push(RecordProblem::new(
+            "contacts",
+            href,
+            "the address book listed this card, but did not return it when asked",
+        ));
+    }
+    let mut rows: Vec<ContactRow> = Vec::with_capacity(page.changed.len());
+    for r in &page.changed {
+        let vcard = r.props.vcard.as_deref().unwrap_or_default();
         let Some(uid) = api::vcard_uid(vcard) else {
-            warn!(
-                event = "carddav_vcard_missing_uid",
-                href = %href,
-                "a vCard has no UID; keyed on its href"
-            );
             summary.errors += 1;
+            problems.push(RecordProblem::new(
+                "contacts",
+                &r.href,
+                "the vCard has no UID, so it cannot be stored",
+            ));
             continue;
         };
-        let was_known = existing.contains_key(href);
-        if was_known {
+        if existing.contains_key(&r.href) {
             summary.contacts_updated += 1;
         } else {
             summary.contacts_new += 1;
@@ -299,16 +317,15 @@ async fn apply_multistatus(
         rows.push(ContactRow::new(
             book_id.to_string(),
             uid,
-            href.clone(),
-            etag.clone(),
+            r.href.clone(),
+            r.props.etag.clone(),
             api::vcard_fn(vcard),
             api::vcard_rev(vcard),
             vcard,
         ));
     }
     db.upsert_contacts(&rows).await?;
-
-    for href in &deleted {
+    for href in &page.deleted {
         db.delete_contact(book_id, href).await?;
         summary.contacts_deleted += 1;
     }

@@ -340,7 +340,13 @@ async fn main() {
         stop: stop.clone(),
     };
 
-    match run(cli, &data_root, &now, &control, &emitter).await {
+    let result = {
+        // Dropped on a panic's unwind too, so a step that dies still says
+        // what it recorded.
+        let _log = LogRecordedProblems;
+        run(cli, &data_root, &now, &control, &emitter).await
+    };
+    match result {
         // A run that ended because it was asked to is not a success, even
         // though it committed: it did not finish, and saying so is how the
         // runner knows not to mark it done. What it committed stands, and
@@ -383,6 +389,16 @@ async fn main() {
             }
             std::process::exit(1);
         }
+    }
+}
+
+/// Every problem this step stored, logged once at its end at the row's
+/// severity (`datalib_problems::log_recorded`).
+struct LogRecordedProblems;
+
+impl Drop for LogRecordedProblems {
+    fn drop(&mut self) {
+        datalib_schema::problems::log_recorded();
     }
 }
 

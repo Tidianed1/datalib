@@ -112,12 +112,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             // Not stamped, so the next run reads it again.
             Err(e) => {
                 summary.errors += 1;
-                warn!(
-                    event = "contacts_vcf_ingest_failed",
-                    path = %f.path.display(),
-                    error = %format!("{e:#}"),
-                    "a vcf file could not be ingested"
-                );
                 problems.push(RunProblem::listing(
                     &format!("vcf {}", f.rel),
                     format!("{e:#}"),

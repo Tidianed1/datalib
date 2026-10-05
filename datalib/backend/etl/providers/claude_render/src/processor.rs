@@ -44,14 +44,14 @@ impl SourceRender for ClaudeRender {
         use datalib_etl::blob_cas::CasEdgeRow;
         use datalib_etl::bulk::BulkUpsertable;
         use datalib_etl_claude::ingest::schema_raw::{ConversationAttachmentRow, ConversationRow};
-        let conversation_uuid = if table == ConversationRow::TABLE {
+        let conversation = if table == ConversationRow::TABLE {
             id
         } else if table == ConversationAttachmentRow::TABLE {
             ConversationAttachmentRow::owning_id_of(id)?
         } else {
             return None;
         };
-        Some(crate::render::ids::conversation(source_id, conversation_uuid).uuid)
+        Some(crate::render::ids::conversation(source_id, conversation).uuid)
     }
 
     async fn run(&self, raw_path: &Path, ctx: &RenderCtx<'_>) -> Result<String> {

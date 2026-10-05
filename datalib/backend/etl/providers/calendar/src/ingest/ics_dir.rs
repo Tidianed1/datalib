@@ -90,7 +90,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             // Not stamped, so the next run reads it again.
             Err(e) => {
                 summary.errors += 1;
-                warn!(event = "calendar_ics_ingest_failed", path = %f.path.display(), error = %format!("{e:#}"), "an ics file could not be read");
                 problems.push(RunProblem::listing(
                     &format!("ics {}", f.rel),
                     format!("{e:#}"),
@@ -156,10 +155,7 @@ async fn ingest_one(
         time_zone: split.time_zone.clone(),
     }])
     .await?;
-    if split.events_without_uid > 0 {
-        summary.errors += split.events_without_uid;
-        warn!(event = "calendar_ics_event_without_uid", path = %file.display(), n = split.events_without_uid, "events with no UID cannot be told apart from one run to the next; skipped them");
-    }
+    summary.errors += split.events_without_uid;
 
     let existing = db.ics_uids(&calendar_id).await?;
     let rows: Vec<IcsObjectRow> = split

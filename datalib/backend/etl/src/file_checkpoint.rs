@@ -200,6 +200,7 @@ async fn replace_file_problem(
         .execute(&mut **tx)
         .await
         .with_context(|| format!("record the problem of {key}"))?;
+    datalib_problems::note_recorded([&row]);
     Ok(())
 }
 

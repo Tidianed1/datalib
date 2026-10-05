@@ -37,7 +37,8 @@ use crate::typedstream::attributed_body_text;
 /// v2: every id carries its row's `created_at` in its leading bits
 ///     (`datalib_id`'s v8 layout).
 /// v4: the author span carries the author's handle as `data-handle`.
-pub const RENDER_VERSION: u32 = 4;
+/// v5: a `+1` number without ten digits after the 1 has no handle.
+pub const RENDER_VERSION: u32 = 5;
 
 pub const STAMP_PRECISION: RecordStampPrecision = RecordStampPrecision::Seconds;
 

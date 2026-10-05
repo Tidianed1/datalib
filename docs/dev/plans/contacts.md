@@ -23,7 +23,7 @@ them.
 
 | word | means |
 |---|---|
-| **handle** | one identifier in one namespace, normalized: `email:riker@enterprise.org`, `tel:+15551234`, `slack:T01/U02`. Upstream data; a render finds it. |
+| **handle** | one identifier in one namespace, normalized: `email:riker@enterprise.org`, `tel:+12025550123`, `slack:T01/U02`. Upstream data; a render finds it. |
 | **contact** | datalib's record of a person (`kind = person`) or of several people who share handles (`kind = group`: "Mom & Dad", a mailing list). A person creates it. |
 | **link** | a row saying a handle belongs to a contact. A person makes it. |
 | **`DatalibContact`** | a person as one source describes them — the handles it ties together, the names it shows, a photo and details. A source's is read from raw rows at render time; the contacts app's is the one a person made. See [One type for a person](#one-type-for-a-person-datalibcontact). |
@@ -39,7 +39,7 @@ The choice that matters most: **where a native id *is* an email
 address or a phone number, the handle is `email:` or `tel:`, not a
 per-app kind.** A WhatsApp JID is a phone number; a Signal recipient
 has an E.164 number; an iMessage handle is one or the other. So one
-link (`tel:+15551234` → Riker) covers WhatsApp, Signal, Messages and
+link (`tel:+12025550123` → Riker) covers WhatsApp, Signal, Messages and
 SMS at once. Only ids that are opaque by nature get a kind of their
 own.
 

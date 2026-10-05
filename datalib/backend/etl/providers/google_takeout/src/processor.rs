@@ -77,7 +77,7 @@ impl DataProcessor for GoogleTakeoutIngest {
         let summary = format!(
             "maps(reviews={} saved={} photos={}) youtube(watch={} subs={}) \
                  chat(groups={} users={} messages={}) gemini(activity={}) \
-                 blobs={} removed={} files_removed={} parse_errors={}",
+                 blobs={} removed={} files_removed={} feeds_failed={}",
             s.maps_reviews,
             s.maps_saved_places,
             s.maps_photos,
@@ -90,7 +90,7 @@ impl DataProcessor for GoogleTakeoutIngest {
             s.blobs_stored,
             s.removed,
             s.files_removed,
-            s.parse_errors,
+            s.feeds_failed,
         );
         session.finish(ctx, summary).await
     }

@@ -910,7 +910,6 @@ async fn fetch_ids(
             Err(e) => {
                 // Not a deletion, so this message still exists and we
                 // still want it. Counted, and the count holds the cursor.
-                warn!(event = "gmail_message_failed", id = %id, error = %e, "a message could not be fetched");
                 summary.messages_failed += 1;
                 // A cancel that lands mid-backoff arrives here as an
                 // error, and it is not one: nobody wants "you stopped
@@ -937,7 +936,6 @@ async fn fetch_ids(
                 // Fetched but unusable: the bytes came back and we could
                 // not make a record of them. A person wants to know
                 // which message, and a `warn!` reaches nobody.
-                warn!(event = "gmail_ingest_failed", id = %msg.id, error = %e, "a message could not be stored");
                 summary.records.push(RecordProblem::new(
                     GMAIL_MESSAGES_TABLE,
                     &msg.id,

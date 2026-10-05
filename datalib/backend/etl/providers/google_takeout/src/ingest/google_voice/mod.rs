@@ -10,11 +10,12 @@ use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{blake3_hex, CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw::WirePayload;
-use datalib_etl::download_problems::RunProblem;
+use datalib_etl::download_problems::{self, RunProblem, SkippedRecord};
 use datalib_etl::file_checkpoint;
 use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
 use datalib_etl::prune;
+use datalib_problems::{Problem, Reason};
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::json;
 
@@ -37,12 +38,9 @@ pub struct VoiceSummary {
     /// Records deleted because no Voice file still holds them.
     pub removed: usize,
     pub files_removed: usize,
-    /// A file that would not read, or one an attachment of which would
-    /// not, is a `listing:voice <path>` row and is left unstamped, so the
-    /// next run reads it again: this is the whole truth each run. Also the
-    /// held-back row when files were removed or rewritten but one could
-    /// not be read, so nothing was deleted.
-    pub problems: Vec<RunProblem>,
+    /// Set when files were removed or rewritten but one could not be read,
+    /// so nothing was deleted.
+    pub held_back: Option<RunProblem>,
 }
 
 pub async fn ingest(
@@ -72,9 +70,15 @@ pub async fn ingest(
     };
     let under =
         |f: &fsscan::ScannedFile, dir: &str| fsscan::is_under(&f.rel, &format!("Voice/{dir}"));
-    let mut problems: Vec<RunProblem> = Vec::new();
-    let mut unread = |f: &fsscan::ScannedFile, detail: String| {
-        problems.push(RunProblem::listing(&format!("voice {}", f.rel), detail));
+    // A file that would not read, or one an attachment of which would
+    // not, is left unstamped, so the next run reads it again and its row
+    // is re-reported until it reads.
+    let mut skipped: Vec<SkippedRecord> = Vec::new();
+    let mut unread = |f: &fsscan::ScannedFile, reason: Reason, detail: String| {
+        skipped.push(SkippedRecord {
+            entry: f.rel.clone(),
+            problem: Problem::record(reason, &format!("{}: {detail}", f.rel)),
+        });
     };
     // Files that would not read at all; their records are unknown.
     let mut failed = 0usize;
@@ -111,6 +115,7 @@ pub async fn ingest(
             Ok(true) => {
                 unread(
                     f,
+                    Reason::FetchFailed,
                     format!(
                         "{} attachments could not be read; first: {}",
                         missing.len(),
@@ -120,7 +125,7 @@ pub async fn ingest(
                 incomplete.push(f);
             }
             Err(e) => {
-                unread(f, format!("{e:#}"));
+                unread(f, Reason::Undeserializable, e.root_cause().to_string());
                 failed += 1;
             }
         }
@@ -151,7 +156,7 @@ pub async fn ingest(
                 done.push(f);
             }
             Err(e) => {
-                unread(f, format!("read {}: {e}", f.path.display()));
+                unread(f, Reason::FetchFailed, e.to_string());
                 failed += 1;
             }
         }
@@ -183,7 +188,7 @@ pub async fn ingest(
                 done.push(f);
             }
             Err(e) => {
-                unread(f, format!("read {}: {e}", path.display()));
+                unread(f, Reason::FetchFailed, e.to_string());
                 failed += 1;
             }
         }
@@ -237,6 +242,7 @@ pub async fn ingest(
         }
     }
     tx.commit().await.context("commit google_voice tx")?;
+    download_problems::report_skipped(db.pool(), "google_voice", &skipped).await;
 
     let mut summary = VoiceSummary {
         messages: n_messages,
@@ -266,9 +272,8 @@ pub async fn ingest(
         summary.files_removed = gone.len();
         file_checkpoint::forget_files(db.pool(), SCOPE, &gone).await?;
     } else if failed > 0 && changes.may_have_dropped_records() {
-        problems.push(fsscan::Scan::deletions_held_back(failed));
+        summary.held_back = Some(fsscan::Scan::deletions_held_back(failed));
     }
-    summary.problems = problems;
     Ok(summary)
 }
 

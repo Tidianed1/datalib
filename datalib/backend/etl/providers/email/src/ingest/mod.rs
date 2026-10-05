@@ -1325,7 +1325,6 @@ async fn sync_blobs(
             Err(e) => {
                 summary.blobs_errored += 1;
                 failures_in_a_row += 1;
-                warn!(event = "jmap_blob_error", blob_id = %blob_id, error = %format!("{e:#}"), "a blob could not be fetched");
                 acc.add_failed(&owning_id, &blob_id, format!("{e:#}"));
                 if failures_in_a_row >= BLOB_FAILURE_BUDGET {
                     tripped = Some(e.context(format!(

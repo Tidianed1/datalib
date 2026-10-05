@@ -57,7 +57,10 @@ Which credential to use, and how to make it read-only, is in
 - `sync-collection` with an empty token returned every object of a
   2,000-event calendar in one reply, with no 507 truncation. The
   truncation path (a 507 on the collection itself) follows the new
-  token anyway.
+  token anyway. A listing that stops short, because the token stopped
+  moving or 50 pages went by, deletes nothing and leaves a
+  `listing:calendar <name>` problem; the shared loop is
+  `datalib_etl::dav::sync`, which CardDAV uses too.
 - Shape of the data across ~5,200 objects: 3,855 single events; the
   rest a series with 0 to many overrides in the same object; 5 objects
   holding only overrides (invitations to one occurrence). No `STATUS`

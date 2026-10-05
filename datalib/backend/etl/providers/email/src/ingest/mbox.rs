@@ -387,7 +387,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 }
                 Ok(false) => {} // duplicate; skipped
                 Err(e) => {
-                    warn!(event = "mbox_message_failed", path = %f.path.display(), error = %format!("{e:#}"), "a message in an mbox could not be parsed; skipped it");
                     summary.parse_errors += 1;
                     unparsed.add(&e);
                 }
@@ -530,7 +529,6 @@ impl Unparsed {
 /// A file the run could not read through, as a `listing:` row. It is not
 /// stamped, so the next run reads it again.
 fn file_unread(f: &fsscan::ScannedFile, e: &anyhow::Error) -> download_problems::RunProblem {
-    warn!(event = "mbox_read_failed", path = %f.path.display(), error = %format!("{e:#}"), "an mbox file could not be read");
     download_problems::RunProblem::listing(&format!("mbox {}", f.rel), format!("{e:#}"))
 }
 

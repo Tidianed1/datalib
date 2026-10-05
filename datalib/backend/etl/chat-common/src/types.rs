@@ -119,7 +119,7 @@ pub struct NormalizedChatItem {
     /// provider has no such identifier for the author (yet), or the
     /// author is the account itself.
     pub author_handle: Option<datalib_handle::Handle>,
-    /// Pre-resolved author label ("Me", "Will Riker", "+15551234"). The
+    /// Pre-resolved author label ("Me", "Will Riker", "+12025550123"). The
     /// provider owns the outgoing/incoming rule and any name lookup.
     pub author_display: String,
     /// Unix milliseconds for the item's effective timestamp, or `None`
