@@ -133,8 +133,9 @@ impl AccountNaming {
     pub fn parse(s: &str) -> Option<Self> {
         s.parse().ok()
     }
-    /// From the `type` `latchkey services info` reports. A plugin
-    /// reports `built-in`.
+    /// From the `type` `latchkey services info` reports, which stands in
+    /// for the rule until latchkey reports it (imbue-ai/latchkey#169). A
+    /// plugin reports `built-in`.
     fn of_service_type(service_type: Option<&str>) -> Self {
         match service_type {
             Some("user-registered") => AccountNaming::Chosen,

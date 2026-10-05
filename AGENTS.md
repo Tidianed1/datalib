@@ -722,9 +722,9 @@ find yourself writing `strftime("%Y-%m-%dT%H:%M:%SZ")`, stop —
 
 ## Auth (web API)
 
-Downloaders reach Cloudflare-fronted hosts through `latchkey curl`, which
-injects the session credential, routed via `latchkey-curl-router` to
-the bundled `curl-impersonate` (`docs/dev/curl_impersonate.md`). If the
-credential is missing or expired, `latchkey auth set <service>` fixes
-it; if Cloudflare still 403s, the IP/UA may be flagged — wait it out or
-swap networks.
+Every web source signs in through latchkey, and a downloader only ever
+runs `latchkey curl`: [`docs/dev/latchkey.md`](docs/dev/latchkey.md).
+Cloudflare-fronted hosts go through the bundled `curl-impersonate`
+([`docs/dev/curl_impersonate.md`](docs/dev/curl_impersonate.md)); if
+Cloudflare still 403s, the IP or user agent may be flagged — wait it
+out or swap networks.

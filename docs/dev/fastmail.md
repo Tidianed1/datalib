@@ -39,7 +39,7 @@ chosen capabilities under `accountCapabilities`.
 
 latchkey keeps one credential per account name per service, and
 replaces it without asking when the name is reused (the general rules
-are in [`data_architecture_ingestion.md`](data_architecture_ingestion.md#auth-and-credentials)).
+are in [`latchkey.md`](latchkey.md#accounts-who-names-them)).
 Contacts and calendar share `fastmail-dav`, so their two read-only
 passwords need two names. The wizard suggests `<address> contacts` and
 `<address> calendar` (`credentialPaste.accountSuffix` in

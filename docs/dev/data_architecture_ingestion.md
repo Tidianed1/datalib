@@ -700,39 +700,15 @@ the render params a processor declares re-renders everything. See
 ## Auth and credentials
 Two patterns:
 
-- **Most providers**: shell out to `latchkey curl` (see [`backend/etl/src/latchkey.rs`](/datalib/backend/etl/src/latchkey.rs)). Auth lives in the latchkey keyring, under a service picked by the request's URL and an account within it. The provider's HTTP transport never sees the bearer token.
+- **Most providers**: shell out to `latchkey curl` ([`latchkey.md`](latchkey.md)). Auth lives in the latchkey keyring, under a service picked by the request's URL and an account within it. The provider's HTTP transport never sees the bearer token.
 - **Yolink**: latchkey doesn't know about `us.yosmart.com`, and the consumer download path isn't bearer-authed — the URL itself is signed (`build_signed_url` in [`providers/yolink/src/ingest/mod.rs`](/datalib/backend/etl/providers/yolink/src/ingest/mod.rs)). Per-device secrets live in config (REDACT before publishing).
 
 If you add a new provider with a new auth shape, prefer extending latchkey upstream before adding a third pattern.
 
 ### Which stored credential latchkey sends
 
-A source picks its credential with `latchkey_settings.account`, which
-becomes `latchkey --account <name>`; leaving it out passes no flag.
-latchkey's rules for that, measured on 3.15 against a local server that
-echoed what arrived:
-
-- **An account is a free-text name**, spaces and all. `auth set` with
-  no `--account` stores under the empty name `""`.
-- **No `--account` means "the only one".** With one credential stored,
-  latchkey uses it whatever its name; with two or more it refuses
-  ("Multiple accounts are stored…"). This holds for `auth set` and
-  `auth clear` too, so a paste with no name silently overwrites a lone
-  named credential — the browser login, say.
-- **A name is overwritten without asking.** Two credentials that must
-  coexist on one service need two names.
-- **`--account` naming nothing stored fails before sending**, so it
-  never shows up as a 401.
-- **`--account ""` reaches the unnamed credential** even beside named
-  ones, but datalib never sends it: an empty `account` means no flag.
-- **Two services on one URL**: with no `--account`, the first-registered
-  service holding any credential wins; with one, latchkey finds the
-  service that holds that name.
-
-The wizard's paste form therefore always stores under a name
-(`pasteTarget` in `datalib/ui/src/config/credentialShape.ts` says what
-a name will replace). [`fastmail.md`](fastmail.md) is the worked case:
-two read-only passwords on one service.
+How a source's `latchkey_settings.account` picks a credential, and
+what happens when it names none: [`latchkey.md`](latchkey.md#accounts-who-names-them).
 
 ## Error handling
 We want enough transient error handling that syncs "usually" work. The goals are:

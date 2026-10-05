@@ -32,7 +32,8 @@ invocation reads it, even `--version`, unless `LATCHKEY_ENCRYPTION_KEY`
 or `LATCHKEY_GATEWAY` is set. On a Mac the first read can put up a
 password prompt. So the wizard runs latchkey only after a person picks
 a source that needs it, never on page load. Tests always set a key of
-their own (below).
+their own (below). The container has no keychain and keeps the key in
+its bind mount instead ([`docker.md`](docker.md)).
 
 ## Three kinds of service
 
@@ -53,10 +54,12 @@ so a stale sibling can shadow the service you just signed in to.
 ## Accounts: who names them
 
 latchkey can hold several credentials for one service, one per
-*account*. An account is just a name. The empty name is the default
-account, which is where a credential goes when nobody names one. A
-source picks its account with `latchkey_settings.account` in its
-config, which becomes `--account` on every request.
+*account*. An account is a free-text name, spaces and all. The empty
+name is the default account, which is where a credential goes when
+nobody names one. A source picks its account with
+`latchkey_settings.account` in its config, which becomes `--account` on
+every request. Leaving the setting out passes no flag at all, so datalib
+never sends `--account ""`.
 
 **Who picks the name depends on the service**, and only for a browser
 login:
@@ -68,16 +71,32 @@ login:
 
 Two services latchkey ships with a browser login and no naming of their
 own (`openrouter`, `ngrok`) break the first row's rule. datalib uses
-neither. `e2e_auth/accounts.spec.ts` checks the rule for every service
-the catalog signs in to with a browser, so a latchkey upgrade that
-changes it fails there.
+neither. latchkey does not report the rule directly, which is why
+datalib reads it off the service's type
+([imbue-ai/latchkey#169](https://github.com/imbue-ai/latchkey/issues/169)).
+`e2e_auth/accounts.spec.ts` checks the rule for every service the
+catalog signs in to with a browser, so a latchkey upgrade that changes
+it fails there.
 
 When no account is named, latchkey works it out from what is stored:
 
 - **nothing stored:** the default account;
 - **one account stored:** that one, named or not. A read uses it, and a
   `set` without `--account` *overwrites* it;
-- **two or more:** it refuses and asks for `--account`.
+- **two or more:** it refuses and asks for `--account` ("Multiple
+  accounts are stored…").
+
+Three more rules follow from that:
+
+- **A name is overwritten without asking.** Two credentials that must
+  live side by side on one service need two names. Fastmail's contacts
+  and calendar passwords are the worked case ([`fastmail.md`](fastmail.md)).
+- **A paste with no name overwrites a lone named credential**, a browser
+  login say. So the wizard's paste form always stores under a name, and
+  `pasteTarget` in `datalib/ui/src/config/credentialShape.ts` says what
+  that name will replace.
+- **`--account` naming nothing stored fails before anything is sent**,
+  so it never shows up as a 401.
 
 ### What the wizard does with this
 
@@ -85,15 +104,26 @@ The Connection section has one account box per source, and it behaves
 the way the service names accounts (`ServiceInfo.account_naming`, read
 off latchkey's `type`):
 
-- **The service names it** (Slack, Gmail, Garmin, …): the box picks
-  among the accounts latchkey already holds. "Sign in with browser" adds
-  one and selects whatever name latchkey reports; it passes `--account`
-  only to refresh a stored one. Pasting a key asks for a name in the
-  paste form, since latchkey stores a pasted key under the name it is
-  given.
+- **The service names it** (Slack, Gmail, Garmin, …): the box says so
+  and offers the accounts latchkey holds. "Sign in with browser" passes
+  `--account` only when the box names one of those, and then reads
+  "Sign in again as …"; otherwise it adds an account and the box takes
+  the name latchkey reports. A new name typed in the box is kept only
+  for a pasted key, which latchkey stores under the name it is given,
+  and the sign-in tab says the login will replace it. The pure decision
+  is `datalib/ui/src/config/accountNaming.ts`.
 - **You name it** (Claude, ChatGPT): the box takes any name, a new one
   included, and every way of signing in stores under it. Empty means
   the default account.
+
+## It speaks HTTP and nothing else
+
+latchkey only ever puts a credential on an HTTP request it makes
+itself; it never hands the credential out. A protocol curl cannot hold
+a session for (IMAP, say) cannot go through it, and datalib does not
+pull secrets out of latchkey to get around that.
+[`email_download_modes.md`](email_download_modes.md#5-why-there-is-no-imap-mode)
+has the long version.
 
 ## A gateway holds everything elsewhere
 
@@ -123,6 +153,10 @@ so on screen while it runs.
   `datalib/ui/src/config/issues.ts`.
 
 ## Testing against the real thing
+
+A provider's `live` tests reach the real service with your own
+credentials, and need `LATCHKEY_CURL` pointed at the router curl
+([`testing.md`](testing.md)).
 
 `//datalib/ui:e2e_auth` runs the wizard's sign-ins against the real
 pinned latchkey, a fake internet and a headless browser, with a store
