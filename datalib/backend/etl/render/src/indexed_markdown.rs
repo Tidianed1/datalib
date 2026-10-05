@@ -47,6 +47,15 @@ pub fn path_for(rendered_root: &Path) -> PathBuf {
 /// One list so the DDL pass cannot cover a different set than the
 /// schema check — the same reason `grid_index::index_ddl` exists.
 fn store_ddl() -> Vec<&'static str> {
+    store_tables()
+        .map(|(_table, ddl)| ddl)
+        .chain(std::iter::once(RENDER_INPUTS_INDEX))
+        .collect()
+}
+
+/// `(table, CREATE TABLE)` for every table this store holds but
+/// `_datalib_meta`, in creation order.
+pub(crate) fn store_tables() -> impl Iterator<Item = (&'static str, &'static str)> {
     GRID_ROWS_DDL
         .iter()
         .chain(MARKDOWNS_DDL.iter())
@@ -57,9 +66,7 @@ fn store_ddl() -> Vec<&'static str> {
         .chain(MEASUREMENTS_DDL.iter())
         .chain(RENDER_CURSOR_DDL.iter())
         .chain(RENDER_INPUTS_DDL.iter())
-        .map(|(_table, ddl)| *ddl)
-        .chain(std::iter::once(RENDER_INPUTS_INDEX))
-        .collect()
+        .copied()
 }
 
 /// Indexes that change no row, so they stay out of [`schema_hash`]:
@@ -73,12 +80,13 @@ fn lookup_indexes() -> impl Iterator<Item = &'static str> {
         ))
 }
 
-/// blake3 over this store's DDL: what the render step folds into its
-/// params, so a change to any render-store table re-renders every
-/// source. Nobody has to remember a bump, and a column added to
-/// `grid_rows` is not `NULL` on every row rendered before it.
+/// This store's shape: what its `_datalib_meta` records, what the render
+/// step folds into its params so a change to any render-store table
+/// re-renders every source, and what the index compares before it reads
+/// one. Nobody has to remember a bump, and a column added to `grid_rows`
+/// is not `NULL` on every row rendered before it.
 pub fn schema_hash() -> String {
-    datalib_store_meta::schema_hash(store_ddl())
+    datalib_etl::doltlite_raw::recorded_shape(store_ddl())
 }
 
 /// One raw row a bucket's render asked for, found or not.
@@ -173,10 +181,11 @@ impl IndexedMarkdownStore {
         std::fs::create_dir_all(rendered_root)
             .with_context(|| format!("mkdir -p {}", rendered_root.display()))?;
         let path = path_for(rendered_root);
-        let ddl: Vec<&str> = store_ddl().into_iter().chain(lookup_indexes()).collect();
-        let pool = blocking(datalib_etl::doltlite_raw::open_derived(
+        let indexes: Vec<&str> = lookup_indexes().collect();
+        let pool = blocking(datalib_etl::doltlite_raw::open_derived_indexed(
             &path,
-            &ddl,
+            &store_ddl(),
+            &indexes,
             datalib_etl::doltlite_raw::StoreKind::Render,
         ))
         .with_context(|| format!("open indexed markdown store {}", path.display()))?;
@@ -223,6 +232,14 @@ impl IndexedMarkdownStore {
     /// The commit this reader reads at. `None` on the owner's handle.
     pub fn pin(&self) -> Option<&datalib_etl::pin::Pin> {
         self.pin.as_ref()
+    }
+
+    /// Whether the store was written in the shape this build reads
+    /// ([`schema_hash`]), as its `_datalib_meta` says. A store with no
+    /// `_datalib_meta` predates every shape this build knows.
+    pub fn in_this_shape(&self) -> Result<bool> {
+        let meta = blocking(datalib_store_meta::read(&self.pool)).context("read _datalib_meta")?;
+        Ok(meta.is_some_and(|m| m.schema_hash == schema_hash()))
     }
 
     /// Use the run-pinned "now" (`--now` / `$DATALIB_DAG_NOW`) for the
@@ -987,8 +1004,6 @@ impl IndexedMarkdownStore {
         cursor: Option<&str>,
         pin: &datalib_etl::pin::Pin,
     ) -> Result<datalib_etl::doltlite_raw::DiffScan> {
-        let has_contacts = blocking(has_table(&self.pool, "source_contacts"))?;
-        let bucket_query = changed_documents_query(has_contacts);
         blocking(datalib_etl::doltlite_raw::scan_buckets(
             &self.pool,
             cursor,
@@ -1001,7 +1016,27 @@ impl IndexedMarkdownStore {
                 // every rendered doc; by the time rows reach here that
                 // fan-out has already happened, on the render side.
                 global_fanout_tables: &[],
-                bucket_query: &bucket_query,
+                bucket_query: "
+                    SELECT DISTINCT markdown_uuid FROM (
+                        SELECT coalesce(to_markdown_uuid, from_markdown_uuid) AS markdown_uuid
+                          FROM dolt_diff_markdowns
+                         WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                        UNION
+                        SELECT coalesce(to_markdown_uuid, from_markdown_uuid) AS markdown_uuid
+                          FROM dolt_diff_grid_rows
+                         WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                        UNION
+                        SELECT coalesce(to_src_markdown_uuid, from_src_markdown_uuid)
+                                 AS markdown_uuid
+                          FROM dolt_diff_edges
+                         WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                        UNION
+                        SELECT coalesce(to_markdown_uuid, from_markdown_uuid) AS markdown_uuid
+                          FROM dolt_diff_source_contacts
+                         WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                    )
+                    WHERE markdown_uuid IS NOT NULL
+                ",
             },
         ))
     }
@@ -1066,7 +1101,7 @@ impl IndexedMarkdownStore {
             )
             .await
             .context("read edges")?;
-            let mut contacts_by_doc = if has_table(&self.pool, "source_contacts").await? {
+            let mut contacts_by_doc =
                 group_by_document::<datalib_schema::source_contacts::SourceContactRow>(
                     &self.pool,
                     "SELECT * FROM source_contacts \
@@ -1076,10 +1111,7 @@ impl IndexedMarkdownStore {
                     &wanted,
                 )
                 .await
-                .context("read source contacts")?
-            } else {
-                HashMap::new()
-            };
+                .context("read source contacts")?;
             let mut out = Vec::with_capacity(mds.len());
             for md in mds {
                 let rows = rows_by_doc.remove(&md.markdown_uuid).unwrap_or_default();
@@ -1126,25 +1158,14 @@ impl IndexedMarkdownStore {
     /// Every problem the store holds at the reader's pin — the whole
     /// table, because a consumer copies it wholesale: the pinned store
     /// is the complete truth about this source's problems at that
-    /// commit, so the copy is the sweep. A store written before the
-    /// table existed reads as empty, with a warning that says so.
+    /// commit, so the copy is the sweep.
     pub fn problems_at_pin(&self) -> Result<Vec<ProblemRow>> {
         assert!(self.pin.is_some(), "problems_at_pin is a reader's call");
         blocking(async {
-            let rows = match sqlx::query("SELECT * FROM problems ORDER BY problem_uuid")
+            let rows = sqlx::query("SELECT * FROM problems ORDER BY problem_uuid")
                 .fetch_all(&self.pool)
                 .await
-            {
-                Ok(rows) => rows,
-                Err(e) if datalib_etl::pin::is_missing_table(&e, "problems") => {
-                    tracing::warn!(
-                        store = %self.path.display(),
-                        "this render store predates the problems table; reading it as clean"
-                    );
-                    return Ok(Vec::new());
-                }
-                Err(e) => return Err(e).context("read problems"),
-            };
+                .context("read problems")?;
             rows.iter().map(ProblemRow::from_row).collect()
         })
     }
@@ -1183,45 +1204,6 @@ impl IndexedMarkdownStore {
     pub fn close(self) {
         blocking(self.pool.close());
     }
-}
-
-/// A table a newer build added is missing from a store an older build
-/// last rendered, until its source renders again. That build wrote no
-/// rows of it, so the readers take a missing table as an empty one.
-async fn has_table(pool: &SqlitePool, table: &str) -> Result<bool> {
-    let n: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?")
-            .bind(table)
-            .fetch_one(pool)
-            .await
-            .with_context(|| format!("look for table {table}"))?;
-    Ok(n > 0)
-}
-
-/// The documents whose rows changed between the two bound commits.
-fn changed_documents_query(has_contacts: bool) -> String {
-    let mut parts = vec![
-        "SELECT coalesce(to_markdown_uuid, from_markdown_uuid) AS markdown_uuid \
-           FROM dolt_diff_markdowns \
-          WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'",
-        "SELECT coalesce(to_markdown_uuid, from_markdown_uuid) AS markdown_uuid \
-           FROM dolt_diff_grid_rows \
-          WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'",
-        "SELECT coalesce(to_src_markdown_uuid, from_src_markdown_uuid) AS markdown_uuid \
-           FROM dolt_diff_edges \
-          WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'",
-    ];
-    if has_contacts {
-        parts.push(
-            "SELECT coalesce(to_markdown_uuid, from_markdown_uuid) AS markdown_uuid \
-               FROM dolt_diff_source_contacts \
-              WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'",
-        );
-    }
-    format!(
-        "SELECT DISTINCT markdown_uuid FROM ({}) WHERE markdown_uuid IS NOT NULL",
-        parts.join(" UNION ")
-    )
 }
 
 #[cfg(test)]
