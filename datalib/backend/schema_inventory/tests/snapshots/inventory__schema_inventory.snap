@@ -279,6 +279,13 @@ calendars_bookkeeping
     last_error
     volatile_payload
     tz_offset
+dav_unconfirmed
+    collection
+    href
+dav_unstored
+    collection
+    href
+    detail
 google_events
     id
     payload
@@ -375,6 +382,13 @@ contacts_bookkeeping
     last_error
     volatile_payload
     tz_offset
+dav_unconfirmed
+    collection
+    href
+dav_unstored
+    collection
+    href
+    detail
 ingested_files
     scope
     rel_path

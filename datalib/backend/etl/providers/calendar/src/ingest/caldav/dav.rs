@@ -16,7 +16,6 @@ pub const KIND: CollectionKind = CollectionKind {
     ns_decl: r#"xmlns:C="urn:ietf:params:xml:ns:caldav""#,
     data_prop: "C:calendar-data",
     multiget: "C:calendar-multiget",
-    report_depth: "1",
 };
 
 pub type DavResponse = webdav::DavResponse<CalendarProps>;
@@ -106,22 +105,6 @@ pub const BODY_LIST_CALENDARS: &str = r#"<?xml version="1.0" encoding="utf-8"?>
 pub fn body_sync_collection(prev_token: &str) -> String {
     KIND.body_sync_collection(prev_token)
 }
-
-/// RFC 4791 `calendar-query` for every event: the listing a server that
-/// cannot `sync-collection` still answers.
-pub const BODY_QUERY_ALL_EVENTS: &str = r#"<?xml version="1.0" encoding="utf-8"?>
-<C:calendar-query xmlns="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
-  <prop>
-    <getetag/>
-    <C:calendar-data/>
-  </prop>
-  <C:filter>
-    <C:comp-filter name="VCALENDAR">
-      <C:comp-filter name="VEVENT"/>
-    </C:comp-filter>
-  </C:filter>
-</C:calendar-query>
-"#;
 
 /// `calendar-query` for one window: the events with an instance in it,
 /// each series trimmed to the overrides that fall in it. RFC 4791 wants

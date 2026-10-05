@@ -10,6 +10,7 @@ extern crate self as datalib_etl;
 pub mod blob_cas;
 pub mod bulk;
 pub mod checkpointer;
+pub mod content_line;
 pub mod control;
 pub mod dav;
 pub mod doltlite_raw;

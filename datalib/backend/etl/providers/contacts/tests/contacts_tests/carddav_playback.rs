@@ -402,79 +402,88 @@ async fn an_expired_token_lists_the_book_whole_again() {
 
 /// A card with no UID cannot be stored, and an address book whose sync
 /// fails is not synced; each was only a `warn!`, so nothing reached the
-/// Manage row. Each is a `problems` row now, and a clean run clears them.
+/// Manage row. Each is a `problems` row now. The card's row stays through
+/// a failed run and a clean incremental one that does not mention it —
+/// it is still not stored — and goes once the card is listed with a UID.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn what_a_sync_could_not_store_is_a_problem_row() {
+async fn what_a_sync_could_not_store_is_a_problem_row_until_it_is_stored() {
     let d = tempfile::tempdir().expect("tempdir");
-    let (one, two, three, store) = (
+    let (one, two, three, four, store) = (
         d.path().join("one"),
         d.path().join("two"),
         d.path().join("three"),
+        d.path().join("four"),
         d.path().join("store"),
     );
     std::fs::create_dir_all(&store).unwrap();
     let book = format!("{HOST}{BOOK}");
-    for root in [&one, &two, &three] {
+    for root in [&one, &two, &three, &four] {
         account_fixtures(root);
     }
     let v1 = cards(BRIDGE_V1);
-    let no_uid = card(&v1, "tng-data").replace("UID:tng-data\r\n", "");
-    fixture(
+    let data = card(&v1, "tng-data");
+    let no_uid = data.replace("UID:tng-data\r\n", "");
+    let sync = |root: &Path, token: &str, resp: HttpResponse| {
+        fixture(
+            root,
+            HttpMethod::Report,
+            &book,
+            "0",
+            &api::body_sync_collection(token),
+            resp,
+        )
+    };
+    sync(
         &one,
-        HttpMethod::Report,
-        &book,
-        "0",
-        &api::body_sync_collection(""),
+        "",
         xml(
             207,
             &multistatus(&format!(
                 "{}{}<sync-token>data:,1</sync-token>",
                 resource("tng-picard", "\"p1\"", card(&v1, "tng-picard")),
-                resource("no-uid", "\"n1\"", &no_uid),
+                resource("tng-data", "\"d1\"", &no_uid),
             )),
         ),
     );
-    fixture(
-        &two,
-        HttpMethod::Report,
-        &book,
-        "0",
-        &api::body_sync_collection("data:,1"),
-        xml(500, "Internal Server Error"),
-    );
-    fixture(
+    sync(&two, "data:,1", xml(500, "Internal Server Error"));
+    sync(
         &three,
-        HttpMethod::Report,
-        &book,
-        "0",
-        &api::body_sync_collection("data:,1"),
+        "data:,1",
         xml(207, &multistatus("<sync-token>data:,2</sync-token>")),
     );
+    sync(
+        &four,
+        "data:,2",
+        xml(
+            207,
+            &multistatus(&format!(
+                "{}<sync-token>data:,3</sync-token>",
+                resource("tng-data", "\"d2\"", data),
+            )),
+        ),
+    );
 
+    let unstored = format!("record:contacts:{BOOK}tng-data.vcf");
     let first = run(&one, &store).await;
     assert_eq!((first.contacts_new, first.errors), (1, 1), "{first:?}");
-    assert_eq!(
-        problem_keys(&store).await,
-        vec![format!("record:contacts:{BOOK}no-uid.vcf")]
-    );
-    let listing_keys = |keys: Vec<String>| -> Vec<String> {
-        keys.into_iter()
-            .filter(|k| k.starts_with("listing:"))
-            .collect()
-    };
+    assert_eq!(problem_keys(&store).await, vec![unstored.clone()]);
     let second = run(&two, &store).await;
     assert_eq!(second.errors, 1, "{second:?}");
     assert_eq!(
-        listing_keys(problem_keys(&store).await),
-        vec!["listing:addressbook Bridge".to_string()]
+        problem_keys(&store).await,
+        vec!["listing:addressbook Bridge".to_string(), unstored.clone()]
     );
     // A run that stopped before the address book has not synced it again.
     let before = problem_keys(&store).await;
     run_stopped(&two, &store).await;
     assert_eq!(problem_keys(&store).await, before);
     run(&three, &store).await;
+    assert_eq!(problem_keys(&store).await, vec![unstored]);
+    let fourth = run(&four, &store).await;
+    assert_eq!(fourth.contacts_new, 1, "{fourth:?}");
+    assert_eq!(problem_keys(&store).await, Vec::<String>::new());
     assert_eq!(
-        listing_keys(problem_keys(&store).await),
-        Vec::<String>::new()
+        stored_uids(&store).await.as_deref(),
+        Some("tng-data,tng-picard")
     );
 }

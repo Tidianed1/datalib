@@ -1621,7 +1621,7 @@ expression: snapshot
       "message": "schema: grid index"
     },
     {
-      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=142 markdowns_read=142 markdowns_removed=3 rows_inserted=599"
+      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=142 markdowns_read=142 markdowns_removed=3 rows_inserted=605"
     }
   ],
   "grid_rows": [
@@ -2110,7 +2110,7 @@ expression: snapshot
       "author": "Jean-Luc Picard",
       "byte_size": null,
       "channel": "Bridge",
-      "content_hash": "8d072d9ba1f4b6ee",
+      "content_hash": "321b42e67dcd0496",
       "conversation_name": "Bridge",
       "conversation_uuid": "00000000-0000-8c1d-9f07-75d08c9fdebe",
       "created_at": "2370-01-02T09:00:00+00:00",
@@ -2124,7 +2124,7 @@ expression: snapshot
       "notion_page_uuid": null,
       "org_name": null,
       "org_uuid": null,
-      "preview_len": 190,
+      "preview_len": 210,
       "project": null,
       "provider": "contacts",
       "qmd_path": "tng_contacts/render_markdown/00000000-0000-81e2-8596-1ee8f9640d13/index.md",
@@ -2200,7 +2200,7 @@ expression: snapshot
       "author": "Jean-Luc Picard",
       "byte_size": null,
       "channel": "Bridge",
-      "content_hash": "8d072d9ba1f4b6ee",
+      "content_hash": "321b42e67dcd0496",
       "conversation_name": "Bridge",
       "conversation_uuid": "00000000-0000-8f94-bcb8-0faa196bfc49",
       "created_at": "2370-01-02T09:00:00+00:00",
@@ -2214,7 +2214,7 @@ expression: snapshot
       "notion_page_uuid": null,
       "org_name": null,
       "org_uuid": null,
-      "preview_len": 190,
+      "preview_len": 210,
       "project": null,
       "provider": "contacts",
       "qmd_path": "tng_contacts-diff/render_markdown/00000000-0000-825c-a3c4-1fb84e9bfce6/index.md",
@@ -12411,8 +12411,8 @@ expression: snapshot
     },
     {
       "kind": "Table",
-      "members_sha": "sha256:05ea15ec7ae714fc8d65208b4fa7b131ed3934858a5091f6358c1536c835f957",
-      "rows": 149,
+      "members_sha": "sha256:ab9fb25365c667ceeeecf98552b234b7e826790ef537fc6f700942b70693f767",
+      "rows": 153,
       "source": ""
     }
   ],
@@ -12420,6 +12420,6 @@ expression: snapshot
     "documents_count": 134,
     "dolt_log_count": 3,
     "grid_rows_count": 359,
-    "storage_rows_count": 206
+    "storage_rows_count": 210
   }
 }

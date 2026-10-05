@@ -186,7 +186,7 @@ async fn discovers_through_well_known_and_syncs_incrementally() {
         &one,
         HttpMethod::Report,
         &bridge,
-        "1",
+        "0",
         &dav::body_sync_collection(""),
         xml(
             207,
@@ -198,7 +198,7 @@ async fn discovers_through_well_known_and_syncs_incrementally() {
         ),
     );
     let staff_v2 = STAFF.replace("Senior staff briefing", "Senior staff briefing (Deck 8)");
-    fixture(&two, HttpMethod::Report, &bridge, "1", &dav::body_sync_collection("data:,100"),
+    fixture(&two, HttpMethod::Report, &bridge, "0", &dav::body_sync_collection("data:,100"),
         xml(207, &multistatus(&format!(
             "{}<response><href>{BRIDGE}reception.ics</href><status>HTTP/1.1 404 Not Found</status></response><sync-token>data:,101</sync-token>",
             resource(&format!("{BRIDGE}staff.ics"), "\"s2\"", &staff_v2),
@@ -376,7 +376,7 @@ fn first_listing(root: &Path) {
         root,
         HttpMethod::Report,
         &format!("{HOST}{BRIDGE}"),
-        "1",
+        "0",
         &dav::body_sync_collection(""),
         xml(
             207,
@@ -393,13 +393,16 @@ fn first_listing(root: &Path) {
 /// the server stops that listing short and then will not move past the
 /// point it stopped. Absence from a listing that never finished says
 /// nothing, so the reception it never reached stays (audit 2026-10-02
-/// §4).
+/// §4). The next run carries on from the token the cut-short one kept;
+/// when that listing reaches its end, the reception it never named is
+/// gone.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_sync_listing_cut_short_deletes_nothing() {
+async fn a_whole_listing_cut_short_prunes_only_once_a_later_run_finishes_it() {
     let d = tempfile::tempdir().expect("tempdir");
-    let (one, two, store) = (
+    let (one, two, three, store) = (
         d.path().join("one"),
         d.path().join("two"),
+        d.path().join("three"),
         d.path().join("store"),
     );
     std::fs::create_dir_all(&store).unwrap();
@@ -411,7 +414,7 @@ async fn a_sync_listing_cut_short_deletes_nothing() {
         &two,
         HttpMethod::Report,
         &bridge,
-        "1",
+        "0",
         &dav::body_sync_collection("data:,100"),
         xml(
             403,
@@ -422,7 +425,7 @@ async fn a_sync_listing_cut_short_deletes_nothing() {
         &two,
         HttpMethod::Report,
         &bridge,
-        "1",
+        "0",
         &dav::body_sync_collection(""),
         xml(
             207,
@@ -437,13 +440,32 @@ async fn a_sync_listing_cut_short_deletes_nothing() {
         &two,
         HttpMethod::Report,
         &bridge,
-        "1",
+        "0",
         &dav::body_sync_collection("data:,200"),
         xml(
             207,
             &multistatus(&format!(
                 "{}<sync-token>data:,200</sync-token>",
                 cut_short()
+            )),
+        ),
+    );
+
+    account_fixtures(&three);
+    let ops = RECEPTION
+        .replace("tng-reception", "tng-ops")
+        .replace("Reception for the Klingon delegation", "Operations review");
+    fixture(
+        &three,
+        HttpMethod::Report,
+        &bridge,
+        "0",
+        &dav::body_sync_collection("data:,200"),
+        xml(
+            207,
+            &multistatus(&format!(
+                "{}<sync-token>data:,201</sync-token>",
+                resource(&format!("{BRIDGE}ops.ics"), "\"o1\"", &ops),
             )),
         ),
     );
@@ -466,80 +488,107 @@ async fn a_sync_listing_cut_short_deletes_nothing() {
         problem_keys(&store).await,
         vec!["listing:calendar Bridge Duty".to_string()]
     );
+
+    let third = run(&three, &store).await;
+    assert_eq!(
+        (third.events_new, third.events_deleted),
+        (1, 1),
+        "{third:?}"
+    );
+    assert_eq!(
+        stored_uids(&store).await.as_deref(),
+        Some("tng-ops@enterprise.test,tng-staff@enterprise.test")
+    );
+    assert_eq!(problem_keys(&store).await, Vec::<String>::new());
 }
 
-/// A server with no `sync-collection` is listed with `calendar-query`,
-/// whole or over a window, every run; a reply it cut short prunes
-/// nothing either.
+/// A windowed calendar is listed whole with `calendar-query` every run.
+/// A reply the server cut short prunes nothing; the next complete one
+/// drops what it does not name.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_query_listing_cut_short_deletes_nothing() {
+async fn a_window_listing_cut_short_deletes_nothing_until_one_completes() {
     let window = datalib_etl_calendar::ingest::Window {
         start: chrono::NaiveDate::from_ymd_opt(2026, 1, 1),
         end: None,
     };
-    for window in [None, Some(window)] {
-        let d = tempfile::tempdir().expect("tempdir");
-        let (one, two, store) = (
-            d.path().join("one"),
-            d.path().join("two"),
-            d.path().join("store"),
-        );
-        std::fs::create_dir_all(&store).unwrap();
-        let bridge = format!("{HOST}{BRIDGE}");
-        let query = match &window {
-            Some(w) => dav::body_query_window(w),
-            None => dav::BODY_QUERY_ALL_EVENTS.to_string(),
-        };
-        for (root, listed) in [
-            (
-                &one,
-                format!(
-                    "{}{}",
-                    resource(&format!("{BRIDGE}staff.ics"), "\"s1\"", STAFF),
-                    resource(&format!("{BRIDGE}reception.ics"), "\"r1\"", RECEPTION),
-                ),
-            ),
-            (
-                &two,
-                format!(
-                    "{}{}",
-                    resource(&format!("{BRIDGE}staff.ics"), "\"s1\"", STAFF),
-                    cut_short(),
-                ),
-            ),
-        ] {
-            account_fixtures(root);
-            fixture(
-                root,
-                HttpMethod::Report,
-                &bridge,
-                "1",
-                &dav::body_sync_collection(""),
-                xml(501, ""),
-            );
-            fixture(
-                root,
-                HttpMethod::Report,
-                &bridge,
-                "1",
-                &query,
-                xml(207, &multistatus(&listed)),
-            );
-        }
-
-        let first = run_in(&one, &store, window).await;
-        assert_eq!(first.events_new, 2, "{window:?}: {first:?}");
-        let second = run_in(&two, &store, window).await;
-        assert_eq!(second.events_deleted, 0, "{window:?}: {second:?}");
-        assert_eq!(
-            stored_uids(&store).await.as_deref(),
-            Some("tng-reception@enterprise.test,tng-staff@enterprise.test"),
-            "{window:?}"
-        );
-        assert_eq!(
-            problem_keys(&store).await,
-            vec!["listing:calendar Bridge Duty".to_string()],
-            "{window:?}"
+    let d = tempfile::tempdir().expect("tempdir");
+    let (one, two, three, store) = (
+        d.path().join("one"),
+        d.path().join("two"),
+        d.path().join("three"),
+        d.path().join("store"),
+    );
+    std::fs::create_dir_all(&store).unwrap();
+    let staff = resource(&format!("{BRIDGE}staff.ics"), "\"s1\"", STAFF);
+    let reception = resource(&format!("{BRIDGE}reception.ics"), "\"r1\"", RECEPTION);
+    for (root, listed) in [
+        (&one, format!("{staff}{reception}")),
+        (&two, format!("{staff}{}", cut_short())),
+        (&three, staff.clone()),
+    ] {
+        account_fixtures(root);
+        fixture(
+            root,
+            HttpMethod::Report,
+            &format!("{HOST}{BRIDGE}"),
+            "1",
+            &dav::body_query_window(&window),
+            xml(207, &multistatus(&listed)),
         );
     }
+
+    let first = run_in(&one, &store, Some(window)).await;
+    assert_eq!(first.events_new, 2, "{first:?}");
+    let second = run_in(&two, &store, Some(window)).await;
+    assert_eq!(second.events_deleted, 0, "{second:?}");
+    assert_eq!(
+        stored_uids(&store).await.as_deref(),
+        Some("tng-reception@enterprise.test,tng-staff@enterprise.test")
+    );
+    assert_eq!(
+        problem_keys(&store).await,
+        vec!["listing:calendar Bridge Duty".to_string()]
+    );
+    let third = run_in(&three, &store, Some(window)).await;
+    assert_eq!(third.events_deleted, 1, "{third:?}");
+    assert_eq!(
+        stored_uids(&store).await.as_deref(),
+        Some("tng-staff@enterprise.test")
+    );
+    assert_eq!(problem_keys(&store).await, Vec::<String>::new());
+}
+
+/// sync-collection is the one way a calendar is listed. A server that
+/// does not support it fails the calendar where a person sees it, rather
+/// than being listed some other way.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_server_without_sync_collection_fails_the_calendar() {
+    let d = tempfile::tempdir().expect("tempdir");
+    let (one, store) = (d.path().join("one"), d.path().join("store"));
+    std::fs::create_dir_all(&store).unwrap();
+    account_fixtures(&one);
+    fixture(
+        &one,
+        HttpMethod::Report,
+        &format!("{HOST}{BRIDGE}"),
+        "0",
+        &dav::body_sync_collection(""),
+        xml(
+            403,
+            r#"<?xml version="1.0"?><error xmlns="DAV:"><supported-report/></error>"#,
+        ),
+    );
+    let first = run(&one, &store).await;
+    assert_eq!((first.events_new, first.errors), (0, 1), "{first:?}");
+    assert_eq!(
+        problem_keys(&store).await,
+        vec!["listing:calendar Bridge Duty".to_string()]
+    );
+    let detail = scalar(&store, "SELECT sample FROM problems")
+        .await
+        .unwrap_or_default();
+    assert!(
+        detail.contains("http 403") && detail.contains("supported-report"),
+        "{detail}"
+    );
 }

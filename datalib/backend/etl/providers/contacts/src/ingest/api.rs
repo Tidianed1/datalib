@@ -4,6 +4,7 @@
 
 use quick_xml::events::BytesStart;
 
+use datalib_etl::content_line;
 use datalib_etl::dav::sync::{CollectionKind, ObjectProps};
 use datalib_etl::dav::{self as webdav, DavProps};
 use datalib_etl::http::{HttpService, LatchkeySettings};
@@ -16,14 +17,11 @@ pub use datalib_etl::dav::DavError;
 /// telemetry events.
 pub const HTTP_SERVICE: HttpService = HttpService::Carddav;
 
-/// RFC 6578 has `sync-collection` sent at Depth 0, and every CardDAV
-/// REPORT here goes the same way.
 pub const KIND: CollectionKind = CollectionKind {
     service: HTTP_SERVICE,
     ns_decl: r#"xmlns:card="urn:ietf:params:xml:ns:carddav""#,
     data_prop: "card:address-data",
     multiget: "card:addressbook-multiget",
-    report_depth: "0",
 };
 
 pub type DavResponse = webdav::DavResponse<ContactProps>;
@@ -191,23 +189,13 @@ pub fn vcard_members(vcard: &str) -> Vec<String> {
 /// name once.
 pub fn vcard_categories(vcard: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    for prop in vcard_all(vcard, "CATEGORIES") {
-        let mut current = String::new();
-        let mut chars = prop.value.chars();
-        let mut names: Vec<String> = Vec::new();
-        while let Some(c) = chars.next() {
-            match c {
-                '\\' => current.extend(chars.next()),
-                ',' => names.push(std::mem::take(&mut current)),
-                _ => current.push(c),
-            }
-        }
-        names.push(current);
-        for name in names {
-            let name = name.trim();
-            if !name.is_empty() && !out.iter().any(|n| n == name) {
-                out.push(name.to_string());
-            }
+    for name in vcard_all(vcard, "CATEGORIES")
+        .iter()
+        .flat_map(|p| p.text_list(','))
+    {
+        let name = name.trim();
+        if !name.is_empty() && !out.iter().any(|n| n == name) {
+            out.push(name.to_string());
         }
     }
     out
@@ -227,56 +215,35 @@ pub fn vcard_n_family_given(vcard: &str) -> Option<(String, String)> {
     Some((family, given))
 }
 
-/// All occurrences of a vCard property, in document order. vCards
-/// can repeat properties (multiple emails, phones, addresses) and
-/// render cares about each one individually.
+/// All occurrences of a vCard property, in document order, without the
+/// blank ones. vCards can repeat properties (multiple emails, phones,
+/// addresses) and render cares about each one individually.
 pub fn vcard_all(vcard: &str, name: &str) -> Vec<VcardProp> {
-    let unfolded = unfold_vcard_lines(vcard);
-    let ab_labels: Vec<(&str, &str)> = unfolded
-        .lines()
-        .filter(|line| property_name(line).eq_ignore_ascii_case("X-ABLabel"))
-        .filter_map(|line| {
-            let (head, value) = line.split_once(':')?;
-            Some((property_group(head)?, value.trim()))
-        })
+    let props: Vec<content_line::Property> = content_line::unfold(vcard)
+        .iter()
+        .filter_map(|line| content_line::parse_line(line))
         .collect();
-    let mut out = Vec::new();
-    for line in unfolded.lines() {
-        if !property_name(line).eq_ignore_ascii_case(name) {
-            continue;
-        }
-        let Some(colon) = line.find(':') else {
-            continue;
-        };
-        let head = &line[..colon];
-        let value = line[colon + 1..].trim().to_string();
-        if value.is_empty() {
-            continue;
-        }
-        // Parse the parameter block between `;` separators after the
-        // property name. We only surface a few keys callers care
-        // about; everything else is left in `raw_params`.
-        let mut params: Vec<(String, String)> = Vec::new();
-        for chunk in head.split(';').skip(1) {
-            if let Some((k, v)) = chunk.split_once('=') {
-                params.push((k.trim().to_string(), v.trim().to_string()));
-            } else if !chunk.is_empty() {
-                params.push(("TYPE".into(), chunk.trim().to_string()));
-            }
-        }
-        let ab_label = property_group(head).and_then(|group| {
-            ab_labels
-                .iter()
-                .find(|(g, _)| g.eq_ignore_ascii_case(group))
-                .map(|(_, label)| label.to_string())
-        });
-        out.push(VcardProp {
-            value,
-            params,
-            ab_label,
-        });
-    }
-    out
+    let ab_label = |group: &str| {
+        props
+            .iter()
+            .find(|p| {
+                p.name == "X-ABLABEL"
+                    && p.group
+                        .as_deref()
+                        .is_some_and(|g| g.eq_ignore_ascii_case(group))
+            })
+            .map(|p| p.text().trim().to_string())
+    };
+    props
+        .iter()
+        .filter(|p| p.name.eq_ignore_ascii_case(name))
+        .filter(|p| !p.value.trim().is_empty())
+        .map(|p| VcardProp {
+            value: p.value.trim().to_string(),
+            params: p.params.clone(),
+            ab_label: p.group.as_deref().and_then(ab_label),
+        })
+        .collect()
 }
 
 /// One occurrence of a vCard property, with its parameters preserved
@@ -284,6 +251,7 @@ pub fn vcard_all(vcard: &str, name: &str) -> Vec<VcardProp> {
 /// rather than just "email".
 #[derive(Debug, Clone)]
 pub struct VcardProp {
+    /// As written, escapes and all; [`VcardProp::text`] reads it.
     pub value: String,
     pub params: Vec<(String, String)>,
     /// The `X-ABLabel` sharing this property's group (`item1.TEL` and
@@ -298,6 +266,20 @@ impl VcardProp {
             .iter()
             .find(|(k, _)| k.eq_ignore_ascii_case(key))
             .map(|(_, v)| v.as_str())
+    }
+
+    /// A TEXT value (`FN`, `NOTE`, `TITLE`) with its escapes undone.
+    pub fn text(&self) -> String {
+        content_line::unescape_text(&self.value)
+    }
+
+    /// A structured value (`ORG`, `ADR`) or a list (`CATEGORIES`), cut
+    /// where `sep` is not escaped and each part unescaped.
+    pub fn text_list(&self, sep: char) -> Vec<String> {
+        content_line::split_unescaped(&self.value, sep)
+            .into_iter()
+            .map(content_line::unescape_text)
+            .collect()
     }
 
     /// What kind of address this is, for a person to read: its
@@ -335,50 +317,11 @@ fn apple_label(label: &str) -> Option<String> {
     }
 }
 
-/// The property name of one unfolded line, `NAME[;params]:value`,
-/// without the optional `group.` prefix RFC 6350 §3.3 allows — Apple
-/// and Google both write `item1.EMAIL;…` for a labelled address, and a
-/// matcher that keeps the prefix drops every one of those.
-fn property_name(line: &str) -> &str {
-    let head_end = line.find([':', ';']).unwrap_or(line.len());
-    let head = &line[..head_end];
-    head.rsplit_once('.').map_or(head, |(_, name)| name)
-}
-
-/// The `item1` of `item1.EMAIL;TYPE=…`.
-fn property_group(head: &str) -> Option<&str> {
-    let name_end = head.find(';').unwrap_or(head.len());
-    head[..name_end].rsplit_once('.').map(|(group, _)| group)
-}
-
+/// The first non-blank value of a property, as written. The ingest keys
+/// cards by some of these (`UID`, and `FN` or `N` where there is no
+/// `UID`), so they stay escaped: unescaping one would re-key its card.
 fn extract_property(vcard: &str, name: &str) -> Option<String> {
-    let unfolded = unfold_vcard_lines(vcard);
-    for line in unfolded.lines() {
-        if property_name(line).eq_ignore_ascii_case(name) {
-            if let Some(colon) = line.find(':') {
-                let value = line[colon + 1..].trim().to_string();
-                if !value.is_empty() {
-                    return Some(value);
-                }
-            }
-        }
-    }
-    None
-}
-
-fn unfold_vcard_lines(vcard: &str) -> String {
-    let mut out = String::with_capacity(vcard.len());
-    for line in vcard.lines() {
-        if line.starts_with(' ') || line.starts_with('\t') {
-            out.push_str(&line[1..]);
-        } else {
-            if !out.is_empty() {
-                out.push('\n');
-            }
-            out.push_str(line);
-        }
-    }
-    out
+    vcard_all(vcard, name).into_iter().next().map(|p| p.value)
 }
 
 // Tests
