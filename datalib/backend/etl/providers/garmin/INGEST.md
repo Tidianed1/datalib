@@ -116,7 +116,9 @@ below).
    the one `.fit` inside the zip stored, and an edge row written
    (`activity_files = false` turns that off). A FIT that failed is
    fetched again next run, listed or not; one that then answers 404
-   has its edge dropped. Activities dated a full
+   has its edge dropped. A download that came back but held no
+   readable FIT is asked for again only once its activity's listing
+   entry changes, since the same bytes would come back. Activities dated a full
    day inside the walked window that the listing did not name are
    pruned with their details and edges — once the page walk reached a
    short page. A walk that stopped on a bad page still upserts the
@@ -163,9 +165,13 @@ only record.
 
 Each file edge carries its own record's hash. An earlier build keyed
 every file of a batch under one ref, so each edge of a batch got the
-last file's hash and a failure was stamped on all of them; at the
-start of every run an edge whose hash another record's edge shares is
-cleared and stamped failed, so the walks above fetch it again.
+last file's hash and a failure was stamped on all of them. Once per
+table, on the first run with that table's walk turned on, an edge whose
+hash another record's edge shares is cleared and stamped failed, so the
+walks above fetch it again; `sync_scope_state` records that it ran
+(`garmin:shared_hash_repair:<table>`). Once only, because two
+activities may share a file for real, and fetching those every run
+would get the same bytes back.
 
 Inside the per-day walk, a metric that fails ten days in a row is
 abandoned for the run rather than paid for once per day of history;

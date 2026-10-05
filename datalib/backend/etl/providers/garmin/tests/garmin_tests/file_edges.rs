@@ -23,10 +23,19 @@ fn fit_edges() -> Vec<(String, Option<String>)> {
 const FIT_EDGES_SQL: &str =
     "SELECT activity_id, blake3 FROM garmin_activity_files ORDER BY activity_id";
 
+const SHARE_THE_RIDES_FIT: &str = "UPDATE garmin_activity_files SET blake3 = \
+     (SELECT blake3 FROM garmin_activity_files WHERE activity_id = '17010414002')";
+
+/// What a store written before the repair looks like: no record of it.
+const NOT_YET_REPAIRED: &str =
+    "DELETE FROM sync_scope_state WHERE scope LIKE 'garmin:shared_hash_repair:%'";
+
 /// The CAS bundle is keyed by ref, and every FIT went in under the one
 /// ref `fit`: each activity's edge got the hash of the last file of
 /// the batch, and the earlier files never reached the CAS. A store
-/// written that way is mended by fetching the shared ones again.
+/// written that way is mended by fetching the shared ones again — once:
+/// a hash two activities share after that is theirs, and fetching it
+/// every run would only get the same bytes back.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn each_activitys_fit_edge_points_at_its_own_file() {
     let _serial = PLAYBACK.lock().await;
@@ -35,11 +44,8 @@ async fn each_activitys_fit_edge_points_at_its_own_file() {
     assert_eq!(s.activity_files, 2, "{}", s.line());
     assert_eq!(a.pairs(FIT_EDGES_SQL).await, fit_edges());
 
-    a.exec(
-        "UPDATE garmin_activity_files SET blake3 = \
-         (SELECT blake3 FROM garmin_activity_files WHERE activity_id = '17010414002')",
-    )
-    .await;
+    a.exec(SHARE_THE_RIDES_FIT).await;
+    a.exec(NOT_YET_REPAIRED).await;
     let s = a.run().await;
     assert_eq!(s.errors, 0, "{}", s.line());
     assert_eq!(
@@ -48,6 +54,39 @@ async fn each_activitys_fit_edge_points_at_its_own_file() {
         "both edges of the shared hash are fetched again: {}",
         s.line()
     );
+    assert_eq!(a.pairs(FIT_EDGES_SQL).await, fit_edges());
+    assert!(a.problems().await.is_empty(), "{:?}", a.problems().await);
+
+    a.exec(SHARE_THE_RIDES_FIT).await;
+    let s = a.run().await;
+    assert_eq!(
+        s.activity_files,
+        0,
+        "a store already repaired is not repaired again: {}",
+        s.line()
+    );
+    assert!(a.problems().await.is_empty(), "{:?}", a.problems().await);
+}
+
+/// The repair stamps edges failed so a walk fetches them again; with that
+/// walk off, nothing would, and the rows would stand for good. So it
+/// waits until the walk is on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_repair_waits_for_the_walk_that_would_refetch() {
+    let _serial = PLAYBACK.lock().await;
+    let mut a = Account::tng();
+    a.run().await;
+    a.exec(SHARE_THE_RIDES_FIT).await;
+    a.exec(NOT_YET_REPAIRED).await;
+
+    a.api.activity_files = Some(false);
+    let s = a.run().await;
+    assert_eq!(s.errors, 0, "{}", s.line());
+    assert!(a.problems().await.is_empty(), "{:?}", a.problems().await);
+
+    a.api.activity_files = None;
+    let s = a.run().await;
+    assert_eq!(s.activity_files, 2, "{}", s.line());
     assert_eq!(a.pairs(FIT_EDGES_SQL).await, fit_edges());
     assert!(a.problems().await.is_empty(), "{:?}", a.problems().await);
 }
@@ -129,4 +168,33 @@ async fn a_failed_wellness_day_behind_the_cursor_is_fetched_again() {
         a.pairs(WELLNESS_EDGES_SQL).await[1],
         ("2369-04-03".to_string(), hash("bundle of 2369-04-03"))
     );
+}
+
+/// A download that is not a zip comes back the same every time, so it is
+/// not asked for again run after run; an edit to the activity is the
+/// one thing that could change it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unreadable_fit_is_fetched_again_only_when_its_activity_changes() {
+    let _serial = PLAYBACK.lock().await;
+    let mut a = Account::tng();
+    a.answer_bytes(FIT_13, bytes(b"not a zip, captain"));
+    let s1 = a.run().await;
+    assert_eq!(s1.errors, 1, "{}", s1.line());
+    let key = "garmin_activity_files:17010413001#fit";
+    assert_eq!(a.problems().await.keys().collect::<Vec<_>>(), [key]);
+
+    let s2 = a.run().await;
+    assert_eq!(
+        (s2.errors, s2.activity_files),
+        (0, 0),
+        "not asked for again: {}",
+        s2.line()
+    );
+    assert_eq!(a.problems().await.keys().collect::<Vec<_>>(), [key]);
+
+    a.spec["activities"][0]["listing"]["activityName"] = "Holodeck run: Dixon Hill, again".into();
+    a.resynthesize();
+    let s3 = a.run().await;
+    assert_eq!((s3.errors, s3.activity_files), (0, 1), "{}", s3.line());
+    assert!(a.problems().await.is_empty(), "{:?}", a.problems().await);
 }

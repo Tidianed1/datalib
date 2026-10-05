@@ -276,7 +276,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         s.errors += 1;
         s.listings_failed += 1;
     }
-    db.unstick_shared_file_hashes().await?;
+    db.repair_shared_file_hashes(api.activity_files(), api.wellness_files())
+        .await?;
     let mut walk = Walk {
         db: &db,
         client: &mut client,
@@ -452,7 +453,6 @@ async fn fetch_account(
             info!(event = "garmin_user_settings_stopped", error = %format!("{e:#}"), "user-settings ended on the stop");
         }
         Err(e) => {
-            warn!(event = "garmin_user_settings_failed", error = %format!("{e:#}"), "user-settings could not be fetched; keeping the stored row");
             settings_failed = Some(RunProblem::listing("user_settings", format!("{e:#}")));
         }
     }
@@ -849,7 +849,6 @@ impl Walk<'_> {
             Err(_) if self.stopping() => Ok(Day::Stopped),
             Err(e) => {
                 s.errors += 1;
-                warn!(event = "garmin_day_failed", metric, date = %d, error = %format!("{e:#}"), "a day could not be fetched");
                 record_error(self.db, "garmin_daily", &id, &format!("{e:#}")).await?;
                 Ok(Day::Failed)
             }
@@ -985,17 +984,23 @@ impl Walk<'_> {
 
         let listed_ids: Vec<&str> = rows.iter().map(|r| r.id_and_payload.id.as_str()).collect();
         let without_detail = self.db.activities_without_detail().await?;
-        let failed_files: HashSet<String> = if self.api.activity_files() {
+        let (failed_files, unreadable_files) = if self.api.activity_files() {
             self.db.activities_with_failed_files().await?
         } else {
-            HashSet::new()
+            Default::default()
         };
+        // A file that came back unreadable would come back the same; it
+        // is asked for again only once its activity changes.
         let to_fetch = activity_work(
             &listed_ids,
             &changed,
             &without_detail,
             &failed_files,
-            |id| self.api.activity_files() && !stored_files.contains_key(id),
+            |id| {
+                self.api.activity_files()
+                    && !stored_files.contains_key(id)
+                    && (!unreadable_files.contains(id) || changed.contains(id))
+            },
         );
         self.progress.set_length(Some(to_fetch.len() as u64));
         let mut edges = CasEdgeAccumulator::new();
@@ -1068,12 +1073,14 @@ impl Walk<'_> {
                         }
                         Err(e) => {
                             s.errors += 1;
-                            edges.add_failed(id, &fit_ref, format!("{e:#}"));
+                            edges.add_failed(id, &fit_ref, format!("{UNREADABLE_FIT}: {e:#}"));
                         }
                     },
                     // A file that failed before and now is not there at
                     // all has nothing left to retry.
-                    Ok(Fetched::Nothing) if failed_files.contains(id) => {
+                    Ok(Fetched::Nothing)
+                        if failed_files.contains(id) || unreadable_files.contains(id) =>
+                    {
                         self.db
                             .forget_file_edges("garmin_activity_files", &[fit_ref])
                             .await?;
@@ -1228,10 +1235,6 @@ impl Walk<'_> {
             let Some(first_page) = path(0) else {
                 // Not counted in `errors`: it is the account's shape, the
                 // same every run, and would hold back the scope record.
-                warn!(
-                    event = "garmin_gear_skipped",
-                    "socialProfile carries no profileId"
-                );
                 self.problems.push(RunProblem::listing(
                     kind.name,
                     "socialProfile carries no profileId, which the gear listing is keyed on",
@@ -1293,6 +1296,10 @@ impl Walk<'_> {
         Ok(())
     }
 }
+
+/// How the stored error of a FIT that downloaded but could not be read
+/// begins, so the retry can tell it from one that did not download.
+pub const UNREADABLE_FIT: &str = "the download held no readable FIT file";
 
 /// The CAS bundle keys its blobs by ref id, so each record's file needs
 /// a ref of its own; the edge row's id is that ref.

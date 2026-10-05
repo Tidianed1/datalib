@@ -170,13 +170,17 @@ that failed, and is a row in the store's `problems` table:
 | --- | --- | --- |
 | a device folder that could not be read at all, or has no serial | `listing:device <name or path>` | the next run that reads it |
 | entries the walk of a folder could not read | `listing:files <serial>` | the next run whose walk is clean |
-| a history file that would not read or parse, or a `latest_config_measurements.json` that would not | `record:airvisual_files:<serial>/<path>` | the next run that reads it |
-| lines in a read file that could not be used | `file:airvisual/export/<serial>:<path>` | the file changes and is read again |
+| a history file that would not read, or a `latest_config_measurements.json` that would not read or parse | `record:airvisual_files:<serial>/<path>` | the next run that reads it |
+| a history file that would not parse, or lines in one that could not be used | `file:airvisual/export/<serial>:<path>` | the file changes and is read again |
 
-A history file that failed is not stamped, so every run tries it again,
-and every run reads every device; the first three kinds are therefore
-replaced whole at the end of each run. A run told to stop leaves them
-as the last run did. A description that will not parse leaves the
+A history file that would not read is not stamped, so every run tries
+it again, and every run reads every device; the first three kinds are
+therefore replaced whole at the end of each run, except that a device
+the run could not read keeps the `record:` rows it had (when a device
+cannot even say which serial it is, every serial the run did not read
+keeps them). A file that read but would not parse would not parse next
+time either, so it is stamped with its row and read again only once it
+changes. A run told to stop leaves the rows as the last run did. A description that will not parse leaves the
 device row as it was rather than blanking its model, firmware and
 timezone.
 

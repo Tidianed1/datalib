@@ -45,6 +45,14 @@ const DEFAULT_WINDOW_DAYS: i64 = 7;
 /// A device with no reading this recent is reported as gone quiet. The
 /// sensors report every few minutes, so a day is far past a gap.
 const SILENT_AFTER_MS: i64 = 86_400_000;
+/// How far back YoLink still serves history: about 66 days on the one
+/// account measured (see INGEST.md). A failed window that ends before
+/// this is not retried, since the readings it held are gone upstream.
+const HISTORY_KEPT_MS: i64 = 66 * 86_400_000;
+/// Failed windows in a row, retried or walked, before a device is left
+/// for the next run: a run this long is a stuck credential or a dead
+/// device, and each more is a request for nothing.
+const CONSECUTIVE_FAILURE_BUDGET: u32 = 30;
 
 // ── parser ──────────────────────────────────────────────────────────
 
@@ -290,6 +298,9 @@ pub(crate) async fn fetch_from<S: WindowSource>(
     let prior_scope_cfg =
         datalib_etl::scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
 
+    let horizon_ms = now_ms - HISTORY_KEPT_MS;
+    retire_windows(db.pool(), &opts.sync.devices, horizon_ms).await?;
+
     // Every device's resume point first, so the bar counts requests (one
     // per window) rather than devices, which finish in uneven lumps.
     let mut plans = Vec::with_capacity(opts.sync.devices.len());
@@ -328,6 +339,7 @@ pub(crate) async fn fetch_from<S: WindowSource>(
             dev: plan.dev,
             bar: &bar,
             stop,
+            horizon_ms,
         };
         match walk.run(plan, stride_ms, window_ms, now_ms, &mut s).await? {
             WalkEnd::Done | WalkEnd::Stopped => {}
@@ -529,9 +541,8 @@ enum WalkEnd {
 enum WindowEnd {
     Fetched,
     Failed,
-    /// Refused before the device's first reading: a window from before
-    /// it was deployed, which has nothing to retry.
-    BeforeDeployment,
+    /// Nothing a retry could fetch; see [`nothing_to_retry`].
+    NothingThere,
 }
 
 struct Walk<'a, S> {
@@ -540,6 +551,20 @@ struct Walk<'a, S> {
     dev: &'a YolinkDevice,
     bar: &'a RunBar,
     stop: &'a datalib_etl::stop::StopFlag,
+    /// Where YoLink's history begins, as far as this run knows.
+    horizon_ms: i64,
+}
+
+/// One more failed window in a row; `Some(why)` once the device has had
+/// its budget.
+fn failed_once(consecutive: &mut u32, start: i64, end: i64) -> Option<String> {
+    *consecutive += 1;
+    (*consecutive >= CONSECUTIVE_FAILURE_BUDGET).then(|| {
+        format!(
+            "abandoned after {consecutive} consecutive window failures \
+             (last window {start}..{end}); the rest is walked next run"
+        )
+    })
 }
 
 impl<S: WindowSource> Walk<'_, S> {
@@ -559,6 +584,7 @@ impl<S: WindowSource> Walk<'_, S> {
                 .fetch_one(self.db.pool())
                 .await?;
         let mut failed_now: HashSet<String> = HashSet::new();
+        let mut consecutive_failures: u32 = 0;
 
         for &(start, end) in &plan.retry {
             if self.stop.requested() {
@@ -567,19 +593,17 @@ impl<S: WindowSource> Walk<'_, S> {
             match self.window(start, end, &mut first_reading, s).await? {
                 WindowEnd::Failed => {
                     failed_now.insert(window_id_recipe(&dev.name, start, end));
+                    if let Some(why) = failed_once(&mut consecutive_failures, start, end) {
+                        return self.finish(WalkEnd::Abandoned(why)).await;
+                    }
                 }
-                WindowEnd::Fetched | WindowEnd::BeforeDeployment => {
+                WindowEnd::Fetched | WindowEnd::NothingThere => {
+                    consecutive_failures = 0;
                     forget_window(self.db.pool(), &window_id_recipe(&dev.name, start, end)).await?;
                 }
             }
         }
 
-        // A run of failures is tolerated (a transient error, or a window
-        // from before the device was deployed); one this long is a stuck
-        // credential or a dead device, and stops the walk rather than
-        // spending a request on every week of history.
-        const CONSECUTIVE_FAILURE_BUDGET: u32 = 30;
-        let mut consecutive_failures: u32 = 0;
         let ahead: HashSet<&str> = plan.ahead.iter().map(String::as_str).collect();
         let mut cursor = plan.cursor;
         while cursor < now_ms {
@@ -591,17 +615,11 @@ impl<S: WindowSource> Walk<'_, S> {
             match self.window(cursor, end, &mut first_reading, s).await? {
                 WindowEnd::Failed => {
                     failed_now.insert(id);
-                    consecutive_failures += 1;
-                    if consecutive_failures >= CONSECUTIVE_FAILURE_BUDGET {
-                        let why = format!(
-                            "abandoned after {consecutive_failures} consecutive window failures \
-                             (last window {cursor}..{end}); the rest is walked next run"
-                        );
-                        warn!(event = "yolink_device_abandoned", device = %dev.name, %why);
+                    if let Some(why) = failed_once(&mut consecutive_failures, cursor, end) {
                         return self.finish(WalkEnd::Abandoned(why)).await;
                     }
                 }
-                WindowEnd::Fetched | WindowEnd::BeforeDeployment => {
+                WindowEnd::Fetched | WindowEnd::NothingThere => {
                     consecutive_failures = 0;
                 }
             }
@@ -637,14 +655,13 @@ impl<S: WindowSource> Walk<'_, S> {
         self.bar.did(1);
         let rows = match fetched {
             Ok(rows) => rows,
-            Err(e) if refused_before_deployment(&e, end, *first_reading) => {
-                info!(event = "yolink_window_before_deployment", device = %dev.name, start, end, error = %format!("{e:#}"), "refused before the device's first reading; nothing to retry");
-                return Ok(WindowEnd::BeforeDeployment);
-            }
             Err(e) => {
+                if let Some(why) = nothing_to_retry(&e, end, *first_reading, self.horizon_ms) {
+                    info!(event = "yolink_window_nothing_there", device = %dev.name, start, end, why, error = %format!("{e:#}"), "a window failed with nothing a retry could fetch");
+                    return Ok(WindowEnd::NothingThere);
+                }
                 s.windows_failed += 1;
                 let err = format!("{e:#}");
-                warn!(event = "yolink_window_failed", device = %dev.name, start, end, error = %err, "a window of one device's history could not be fetched");
                 record_window_failure(self.db.pool(), &dev.name, start, end, &err).await?;
                 return Ok(WindowEnd::Failed);
             }
@@ -674,14 +691,56 @@ impl<S: WindowSource> Walk<'_, S> {
     }
 }
 
-/// A window YoLink refused with a client error, ending before the
-/// device's first stored reading: a configured `start` that predates the
-/// device. A timeout or a rate limit is not that.
-fn refused_before_deployment(e: &anyhow::Error, end_ms: i64, first_reading: Option<i64>) -> bool {
-    let refused = e
-        .downcast_ref::<HttpStatus>()
-        .is_some_and(|HttpStatus(code)| (400..500).contains(code) && ![408, 429].contains(code));
-    refused && first_reading.is_none_or(|first| end_ms <= first)
+/// Why a failed window has nothing a retry could fetch, or `None` when a
+/// retry might: YoLink said it is not there (404, 410); it refused a
+/// window ending before the device's first stored reading, which is a
+/// configured `start` that predates the device (not a timeout or a rate
+/// limit); or the window ends before the history YoLink keeps.
+fn nothing_to_retry(
+    e: &anyhow::Error,
+    end_ms: i64,
+    first_reading: Option<i64>,
+    horizon_ms: i64,
+) -> Option<&'static str> {
+    let status = e.downcast_ref::<HttpStatus>().map(|HttpStatus(code)| *code);
+    if matches!(status, Some(404 | 410)) {
+        return Some("not there upstream");
+    }
+    let refused = status.is_some_and(|c| (400..500).contains(&c) && ![408, 429].contains(&c));
+    if refused && first_reading.is_none_or(|first| end_ms <= first) {
+        return Some("before the device's first reading");
+    }
+    (end_ms <= horizon_ms).then_some("older than the history YoLink keeps")
+}
+
+/// Drop the failed windows no run will ask for again: those of a device
+/// the config no longer names, and those that end before the history
+/// YoLink keeps.
+async fn retire_windows(
+    pool: &SqlitePool,
+    devices: &[YolinkDevice],
+    horizon_ms: i64,
+) -> Result<()> {
+    let configured: HashSet<&str> = devices.iter().map(|d| d.name.as_str()).collect();
+    let rows: Vec<(String, String, i64)> =
+        sqlx::query_as("SELECT id, device_name, end_ms FROM yolink_windows")
+            .fetch_all(pool)
+            .await
+            .context("list yolink_windows")?;
+    let keep: HashSet<String> = rows
+        .into_iter()
+        .filter(|(_, device, end)| configured.contains(device.as_str()) && *end > horizon_ms)
+        .map(|(id, _, _)| id)
+        .collect();
+    let gone = datalib_etl::prune::prune_scope(pool, YOLINK_WINDOWS_TABLE, &[], &keep).await?;
+    if !gone.is_empty() {
+        info!(
+            event = "yolink_windows_retired",
+            windows = gone.len(),
+            "failed windows no run will ask for again"
+        );
+    }
+    Ok(())
 }
 
 /// Every failed window of one device: `(id, start_ms, end_ms)`.
@@ -1250,20 +1309,89 @@ mod walk_tests {
 
     /// A configured `start` before the device existed is refused; that
     /// window has nothing to retry and is no problem. A refusal once the
-    /// device has readings is.
+    /// device has readings is, until a retry says the window is not
+    /// there at all.
     #[tokio::test]
     async fn a_refusal_before_the_first_reading_is_not_a_failure() {
         let st = Store::new().await;
         let cfg = sync(vec![device(DEVICE, "2369-04-01")], 7);
         let mut fake = Fake::new();
         fake.deployed = day(7);
-        fake.failing.lock().unwrap().insert(day(0), Some(404));
-        fake.failing.lock().unwrap().insert(day(14), Some(404));
+        fake.failing.lock().unwrap().insert(day(0), Some(403));
+        fake.failing.lock().unwrap().insert(day(14), Some(403));
         let s = st.run(&fake, &cfg, day(28)).await;
         assert_eq!((s.windows_failed, s.errors), (1, 0), "{s:?}");
         assert_eq!(
             keys(&st.problems().await),
             [window_key(day(14), day(21) + FIVE_MIN).as_str()]
+        );
+
+        fake.failing.lock().unwrap().insert(day(14), Some(404));
+        let s = st.run(&fake, &cfg, day(29)).await;
+        assert_eq!(s.windows_failed, 0, "{s:?}");
+        assert!(st.problems().await.is_empty(), "{:?}", st.problems().await);
+        assert_eq!(st.count("SELECT COUNT(*) FROM yolink_windows").await, 0);
+    }
+
+    /// No run asks for a window of a device the config stopped naming,
+    /// nor for one older than the history YoLink keeps, so their rows
+    /// would stand for good.
+    #[tokio::test]
+    async fn failed_windows_no_run_will_ask_for_are_retired() {
+        let st = Store::new().await;
+        let fake = Fake::new();
+        fake.failing.lock().unwrap().insert(day(7), None);
+        let both = sync(
+            vec![
+                device(DEVICE, "2369-04-01"),
+                device("cargo-bay-2", "2369-04-01"),
+            ],
+            7,
+        );
+        st.run(&fake, &both, day(28)).await;
+        assert_eq!(st.count("SELECT COUNT(*) FROM yolink_windows").await, 2);
+
+        let one = sync(vec![device(DEVICE, "2369-04-01")], 7);
+        st.run(&fake, &one, day(29)).await;
+        assert_eq!(
+            keys(&st.problems().await),
+            [window_key(day(7), day(14) + FIVE_MIN).as_str()],
+            "the removed device's window went; the one still failing stays"
+        );
+
+        fake.failing.lock().unwrap().clear();
+        fake.asked();
+        st.run(&fake, &one, day(100)).await;
+        assert!(
+            !fake.asked().contains(&(day(7), day(14) + FIVE_MIN)),
+            "a window YoLink no longer keeps is not asked for"
+        );
+        assert!(st.problems().await.is_empty(), "{:?}", st.problems().await);
+        assert_eq!(st.count("SELECT COUNT(*) FROM yolink_windows").await, 0);
+    }
+
+    /// The retry pass stops where the forward walk would: a device whose
+    /// every window fails is not asked for each of its failed windows,
+    /// one failing request at a time.
+    #[tokio::test]
+    async fn the_retry_pass_gives_up_on_the_same_budget() {
+        let st = Store::new().await;
+        let cfg = sync(vec![device(DEVICE, "2369-04-01")], 1);
+        let mut fake = Fake::new();
+        for d in (0..64).step_by(2) {
+            fake.failing.lock().unwrap().insert(day(d), None);
+        }
+        let s = st.run(&fake, &cfg, day(64)).await;
+        assert_eq!((s.windows_failed, s.errors), (32, 0), "{s:?}");
+
+        fake.fail_all = true;
+        fake.asked();
+        let s = st.run(&fake, &cfg, day(65)).await;
+        assert_eq!(fake.asked().len(), 30, "{s:?}");
+        let rows = st.problems().await;
+        assert!(
+            keys(&rows).contains(&format!("listing:{DEVICE}").as_str()),
+            "{rows:?}"
         );
     }
 

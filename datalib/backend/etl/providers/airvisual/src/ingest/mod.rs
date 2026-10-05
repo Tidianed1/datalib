@@ -9,10 +9,11 @@
 pub mod parse;
 pub mod schema_raw;
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use sqlx::{Sqlite, Transaction};
+use sqlx::{Sqlite, SqlitePool, Transaction};
 use tracing::info;
 
 use datalib_etl::bulk::bulk_upsert_entity_in_tx;
@@ -134,11 +135,44 @@ pub const FILES_TABLE: &str = "airvisual_files";
 
 /// What a run could not read, reported once at its end. Every run reads
 /// every device and re-reads every file it could not stamp, so each set
-/// is the whole truth for the run that collected it.
+/// is the whole truth for the devices the run read; a device it could
+/// not read keeps the file rows it had (see [`carried_over`]).
 #[derive(Default)]
 struct Problems {
     devices: Vec<RunProblem>,
     files: Vec<RecordProblem>,
+    /// Serials whose folder was walked this run.
+    read: HashSet<String>,
+    /// Serials whose folder could not be walked this run.
+    unread: HashSet<String>,
+    /// A device whose serial is unknown failed, so any serial could be it.
+    unidentified: bool,
+}
+
+/// The file rows of the last run that this run has no verdict on: a
+/// device it could not read, or, when a device could not even say
+/// which it is, every serial it did not read. A serial neither read nor
+/// failing is a device the config no longer names, and its rows go.
+async fn carried_over(pool: &SqlitePool, problems: &Problems) -> Result<Vec<RecordProblem>> {
+    let prefix = format!("{}{FILES_TABLE}:", download_problems::RECORD_PREFIX);
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT scope_key, sample FROM problems WHERE scope_kind = ? AND INSTR(scope_key, ?) = 1",
+    )
+    .bind(datalib_problems::ScopeKind::Entity.as_str())
+    .bind(&prefix)
+    .fetch_all(pool)
+    .await
+    .context("read the last run's file problems")?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(key, sample)| {
+            let id = key.strip_prefix(&prefix)?.to_string();
+            let serial = id.split('/').next()?;
+            let keep = !problems.read.contains(serial)
+                && (problems.unread.contains(serial) || problems.unidentified);
+            keep.then(|| RecordProblem::new(FILES_TABLE, &id, sample))
+        })
+        .collect())
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
@@ -160,6 +194,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             "told to stop; the problems stay as the last run left them"
         );
     } else {
+        let carried = carried_over(db.pool(), &problems).await?;
+        problems.files.extend(carried);
         download_problems::report_run(db.pool(), &problems.devices).await;
         download_problems::report_records(db.pool(), &problems.files).await;
     }
@@ -201,6 +237,7 @@ async fn fetch_device(
                 None => format!("{e:#}"),
             };
             device_failed(s, detail);
+            problems.unidentified = true;
             return Ok(());
         }
     };
@@ -217,9 +254,11 @@ async fn fetch_device(
         Ok(scan) => scan,
         Err(e) => {
             device_failed(s, format!("{e:#}"));
+            problems.unread.insert(who.id.clone());
             return Ok(());
         }
     };
+    problems.read.insert(who.id.clone());
     let file_problem = |rel: &str, detail: String| {
         RecordProblem::new(FILES_TABLE, &format!("{}/{rel}", who.id), detail)
     };
@@ -258,10 +297,24 @@ async fn fetch_device(
         let file_started = std::time::Instant::now();
         let read = match read_one(f) {
             Ok(read) => read,
-            Err(e) => {
+            Err(Unread::Read(why)) => {
                 // Not stamped, so the next run reads it again.
                 s.errors += 1;
-                problems.files.push(file_problem(&f.rel, format!("{e:#}")));
+                problems.files.push(file_problem(&f.rel, why));
+                continue;
+            }
+            Err(Unread::Parse(why)) => {
+                // The same bytes would not parse next run either: stamped
+                // with its problem, it is read again once it changes.
+                s.errors += 1;
+                let problem = Problem::record(Reason::Undeserializable, &why);
+                file_checkpoint::record_file_with_problem(
+                    &mut tx,
+                    &scope,
+                    f,
+                    Some((Outcome::Dropped, problem)),
+                )
+                .await?;
                 continue;
             }
         };
@@ -368,13 +421,20 @@ struct ReadFile {
     parse_ms: u128,
 }
 
+/// Why a file was not read.
+enum Unread {
+    Read(String),
+    Parse(String),
+}
+
 /// Read and parse one file. An `Err` costs that file and nothing else.
-fn read_one(f: &ScannedFile) -> Result<ReadFile> {
+fn read_one(f: &ScannedFile) -> std::result::Result<ReadFile, Unread> {
     let t = std::time::Instant::now();
-    let body =
-        std::fs::read_to_string(&f.path).with_context(|| format!("read {}", f.path.display()))?;
+    let body = std::fs::read_to_string(&f.path)
+        .map_err(|e| Unread::Read(format!("read {}: {e}", f.path.display())))?;
     let read_ms = t.elapsed().as_millis();
-    let parsed = parse::parse(&body, &f.rel).with_context(|| format!("parse {}", f.rel))?;
+    let parsed = parse::parse(&body, &f.rel)
+        .map_err(|e| Unread::Parse(format!("parse {}: {e:#}", f.rel)))?;
     Ok(ReadFile {
         parsed,
         read_ms,
@@ -834,10 +894,11 @@ mod tests {
         e.db.close().await;
     }
 
-    /// A file that will not parse is left unstamped and read again next
-    /// run; until it reads, it is a row naming it.
+    /// A file that will not parse would not parse next run either: it is
+    /// stamped with its problem, not read again until it changes, and the
+    /// row goes when it does.
     #[tokio::test]
-    async fn a_file_that_will_not_parse_is_a_problem_until_it_reads() {
+    async fn a_file_that_will_not_parse_is_a_problem_until_it_changes() {
         let e = env().await;
         let f = e.root.join("archive1/202501_AirVisual_values.txt");
         std::fs::write(&f, "Stardate;Warp factor;\n47634.4;9.2;\n").unwrap();
@@ -849,11 +910,17 @@ mod tests {
         let s = fetch(opts(&e, kitchen(&e))).await.unwrap();
         assert_eq!((s.errors, s.samples), (1, 1), "the other file still landed");
         let rows = problems(e.db.pool()).await;
-        assert_eq!(
-            keys(&rows),
-            ["record:airvisual_files:KITCHEN01/archive1/202501_AirVisual_values.txt"]
-        );
+        let key = "file:airvisual/export/KITCHEN01:archive1/202501_AirVisual_values.txt";
+        assert_eq!(keys(&rows), [key]);
         assert!(rows[0].1.contains("no Timestamp column"), "{rows:?}");
+
+        let s = fetch(opts(&e, kitchen(&e))).await.unwrap();
+        assert_eq!(
+            (s.errors, s.files_skipped),
+            (0, 2),
+            "an unchanged file is not read again"
+        );
+        assert_eq!(keys(&problems(e.db.pool()).await), [key]);
 
         std::fs::write(&f, format!("{HEADER}{}", line(1736185260, "3.0", "500"))).unwrap();
         let s = fetch(opts(&e, kitchen(&e))).await.unwrap();
@@ -921,6 +988,32 @@ mod tests {
             ["record:airvisual_files:KITCHEN01/latest_config_measurements.json"]
         );
 
+        std::fs::write(&json, latest_json("KITCHEN01", "kitchen")).unwrap();
+        fetch(opts(&e, kitchen(&e))).await.unwrap();
+        assert!(problems(e.db.pool()).await.is_empty());
+        e.db.close().await;
+    }
+
+    /// A device that cannot be read this run has no verdict on its files:
+    /// the rows it had stay until it is read again.
+    #[tokio::test]
+    async fn a_device_that_cannot_be_read_keeps_its_file_rows() {
+        let e = env().await;
+        let json = e.root.join(LATEST_JSON);
+        std::fs::write(&json, r#"{"serial_number": "KITCH"#).unwrap();
+        fetch(opts(&e, kitchen(&e))).await.unwrap();
+        let row = "record:airvisual_files:KITCHEN01/latest_config_measurements.json";
+        assert_eq!(keys(&problems(e.db.pool()).await), [row]);
+
+        let away = e.root.with_file_name("airvisual-away");
+        std::fs::rename(&e.root, &away).unwrap();
+        for devices in [kitchen(&e), vec![device(&e.root, None, None)]] {
+            fetch(opts(&e, devices)).await.unwrap();
+            let rows = problems(e.db.pool()).await;
+            assert!(keys(&rows).contains(&row), "{rows:?}");
+        }
+
+        std::fs::rename(&away, &e.root).unwrap();
         std::fs::write(&json, latest_json("KITCHEN01", "kitchen")).unwrap();
         fetch(opts(&e, kitchen(&e))).await.unwrap();
         assert!(problems(e.db.pool()).await.is_empty());
