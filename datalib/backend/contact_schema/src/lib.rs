@@ -147,13 +147,8 @@ impl ContactHandle {
     /// A handle with nothing the source wrote beside it: what chat-common
     /// knows of an author.
     pub fn of(handle: Handle) -> Self {
-        let medium = match handle.kind() {
-            HandleKind::Email => Medium::Email,
-            HandleKind::Tel => Medium::Phone,
-            HandleKind::Slack => Medium::Other,
-        };
         Self {
-            medium,
+            medium: Medium::of_kind(handle.kind()),
             label: None,
             value: handle.value().to_string(),
             handle: Some(handle),
@@ -185,6 +180,14 @@ pub enum Medium {
 impl Medium {
     pub fn as_str(self) -> &'static str {
         self.into()
+    }
+
+    pub fn of_kind(kind: HandleKind) -> Self {
+        match kind {
+            HandleKind::Email => Medium::Email,
+            HandleKind::Tel => Medium::Phone,
+            HandleKind::Slack => Medium::Other,
+        }
     }
 }
 

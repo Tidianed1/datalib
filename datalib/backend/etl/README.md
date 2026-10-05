@@ -3,9 +3,11 @@
 Everything a provider needs but should not re-invent: the doltlite-backed
 raw store (`doltlite_raw.rs`, `bulk.rs`), the blob CAS (`blob_cas.rs`), the
 diff scan a render cursor drives (`doltlite_raw::scan_buckets`), the
-local-tree walker and scanner (`fswalk.rs`, `fsscan.rs`), and the HTTP/auth
-plumbing (`http.rs`, `latchkey.rs`). The render side's shared code is
-`render/`.
+local-tree walker and scanner (`fswalk.rs`, `fsscan.rs`), the
+content-line grammar iCalendar and vCard share (`content_line.rs`:
+unfolding, quoted parameters, TEXT unescaping, splitting a structured
+value on its unescaped `;`), and the HTTP/auth plumbing (`http.rs`,
+`latchkey.rs`). The render side's shared code is `render/`.
 
 Provider-specific code does **not** belong here. A provider crate lives in
 `providers/<name>/` and describes only its own tables and its own upserts.
@@ -422,7 +424,10 @@ test for a rung is always the same shape: build the store at
 `app_store.rs`'s `a_store_from_before_the_utc_columns_is_migrated_on_open`
 is the template. A provider's `RawDb` takes its ladder as the third
 argument of `raw_db!` (email's `schema_raw::LADDER`); contacts, which
-opens by hand, passes it to `open_migrating`. The app stores' rungs
+opens by hand, passes it to `open_migrating`. The contacts app's store
+(`datalib_contacts::LADDER`) passes its own to `open_curated`: a rung
+there is how a change to the handle rules reaches the links a person
+made, and its test fails until one is added. The app stores' rungs
 (`core/src/app_store_migrate.rs`) are applied by `AppStore::open`
 itself rather than through `open_migrating`.
 

@@ -636,9 +636,23 @@ pub async fn open_migrating(
 
 /// A store whose rows a person wrote by hand, for its one writer: no
 /// download bookkeeping, and [`OnSchemaBreak::Refuse`], since nothing
-/// can rebuild it.
-pub async fn open_curated(db_path: &Path, ddl: &[&str], kind: StoreKind) -> Result<SqlitePool> {
-    open_inner(db_path, ddl, &[], false, kind, OnSchemaBreak::Refuse, &[]).await
+/// can rebuild it. Its `ladder` climbs as [`open_migrating`]'s does.
+pub async fn open_curated(
+    db_path: &Path,
+    ddl: &[&str],
+    kind: StoreKind,
+    ladder: &[Migration],
+) -> Result<SqlitePool> {
+    open_inner(
+        db_path,
+        ddl,
+        &[],
+        false,
+        kind,
+        OnSchemaBreak::Refuse,
+        ladder,
+    )
+    .await
 }
 
 /// [`open`] with the policy said rather than taken from the process.

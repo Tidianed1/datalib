@@ -12,10 +12,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 pub use datalib_contact_schema::ContactKind;
-use datalib_contact_schema::{ContactHandle, DatalibContact};
+use datalib_contact_schema::{ContactHandle, DatalibContact, Medium};
 use datalib_etl::doltlite_raw;
-use datalib_handle::Handle;
-use datalib_store_meta::StoreKind;
+use datalib_handle::{Handle, HandleKind};
+use datalib_store_meta::{Migration, StoreKind};
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use sqlx::sqlite::SqlitePool;
@@ -66,6 +66,144 @@ const DDL: &[&str] = &[
         PRIMARY KEY (group_id, member_id)
     )",
 ];
+
+/// The store's migration ladder (etl/README.md §"The migration ladder").
+/// A link is a handle a person chose, so when the handle rules move the
+/// links move with them: each rules change adds a rung that runs
+/// [`rebuild_handles`], and [`HANDLE_RULES_OF_LADDER`] names the rules
+/// the last such rung brought the links to.
+pub const LADDER: &[Migration] = &[Migration {
+    version: 1,
+    name: "every linked handle respelled under handle rules 1",
+    apply: |conn| Box::pin(rebuild_handles(conn)),
+}];
+
+/// `datalib_handle::RULES_VERSION` as of the ladder's last handle rung.
+#[cfg(test)]
+const HANDLE_RULES_OF_LADDER: u32 = 1;
+
+/// What a stored link comes to under this build's handle rules.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Rebuilt {
+    /// The rules spell it another way now, and nobody holds that spelling.
+    Respell { from: String, to: String },
+    /// Its contact already holds the new spelling; this row is a copy.
+    Duplicate { from: String },
+    /// Another contact holds the new spelling. Kept as it was.
+    HeldElsewhere {
+        from: String,
+        to: String,
+        holder: String,
+    },
+    /// The rules no longer make a handle of it. Kept as it was.
+    Unmapped { from: String },
+}
+
+/// `links` is every `(handle, contact_id)` row; the answer names only
+/// the rows that change or cannot.
+fn plan_rebuild(links: &[(String, String)]) -> Vec<Rebuilt> {
+    let mut holder: HashMap<String, String> = links.iter().cloned().collect();
+    let mut out = Vec::new();
+    for (from, contact) in links {
+        let Some(to) = Handle::rebuild(from) else {
+            out.push(Rebuilt::Unmapped { from: from.clone() });
+            continue;
+        };
+        let to = to.as_str().to_string();
+        if &to == from {
+            continue;
+        }
+        match holder.get(&to) {
+            None => {
+                holder.remove(from);
+                holder.insert(to.clone(), contact.clone());
+                out.push(Rebuilt::Respell {
+                    from: from.clone(),
+                    to,
+                });
+            }
+            Some(h) if h == contact => {
+                holder.remove(from);
+                out.push(Rebuilt::Duplicate { from: from.clone() });
+            }
+            Some(h) => out.push(Rebuilt::HeldElsewhere {
+                from: from.clone(),
+                to,
+                holder: h.clone(),
+            }),
+        }
+    }
+    out
+}
+
+/// Respell every link under this build's handle rules. A link the rules
+/// no longer read, or whose new spelling someone else holds, is kept as
+/// written and logged; [`Store::contact`] shows it without a handle.
+async fn rebuild_handles(conn: &mut sqlx::SqliteConnection) -> Result<()> {
+    let links: Vec<(String, String)> =
+        sqlx::query_as("SELECT handle, contact_id FROM handles ORDER BY handle")
+            .fetch_all(&mut *conn)
+            .await
+            .context("read the linked handles")?;
+    for step in plan_rebuild(&links) {
+        match step {
+            Rebuilt::Respell { from, to } => {
+                sqlx::query("UPDATE handles SET handle = ? WHERE handle = ?")
+                    .bind(&to)
+                    .bind(&from)
+                    .execute(&mut *conn)
+                    .await
+                    .with_context(|| format!("respell {from} as {to}"))?;
+                tracing::info!(%from, %to, "contacts: a linked handle respelled");
+            }
+            Rebuilt::Duplicate { from } => {
+                sqlx::query("DELETE FROM handles WHERE handle = ?")
+                    .bind(&from)
+                    .execute(&mut *conn)
+                    .await
+                    .with_context(|| format!("drop the copy {from}"))?;
+                tracing::info!(%from, "contacts: a linked handle's contact already holds its new spelling");
+            }
+            Rebuilt::HeldElsewhere { from, to, holder } => tracing::warn!(
+                %from,
+                %to,
+                %holder,
+                "contacts: a linked handle's new spelling belongs to another contact; kept as written"
+            ),
+            Rebuilt::Unmapped { from } => tracing::warn!(
+                %from,
+                "contacts: a linked handle is no handle under this build's rules; kept as written"
+            ),
+        }
+    }
+    Ok(())
+}
+
+/// A link as the store holds it. One the handle rules no longer read is
+/// shown as written, with no handle, rather than left out.
+fn stored_link(stored: &str, stopped_working_by: Option<String>) -> ContactHandle {
+    let mut link = match Handle::parse(stored) {
+        Some(h) => ContactHandle::of(h),
+        None => {
+            tracing::warn!(
+                handle = stored,
+                "contacts: a linked handle this build does not read; shown as written"
+            );
+            let kind = stored
+                .split_once(':')
+                .and_then(|(k, _)| HandleKind::parse(k));
+            ContactHandle {
+                medium: kind.map_or(Medium::Other, Medium::of_kind),
+                label: None,
+                value: stored.to_string(),
+                handle: None,
+                stopped_working_by: None,
+            }
+        }
+    };
+    link.stopped_working_by = stopped_working_by;
+    link
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, EnumString, IntoStaticStr, VariantArray)]
 #[serde(rename_all = "snake_case")]
@@ -129,7 +267,7 @@ pub struct Store {
 
 impl Store {
     pub async fn open(path: &Path) -> Result<Self> {
-        let pool = doltlite_raw::open_curated(path, DDL, StoreKind::Contacts).await?;
+        let pool = doltlite_raw::open_curated(path, DDL, StoreKind::Contacts, LADDER).await?;
         Ok(Self { pool })
     }
 
@@ -218,11 +356,7 @@ impl Store {
         .await
         .context("read a contact's handles")?
         .iter()
-        .filter_map(|h| {
-            let mut linked = ContactHandle::of(Handle::parse(h.get("handle"))?);
-            linked.stopped_working_by = h.get("stopped_working_by");
-            Some(linked)
-        })
+        .map(|h| stored_link(h.get("handle"), h.get("stopped_working_by")))
         .collect();
         Ok(Some(contact))
     }
@@ -437,6 +571,130 @@ mod tests {
         ] {
             assert!(!is_partial_date(bad), "{bad}");
         }
+    }
+
+    /// A rules change that the ladder has not caught up with leaves
+    /// every link a person made spelled the old way, and the chips that
+    /// carry the new spelling stop finding them.
+    #[test]
+    fn the_ladder_has_a_rung_for_the_current_handle_rules() {
+        assert_eq!(
+            HANDLE_RULES_OF_LADDER,
+            datalib_handle::RULES_VERSION,
+            "the handle rules moved: add a rung to LADDER that runs rebuild_handles, \
+             and set HANDLE_RULES_OF_LADDER to the new RULES_VERSION"
+        );
+    }
+
+    #[test]
+    fn a_rebuild_respells_merges_and_keeps_what_it_cannot_place() {
+        let links = |rows: &[(&str, &str)]| -> Vec<(String, String)> {
+            rows.iter()
+                .map(|(h, c)| (h.to_string(), c.to_string()))
+                .collect()
+        };
+        assert_eq!(
+            plan_rebuild(&links(&[
+                ("email:mailto:troi@enterprise.org", "troi"),
+                ("email:mailto:riker@enterprise.org", "riker"),
+                ("email:riker@enterprise.org", "riker"),
+                ("email:mailto:worf@enterprise.org", "worf"),
+                ("email:worf@enterprise.org", "alexander"),
+                ("tel:+1123456", "q"),
+                ("tel:+12025550101", "picard"),
+            ])),
+            vec![
+                Rebuilt::Respell {
+                    from: "email:mailto:troi@enterprise.org".into(),
+                    to: "email:troi@enterprise.org".into(),
+                },
+                Rebuilt::Duplicate {
+                    from: "email:mailto:riker@enterprise.org".into(),
+                },
+                Rebuilt::HeldElsewhere {
+                    from: "email:mailto:worf@enterprise.org".into(),
+                    to: "email:worf@enterprise.org".into(),
+                    holder: "alexander".into(),
+                },
+                Rebuilt::Unmapped {
+                    from: "tel:+1123456".into(),
+                },
+            ]
+        );
+        assert_eq!(
+            plan_rebuild(&links(&[
+                ("email:mailto:data@enterprise.org", "data"),
+                ("email:mailto:Data@enterprise.org", "lore"),
+            ])),
+            vec![
+                Rebuilt::Respell {
+                    from: "email:mailto:data@enterprise.org".into(),
+                    to: "email:data@enterprise.org".into(),
+                },
+                Rebuilt::HeldElsewhere {
+                    from: "email:mailto:Data@enterprise.org".into(),
+                    to: "email:data@enterprise.org".into(),
+                    holder: "data".into(),
+                },
+            ],
+            "two old spellings of one new handle: the first takes it"
+        );
+    }
+
+    /// A store from before the ladder (schema version 0), holding links
+    /// an older build's rules spelled, is respelled on open; the links
+    /// the rules no longer read are still on their contact.
+    #[tokio::test]
+    async fn a_store_from_before_the_ladder_is_respelled_on_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = store_path(dir.path());
+        let store = Store::open(&path).await.unwrap();
+        let picard = store
+            .create("Jean-Luc Picard", ContactKind::Person, &[])
+            .await
+            .unwrap();
+        for old in ["email:mailto:picard@enterprise.org", "tel:+1123456"] {
+            sqlx::query(
+                "INSERT INTO handles (handle, contact_id, linked_how, linked_at_utc, tz_offset) \
+                 VALUES (?, ?, 'manual', '2364-03-01T09:00:00.000000Z', '+00:00')",
+            )
+            .bind(old)
+            .bind(&picard)
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query("UPDATE _datalib_meta SET value = '0' WHERE key = 'schema_version'")
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        store.seal("an older build's links").await.unwrap();
+        store.close().await;
+
+        let store = Store::open(&path).await.unwrap();
+        let email = email("picard@enterprise.org");
+        let got = store.resolve(std::slice::from_ref(&email)).await.unwrap();
+        assert_eq!(
+            got[email.as_str()].key,
+            picard,
+            "the respelled link resolves"
+        );
+        let c = store.contact(&picard).await.unwrap().unwrap();
+        let shown: Vec<(String, Option<Handle>)> = c
+            .handles
+            .iter()
+            .map(|h| (h.value.clone(), h.handle.clone()))
+            .collect();
+        assert_eq!(
+            shown,
+            vec![
+                ("picard@enterprise.org".to_string(), Some(email)),
+                ("tel:+1123456".to_string(), None),
+            ],
+            "the link the rules no longer read is shown as written, not dropped"
+        );
+        assert_eq!(c.handles[1].medium, Medium::Phone);
+        store.close().await;
     }
 
     #[test]
