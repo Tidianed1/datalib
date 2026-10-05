@@ -3,8 +3,10 @@
 //! Servers disagree on namespace prefixes (`d:`, `D:`, none) and on text
 //! encoding (Fastmail wraps every value in CDATA), so the walker matches
 //! elements by local name and hands each provider the properties it asked
-//! for through [`DavProps`]. Keeping one collection in step is [`sync`].
+//! for through [`DavProps`]. Keeping one collection in step is [`sync`],
+//! and what its listings mean for the store is [`state`].
 
+pub mod state;
 pub mod sync;
 
 use std::collections::BTreeMap;
@@ -29,12 +31,15 @@ pub enum DavError {
         service: HttpService,
         source: HttpError,
     },
-    #[error("{service} http {status} on {method:?} {url}")]
+    #[error("{service} http {status}{} on {method:?} {url}", precondition.as_deref().map(|p| format!(" ({p})")).unwrap_or_default())]
     Http {
         service: HttpService,
         method: HttpMethod,
         status: u16,
         url: String,
+        /// The condition a WebDAV error body names (RFC 4918 §16), such
+        /// as RFC 6578's `valid-sync-token`.
+        precondition: Option<String>,
     },
     #[error("{service} malformed response from {url}: {message}")]
     Malformed {
@@ -190,6 +195,7 @@ async fn request<P: DavProps>(
                 method,
                 status: resp.status,
                 url,
+                precondition: precondition(&resp.body_str()),
             });
         }
         return parse_multistatus(&resp.body_str()).map_err(|e| DavError::Malformed {
@@ -231,6 +237,26 @@ pub fn http_request(
         bypass_latchkey: false,
         latchkey: latchkey.clone(),
         bearer: None,
+    }
+}
+
+/// The first element inside a `<DAV:error>` body: the precondition or
+/// postcondition the request failed.
+fn precondition(body: &str) -> Option<String> {
+    let mut reader = Reader::from_str(body);
+    let mut in_error = false;
+    loop {
+        match reader.read_event().ok()? {
+            Event::Start(e) | Event::Empty(e) => {
+                let name = local_name(e.name().as_ref());
+                if in_error {
+                    return Some(name);
+                }
+                in_error = name == "error";
+            }
+            Event::Eof => return None,
+            _ => {}
+        }
     }
 }
 
@@ -508,6 +534,7 @@ mod tests {
             method: HttpMethod::Propfind,
             status,
             url: url.into(),
+            precondition: None,
         })
     }
 
@@ -611,6 +638,21 @@ mod tests {
             Some("https://a.test/e.ics")
         );
         assert_eq!(origin("https://a.test:8443/x"), Some("https://a.test:8443"));
+    }
+
+    /// The first body is Fastmail's answer to a sync token it does not
+    /// honour, as measured live.
+    #[test]
+    fn an_error_body_names_its_precondition() {
+        let fastmail = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<D:error xmlns:D=\"DAV:\">\n  \
+            <D:valid-sync-token/>\n  <D:responsedescription>Invalid sync-token</D:responsedescription>\n</D:error>\n";
+        assert_eq!(precondition(fastmail).as_deref(), Some("valid-sync-token"));
+        assert_eq!(
+            precondition(r#"<error xmlns="DAV:"><supported-report/></error>"#).as_deref(),
+            Some("supported-report")
+        );
+        assert_eq!(precondition("<html><body>Forbidden</body></html>"), None);
+        assert_eq!(precondition(""), None);
     }
 
     #[test]

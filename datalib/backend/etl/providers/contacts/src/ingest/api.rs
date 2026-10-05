@@ -16,14 +16,11 @@ pub use datalib_etl::dav::DavError;
 /// telemetry events.
 pub const HTTP_SERVICE: HttpService = HttpService::Carddav;
 
-/// RFC 6578 has `sync-collection` sent at Depth 0, and every CardDAV
-/// REPORT here goes the same way.
 pub const KIND: CollectionKind = CollectionKind {
     service: HTTP_SERVICE,
     ns_decl: r#"xmlns:card="urn:ietf:params:xml:ns:carddav""#,
     data_prop: "card:address-data",
     multiget: "card:addressbook-multiget",
-    report_depth: "0",
 };
 
 pub type DavResponse = webdav::DavResponse<ContactProps>;

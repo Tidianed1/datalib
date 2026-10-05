@@ -417,6 +417,8 @@ pub fn full_ddl() -> Vec<String> {
     ];
     out.extend(GroupMemberRow::all_ddl());
     out.extend(ContactCategoryRow::all_ddl());
+    // What CalDAV's / CardDAV's listings owe the store across runs.
+    out.extend(datalib_etl::dav::state::DDL.map(str::to_string));
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));
     }
