@@ -294,11 +294,17 @@ impl Scan {
     /// keep their records until a walk completes. Empty for a clean walk,
     /// so reporting it also clears the last run's row.
     pub fn walk_problems(&self) -> Vec<crate::download_problems::RunProblem> {
+        self.walk_problems_as("files")
+    }
+
+    /// [`Self::walk_problems`] under a name of the caller's, for a source
+    /// that scans more than one tree: `report_run` keeps one row per name.
+    pub fn walk_problems_as(&self, name: &str) -> Vec<crate::download_problems::RunProblem> {
         let Some(first) = self.errors.first() else {
             return Vec::new();
         };
         vec![crate::download_problems::RunProblem::listing(
-            "files",
+            name,
             format!(
                 "{} entries under {} could not be read, so no file's records \
                  were deleted this run; first: {}: {}",

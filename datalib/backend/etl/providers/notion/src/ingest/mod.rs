@@ -854,6 +854,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             let state = datalib_etl::scope_state::snapshot(db.pool()).await?;
             let prior = datalib_etl::scope_config::load(db.pool(), SCOPE_CONFIG_KEY).await?;
             let since = datalib_etl::scope_state::since_for_scope(
+                &datalib_time::IsoOffsetTimestamp::now_local(),
                 &state,
                 SEARCH_SCOPE,
                 opts.refresh_window_days,

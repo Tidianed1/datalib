@@ -265,6 +265,7 @@ async fn discover<F: Forge>(
     let mut failed_scopes = 0usize;
     for scope in scopes {
         let since = datalib_etl::scope_state::since_for_scope(
+            &datalib_time::IsoOffsetTimestamp::now_local(),
             state,
             scope,
             refresh_window_days,
