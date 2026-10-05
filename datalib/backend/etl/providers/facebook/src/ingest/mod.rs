@@ -303,9 +303,8 @@ async fn store_media(
                         summary.media_stored += 1;
                     }
                     Err(e) => {
-                        warn!(event = "facebook_media_missing", uri, error = %e, "a media file the export names is not there");
                         missing.insert(uri.clone());
-                        acc.add_failed(id, &uri, "media file not in the export");
+                        acc.add_failed(id, &uri, format!("media file not in the export: {e}"));
                         summary.media_missing += 1;
                     }
                 }

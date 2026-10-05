@@ -1239,7 +1239,6 @@ async fn sync_blobs(
             }
             Err(e) => {
                 summary.blobs_errored += 1;
-                warn!(event = "jmap_blob_error", blob_id = %blob_id, error = %e, "a blob could not be fetched");
                 acc.add_failed(&owning_id, &blob_id, e.to_string());
             }
         }

@@ -1313,7 +1313,6 @@ async fn fetch_files_for(
                 summary.failed_blobs += 1;
             }
             Err(e) => {
-                warn!(event = "claude_media_unexpected_err", file_uuid = %file_uuid, error = %e, "a media download failed in a way this build does not classify");
                 attach.add_failed(conv_uuid, file_uuid, e.to_string());
                 summary.failed_blobs += 1;
             }

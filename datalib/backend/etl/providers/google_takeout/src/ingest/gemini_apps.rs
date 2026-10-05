@@ -12,7 +12,6 @@ use datalib_etl::file_checkpoint;
 use datalib_etl::progress::Progress;
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::json;
-use tracing::warn;
 
 use super::db::RawDb;
 use super::mdl_html;
@@ -104,13 +103,11 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
                     acc.add_fetched(&id, &file_name, bytes, ct, Some(file_name.clone()));
                 }
                 Err(e) => {
-                    warn!(
-                        event = "gemini_attachment_missing",
-                        activity_id = %id,
-                        error = %e,
-                        "an attachment the activity names is not in the export"
+                    acc.add_failed(
+                        &id,
+                        &file_name,
+                        format!("attachment file missing on disk: {e}"),
                     );
-                    acc.add_failed(&id, &file_name, "attachment file missing on disk");
                 }
             }
         }

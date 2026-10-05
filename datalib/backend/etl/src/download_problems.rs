@@ -131,25 +131,15 @@ where
     out
 }
 
-/// One `warn!` per problem, in a shape every provider shares so a reader
-/// grepping `download_problem` finds all of them — and one `problems`
-/// row each in the raw store, keyed `config:<setting>:<value>`, which is
-/// what reaches the screen. The rows are the whole truth every run: a
+/// One `problems` row per configured entry upstream does not have, in
+/// the raw store, keyed `config:<setting>:<value>`, which is what
+/// reaches the screen; the step's log says how many
+/// (`datalib_problems::log_recorded`). The rows are the whole truth every run: a
 /// run's list replaces the last one's, so an entry the config no longer
 /// names, or that upstream now has, is gone. Recording never fails the
 /// run; a store that cannot take the rows is said and passed over.
 pub async fn report(pool: &sqlx::SqlitePool, problems: &[DownloadProblem]) {
     use datalib_problems::{Outcome, Problem, Reason, Severity};
-    for p in problems {
-        tracing::warn!(
-            event = "download_problem",
-            setting = %p.setting,
-            value = %p.value,
-            reason = p.reason.as_str(),
-            detail = %p.detail,
-            "a configured entry does not exist upstream; continuing without it",
-        );
-    }
     let rows: Vec<(String, Outcome, Problem)> = problems
         .iter()
         .map(|p| {
@@ -271,24 +261,14 @@ impl RunProblem {
     }
 }
 
-/// As [`report`], for what a run could not do as a whole: one `warn!`
-/// per problem under `event = "run_problem"`, and one `problems` row
-/// each keyed `listing:<name>` / `phase:<name>`. Every row of both kinds
+/// As [`report`], for what a run could not do as a whole: one `problems`
+/// row each, keyed `listing:<name>` / `phase:<name>`. Every row of both kinds
 /// is replaced each run — call it with an empty slice on a clean run so
 /// the last run's rows go. An error, because the reader has nothing
 /// current for that listing or phase; two problems on one key keep the
 /// first's detail.
 pub async fn report_run(pool: &sqlx::SqlitePool, problems: &[RunProblem]) {
     use datalib_problems::{Outcome, Problem, Reason, Severity};
-    for p in problems {
-        tracing::warn!(
-            event = "run_problem",
-            kind = p.kind.as_str(),
-            name = %p.name,
-            detail = %p.detail,
-            "part of the run did not happen; what it would have written was left as it was",
-        );
-    }
     let mut seen = std::collections::HashSet::new();
     let rows: Vec<(String, Outcome, Problem)> = problems
         .iter()
@@ -361,15 +341,6 @@ impl RecordProblem {
 /// so one that succeeds this time drops off by itself.
 pub async fn report_records(pool: &sqlx::SqlitePool, problems: &[RecordProblem]) {
     use datalib_problems::{Outcome, Problem, Reason, Severity};
-    for p in problems {
-        tracing::warn!(
-            event = "record_problem",
-            table = %p.table,
-            id = %p.id,
-            detail = %p.detail,
-            "a record upstream named could not be fetched; it is missing from the mirror",
-        );
-    }
     let rows: Vec<(String, Outcome, Problem)> = problems
         .iter()
         .map(|p| {
@@ -405,7 +376,6 @@ pub const SKIPPED_PREFIX: &str = "skipped:";
 /// What one `part` of a download (a feed, a file) skipped the last time
 /// it read its input. Replaces only that part's rows, so a part that did
 /// not re-read anything this run must not call it: its rows still hold.
-/// One log line with the counts, never one per record.
 pub async fn report_skipped(pool: &sqlx::SqlitePool, part: &str, skipped: &[SkippedRecord]) {
     use datalib_problems::Outcome;
     let mut seen = std::collections::HashSet::new();
@@ -418,25 +388,6 @@ pub async fn report_skipped(pool: &sqlx::SqlitePool, part: &str, skipped: &[Skip
         .filter(|(key, _)| seen.insert(key.clone()))
         .map(|(key, s)| (key, Outcome::Dropped, s.problem.clone()))
         .collect();
-    if !skipped.is_empty() {
-        let mut by_why: std::collections::BTreeMap<String, usize> = Default::default();
-        for s in skipped {
-            let why = s
-                .problem
-                .rule
-                .as_deref()
-                .unwrap_or(s.problem.reason.as_str());
-            *by_why.entry(why.to_string()).or_default() += 1;
-        }
-        let counts: Vec<String> = by_why.iter().map(|(k, n)| format!("{k}={n}")).collect();
-        tracing::warn!(
-            event = "records_skipped",
-            part,
-            skipped = skipped.len(),
-            by_reason = %counts.join(","),
-            "entries were read and not stored; each is a problems row",
-        );
-    }
     let prefix = format!("{SKIPPED_PREFIX}{part}:");
     if let Err(e) = replace_prefixed(pool, &[&prefix], &rows).await {
         tracing::warn!(
@@ -464,14 +415,6 @@ const SILENT_PREFIX: &str = "silent:";
 /// speaks again drops off by itself.
 pub async fn report_silent(pool: &sqlx::SqlitePool, silent: &[SilentEntry]) {
     use datalib_problems::{Outcome, Problem, Reason, Severity};
-    for s in silent {
-        tracing::warn!(
-            event = "silent_entry",
-            name = %s.name,
-            detail = %s.detail,
-            "a configured entry has sent nothing new",
-        );
-    }
     let rows: Vec<(String, Outcome, Problem)> = silent
         .iter()
         .map(|s| {
@@ -527,6 +470,7 @@ async fn replace_prefixed(
             .with_context(|| format!("clear the last run's {prefix} problems"))?;
     }
     let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
+    let mut stored = Vec::with_capacity(rows.len());
     for (key, outcome, problem) in rows {
         let row = ProblemRow {
             first_seen_at_utc: first_seen.get(key).cloned().unwrap_or_else(|| now.clone()),
@@ -549,8 +493,11 @@ async fn replace_prefixed(
             .execute(&mut *tx)
             .await
             .with_context(|| format!("record {key}"))?;
+        stored.push(row);
     }
-    tx.commit().await.context("commit")
+    tx.commit().await.context("commit")?;
+    datalib_problems::note_recorded(&stored);
+    Ok(())
 }
 
 #[cfg(test)]

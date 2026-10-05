@@ -18,7 +18,6 @@ use datalib_etl::prune;
 use datalib_problems::{Problem, Reason};
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::json;
-use tracing::warn;
 
 use self::parse::{parse_bills, parse_chat_log, parse_haudio, CallKind, Party};
 use self::schema_raw::{
@@ -395,12 +394,10 @@ fn ingest_text_thread(
                         attachment_refs.push(ref_name);
                     }
                     Err(e) => {
-                        warn!(event = "voice_attachment_unreadable", message_id = %id, error = %e, "an attachment could not be read");
-                        acc.add_failed(&id, &ref_name, "attachment unreadable");
+                        acc.add_failed(&id, &ref_name, format!("attachment unreadable: {e}"));
                     }
                 }
             } else {
-                warn!(event = "voice_attachment_missing", message_id = %id, "an attachment the record names is not in the export");
                 acc.add_failed(&id, src, "attachment not found on disk");
             }
         }
@@ -469,8 +466,7 @@ fn ingest_event(
                     audio_ref = Some(ref_name);
                 }
                 Err(e) => {
-                    warn!(event = "voice_audio_unreadable", message_id = %id, error = %e, "an audio file could not be read");
-                    acc.add_failed(&id, &ref_name, "audio unreadable");
+                    acc.add_failed(&id, &ref_name, format!("audio unreadable: {e}"));
                 }
             }
         }
@@ -538,8 +534,7 @@ fn ingest_orphan_audio(
             *n_attachments += 1;
         }
         Err(e) => {
-            warn!(event = "voice_orphan_audio_unreadable", message_id = %id, error = %e, "an audio file no record names could not be read");
-            acc.add_failed(&id, &ref_name, "audio unreadable");
+            acc.add_failed(&id, &ref_name, format!("audio unreadable: {e}"));
         }
     }
     let payload = json!({
