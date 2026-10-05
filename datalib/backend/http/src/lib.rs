@@ -20,7 +20,7 @@ use axum::{
     Router,
 };
 use datalib_core::repo::{DynAppRepo, RepoError};
-use datalib_dag::config::{owner_only_options, replace_config};
+use datalib_dag::config::owner_only_options;
 use datalib_dag::supervisor::store::RequestRow;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -957,7 +957,7 @@ async fn put_config(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
     }
-    if let Err(e) = replace_config(&path, &req.text) {
+    if let Err(e) = datalib_runtime::atomic::write_owner_only(&path, req.text.as_bytes()) {
         tracing::error!("put_config: write {}: {e}", path.display());
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }

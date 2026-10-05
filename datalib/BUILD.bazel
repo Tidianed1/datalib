@@ -8,6 +8,7 @@ load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 # serve_dev.sh carries both, because `env` applies only to the target
 # `bazel run` was given, not to a script it execs.
 _DEV_RUNTIME_DATA = [
+    "dev_lib.sh",
     "dev_runtime.sh",
     "@nodejs_host//:node_bin",
     "//third-party/qmd/runtime:qmd_tree",
