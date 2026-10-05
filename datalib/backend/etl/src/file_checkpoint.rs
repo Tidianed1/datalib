@@ -227,14 +227,6 @@ pub async fn record_file_pool(pool: &SqlitePool, scope: &str, file: &ScannedFile
     Ok(())
 }
 
-/// What a snapshot file's parse made of it: the table's rows, or `None`
-/// to leave the table as it is, and what it could not use, which
-/// [`ingest_snapshot`] stamps on the file in the same transaction.
-pub type SnapshotRead<T> = (
-    Option<Vec<T>>,
-    Option<(datalib_problems::Outcome, datalib_problems::Problem)>,
-);
-
 /// What [`ingest_snapshot`] did to its table.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct SnapshotCounts {
@@ -250,11 +242,11 @@ pub struct SnapshotCounts {
 /// Takes a [`ScannedFile`] rather than a path because the provider has already
 /// scanned the export root, so the file's existence and its hash are known.
 ///
-/// `parse` returns `None` for a file that does not say which records it
-/// holds (the list it should carry is missing), and that deletes nothing;
-/// `Some(vec![])` is a file that lists none, and empties the table. Either
-/// way the file stamps: it was read and understood, and re-reading it every
-/// run would be the "retry forever" shape.
+/// `parse` returns every record the file holds, and an empty list
+/// empties the table. A file it cannot read as a whole list — not the
+/// layout it knows, or entries none of which it could read — is an
+/// error: nothing is written or deleted, and the file is not stamped, so
+/// a build that reads the new layout picks it up.
 ///
 /// A file absent from the scan, or unchanged, does nothing. Absent is not
 /// empty: an export requested without this product has no such file.
@@ -266,7 +258,7 @@ pub async fn ingest_snapshot<T, F>(
 ) -> Result<SnapshotCounts>
 where
     T: crate::bulk::BulkUpsertable,
-    F: FnOnce(&[u8]) -> Result<SnapshotRead<T>>,
+    F: FnOnce(&[u8]) -> Result<Vec<T>>,
 {
     let Some(f) = file else {
         return Ok(SnapshotCounts::default());
@@ -276,25 +268,22 @@ where
     }
 
     let bytes = std::fs::read(&f.path).with_context(|| format!("read {}", f.path.display()))?;
-    let (rows, problem) = parse(&bytes)?;
+    let rows = parse(&bytes)?;
 
     let now = datalib_time::IsoOffsetTimestamp::now_local();
     let mut tx = pool
         .begin()
         .await
         .with_context(|| format!("begin {scope} tx"))?;
-    let mut counts = SnapshotCounts::default();
-    if let Some(rows) = rows {
-        crate::bulk::bulk_upsert_in_tx(&mut tx, &rows, &now).await?;
-        let keep: HashSet<String> = rows.iter().map(|r| r.id().to_string()).collect();
-        let gone = crate::prune::prune_scope_in_tx(&mut tx, T::TABLE, &[], &keep).await?;
-        crate::prune::record(T::TABLE, keep.len() + gone.len(), gone.len());
-        counts = SnapshotCounts {
-            written: rows.len(),
-            removed: gone.len(),
-        };
-    }
-    record_file_with_problem(&mut tx, scope, f, problem).await?;
+    crate::bulk::bulk_upsert_in_tx(&mut tx, &rows, &now).await?;
+    let keep: HashSet<String> = rows.iter().map(|r| r.id().to_string()).collect();
+    let gone = crate::prune::prune_scope_in_tx(&mut tx, T::TABLE, &[], &keep).await?;
+    crate::prune::record(T::TABLE, keep.len() + gone.len(), gone.len());
+    let counts = SnapshotCounts {
+        written: rows.len(),
+        removed: gone.len(),
+    };
+    record_file(&mut tx, scope, f).await?;
     tx.commit()
         .await
         .with_context(|| format!("commit {scope} tx"))?;

@@ -348,6 +348,17 @@ touch-without-edit, a duplicate copy, a new file, a deletion, and a
 shortened playlist — followed by a rescan that hashes exactly five files
 and identifies exactly two new items.
 
+## What the reconcile does not delete
+
+A path the scan did not read is not a path that is gone. A cloud
+placeholder (above) and a file over `max_bytes` are found by the walk
+and not read; both are in the scan's `present_unread`, and their rows
+stay. A walk that reported an error deletes nothing at all, because an
+unreadable folder's files look exactly like deleted ones; the error is
+the source's `listing:files` problem. `a_path_the_scan_passed_over_keeps_its_row`
+in `tests/media_e2e.rs` covers all three, the placeholder as a sparse
+file (a size and no blocks).
+
 ## Interrupting a scan
 
 The path-keyed tables are reconciled at the **end** of a scan, not

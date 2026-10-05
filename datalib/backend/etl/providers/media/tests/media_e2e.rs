@@ -1291,3 +1291,52 @@ fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> Result<()> {
     }
     Ok(())
 }
+
+/// A path the scan did not read is not a path that is gone (audit
+/// 2026-10-02 §4). A file now over `max_bytes`, a file evicted to the
+/// cloud (a size and no blocks, which the scan must not read), and a
+/// removed file seen through a walk that reported an error each used to
+/// lose its row.
+#[tokio::test]
+async fn a_path_the_scan_passed_over_keeps_its_row() -> Result<()> {
+    let h = Harness::on_a_copy().await?;
+    h.scan().await?;
+    let before = files(&h.db).await?;
+
+    let over = h
+        .scan_with(|o| ingest::FetchOptions {
+            max_bytes: Some(1),
+            ..o
+        })
+        .await?;
+    assert_eq!(over.removed, 0, "{over:?}");
+    assert_eq!(
+        files(&h.db).await?,
+        before,
+        "every file is over max_bytes, none is gone"
+    );
+
+    let evicted = h.root.join("music/ode_to_spot.mp3");
+    let size = std::fs::metadata(&evicted)?.len();
+    std::fs::remove_file(&evicted)?;
+    std::fs::File::create(&evicted)?.set_len(size)?;
+    let dataless = h.scan().await?;
+    assert_eq!(dataless.dataless_skipped, 1, "{dataless:?}");
+    assert_eq!(dataless.removed, 0, "{dataless:?}");
+    assert_eq!(
+        files(&h.db).await?,
+        before,
+        "the evicted file is still there"
+    );
+
+    std::fs::remove_file(h.root.join("music/untagged_hum.mp3"))?;
+    std::os::unix::fs::symlink(h.root.join("nowhere"), h.root.join("music/dangling.mp3"))?;
+    let walked = h.scan().await?;
+    assert_eq!(walked.removed, 0, "{walked:?}");
+    assert!(files(&h.db).await?.contains_key("music/untagged_hum.mp3"));
+    let problems: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems")
+        .fetch_all(h.db.pool())
+        .await?;
+    assert_eq!(problems, vec!["listing:files".to_string()]);
+    Ok(())
+}

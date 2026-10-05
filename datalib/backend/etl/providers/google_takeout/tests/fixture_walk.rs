@@ -719,39 +719,6 @@ async fn a_feed_that_fails_is_a_phase_problem_until_it_reads() {
     assert_eq!(e.count("maps_reviews").await, 2);
 }
 
-/// A Maps file with no `features` list says nothing about which places
-/// exist: nothing is stored or deleted, and the file carries one row that
-/// stands while it does not change and goes with the read of a good one.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_maps_file_without_a_list_is_a_problem_on_the_file() {
-    let e = Export::new();
-    e.sync().await;
-    let good = std::fs::read(e.root.join(REVIEWS)).unwrap();
-    e.rewrite(REVIEWS, |_| "{}".to_string());
-    e.sync().await;
-    assert_eq!(e.count("maps_reviews").await, 2);
-    let key = format!("file:google_takeout/maps_reviews:{REVIEWS}");
-    assert_eq!(
-        e.problems().await,
-        [(
-            key.clone(),
-            "error".to_string(),
-            "undeserializable".to_string()
-        )]
-    );
-
-    e.sync().await;
-    assert_eq!(
-        e.keys().await,
-        [key.as_str()],
-        "unchanged, not read, still true"
-    );
-
-    std::fs::write(e.root.join(REVIEWS), good).unwrap();
-    e.sync().await;
-    assert_eq!(e.keys().await, Vec::<String>::new());
-}
-
 /// A sidecar that will not parse is left unstamped and named; a photo
 /// whose media is not in the export lands without bytes, says so on its
 /// record, and is looked for again until it is there.
@@ -1017,4 +984,140 @@ async fn an_unchanged_file_keeps_its_skipped_rows() {
         1,
         "the post left the export, so its row goes"
     );
+}
+
+// ── A file this reader cannot read deletes nothing ───────────────────
+
+impl Export {
+    async fn phase_problems(&self) -> Vec<String> {
+        let db = RawDb::open(&self.db_path).await.unwrap();
+        let keys = sqlx::query_scalar(
+            "SELECT scope_key FROM problems WHERE scope_key LIKE 'phase:%' ORDER BY scope_key",
+        )
+        .fetch_all(db.pool())
+        .await
+        .unwrap();
+        db.close().await;
+        keys
+    }
+}
+
+/// Every feature keeps its place in the list and loses the field the
+/// reader keys it by, as if Google had renamed it.
+fn rename_properties(json: String) -> String {
+    json.replace("\"properties\"", "\"attributes\"")
+}
+
+fn rename_cells(html: String) -> String {
+    html.replace("<div class=\"outer-cell", "<div class=\"activity-entry")
+}
+
+fn two_column_csv(_: String) -> String {
+    "Channel Id,Channel Title\nUCpicard001,Captain's Log Official\n".to_string()
+}
+
+fn no_feature_list(_: String) -> String {
+    r#"{"type":"FeatureCollection","items":[]}"#.to_string()
+}
+
+type Edit = fn(String) -> String;
+
+/// One single-file feed's file, rewritten by `edit` between two syncs.
+struct Rewrite {
+    rel: &'static str,
+    feed: &'static str,
+    table: &'static str,
+    rows: i64,
+    edit: Edit,
+}
+
+/// A newer export in a layout this reader does not know used to read as
+/// a file that lists nothing — every watch, subscription, review or
+/// Gemini activity deleted — or, for a Maps file with no `features`,
+/// as a quiet `warn!` with the file marked read (audit 2026-10-02 §4).
+/// Now it deletes nothing and fails its feed where a person sees it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_file_in_a_layout_this_reader_does_not_know_deletes_nothing_and_says_so() {
+    let reviews = |edit| Rewrite {
+        rel: REVIEWS,
+        feed: "maps_reviews",
+        table: "maps_reviews",
+        rows: 2,
+        edit,
+    };
+    let gemini = |edit| Rewrite {
+        rel: GEMINI,
+        feed: "gemini_apps",
+        table: "gemini_activity",
+        rows: 2,
+        edit,
+    };
+    let cases = [
+        reviews(no_feature_list),
+        reviews(rename_properties),
+        Rewrite {
+            rel: SAVED,
+            feed: "maps_saved_places",
+            table: "maps_saved_places",
+            rows: 2,
+            edit: rename_properties,
+        },
+        Rewrite {
+            rel: SUBSCRIPTIONS,
+            feed: "youtube_subscriptions",
+            table: "youtube_subscriptions",
+            rows: 3,
+            edit: two_column_csv,
+        },
+        Rewrite {
+            rel: WATCH_HISTORY,
+            feed: "youtube_watch_history",
+            table: "youtube_watch_history",
+            rows: 3,
+            edit: rename_cells,
+        },
+        gemini(rename_cells),
+        gemini(|_| String::new()),
+    ];
+    for c in cases {
+        let e = Export::new();
+        e.sync().await;
+        assert_eq!(e.count(c.table).await, c.rows, "{}", c.rel);
+
+        e.rewrite(c.rel, c.edit);
+        let s = e.sync().await;
+        assert_eq!(s.removed, 0, "{}: {s:?}", c.rel);
+        assert_eq!(e.count(c.table).await, c.rows, "{}", c.rel);
+        assert_eq!(
+            e.phase_problems().await,
+            vec![format!("phase:{}", c.feed)],
+            "{}",
+            c.rel
+        );
+    }
+}
+
+/// The other side of that rule: a file in the known layout that lists
+/// nothing is a product emptied upstream, and empties its table.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_file_that_lists_nothing_empties_its_table() {
+    fn no_features(_: String) -> String {
+        r#"{"type":"FeatureCollection","features":[]}"#.to_string()
+    }
+    fn header_only(csv: String) -> String {
+        csv.lines().next().unwrap().to_string() + "\n"
+    }
+    let cases: [(&str, &str, Edit); 3] = [
+        (REVIEWS, "maps_reviews", no_features),
+        (SAVED, "maps_saved_places", no_features),
+        (SUBSCRIPTIONS, "youtube_subscriptions", header_only),
+    ];
+    for (rel, table, edit) in cases {
+        let e = Export::new();
+        e.sync().await;
+        e.rewrite(rel, edit);
+        e.sync().await;
+        assert_eq!(e.count(table).await, 0, "{rel}");
+        assert_eq!(e.phase_problems().await, Vec::<String>::new(), "{rel}");
+    }
 }

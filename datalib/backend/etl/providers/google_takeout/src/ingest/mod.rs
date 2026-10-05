@@ -19,7 +19,6 @@ pub use db::{db_path_for, RawDb};
 use datalib_etl::download_problems::{self, RunProblem, RunProblemKind};
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan;
-use datalib_problems::{Outcome, Problem, Reason};
 use futures::FutureExt;
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
@@ -260,6 +259,27 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     Ok(summary)
 }
 
+/// A file that is not in the layout its reader knows: `what` says how.
+/// Nothing is stored or deleted on its word, and the feed fails where a
+/// person sees it, so a newer export Google reshaped cannot empty a table.
+pub(crate) fn unknown_layout(file: &str, what: &str) -> anyhow::Error {
+    anyhow::anyhow!(
+        "{file} {what}, so it is not in a layout this reader knows; nothing was stored or deleted"
+    )
+}
+
+/// A file that lists entries none of which could be read is a layout
+/// that moved, not a product emptied upstream.
+pub(crate) fn require_some_read(file: &str, listed: usize, read: usize) -> Result<()> {
+    if listed > 0 && read == 0 {
+        return Err(unknown_layout(
+            file,
+            &format!("lists {listed} entries and none could be read"),
+        ));
+    }
+    Ok(())
+}
+
 /// Reports what a snapshot feed skipped, if it read its file this run:
 /// `None` means the file was unchanged and last run's rows still hold.
 pub(crate) async fn report_skipped_if_read(
@@ -270,15 +290,6 @@ pub(crate) async fn report_skipped_if_read(
     if let Some(skipped) = skipped {
         download_problems::report_skipped(db.pool(), part, &skipped).await;
     }
-}
-
-/// What a Maps file with no `features` list leaves on the file: it says
-/// nothing about which places exist, so nothing was stored or deleted.
-pub(crate) fn no_features_list() -> (Outcome, Problem) {
-    (
-        Outcome::Dropped,
-        Problem::field("features", Reason::Undeserializable, ""),
-    )
 }
 
 /// Runs one feed so that its failure, an error or a panic, costs only
