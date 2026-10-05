@@ -21,15 +21,16 @@ pub async fn ingest(
     progress: &Progress,
 ) -> Result<SnapshotCounts> {
     let file = scan.file(FILE_REL);
-    let mut unusable = None;
     let n = file_checkpoint::ingest_snapshot(db.pool(), SCOPE, file, |bytes| {
         let geo: Value = serde_json::from_slice(bytes).context("parse Reviews.json")?;
         let Some(features) = geo.get("features").and_then(|v| v.as_array()) else {
-            unusable = Some((
-                Reason::Undeserializable,
-                "the file has no features list, so nothing was ingested or deleted".to_string(),
+            return Ok((
+                None,
+                super::unusable(
+                    Reason::Undeserializable,
+                    "the file has no features list, so nothing was ingested or deleted".to_string(),
+                ),
             ));
-            return Ok(None);
         };
         let mut rows: Vec<MapsReviewRow> = Vec::with_capacity(features.len());
         let mut skipped: Vec<String> = Vec::new();
@@ -55,11 +56,9 @@ pub async fn ingest(
                 when_ts: Some(date.to_string()),
             });
         }
-        unusable = super::skipped_records(&skipped);
-        Ok(Some(rows))
+        Ok((Some(rows), super::skipped_records(&skipped)))
     })
     .await?;
-    super::record_unusable(db, SCOPE, file, unusable).await?;
     progress.set_message(&format!("maps_reviews: {}", n.written));
     Ok(n)
 }

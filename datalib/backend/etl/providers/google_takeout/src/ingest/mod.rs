@@ -21,9 +21,8 @@ use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan;
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use datalib_etl::control::DownloadControl;
-use datalib_etl::file_checkpoint;
 use datalib_etl::progress::Progress;
 use datalib_problems::{Outcome, Problem, Reason};
 use serde::{Deserialize, Serialize};
@@ -236,44 +235,22 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     Ok(summary)
 }
 
-/// What a snapshot file's read could not use, said on the file:
-/// `ingest_snapshot` stamped it clean, and this restamps it with the one
-/// row the file keeps until it is read again. `None` when the read found
-/// nothing wrong, or did not happen because the file had not changed.
-pub(crate) async fn record_unusable(
-    db: &RawDb,
-    scope: &str,
-    file: Option<&fsscan::ScannedFile>,
-    unusable: Option<(Reason, String)>,
-) -> Result<()> {
-    let (Some(file), Some((reason, detail))) = (file, unusable) else {
-        return Ok(());
-    };
-    let mut tx = db
-        .pool()
-        .begin()
-        .await
-        .context("begin unusable-records tx")?;
-    file_checkpoint::record_file_with_problem(
-        &mut tx,
-        scope,
-        file,
-        Some((Outcome::Dropped, Problem::record(reason, &detail))),
-    )
-    .await?;
-    tx.commit().await.context("commit unusable-records tx")
+/// What a snapshot file's read could not use, for `ingest_snapshot` to
+/// stamp on the file: it stands until the file is read again.
+pub(crate) fn unusable(reason: Reason, detail: String) -> Option<(Outcome, Problem)> {
+    Some((Outcome::Dropped, Problem::record(reason, &detail)))
 }
 
-/// The detail of a [`record_unusable`] row over records a read skipped.
-pub(crate) fn skipped_records(skipped: &[String]) -> Option<(Reason, String)> {
+/// The [`unusable`] row over records a read skipped.
+pub(crate) fn skipped_records(skipped: &[String]) -> Option<(Outcome, Problem)> {
     let first = skipped.first()?;
-    Some((
+    unusable(
         Reason::NoIdentity,
         format!(
             "{} records could not be used; first: {first}",
             skipped.len()
         ),
-    ))
+    )
 }
 
 /// A feed that failed as a whole stamped nothing, so the next run tries

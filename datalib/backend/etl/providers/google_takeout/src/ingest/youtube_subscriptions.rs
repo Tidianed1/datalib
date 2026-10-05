@@ -23,7 +23,6 @@ pub async fn ingest(
     progress: &Progress,
 ) -> Result<SnapshotCounts> {
     let file = scan.file(FILE_REL);
-    let mut unusable = None;
     let n = file_checkpoint::ingest_snapshot(db.pool(), SCOPE, file, |bytes| {
         let text = String::from_utf8_lossy(bytes);
         let mut rows: Vec<YoutubeSubscriptionRow> = Vec::new();
@@ -57,11 +56,9 @@ pub async fn ingest(
                 channel_title: Some(channel_title),
             });
         }
-        unusable = super::skipped_records(&skipped);
-        Ok(Some(rows))
+        Ok((Some(rows), super::skipped_records(&skipped)))
     })
     .await?;
-    super::record_unusable(db, SCOPE, file, unusable).await?;
     progress.set_message(&format!("youtube_subscriptions: {}", n.written));
     Ok(n)
 }
