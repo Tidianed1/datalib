@@ -76,6 +76,7 @@ export const TILE = {
   slack: "Mirror channels and DMs from one Slack workspace.",
   claude: "Mirror your claude.ai conversations",
   chatgpt: "Mirror your ChatGPT conversations.",
+  garmin: "Weight, sleep, heart rate, activities and FIT files from Garmin Connect.",
 };
 
 /// The latchkey subcommand of one logged run: `services info`,

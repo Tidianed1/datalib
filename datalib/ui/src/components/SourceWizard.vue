@@ -548,6 +548,9 @@ const gateway = ref<string | null>(null);
 /// top of the Connection section for every source, since without the
 /// answer it offers no way to sign in at all.
 const accountsFailure = ref<Failure | null>(null);
+/// Where signing in will install the latchkey plugin this service comes
+/// from, while latchkey lacks it.
+const installsPlugin = ref<string | null>(null);
 
 async function loadAccounts() {
   const name = service.value;
@@ -562,6 +565,7 @@ async function loadAccounts() {
     serviceRegistered.value = info.registered;
     latchkeyCli.value = info.cli;
     gateway.value = info.gateway;
+    installsPlugin.value = info.installs_plugin;
     accountsFailure.value = info.error
       ? { issue: info.issue ?? "unknown", detail: info.error }
       : null;
@@ -657,6 +661,11 @@ watch(pasteUsername, (username) => {
       chosen.value?.credentialPaste?.accountSuffix,
     );
 });
+
+/// A folder is imported, not pasted.
+const pasteTabLabel = computed(() =>
+  pasteShape.value.kind === "directory" ? "Import tokens" : "Paste a key",
+);
 
 /// latchkey's own word for the secret: "Token", "App password".
 const pasteSecretLabel = computed(() => {
@@ -1203,6 +1212,14 @@ function submit() {
             Credentials are held by a latchkey gateway (<code>{{ gateway }}</code
             >). Sign in where that gateway is managed, then press <b>Check connection</b>.
           </p>
+          <p
+            v-if="installsPlugin && signInWays.length"
+            class="wiz-help wiz-conn-note wiz-plugin-note"
+          >
+            latchkey reaches {{ chosen.label }} through a plugin. Signing in installs it into
+            <code>{{ installsPlugin }}</code
+            >.
+          </p>
           <!-- How a credential gets into latchkey under the name above. A
                tab per way the service offers; a lone way is shown bare. -->
           <div v-if="signInWays.length" class="wiz-signin">
@@ -1218,7 +1235,7 @@ function submit() {
                 aria-controls="wiz-signin-panel"
                 @click="chooseSignIn(way)"
               >
-                {{ way === "web" ? "Web login" : "Paste a key" }}
+                {{ way === "web" ? "Web login" : pasteTabLabel }}
               </button>
             </div>
             <div
@@ -1231,7 +1248,7 @@ function submit() {
               <p class="wiz-help">
                 Opens a browser window to sign in. latchkey keeps what the sign-in grants, which is
                 usually full access: it can read and change everything the account can.
-                <template v-if="signInWays.includes('paste')"
+                <template v-if="signInWays.includes('paste') && pasteShape.kind !== 'directory'"
                   >For less, use <b>Paste a key</b>.</template
                 >
               </p>
@@ -1315,7 +1332,10 @@ function submit() {
                 <input
                   v-model="pasteSecret"
                   class="wiz-input"
-                  type="password"
+                  :type="pasteShape.kind === 'directory' ? 'text' : 'password'"
+                  :placeholder="
+                    pasteShape.kind === 'directory' ? pasteShape.placeholder : undefined
+                  "
                   autocomplete="off"
                   spellcheck="false"
                 />

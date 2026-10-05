@@ -978,6 +978,15 @@ export const CATALOG: CatalogEntry[] = [
     defaultName: "garmin",
     nameHint: "My Garmin",
     wizard: true,
+    // From latchkey's Garmin plugin, which datalib ships and installs
+    // on the first sign-in (datalib/backend/http/src/plugins.rs).
+    credentialService: "garmin",
+    credentialPaste: {
+      help:
+        "A folder holding oauth1_token.json, as garth or python-garminconnect write it. " +
+        "latchkey keeps a copy; the folder is not read again.",
+    },
+    canProbe: true,
     fields: [
       {
         kind: "date",
@@ -1002,15 +1011,6 @@ export const CATALOG: CatalogEntry[] = [
         help:
           "All-day heart rate, stress, steps, body battery and sleep at sensor resolution, " +
           "one zip per day. The per-day metrics already carry the same series at chart resolution.",
-      },
-      {
-        kind: "text",
-        required: false,
-        target: "api.token_dir",
-        label: "Token folder",
-        help:
-          "Where `datalib-step login garmin` (or garth) put oauth1_token.json. " +
-          "Leave empty for ~/.garth.",
       },
     ],
   },

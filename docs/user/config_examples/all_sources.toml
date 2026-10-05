@@ -986,10 +986,10 @@ inputs = ["yolink/keyword_index"]
 # scores), weigh-ins, activities with their original FIT files, devices,
 # personal records, gear, badges, workouts and goals.
 #
-# Not a latchkey service. Sign in once with `datalib-step login garmin`
-# (email, password, emailed MFA code); it writes an OAuth1 token that
-# lasts about a year under `token_dir`, and the ingest step mints the
-# hourly bearer from it on its own. A token from garth works too.
+# Through latchkey's Garmin plugin, which the Add a source dialog installs
+# on the first sign-in. From a terminal, with the plugin in place:
+# `latchkey auth browser garmin`, or `latchkey auth set-nocurl garmin
+# ~/.garth` to import a token garth wrote. The sign-in lasts about a year.
 [[groups]]
 id = "garmin"
 type = "garmin"
@@ -1001,7 +1001,6 @@ function = "ingest"
 [steps.params.api]
 since = "2024-01-01"       # earliest day to mirror; default a year back. Quote it:
                            # a bare date is a TOML date, not the string validated here
-# token_dir = "~/.garth"   # where the login put oauth1_token.json (default)
 # refresh_days = 7         # trailing days re-fetched every run (late syncs, recomputed sleep)
 # metrics = ["daily_summary", "sleep", "hrv"]  # a subset of the per-day metrics
 # activity_files = true    # each activity's original FIT file, into the blob store

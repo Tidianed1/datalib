@@ -18,7 +18,7 @@ use tokio::process::Command;
 
 use datalib_probe::issue::{classify, IssueKind};
 
-use crate::AppState;
+use crate::{plugins, AppState};
 
 /// How long to wait on `latchkey services info` before giving up. It
 /// makes a validation request per stored credential, so it is a network
@@ -88,6 +88,11 @@ pub struct ServiceInfo {
     pub error: Option<String>,
     /// What kind of trouble `error` is, for the wizard's one sentence.
     pub issue: Option<IssueKind>,
+    /// Where signing in will install the latchkey plugin that adds this
+    /// service, when latchkey lacks it and datalib ships one
+    /// ([`crate::plugins`]). The wizard says so before anything is
+    /// written.
+    pub installs_plugin: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -121,6 +126,12 @@ pub async fn get_service(
             // into the "latchkey could not be asked" note.
             let message = e.to_string();
             let unknown = message.contains("Unknown service");
+            if let Some(info) = unknown
+                .then(|| plugin_service_info(&service, gateway.as_deref()))
+                .flatten()
+            {
+                return Ok(Json(info));
+            }
             Ok(Json(ServiceInfo {
                 service,
                 auth_options: Vec::new(),
@@ -131,9 +142,62 @@ pub async fn get_service(
                 issue: (!unknown).then(|| classify(&message, gateway.is_some())),
                 gateway,
                 error: if unknown { None } else { Some(message) },
+                installs_plugin: None,
             }))
         }
     }
+}
+
+/// What a service latchkey lacks will offer once its plugin is in, for
+/// a service datalib ships the plugin for. Not under a gateway: the
+/// plugin would have to be on the gateway's machine.
+fn plugin_service_info(service: &str, gateway: Option<&str>) -> Option<ServiceInfo> {
+    let plugin = plugins::for_service(service)?;
+    if gateway.is_some() {
+        return None;
+    }
+    let dir = plugins::plugin_dir(&plugins::latchkey_dir()?, plugin);
+    Some(ServiceInfo {
+        service: service.to_string(),
+        auth_options: plugin.auth_options.iter().map(|o| o.to_string()).collect(),
+        set_example: Some(plugin.set_example.to_string()),
+        accounts: Vec::new(),
+        registered: false,
+        cli: datalib_core::node_runtime::latchkey_cli_hint(),
+        gateway: None,
+        error: None,
+        issue: None,
+        installs_plugin: Some(dir.display().to_string()),
+    })
+}
+
+/// Puts the plugin that adds `service` where latchkey loads it, when
+/// datalib ships one: before a sign-in or a paste, which are the first
+/// things that need latchkey to know the service.
+async fn install_plugin_for(service: &str) -> Result<(), String> {
+    let Some(plugin) = plugins::for_service(service) else {
+        return Ok(());
+    };
+    let Some(latchkey_dir) = plugins::latchkey_dir() else {
+        return Err(format!(
+            "neither $LATCHKEY_DIRECTORY nor $HOME is set, so there is nowhere to install \
+             latchkey's {service} plugin"
+        ));
+    };
+    let dir = plugins::plugin_dir(&latchkey_dir, plugin);
+    let at = dir.clone();
+    let found = tokio::task::spawn_blocking(move || plugins::install(plugin, &at))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| format!("could not install latchkey's {service} plugin: {e}"))?;
+    match found {
+        plugins::Found::Theirs => {
+            tracing::info!(service, dir = %dir.display(), "left a latchkey plugin datalib did not install")
+        }
+        plugins::Found::Ours(v) if v == plugin.version => {}
+        _ => tracing::info!(service, dir = %dir.display(), "installed a latchkey plugin"),
+    }
+    Ok(())
 }
 
 fn parse_service_info(service: &str, v: &Value) -> ServiceInfo {
@@ -181,6 +245,7 @@ fn parse_service_info(service: &str, v: &Value) -> ServiceInfo {
         gateway: None,
         error: None,
         issue: None,
+        installs_plugin: None,
     }
 }
 
@@ -237,12 +302,9 @@ pub enum ConnectState {
 pub struct ConnectStatus {
     pub id: String,
     pub status: ConnectState,
-    /// Which account latchkey filed the credential under, when it says.
-    /// Not the one that was asked for: `auth browser` ignores
-    /// `--account` when storing and uses the identity the login yields
-    /// (imbue-ai/latchkey#148) — the signed-in address for an OAuth
-    /// service, and the unnamed default for a flow with no identity in
-    /// it. Its own report is the only reliable way to know which.
+    /// Which account latchkey filed the credential under, when it says:
+    /// the one asked for, or with none asked for, the identity the login
+    /// yields.
     pub account: Option<String>,
     /// The command's combined output, so a failure is diagnosable
     /// without going to a terminal. Trimmed to the tail — latchkey can
@@ -280,6 +342,9 @@ pub enum PastedCredential {
     Headers { headers: Vec<String> },
     /// HTTP Basic, which is what an app password is (Fastmail's DAV).
     Basic { username: String, password: String },
+    /// A folder the service's plugin reads the credential from, stored
+    /// with `auth set-nocurl` (Garmin's garth tokens).
+    Directory { path: String },
 }
 
 #[derive(Debug, Deserialize)]
@@ -307,6 +372,9 @@ pub async fn set_credential(
     }
     let args = set_args(&service, body.account.trim(), &body.credential)
         .map_err(|m| err(StatusCode::BAD_REQUEST, &m))?;
+    install_plugin_for(&service)
+        .await
+        .map_err(|m| err(StatusCode::INTERNAL_SERVER_ERROR, &m))?;
     match latchkey_output(&args).await {
         Ok(_) => {
             tracing::info!(service, "latchkey stored a pasted credential");
@@ -343,7 +411,11 @@ fn set_args(
         }
         args.extend(["--account".to_string(), account.to_string()]);
     }
-    args.extend(["auth".to_string(), "set".to_string(), service.to_string()]);
+    let set = match credential {
+        PastedCredential::Directory { .. } => "set-nocurl",
+        _ => "set",
+    };
+    args.extend(["auth".to_string(), set.to_string(), service.to_string()]);
     match credential {
         PastedCredential::Headers { headers } => {
             if headers.is_empty() {
@@ -375,6 +447,13 @@ fn set_args(
                 return Err("the username has no ':' and neither has a line break".into());
             }
             args.extend(["-u".to_string(), format!("{username}:{password}")]);
+        }
+        PastedCredential::Directory { path } => {
+            let path = path.trim();
+            if path.is_empty() || path.starts_with('-') || !one_line(path) {
+                return Err("a folder is one line and does not start with '-'".into());
+            }
+            args.push(path.to_string());
         }
     }
     Ok(args)
@@ -443,6 +522,10 @@ pub async fn start_connect(
     args.extend(["auth".to_string(), "browser".to_string(), service.clone()]);
 
     tokio::spawn(async move {
+        if let Err(message) = install_plugin_for(&service).await {
+            fail(&slot, &service, message);
+            return;
+        }
         // Registering is what makes the browser login exist at all, so
         // it has to happen first. latchkey refuses a name it already
         // holds; that refusal is the desired outcome, not a failure —
@@ -1005,6 +1088,47 @@ mod tests {
                 "Authorization: Bearer ro-token"
             ]
         );
+    }
+
+    /// A plugin's credential from files is stored with `set-nocurl`,
+    /// which takes the folder as its only argument.
+    #[test]
+    fn a_token_folder_becomes_auth_set_nocurl_arguments() {
+        let folder = PastedCredential::Directory {
+            path: " ~/.garth ".into(),
+        };
+        assert_eq!(
+            set_args("garmin", "picard", &folder).unwrap(),
+            vec![
+                "--account",
+                "picard",
+                "auth",
+                "set-nocurl",
+                "garmin",
+                "~/.garth"
+            ]
+        );
+        let refuse = |path: &str| {
+            set_args(
+                "garmin",
+                "",
+                &PastedCredential::Directory { path: path.into() },
+            )
+            .unwrap_err()
+        };
+        refuse("");
+        refuse("--help");
+        refuse("a\nb");
+    }
+
+    #[test]
+    fn a_service_datalib_has_a_plugin_for_offers_its_ways_in_before_it_is_installed() {
+        let info = plugin_service_info("garmin", None).unwrap();
+        assert!(!info.registered);
+        assert_eq!(info.auth_options, vec!["browser", "set"]);
+        assert!(info.installs_plugin.unwrap().ends_with("plugins/garmin"));
+        assert!(plugin_service_info("garmin", Some("http://gw")).is_none());
+        assert!(plugin_service_info("slack", None).is_none());
     }
 
     /// A refusal names what is wrong without echoing the secret.

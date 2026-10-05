@@ -12,6 +12,11 @@ export const TNG = {
   claudeSessionKey: "sk-ant-tng-picard",
   chatgptSessionCookie: "tng-chatgpt-session",
   chatgptAccessToken: "tng-chatgpt-access",
+  /// The year-long OAuth1 token a garth folder holds, and the bearer the
+  /// exchange mints from it.
+  garminOauthToken: "tng-garmin-oauth1",
+  garminOauthSecret: "tng-garmin-secret",
+  garminBearer: "tng-garmin-bearer",
 };
 
 const cookies = (req) =>
@@ -146,8 +151,33 @@ function chatgpt(req) {
   }
 }
 
+function garmin(req) {
+  if (req.method === "POST" && req.path === "/oauth-service/oauth/exchange/user/2.0") {
+    // The plugin signs this with the stored OAuth1 token; the fake
+    // checks only that it is the one the garth folder held.
+    const signed = /oauth_token="([^"]*)"/.exec(String(req.headers.authorization ?? ""));
+    if (signed?.[1] !== TNG.garminOauthToken) return { status: 401, text: "" };
+    return { json: { access_token: TNG.garminBearer, expires_in: 3600 } };
+  }
+  if (bearer(req) !== TNG.garminBearer) return { status: 401, text: "" };
+  switch (req.path) {
+    case "/userprofile-service/socialProfile":
+      return {
+        json: {
+          profileId: 1701,
+          displayName: "picard-1701",
+          fullName: "Jean-Luc Picard",
+          userName: "picard@enterprise.test",
+        },
+      };
+    default:
+      return { status: 404, text: "" };
+  }
+}
+
 export const FAKE_SITES = {
   "slack.com": slack,
   "claude.ai": claude,
   "chatgpt.com": chatgpt,
+  "connectapi.garmin.com": garmin,
 };

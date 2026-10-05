@@ -41,6 +41,7 @@ pub mod lock;
 pub mod logging;
 pub mod loop_guard;
 pub mod manage;
+pub mod plugins;
 pub mod probe;
 pub mod prometheus;
 pub mod remote_media;

@@ -41,7 +41,6 @@ use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
 use datalib_etl_garmin_config::{GarminApi, DEFAULT_SINCE_DAYS};
 
-use crate::auth::Credentials;
 use api::{Fetched, GarminClient, GarminError};
 pub use db::{db_path_for, RawDb};
 use db::{ActivityWork, Enumerated, ACTIVITIES_SCOPE};
@@ -137,7 +136,7 @@ pub fn item_listing_path(
 pub struct FetchOptions {
     /// The store this run writes into, opened and closed by the caller.
     pub db: RawDb,
-    pub creds: Credentials,
+    pub latchkey: datalib_etl::http::LatchkeySettings,
     pub api: GarminApi,
     /// The run's local calendar date: the last day every walk reaches,
     /// and the date every row this run fetches is stamped with.
@@ -290,7 +289,7 @@ async fn walk_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     let since = date(&since_str)?;
     let end = walk_end(opts.today, api.until.as_deref())?;
     let refresh = Duration::days(api.refresh_days());
-    let mut client = GarminClient::new(opts.creds);
+    let mut client = GarminClient::new(opts.latchkey);
     let mut s = FetchSummary::default();
     let progress = &opts.progress;
 

@@ -14,7 +14,6 @@ use datalib_etl::progress::Progress;
 use datalib_etl::retry::{self, RetryGuard};
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl::synthesize::{write_fixture, Synthesizer};
-use datalib_etl_garmin::auth::Credentials;
 use datalib_etl_garmin::ingest::api::{base_url, req_get, req_get_bytes};
 use datalib_etl_garmin::ingest::{db_path_for, fetch, FetchOptions, FetchSummary, RawDb};
 use datalib_etl_garmin::synthesize::GarminSynth;
@@ -131,7 +130,7 @@ impl Account {
             guard,
             fetch(FetchOptions {
                 db: db.clone(),
-                creds: Credentials::fixed("playback"),
+                latchkey: Default::default(),
                 api: self.api.clone(),
                 today,
                 progress,

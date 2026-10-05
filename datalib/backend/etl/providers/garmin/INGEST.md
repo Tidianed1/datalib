@@ -5,9 +5,9 @@ into a doltlite raw store, over the same API the Garmin Connect phone
 app uses (`connectapi.garmin.com`). There is no public Garmin API for
 individuals; this one is what `garth`, `python-garminconnect` and
 GarminDB all sit on. The endpoints and query parameters here are the
-same facts those projects observed; the only code ported from any of
-them is the SSO login, from `garth` (MIT). GarminDB is GPL-2.0 and
-nothing was taken from it beyond which URLs exist.
+same facts those projects observed; no code was ported from any of
+them. GarminDB is GPL-2.0 and nothing was taken from it beyond which
+URLs exist.
 
 ```
 <data_root>/<group>/ingest/entities.doltlite_db
@@ -27,38 +27,26 @@ nothing was taken from it beyond which URLs exist.
 
 ## Where the data comes from, and what auth it needs
 
-**Garmin is not a latchkey service.** Every API call carries an OAuth2
-bearer that expires in about an hour, and a fresh one is minted by an
-OAuth1-*signed* request (HMAC-SHA1 over a nonce, a timestamp and a
-stored token secret). Latchkey can inject a static header, or capture a
-cookie or a token a web app mints, but it cannot sign; so the credential
-lives with the provider, the way `yolink` signs its own download URLs.
+Every request goes through `latchkey curl`, like any other latchkey
+source. The `garmin` service is not built into latchkey: it comes from
+[latchkey-garmin](https://github.com/imbue-ai/latchkey-garmin), a
+plugin datalib vendors under `third-party/latchkey-garmin/` and writes
+into `<latchkey dir>/plugins/garmin/` the first time someone signs in to
+Garmin from the wizard (`datalib/backend/http/src/plugins.rs`). A copy
+already there without datalib's stamp is the person's own and is left
+alone.
 
-The durable secret is the **OAuth1 token**, which lasts about a year.
-A login produces it:
+The plugin stores the year-long OAuth1 token and mints the hourly
+bearer from it with an OAuth1-signed exchange whenever latchkey finds
+the bearer expired, so the provider never sees either. Two ways in:
 
 ```sh
-datalib-step login garmin            # prompts: email, password, the emailed MFA code
+latchkey auth browser garmin                # Garmin's own sign-in page
+latchkey auth set-nocurl garmin ~/.garth    # import a token garth wrote
 ```
 
-That writes `oauth1_token.json` and `oauth2_token.json` under
-`api.token_dir` (default `~/.garth`), mode 600, in garth's own file
-format — so a token produced by garth (`garth login`, then
-`garth.client.dump("~/.garth")`) works unchanged, and vice versa. The
-ingest step reads the OAuth1 token, refreshes the bearer when the
-cached one has expired, and writes the fresh bearer back beside it.
-
-The SSO login is the Connect app's flow (`sso.garmin.com/mobile/api/login`,
-then `/mobile/api/mfa/verifyCode`, then a service ticket exchanged at
-`connectapi.garmin.com/oauth-service/oauth/preauthorized`), ported from
-garth's `sso.py`. The OAuth1 consumer it signs with is the Connect
-mobile app's, pinned in `src/auth.rs` rather than fetched from the S3
-file garth reads it from. When the OAuth1 token itself expires the
-bearer exchange answers 401 and the run fails with the auth hint; log
-in again.
-
-A `garmin` service in latchkey that computed the bearer per request
-would move this login into the wizard's Connect button; none exists.
+When the OAuth1 token itself expires the exchange fails, the request
+answers 401, and the run fails with the auth hint; sign in again.
 
 ## What one run does
 
@@ -206,9 +194,10 @@ Inside the per-day walk, a metric that fails ten days in a row is
 abandoned for the run rather than paid for once per day of history.
 The days it did not reach have no row, so the next run asks for them.
 
-A refused bearer ends the run, and so does a bearer that cannot be had
-at all (the hourly token exchange failing mid-run): every later request
-would fail the same way.
+A refused bearer ends the run, and so does a request latchkey will not
+send at all (no credential, or the plugin's hourly token exchange
+failing mid-run; latchkey exits 1 for both): every later request would
+fail the same way.
 
 ### What a second run costs
 

@@ -16,7 +16,6 @@ use datalib_etl::progress::Progress;
 use datalib_etl::retry::{self, RetryGuard};
 use datalib_etl::stop::StopFlag;
 use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl_garmin::auth::Credentials;
 use datalib_etl_garmin::ingest::{db_path_for, fetch, FetchOptions, RawDb, ACTIVITY_PAGE};
 use datalib_etl_garmin_config::GarminApi;
 use serde_json::json;
@@ -79,7 +78,7 @@ impl Rig for Garmin {
             guard,
             fetch(FetchOptions {
                 db: db.clone(),
-                creds: Credentials::fixed("playback"),
+                latchkey: Default::default(),
                 api: self.api.clone(),
                 today: TODAY,
                 progress: Progress::noop(),

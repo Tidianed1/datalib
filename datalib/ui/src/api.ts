@@ -1567,6 +1567,9 @@ export type LatchkeyService = {
   error: string | null;
   /// What kind of trouble `error` is.
   issue: IssueKind | null;
+  /// Where signing in will install the latchkey plugin that adds this
+  /// service, when latchkey lacks it and datalib ships one.
+  installs_plugin: string | null;
 };
 
 /// How to teach latchkey a service it has never heard of, so that a
@@ -1719,7 +1722,9 @@ export function startLatchkeyConnect(
 /// A credential pasted by hand. Mirrors `PastedCredential` in
 /// datalib/backend/http/src/connect.rs.
 export type PastedCredential =
-  { kind: "headers"; headers: string[] } | { kind: "basic"; username: string; password: string };
+  | { kind: "headers"; headers: string[] }
+  | { kind: "basic"; username: string; password: string }
+  | { kind: "directory"; path: string };
 
 /// Store a pasted credential with `latchkey auth set`. An empty account
 /// lets latchkey choose, which replaces the one it holds if it holds one.

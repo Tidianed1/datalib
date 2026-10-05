@@ -27,6 +27,20 @@ describe("credentialShape", () => {
     expect(pastedCredential(shape, "", "engage")).toBeNull();
   });
 
+  it("reads a plugin's set-nocurl example as a folder to import", () => {
+    const shape = credentialShape("latchkey auth set-nocurl garmin ~/.garth");
+    expect(shape).toEqual({
+      kind: "directory",
+      placeholder: "~/.garth",
+      secretLabel: "token folder",
+    });
+    expect(pastedCredential(shape, "", " ~/garth-tokens ")).toEqual({
+      kind: "directory",
+      path: "~/garth-tokens",
+    });
+    expect(pastedCredential(shape, "", "")).toBeNull();
+  });
+
   it("puts the secret where latchkey's placeholder is", () => {
     const shape = credentialShape('latchkey auth set gitlab -H "PRIVATE-TOKEN: <token>"');
     expect(pastedCredential(shape, "", "glpat-1")).toEqual({

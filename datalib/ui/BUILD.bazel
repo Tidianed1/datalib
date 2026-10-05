@@ -331,6 +331,10 @@ _E2E_AUTH_DATA = [
     # the suite's curl hands every request to the real router.
     "//third-party/latchkey-curl-shims:curl_impersonate",
     "//third-party/latchkey-curl-shims:latchkey_curl_router",
+    # The Garmin plugin, as a person's own copy; the env names it by
+    # its package.json, which has to be listed itself.
+    "//third-party/latchkey-garmin:package.json",
+    "//third-party/latchkey-garmin:plugin",
     ":node_modules",
     ":e2e_auth_inputs",
 ] + DEV_RUNTIME_DATA
@@ -340,6 +344,7 @@ _E2E_AUTH_ENV = dict(
     DATALIB_TEST_AUTH_HTTP_BIN_RLOC = "$(rlocationpath //datalib/backend/http:datalib_http_bin)",
     DATALIB_TEST_AUTH_STEP_BIN_RLOC = "$(rlocationpath //datalib/backend/datalib_step:datalib_step)",
     DATALIB_TEST_AUTH_ROUTER_RLOC = "$(rlocationpath //third-party/latchkey-curl-shims:latchkey_curl_router)",
+    DATALIB_TEST_AUTH_GARMIN_PLUGIN_RLOC = "$(rlocationpath //third-party/latchkey-garmin:package.json)",
 )
 
 sh_binary(

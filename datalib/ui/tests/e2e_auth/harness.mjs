@@ -7,6 +7,7 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -380,6 +381,23 @@ export async function startWorld(internet, options) {
     /// Run the real latchkey CLI against this world's store, the way a
     /// person sets one up in a terminal before ever opening the app.
     latchkey: (...args) => runLatchkey(storeEnv(store, key), args),
+    /// Where latchkey keeps its plugins in this world.
+    pluginsDir: path.join(store, "plugins"),
+    /// Write a file under the world's directory; returns its path.
+    writeFile: (rel, text) => {
+      const file = path.join(dir, rel);
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, text);
+      return file;
+    },
+    readFile: (file) => (existsSync(file) ? readFileSync(file, "utf8") : null),
+    /// The Garmin plugin, put in place the way a person with their own
+    /// clone would have it: no stamp of datalib's.
+    installOwnGarminPlugin: () => {
+      const to = path.join(store, "plugins", "garmin");
+      cpSync(need("DATALIB_TEST_AUTH_GARMIN_PLUGIN"), to, { recursive: true, dereference: true });
+      return to;
+    },
     /// Every latchkey the backend (or a step it spawned) ran so far.
     latchkeyRuns: () => readSpy(spyLog),
     /// Let the stood-in browser download finish.
