@@ -20,10 +20,12 @@ use std::str::FromStr;
 
 use datalib_etl::blob_cas::{BlobCas, CasInsert};
 use datalib_etl::doltlite_raw;
-use datalib_etl::download_problems::{self, RecordProblem, RunProblem};
+use datalib_etl::download_problems::RecordProblem;
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl::stop::StopFlag;
 use datalib_etl_sqlite_mirror::{mirror, MirrorOptions, MirrorStats};
 use datalib_whatsapp_backup::decrypt_file;
 
@@ -119,6 +121,23 @@ pub async fn fetch(
     knobs: &MirrorKnobs,
     progress: &Progress,
 ) -> Result<IngestSummary> {
+    // The mirror has no stop to honour, so it always reads the whole backup.
+    let never_stops = StopFlag::new();
+    run_problems::collecting(db.pool(), &never_stops, |found| {
+        read_backup(backup_dir, root_key, db, cache, knobs, progress, found)
+    })
+    .await
+}
+
+async fn read_backup(
+    backup_dir: &Path,
+    root_key: &[u8; 32],
+    db: &RawDb,
+    cache: &FingerprintCache,
+    knobs: &MirrorKnobs,
+    progress: &Progress,
+    found: RunProblems,
+) -> Result<IngestSummary> {
     let crypt_path = backup_dir.join("Databases").join("msgstore.db.crypt15");
     tracing::info!(crypt_path = %crypt_path.display(), "whatsapp::ingest start");
 
@@ -152,7 +171,7 @@ pub async fn fetch(
     };
     drop(tmp);
 
-    mirror_beside_msgstore(backup_dir, root_key, db, cache, &mut summary).await?;
+    mirror_beside_msgstore(backup_dir, root_key, db, cache, &mut summary, &found).await?;
     tracing::info!(summary = %summary.summary(), "whatsapp::ingest done");
     Ok(summary)
 }
@@ -166,13 +185,13 @@ async fn mirror_beside_msgstore(
     db: &RawDb,
     cache: &FingerprintCache,
     summary: &mut IngestSummary,
+    found: &RunProblems,
 ) -> Result<()> {
-    let mut run_problems: Vec<RunProblem> = Vec::new();
     let wa_db = backup_dir.join(WA_DB_BACKUP);
     if wa_db.is_file() {
         match read_wa_db_contacts(&wa_db, root_key).await {
             Ok(rows) => summary.contacts = Some(store_contacts(db.pool(), &rows).await?),
-            Err(e) => run_problems.push(RunProblem::phase("wa.db contacts", format!("{e:#}"))),
+            Err(e) => found.phase("wa.db contacts", format!("{e:#}")),
         }
     } else {
         // Like a missing `Media/`: a copy of the backup made without
@@ -186,18 +205,13 @@ async fn mirror_beside_msgstore(
 
     let media_root = backup_dir.join(MEDIA_DIR);
     if media_root.is_dir() {
-        let media = mirror_media_files(db.pool(), db.cas(), &media_root, cache, summary).await?;
-        run_problems.extend(media.walk);
-        // Every run reads again whatever the CAS still lacks, so this
-        // run's set is the whole truth.
-        download_problems::report_records(db.pool(), &media.unreadable).await;
+        mirror_media_files(db.pool(), db.cas(), &media_root, cache, summary, found).await?;
     } else {
         tracing::info!(
             media_root = %media_root.display(),
             "whatsapp::ingest: no Media/ dir; skipping media-file registry"
         );
     }
-    download_problems::report_run(db.pool(), &run_problems).await;
     Ok(())
 }
 
@@ -310,7 +324,8 @@ async fn mirror_media_files(
     media_root: &Path,
     cache: &FingerprintCache,
     summary: &mut IngestSummary,
-) -> Result<MediaProblems> {
+    found: &RunProblems,
+) -> Result<()> {
     let scan = fsscan::scan(
         cache,
         media_root,
@@ -321,6 +336,7 @@ async fn mirror_media_files(
         |_| true,
     )
     .await?;
+    found.extend(scan.walk_problems_as("media"));
 
     // Drop-and-refill, like the mirrored tables: a byte-identical refill
     // is not a change to doltlite, and a file gone from `Media/` goes
@@ -392,21 +408,21 @@ async fn mirror_media_files(
     }
     put_media_batch(cas, &pending).await?;
 
-    Ok(MediaProblems {
-        walk: scan.walk_problems_as("media"),
-        unreadable: unreadable
+    found.records_failed(
+        unreadable
             .into_iter()
             .filter(|(hex, _)| !staged.contains(hex))
-            .map(|(_, problem)| problem)
-            .collect(),
-    })
-}
-
-/// What a walk of `Media/` could not do: the parts of the tree it could
-/// not list, and the files whose bytes it could not read.
-struct MediaProblems {
-    walk: Vec<RunProblem>,
-    unreadable: Vec<RecordProblem>,
+            .map(|(_, problem)| problem),
+    );
+    // Every run reads again whatever the CAS still lacks, so a row stands
+    // only on a file under a folder this walk could not list.
+    let unseen = scan.unseen();
+    found.records_tried_all_but(WA_MEDIA_FILES, move |id| {
+        id.strip_prefix(MEDIA_DIR)
+            .and_then(|rel| rel.strip_prefix('/'))
+            .is_some_and(&unseen)
+    });
+    Ok(())
 }
 
 async fn put_media_batch(cas: &BlobCas, items: &[(String, Vec<u8>, Option<String>)]) -> Result<()> {
@@ -474,9 +490,17 @@ mod tests {
             .await
             .expect("open fingerprint cache");
         let mut summary = IngestSummary::default();
-        mirror_media_files(db.pool(), db.cas(), &media_root, &cache, &mut summary)
-            .await
-            .expect("mirror media");
+        let found = RunProblems::unwritten();
+        mirror_media_files(
+            db.pool(),
+            db.cas(),
+            &media_root,
+            &cache,
+            &mut summary,
+            &found,
+        )
+        .await
+        .expect("mirror media");
 
         let paths: Vec<String> =
             sqlx::query_scalar("SELECT relative_path FROM wa_media_files ORDER BY relative_path")
@@ -488,6 +512,21 @@ mod tests {
         // Exactly the string msgstore stores in `message_media.file_path`.
         assert_eq!(paths, vec!["Media/WhatsApp Images/IMG-0001.jpg"]);
         assert_eq!(summary.media_files, 1);
+    }
+
+    /// The half of a fetch after msgstore, its problems written as a
+    /// fetch writes them.
+    async fn mirror_beside_msgstore(
+        backup_dir: &Path,
+        root_key: &[u8; 32],
+        db: &RawDb,
+        cache: &FingerprintCache,
+        summary: &mut IngestSummary,
+    ) -> Result<()> {
+        run_problems::collecting(db.pool(), &StopFlag::new(), |found| async move {
+            super::mirror_beside_msgstore(backup_dir, root_key, db, cache, summary, &found).await
+        })
+        .await
     }
 
     async fn problems(db: &RawDb) -> Vec<(String, String)> {

@@ -7,11 +7,11 @@ use anyhow::{Context, Result};
 use tracing::warn;
 
 use datalib_etl::control::DownloadControl;
-use datalib_etl::download_problems::{self, RunProblem};
 use datalib_etl::file_checkpoint;
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
 
 use super::api::{split_vcards, vcard_fn, vcard_n_family_given, vcard_rev, vcard_uid};
 use super::db::{addressbook_pk, RawDb};
@@ -55,6 +55,11 @@ pub struct FetchSummary {
 const CHECKPOINT_SCOPE: &str = "contacts/vcf";
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| read_folder(opts, found)).await
+}
+
+async fn read_folder(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = opts.db.clone();
 
     let account_id = opts
@@ -90,7 +95,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     opts.progress.inc(changes.unchanged as u64);
 
     let mut read: BTreeSet<&str> = BTreeSet::new();
-    let mut problems = scan.walk_problems();
+    found.extend(scan.walk_problems());
     for f in changes.needs_reading_by_path() {
         opts.progress
             .set_message(&format!("ingesting {}", f.path.display()));
@@ -112,10 +117,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             // Not stamped, so the next run reads it again.
             Err(e) => {
                 summary.errors += 1;
-                problems.push(RunProblem::listing(
-                    &format!("vcf {}", f.rel),
-                    format!("{e:#}"),
-                ));
+                found.listing(&format!("vcf {}", f.rel), format!("{e:#}"));
             }
         }
         opts.progress.inc(1);
@@ -131,7 +133,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             .await?;
         summary.files_removed += 1;
     }
-    download_problems::report_run(db.pool(), &problems).await;
     Ok(summary)
 }
 

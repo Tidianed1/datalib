@@ -106,11 +106,12 @@ the step.
 
 Render shows a `conversations:` or `claude_attachments:` row on the
 conversation's page. The `listing:`/`phase:` rows and the `config:` rows
-are each written once, at the end of a run, replacing the last run's,
-on both the listing path and the `conv_uuids` path. A run the rate limit
-cut short does not rewrite the `config:` rows, since it did not check
-every configured entry. A run that was asked to stop writes neither, and records nothing about a request the stop
-refused: a conversation whose files the stop cut short is not written
+of a run that got to its end replace the last run's, on both the listing
+path and the `conv_uuids` path. A run the rate limit cut short adds its
+`listing:`/`phase:` rows and clears none, and does not rewrite the
+`config:` rows, since it did not check every configured entry. A run
+that was asked to stop clears none either, and records nothing about a
+request the stop refused: a conversation whose files the stop cut short is not written
 at all, so the next run starts it over.
 
 ## Projects

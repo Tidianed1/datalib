@@ -14,6 +14,7 @@ use async_trait::async_trait;
 use datalib_etl::download_problems::RunProblem;
 use datalib_etl::download_run::DownloadRun;
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
@@ -156,6 +157,19 @@ pub async fn sync<F: Forge>(
     client: &ForgeClient,
     opts: SyncOptions<'_>,
 ) -> Result<F::Summary> {
+    let stop = opts.stop.clone();
+    run_problems::collecting(forge.pool(), &stop, |found| {
+        sync_collecting(forge, client, opts, found)
+    })
+    .await
+}
+
+async fn sync_collecting<F: Forge>(
+    forge: &F,
+    client: &ForgeClient,
+    opts: SyncOptions<'_>,
+    found: RunProblems,
+) -> Result<F::Summary> {
     let _ = datalib_etl::latchkey::ensure_curl_router();
     let pool = forge.pool();
     let run = DownloadRun::start(pool, &opts.run_config).await?;
@@ -198,11 +212,14 @@ pub async fn sync<F: Forge>(
         } else {
             None
         };
+        if let Some(listed) = &discovery {
+            found.extend(listed.problems.iter().cloned());
+        }
         // A give-up in discovery ends the run's requests there.
-        let mut gave_up = discovery.as_ref().and_then(|found| found.gave_up.clone());
+        let mut gave_up = discovery.as_ref().and_then(|listed| listed.gave_up.clone());
         let keys: Vec<Planned> = match &discovery {
             Some(_) if gave_up.is_some() => Vec::new(),
-            Some(found) => with_retries(found.keys.clone(), retries(forge).await?),
+            Some(listed) => with_retries(listed.keys.clone(), retries(forge).await?),
             // Named directly: no listing, so nothing to compare against —
             // always fetched, and nothing else is.
             None => opts
@@ -304,20 +321,21 @@ pub async fn sync<F: Forge>(
         }
 
         // A stopped run did not get through what it listed: its cursors
-        // and its listing problems stay as the last finished run left
-        // them.
+        // stay as the last finished run left them.
         if opts.stop.requested() {
             return Ok(false);
         }
-        let Some(found) = discovery else {
+        // A run of named change requests searched nothing, so it has no
+        // verdict on any search; a give-up is on the record it stopped at.
+        let Some(listed) = discovery else {
+            found.cut_short();
             return Ok(false);
         };
         // A run that gave up did not reach all it listed: its cursors stay
         // put so the next run lists it again.
         if let Some(gave_up) = gave_up {
-            let mut problems = found.problems;
-            problems.push(gave_up);
-            datalib_etl::download_problems::report_run(pool, &problems).await;
+            found.push(gave_up);
+            found.cut_short();
             return Ok(false);
         }
         // What the cap left is owed before the cursors move past it: the
@@ -329,11 +347,10 @@ pub async fn sync<F: Forge>(
             &format!("over this run's cap of {cap} {}s", F::ITEM),
         )
         .await?;
-        for (scope, at) in &found.new_state {
+        for (scope, at) in &listed.new_state {
             datalib_etl::doltlite_raw::upsert_scope_state(pool, scope, at).await?;
         }
-        datalib_etl::download_problems::report_run(pool, &found.problems).await;
-        Ok::<bool, anyhow::Error>(found.problems.is_empty())
+        Ok::<bool, anyhow::Error>(listed.problems.is_empty())
     };
 
     let result = work.await;

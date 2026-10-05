@@ -12,11 +12,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use datalib_etl::download_problems::{self, RecordProblem};
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan;
 use datalib_etl::fswalk;
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl::stop::StopFlag;
 
 pub use db::{db_path_for, RawDb, WriteBatch};
 use kind::{Container, MediaClass};
@@ -100,6 +101,13 @@ pub struct FetchSummary {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let pool = opts.db.pool().clone();
+    // The scan has no stop to honour, so it always covers the whole tree.
+    let never_stops = StopFlag::new();
+    run_problems::collecting(&pool, &never_stops, |found| scan_tree(opts, found)).await
+}
+
+async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let mut summary = FetchSummary::default();
     let now = datalib_time::parse_strict(&opts.now)
         .with_context(|| format!("parse the run's now {:?}", opts.now))?;
@@ -149,6 +157,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     )
     .await?;
     summary.errors += scan.errors.len();
+    found.extend(scan.walk_problems());
     summary.dataless_skipped = dataless.into_inner().unwrap().len();
     // A file the scan found and did not read — evicted to the cloud, or
     // over `max_bytes` — is still there, so its rows stay.
@@ -164,12 +173,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     opts.progress.set_length(Some(scan.files.len() as u64));
 
     let mut playlist_files = Vec::new();
-    let mut unread: Vec<RecordProblem> = Vec::new();
-    if !scan.errors.is_empty() || !declined.is_empty() {
-        for table in ["media_files", "media_playlists"] {
-            unread.extend(untried_records(opts.db.pool(), table, &scan, &declined).await?);
-        }
-    }
     let mut batch = WriteBatch::default();
     // Items identified during *this* scan, so N copies of one file are
     // parsed once rather than N times.
@@ -217,7 +220,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 // not in `known_items`.
                 Err(e) => {
                     summary.errors += 1;
-                    unread.push(RecordProblem::new("media_files", &f.rel, format!("{e:#}")));
+                    found.record_failed("media_files", &f.rel, format!("{e:#}"));
                     continue;
                 }
             }
@@ -242,7 +245,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             &playlist_files,
             &mut prev,
             &mut summary,
-            &mut unread,
+            &found,
         )
         .await?;
     }
@@ -260,27 +263,15 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 .await
                 .context("delete vanished playlists")?) as usize;
     }
-    // Every scan walks the whole tree and retries every file it could
-    // not read, so each set replaces the last scan's.
-    download_problems::report_run(opts.db.pool(), &scan.walk_problems()).await;
-    download_problems::report_records(opts.db.pool(), &unread).await;
+    // Every scan retries every file it could not read, so a row stands
+    // only on a path this scan did not try: under an entry the walk could
+    // not read, or found and not read (dataless, or over `max_bytes`).
+    let declined: std::collections::HashSet<String> = declined.into_iter().collect();
+    for table in ["media_files", "media_playlists"] {
+        let (declined, unseen) = (declined.clone(), scan.unseen());
+        found.records_tried_all_but(table, move |id| declined.contains(id) || unseen(id));
+    }
     Ok(summary)
-}
-
-/// The last scan's `record:{table}:` rows on paths this scan did not try
-/// again — under an entry its walk could not read, or found and not read
-/// (dataless, or over `max_bytes`) — carried into this scan's set.
-async fn untried_records(
-    pool: &sqlx::SqlitePool,
-    table: &str,
-    scan: &fsscan::Scan,
-    declined: &[String],
-) -> Result<Vec<RecordProblem>> {
-    Ok(download_problems::earlier_records(pool, table, "")
-        .await?
-        .into_iter()
-        .filter(|r| declined.contains(&r.id) || scan.could_not_see(&r.id))
-        .collect())
 }
 
 /// A cloud placeholder: the file has a size but no allocated blocks, so its
@@ -374,7 +365,7 @@ async fn scan_playlists(
     files: &[fsscan::ScannedFile],
     prev: &mut db::PrevCache,
     summary: &mut FetchSummary,
-    unread: &mut Vec<RecordProblem>,
+    found: &RunProblems,
 ) -> Result<()> {
     let mut rows: Vec<MediaPlaylistRow> = Vec::new();
     let mut entries: Vec<MediaPlaylistEntryRow> = Vec::new();
@@ -394,7 +385,7 @@ async fn scan_playlists(
             Ok(b) => b,
             Err(e) => {
                 summary.errors += 1;
-                unread.push(RecordProblem::new("media_playlists", &f.rel, e.to_string()));
+                found.record_failed("media_playlists", &f.rel, e.to_string());
                 continue;
             }
         };

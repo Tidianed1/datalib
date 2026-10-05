@@ -51,7 +51,7 @@ pub fn plan_ingest(
 
 /// The mirror processor. Owns its doltlite store end to end (open,
 /// register the interrupt hook, mirror, commit + close via
-/// `session.finish`).
+/// `run_store`).
 struct LightroomIngest {
     id: String,
     raw_path: PathBuf,
@@ -69,23 +69,23 @@ impl DataProcessor for LightroomIngest {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = raw_layout::entities_db(&self.raw_path);
         let pool = ingest::mirror::open_mirror(&entity_db).await?;
-        let session = ctx.open_store(pool.clone(), entity_db).await;
-        let cache = FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?;
-        let run = sync::run(
-            &pool,
-            &cache,
-            sync::Inputs {
-                backups: self.backups.as_deref(),
-                catalog: self.catalog.as_deref(),
-            },
-            &self.options,
-            ctx.progress,
-            &ctx.control.stop,
-            ctx.name,
-        )
-        .await?;
-        run.report(&pool).await;
-        let summary = run.summary();
-        session.finish(ctx, summary).await
+        ctx.run_store(pool.clone(), None, |_| async {
+            let cache = FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?;
+            let run = sync::run(
+                &pool,
+                &cache,
+                sync::Inputs {
+                    backups: self.backups.as_deref(),
+                    catalog: self.catalog.as_deref(),
+                },
+                &self.options,
+                ctx.progress,
+                &ctx.control.stop,
+                ctx.name,
+            )
+            .await?;
+            Ok(run.summary())
+        })
+        .await
     }
 }

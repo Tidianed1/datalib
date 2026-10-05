@@ -7,11 +7,12 @@ use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{blake3_hex, CasInsert};
 use datalib_etl::bulk::{bulk_upsert_entity_in_tx, bulk_upsert_in_tx};
 use datalib_etl::doltlite_raw::{record_object_error, record_object_skipped};
-use datalib_etl::download_problems::{self, SkippedRecord};
+use datalib_etl::download_problems::SkippedRecord;
 use datalib_etl::file_checkpoint;
 use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
 use datalib_etl::prune;
+use datalib_etl::run_problems::RunProblems;
 use datalib_problems::{Problem, Reason};
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::Value;
@@ -56,6 +57,7 @@ pub async fn ingest(
     db: &RawDb,
     scan: &fsscan::Scan,
     progress: &Progress,
+    found: &RunProblems,
 ) -> Result<MapsPhotosSummary> {
     let prev = file_checkpoint::load_cursor(db.pool(), SCOPE).await?;
     let changes = scan.changes_since(&prev);
@@ -136,7 +138,7 @@ pub async fn ingest(
         file_checkpoint::record_file(&mut tx, SCOPE, f).await?;
     }
     tx.commit().await.context("commit maps_photos tx")?;
-    download_problems::report_skipped(db.pool(), "maps_photos", &skipped).await;
+    found.skipped("maps_photos", skipped);
 
     // A photo row is keyed by its sidecar's stem, so a row whose stem no
     // sidecar here carries is gone — read as "not exported" when the

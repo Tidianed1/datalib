@@ -12,18 +12,18 @@ pub mod schema_raw;
 use std::collections::HashSet;
 use std::path::Path;
 
-use anyhow::{Context, Result};
-use sqlx::{Sqlite, SqlitePool, Transaction};
+use anyhow::Result;
+use sqlx::{Sqlite, Transaction};
 use tracing::info;
 
 use datalib_etl::bulk::bulk_upsert_entity_in_tx;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw as dr;
-use datalib_etl::download_problems::{self, RecordProblem, RunProblem};
 use datalib_etl::file_checkpoint;
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan::{self, ScannedFile};
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
 
 use datalib_etl_airvisual_config::AirvisualDevice;
 use datalib_problems::{Outcome, Problem, Reason};
@@ -129,18 +129,15 @@ pub fn identify(dev: &AirvisualDevice, info: &DeviceInfo) -> Result<Identity> {
     Ok(Identity { id, name })
 }
 
-/// The raw table a [`RecordProblem`] about one of a device's files names;
-/// the id is `<device>/<path under its folder>`.
+/// The raw table a file's `record:` problem row names; the id is
+/// `<device>/<path under its folder>`.
 pub const FILES_TABLE: &str = "airvisual_files";
 
-/// What a run could not read, reported once at its end. Every run reads
-/// every device and re-reads every file it could not stamp, so each set
-/// is the whole truth for the devices the run read; a device it could
-/// not read keeps the file rows it had (see [`carried_over`]).
-#[derive(Default)]
-struct Problems {
-    devices: Vec<RunProblem>,
-    files: Vec<RecordProblem>,
+/// Which devices a run reached, so its end can say which file rows it
+/// has a verdict on. Every run re-reads every file it could not stamp,
+/// so a device it read has exactly the file rows this run found.
+struct Reached {
+    found: RunProblems,
     /// Serials whose folder was walked this run.
     read: HashSet<String>,
     /// Serials whose folder could not be walked this run.
@@ -149,56 +146,38 @@ struct Problems {
     unidentified: bool,
 }
 
-/// The file rows of the last run that this run has no verdict on: a
-/// device it could not read, or, when a device could not even say
-/// which it is, every serial it did not read. A serial neither read nor
-/// failing is a device the config no longer names, and its rows go.
-async fn carried_over(pool: &SqlitePool, problems: &Problems) -> Result<Vec<RecordProblem>> {
-    let prefix = format!("{}{FILES_TABLE}:", download_problems::RECORD_PREFIX);
-    let rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT scope_key, sample FROM problems WHERE scope_kind = ? AND INSTR(scope_key, ?) = 1",
-    )
-    .bind(datalib_problems::ScopeKind::Entity.as_str())
-    .bind(&prefix)
-    .fetch_all(pool)
-    .await
-    .context("read the last run's file problems")?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|(key, sample)| {
-            let id = key.strip_prefix(&prefix)?.to_string();
-            let serial = id.split('/').next()?;
-            let keep = !problems.read.contains(serial)
-                && (problems.unread.contains(serial) || problems.unidentified);
-            keep.then(|| RecordProblem::new(FILES_TABLE, &id, sample))
-        })
-        .collect())
+pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| read_devices(opts, found)).await
 }
 
-pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+async fn read_devices(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = opts.db;
     let mut s = FetchSummary {
         devices: opts.devices.len(),
         ..Default::default()
     };
-    let mut problems = Problems::default();
+    let mut reached = Reached {
+        found: found.clone(),
+        read: HashSet::new(),
+        unread: HashSet::new(),
+        unidentified: false,
+    };
     for dev in &opts.devices {
         if opts.control.stop.requested() {
             break;
         }
-        fetch_device(&db, dev, &opts.cache, &opts.progress, &mut s, &mut problems).await?;
+        fetch_device(&db, dev, &opts.cache, &opts.progress, &mut s, &mut reached).await?;
     }
-    if opts.control.stop.requested() {
-        info!(
-            event = "airvisual_stopped",
-            "told to stop; the problems stay as the last run left them"
-        );
-    } else {
-        let carried = carried_over(db.pool(), &problems).await?;
-        problems.files.extend(carried);
-        download_problems::report_run(db.pool(), &problems.devices).await;
-        download_problems::report_records(db.pool(), &problems.files).await;
-    }
+    // A stop leaves devices unvisited, and any serial could be one of them.
+    let any_unread = reached.unidentified || opts.control.stop.requested();
+    let Reached { read, unread, .. } = reached;
+    // A serial neither read nor failing is a device the config no longer
+    // names, and its rows go.
+    found.records_tried_all_but(FILES_TABLE, move |id| {
+        let serial = id.split('/').next().unwrap_or(id);
+        !read.contains(serial) && (unread.contains(serial) || any_unread)
+    });
     Ok(s)
 }
 
@@ -211,7 +190,7 @@ async fn fetch_device(
     cache: &FingerprintCache,
     progress: &Progress,
     s: &mut FetchSummary,
-    problems: &mut Problems,
+    reached: &mut Reached,
 ) -> Result<()> {
     let root = dev.path();
     let label = format!(
@@ -220,9 +199,10 @@ async fn fetch_device(
             .clone()
             .unwrap_or_else(|| dev.path.display().to_string())
     );
-    let mut device_failed = |s: &mut FetchSummary, detail: String| {
+    let found = reached.found.clone();
+    let device_failed = |s: &mut FetchSummary, detail: String| {
         s.errors += 1;
-        problems.devices.push(RunProblem::listing(&label, detail));
+        found.listing(&label, detail);
     };
     let started = std::time::Instant::now();
     let (info, info_error) = match read_device_info(&root) {
@@ -237,7 +217,7 @@ async fn fetch_device(
                 None => format!("{e:#}"),
             };
             device_failed(s, detail);
-            problems.unidentified = true;
+            reached.unidentified = true;
             return Ok(());
         }
     };
@@ -254,17 +234,17 @@ async fn fetch_device(
         Ok(scan) => scan,
         Err(e) => {
             device_failed(s, format!("{e:#}"));
-            problems.unread.insert(who.id.clone());
+            reached.unread.insert(who.id.clone());
             return Ok(());
         }
     };
-    problems.read.insert(who.id.clone());
-    let file_problem = |rel: &str, detail: String| {
-        RecordProblem::new(FILES_TABLE, &format!("{}/{rel}", who.id), detail)
+    reached.read.insert(who.id.clone());
+    let file_failed = |rel: &str, detail: String| {
+        found.record_failed(FILES_TABLE, &format!("{}/{rel}", who.id), detail)
     };
     if let Some(why) = &info_error {
         s.errors += 1;
-        problems.files.push(file_problem(LATEST_JSON, why.clone()));
+        file_failed(LATEST_JSON, why.clone());
     }
     info!(
         event = "airvisual_scan",
@@ -276,9 +256,7 @@ async fn fetch_device(
         "scanned the export tree"
     );
     s.errors += scan.errors.len();
-    problems
-        .devices
-        .extend(scan.walk_problems_as(&format!("files {}", who.id)));
+    found.extend(scan.walk_problems_as(&format!("files {}", who.id)));
 
     let prev = file_checkpoint::load_cursor(db.pool(), &scope).await?;
     let changes = scan.changes_since(&prev);
@@ -300,7 +278,7 @@ async fn fetch_device(
             Err(Unread::Read(why)) => {
                 // Not stamped, so the next run reads it again.
                 s.errors += 1;
-                problems.files.push(file_problem(&f.rel, why));
+                file_failed(&f.rel, why);
                 continue;
             }
             Err(Unread::Parse(why)) => {

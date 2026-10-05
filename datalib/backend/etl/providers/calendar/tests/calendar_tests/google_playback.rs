@@ -62,7 +62,9 @@ async fn run_in(playback: &Path, store: &Path, window: Option<Window>) -> FetchS
         control: Default::default(),
     })
     .await;
-    db.commit_all("test").await.expect("commit");
+    if summary.is_ok() {
+        db.commit_all("test").await.expect("commit");
+    }
     db.close().await;
     std::env::remove_var(PLAYBACK_ENV);
     summary.expect("google fetch under playback")

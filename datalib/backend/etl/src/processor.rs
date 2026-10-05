@@ -75,6 +75,9 @@ pub struct RunCtx<'a> {
     /// observability the orchestrator installs as scopes.
     metrics: Arc<DownloadMetrics>,
     diagnostics: Arc<Diagnostics>,
+    /// [`DataProcessor::streams_output`] of the processor this context
+    /// was built for.
+    streams_output: bool,
 }
 
 impl<'a> RunCtx<'a> {
@@ -96,7 +99,20 @@ impl<'a> RunCtx<'a> {
             control,
             metrics,
             diagnostics,
+            streams_output: false,
         }
+    }
+
+    /// Says the processor answers `true` to
+    /// [`DataProcessor::streams_output`]: its store is fit to read at
+    /// any moment of a run, so a run that fails keeps what it wrote.
+    pub fn streaming(mut self, streams_output: bool) -> Self {
+        self.streams_output = streams_output;
+        self
+    }
+
+    pub fn streams_output(&self) -> bool {
+        self.streams_output
     }
 
     /// How often this run seals partial output.
@@ -104,36 +120,11 @@ impl<'a> RunCtx<'a> {
         self.control.checkpoint_cadence.unwrap_or_default()
     }
 
-    /// Open a doltlite [`RawStoreSession`](crate::raw_store::RawStoreSession)
-    /// over a source's write `pool`. The processor calls
-    /// `session.finish(self, summary)` after the fetch. This is the uniform
-    /// "doltlite-backed source" entry point — the commit machinery lives in
-    /// `etl`, not here and not in the orchestrator.
-    pub async fn open_store(
-        &self,
-        pool: sqlx::sqlite::SqlitePool,
-        entity_path: std::path::PathBuf,
-    ) -> crate::raw_store::RawStoreSession {
-        crate::raw_store::RawStoreSession::open(pool, entity_path, self).await
-    }
-
-    /// The same session with the source's blob CAS attached, so `finish`
-    /// closes it too. A source that keeps a CAS opens its session this
-    /// way; one whose CAS is optional passes `None` when it has none.
-    pub async fn open_store_with_blobs(
-        &self,
-        pool: sqlx::sqlite::SqlitePool,
-        cas_pool: Option<sqlx::sqlite::SqlitePool>,
-        entity_path: std::path::PathBuf,
-    ) -> crate::raw_store::RawStoreSession {
-        crate::raw_store::RawStoreSession::open_with_blobs(pool, cas_pool, entity_path, self).await
-    }
-
     /// Run a download against its doltlite store: `body` gets the
     /// [`Sealer`](crate::raw_store::Sealer) for its own batch boundaries
     /// and returns the run's summary. The store, and `cas_pool` when the
-    /// source keeps a blob CAS, are committed and closed on `Ok` and
-    /// closed uncommitted on `Err`; see
+    /// source keeps a blob CAS, are committed and closed on `Ok`; on `Err`
+    /// they are closed, committed first only for a streaming processor; see
     /// [`RawStoreSession::run`](crate::raw_store::RawStoreSession::run).
     pub async fn run_store<Fut>(
         &self,
@@ -144,15 +135,10 @@ impl<'a> RunCtx<'a> {
     where
         Fut: std::future::Future<Output = Result<String>>,
     {
-        crate::raw_store::RawStoreSession::open_with_blobs(
-            pool,
-            cas_pool,
-            std::path::PathBuf::new(),
-            self,
-        )
-        .await
-        .run(self, body)
-        .await
+        crate::raw_store::RawStoreSession::open(pool, cas_pool, self)
+            .await
+            .run(self, body)
+            .await
     }
 
     pub fn metrics(&self) -> Arc<DownloadMetrics> {

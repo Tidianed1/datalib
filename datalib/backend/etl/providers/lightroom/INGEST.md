@@ -404,8 +404,9 @@ replayed backup, makes every later sync try again until it lands.
   after the mirror engine has emptied the mirror's tables: committing
   anything on top of that would publish half a catalog, so that fails
   the run, and the next run's open discards the half-written state.
-- **A stopped run records no problems**, so the last complete run's
-  stand.
+- **A stopped run clears no problems**, so the last complete run's
+  stand; a backup that would not mirror before the stop is still
+  recorded.
 
 A zip is unpacked into a temporary directory for the length of its
 mirror, so a run needs free space for one catalog at a time; the

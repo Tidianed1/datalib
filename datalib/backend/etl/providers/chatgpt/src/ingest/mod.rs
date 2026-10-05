@@ -12,11 +12,12 @@ use chrono::DateTime;
 use datalib_etl::blob_cas::CasEdgeAccumulator;
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw::WirePayload;
-use datalib_etl::download_problems::{self, DownloadProblem, RunProblem};
+use datalib_etl::download_problems::DownloadProblem;
 use datalib_etl::download_run::DownloadRun;
 use datalib_etl::http::LatchkeySettings;
 use datalib_etl::http::IMPERSONATE_MARKER_HEADER;
 use datalib_etl::latchkey::latchkey_curl_command;
+use datalib_etl::run_problems::{self, RunProblems};
 use datalib_problems::Reason;
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
@@ -120,6 +121,13 @@ pub struct FetchSummary {
     db = %opts.db.pool().connect_options().get_filename().display()
 ))]
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    let sealer = opts.sealer.clone();
+    run_problems::collecting_sealed(&pool, &stop, sealer.as_ref(), |found| download(opts, found))
+        .await
+}
+
+async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let _ = datalib_etl::latchkey::ensure_curl_router();
     let db = opts.db.clone();
 
@@ -174,7 +182,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             "signed in as this account"
         );
 
-        let mut walk = Walk::default();
+        let mut walk = Walk::new(found);
         if !opts.conv_uuids.is_empty() {
             fetch_named(
                 &mut client,
@@ -210,14 +218,13 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             )
             .await?;
         }
-        // A stop may have cut any of it short; the last run's rows stand
-        // until a run gets through. A rate limit may have left named
-        // conversations unchecked, so their `config:` rows stand too.
-        if !opts.control.stop.requested() {
-            if !walk.rate_limited {
-                download_problems::report(db.pool(), &walk.config_problems).await;
-            }
-            download_problems::report_run(db.pool(), &walk.run_problems).await;
+        // A rate limit may have left named conversations unchecked, so
+        // their `config:` rows stand, and it ended the run before every
+        // listing and phase was tried.
+        if walk.rate_limited {
+            walk.found.cut_short();
+        } else {
+            walk.found.config(std::mem::take(&mut walk.config_problems));
         }
         Ok::<(), anyhow::Error>(())
     };
@@ -230,11 +237,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     Ok(summary)
 }
 
-/// What one run could not do, collected for the single report at its end,
-/// and what the retry pass needs to know about the walk.
-#[derive(Default)]
+/// What one run could not do, and what the retry pass needs to know
+/// about the walk.
 struct Walk {
-    run_problems: Vec<RunProblem>,
+    found: RunProblems,
     config_problems: Vec<DownloadProblem>,
     /// Conversations whose attachments the walk already tried this run.
     attachments_tried: HashSet<String>,
@@ -250,12 +256,21 @@ enum Cut {
 }
 
 impl Walk {
+    fn new(found: RunProblems) -> Self {
+        Self {
+            found,
+            config_problems: Vec::new(),
+            attachments_tried: HashSet::new(),
+            rate_limited: false,
+        }
+    }
+
     fn rate_limited(&mut self, fetched: usize, left: usize, reason: &str) {
         self.rate_limited = true;
-        self.run_problems.push(RunProblem::phase(
+        self.found.phase(
             "conversations",
             format!("rate-limited after {fetched} fetched; {left} left for the next run: {reason}"),
-        ));
+        );
     }
 }
 
@@ -359,8 +374,7 @@ async fn fetch_listed(
         if listing.is_empty() && !db.has_any_conversation().await? {
             return Err(anyhow::anyhow!("list conversations: {e}"));
         }
-        walk.run_problems
-            .push(RunProblem::listing("conversations", e));
+        walk.found.listing("conversations", e);
         // Every detail fetch would be refused the same way.
         if rate_limited {
             walk.rate_limited = true;
@@ -613,12 +627,12 @@ async fn retry_attachments(
                 Err(Cut::Stopped) => break,
                 Err(Cut::RateLimited(reason)) => {
                     walk.rate_limited = true;
-                    walk.run_problems.push(RunProblem::phase(
+                    walk.found.phase(
                         "attachments",
                         format!(
                             "stopped at the rate limit; the rest is left for the next run: {reason}"
                         ),
-                    ));
+                    );
                     break;
                 }
             };

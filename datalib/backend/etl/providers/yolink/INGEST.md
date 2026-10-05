@@ -64,7 +64,8 @@ way the readings it held are gone, so retry within the retention
 window.
 
 The `listing:` and `silent:` rows are replaced whole at the end of each
-run; a run told to stop leaves them as the last run did.
+run. A run told to stop keeps the `listing:` rows it found before the
+stop, clears none, and leaves the `silent:` rows as the last run did.
 
 ## Upstream history expires. The mirror is the only durable copy.
 

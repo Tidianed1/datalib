@@ -11,9 +11,10 @@ use anyhow::{Context, Result};
 use datalib_etl::control::DownloadControl;
 use datalib_etl::dav::state as dav_state;
 use datalib_etl::dav::sync::{CollectionSync, Page};
-use datalib_etl::download_problems::{self, RunProblem};
+use datalib_etl::download_problems;
 use datalib_etl::http::LatchkeySettings;
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
 use tracing::info;
 
 use api::ContactProps;
@@ -59,6 +60,11 @@ pub struct FetchSummary {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| sync_account(opts, found)).await
+}
+
+async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = opts.db.clone();
 
     let mut summary = FetchSummary::default();
@@ -89,7 +95,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     }
     summary.addressbooks = books.len();
 
-    let mut run_problems: Vec<RunProblem> = Vec::new();
+    report_unmatched_names(&found, &opts.addressbooks, &books)?;
+
     let mut synced_ids: Vec<String> = Vec::new();
     for book in &books {
         let named = book
@@ -113,22 +120,52 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         );
         match synced {
             Ok(None) => {}
-            Ok(Some(cut_short)) => run_problems.push(RunProblem::listing(
+            Ok(Some(cut_short)) => found.listing(
                 &listing,
                 format!("{cut_short}; nothing it has not reached is deleted until it finishes"),
-            )),
+            ),
             Err(e) => {
                 summary.errors += 1;
-                run_problems.push(RunProblem::listing(&listing, format!("{e:#}")));
+                found.listing(&listing, format!("{e:#}"));
             }
         }
     }
-    // A stop leaves the rest unsynced; their last rows stand.
-    if !opts.control.stop.requested() {
-        download_problems::report_run(db.pool(), &run_problems).await;
-        dav_state::report_unstored(db.pool(), "contacts", &synced_ids).await;
-    }
+    dav_state::collect_unstored(db.pool(), &found, "contacts", &synced_ids).await;
     Ok(summary)
+}
+
+/// A configured name no address book has is reported and costs only
+/// itself — unless none matches, which fails the run rather than
+/// falling back to every address book the filter was there to exclude.
+fn report_unmatched_names(
+    found: &RunProblems,
+    configured: &[String],
+    books: &[Book],
+) -> Result<()> {
+    let names = || {
+        books
+            .iter()
+            .map(|b| b.display_name.as_deref().unwrap_or(&b.href))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let resolution = download_problems::resolve_configured("addressbooks", configured, |want| {
+        books
+            .iter()
+            .any(|b| b.display_name.as_deref() == Some(want))
+            .then_some(())
+            .ok_or_else(|| format!("no address book has that name; the account has {}", names()))
+    });
+    let nothing_resolved = resolution.nothing_resolved();
+    found.config(resolution.problems);
+    if nothing_resolved {
+        anyhow::bail!(
+            "none of the configured addressbooks ({}) exists; the account has {}",
+            configured.join(", "),
+            names()
+        );
+    }
+    Ok(())
 }
 
 /// Resource the orchestrator carries around per addressbook —

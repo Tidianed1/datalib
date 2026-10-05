@@ -107,117 +107,109 @@ impl DataProcessor for EmailIngest {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        // The source owns the store: open it, hand the orchestrator only an
-        // opaque interrupt-commit hook, do the work, commit, close. No pool or
-        // `dolt_commit` ever crosses back to the orchestrator.
-        let entity_db = ingest::db_path_for(&self.raw_path);
-        let db = ingest::RawDb::open(&entity_db).await?;
-        let session = ctx
-            .open_store_with_blobs(db.pool().clone(), Some(db.cas().pool().clone()), entity_db)
-            .await;
-
-        let summary = match &self.mode {
-            ExtractMode::Jmap(sync) => {
-                let s = ingest::fetch(ingest::FetchOptions {
-                    db,
-                    sealer: Some(session.sealer()),
-                    hostname: sync.hostname.clone(),
-                    latchkey: self.latchkey.clone(),
-                    account_id: sync.account_id.clone(),
-                    full_resync: sync.full_resync,
-                    only_mailbox_labels: self.only_extract_labels.clone(),
-                    blob_size_limit_bytes: self.blob_size_limit_bytes,
-                    blob_download_concurrency: sync.blob_download_concurrency,
-                    progress: ctx.progress.clone(),
-                    control: ctx.control.clone(),
-                })
-                .await?;
-                format!(
-                    "mailboxes={} emails={} destroyed={} threads={} blobs(dl={} oversize={} err={})",
-                    s.mailboxes_upserted,
-                    s.emails_upserted,
-                    s.emails_destroyed,
-                    s.threads_upserted,
-                    s.blobs_downloaded,
-                    s.blobs_oversize,
-                    s.blobs_errored,
-                )
-            }
-            ExtractMode::GmailApi(gmail) => {
-                let s = ingest::gmail_api::fetch(ingest::gmail_api::FetchOptions {
-                    db,
-                    sealer: Some(session.sealer()),
-                    config: gmail.clone(),
-                    latchkey: self.latchkey.clone(),
-                    only_labels: self.only_extract_labels.clone(),
-                    blob_size_limit_bytes: self.blob_size_limit_bytes,
-                    progress: ctx.progress.clone(),
-                    control: ctx.control.clone(),
-                })
-                .await?;
-                format!(
-                    "mailboxes={} threads={} emails={} destroyed={} \
-                     blobs(stored={} skipped={} oversize={}) filtered={} \
-                     quota_units={} full_sync={} budget_exhausted={}",
-                    s.mailboxes_upserted,
-                    s.threads_upserted,
-                    s.emails_upserted,
-                    s.emails_destroyed,
-                    s.blobs_stored,
-                    s.blobs_skipped,
-                    s.blobs_oversize,
-                    s.messages_filtered,
-                    s.quota_units_spent,
-                    s.full_sync,
-                    s.budget_exhausted,
-                )
-            }
-            ExtractMode::Mbox {
-                input_path,
-                account_config,
-            } => {
-                if !is_mbox_input(input_path) {
-                    return Err(anyhow!(
-                        "`mbox.path` is {} — expected a .mbox file, or a directory holding one",
-                        input_path.display()
-                    ));
+        let db = ingest::RawDb::open(&ingest::db_path_for(&self.raw_path)).await?;
+        let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
+        ctx.run_store(pool, Some(cas_pool), |sealer| async {
+            Ok(match &self.mode {
+                ExtractMode::Jmap(sync) => {
+                    let s = ingest::fetch(ingest::FetchOptions {
+                        db,
+                        sealer: Some(sealer),
+                        hostname: sync.hostname.clone(),
+                        latchkey: self.latchkey.clone(),
+                        account_id: sync.account_id.clone(),
+                        full_resync: sync.full_resync,
+                        only_mailbox_labels: self.only_extract_labels.clone(),
+                        blob_size_limit_bytes: self.blob_size_limit_bytes,
+                        blob_download_concurrency: sync.blob_download_concurrency,
+                        progress: ctx.progress.clone(),
+                        control: ctx.control.clone(),
+                    })
+                    .await?;
+                    format!(
+                        "mailboxes={} emails={} destroyed={} threads={} blobs(dl={} oversize={} err={})",
+                        s.mailboxes_upserted,
+                        s.emails_upserted,
+                        s.emails_destroyed,
+                        s.threads_upserted,
+                        s.blobs_downloaded,
+                        s.blobs_oversize,
+                        s.blobs_errored,
+                    )
                 }
-                let s = ingest::mbox::fetch(ingest::mbox::FetchOptions {
-                    cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?)
-                        .await?,
-                    db,
-                    input_path: input_path.clone(),
-                    account_id_override: account_config.account_id.clone(),
-                    account_config: ingest::mbox::MboxAccountConfig {
-                        account_id: account_config.account_id.clone(),
-                        display_name: account_config.display_name.clone(),
-                        email_address: account_config.email_address.clone(),
-                        is_personal: account_config.is_personal,
-                    },
-                    only_labels: self.only_extract_labels.clone(),
-                    blob_size_limit_bytes: self.blob_size_limit_bytes,
-                    progress: ctx.progress.clone(),
-                    control: ctx.control.clone(),
-                })
-                .await?;
-                format!(
-                    "mailboxes={} threads={} emails={} removed={} files_removed={} blobs(stored={} skipped={} oversize={}) parse_errors={}",
-                    s.mailboxes_upserted,
-                    s.threads_upserted,
-                    s.emails_upserted,
-                    s.emails_removed,
-                    s.files_removed,
-                    s.blobs_stored,
-                    s.blobs_skipped,
-                    s.blobs_oversize,
-                    s.parse_errors,
-                )
-            }
-        };
-
-        // The source's post-download commit + pool close (uniform across
-        // providers); keeps the old `{stats} commit={h}` summary suffix.
-        session.finish(ctx, summary).await
+                ExtractMode::GmailApi(gmail) => {
+                    let s = ingest::gmail_api::fetch(ingest::gmail_api::FetchOptions {
+                        db,
+                        sealer: Some(sealer),
+                        config: gmail.clone(),
+                        latchkey: self.latchkey.clone(),
+                        only_labels: self.only_extract_labels.clone(),
+                        blob_size_limit_bytes: self.blob_size_limit_bytes,
+                        progress: ctx.progress.clone(),
+                        control: ctx.control.clone(),
+                    })
+                    .await?;
+                    format!(
+                        "mailboxes={} threads={} emails={} destroyed={} \
+                         blobs(stored={} skipped={} oversize={}) filtered={} \
+                         quota_units={} full_sync={} budget_exhausted={}",
+                        s.mailboxes_upserted,
+                        s.threads_upserted,
+                        s.emails_upserted,
+                        s.emails_destroyed,
+                        s.blobs_stored,
+                        s.blobs_skipped,
+                        s.blobs_oversize,
+                        s.messages_filtered,
+                        s.quota_units_spent,
+                        s.full_sync,
+                        s.budget_exhausted,
+                    )
+                }
+                ExtractMode::Mbox {
+                    input_path,
+                    account_config,
+                } => {
+                    if !is_mbox_input(input_path) {
+                        return Err(anyhow!(
+                            "`mbox.path` is {} — expected a .mbox file, or a directory holding one",
+                            input_path.display()
+                        ));
+                    }
+                    let s = ingest::mbox::fetch(ingest::mbox::FetchOptions {
+                        cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?)
+                            .await?,
+                        db,
+                        input_path: input_path.clone(),
+                        account_id_override: account_config.account_id.clone(),
+                        account_config: ingest::mbox::MboxAccountConfig {
+                            account_id: account_config.account_id.clone(),
+                            display_name: account_config.display_name.clone(),
+                            email_address: account_config.email_address.clone(),
+                            is_personal: account_config.is_personal,
+                        },
+                        only_labels: self.only_extract_labels.clone(),
+                        blob_size_limit_bytes: self.blob_size_limit_bytes,
+                        progress: ctx.progress.clone(),
+                        control: ctx.control.clone(),
+                    })
+                    .await?;
+                    format!(
+                        "mailboxes={} threads={} emails={} removed={} files_removed={} blobs(stored={} skipped={} oversize={}) parse_errors={}",
+                        s.mailboxes_upserted,
+                        s.threads_upserted,
+                        s.emails_upserted,
+                        s.emails_removed,
+                        s.files_removed,
+                        s.blobs_stored,
+                        s.blobs_skipped,
+                        s.blobs_oversize,
+                        s.parse_errors,
+                    )
+                }
+            })
+        })
+        .await
     }
 }
 

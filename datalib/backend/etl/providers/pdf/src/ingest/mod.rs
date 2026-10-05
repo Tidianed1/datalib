@@ -11,11 +11,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use datalib_etl::download_problems::{self, RecordProblem};
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan;
 use datalib_etl::fswalk;
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl::stop::StopFlag;
 
 pub use db::{db_path_for, RawDb, RenderTarget};
 use schema_raw::{PdfDocumentRow, PdfKind, PdfPathRow, PdfScanMetaRow};
@@ -63,6 +64,13 @@ pub struct FetchSummary {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let pool = opts.db.pool().clone();
+    // The scan has no stop to honour, so it always covers the whole tree.
+    let never_stops = StopFlag::new();
+    run_problems::collecting(&pool, &never_stops, |found| scan_tree(opts, found)).await
+}
+
+async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let mut summary = FetchSummary::default();
 
     // Load the cache BEFORE truncating the path table, exactly as
@@ -101,6 +109,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     )
     .await?;
     summary.errors += scan.errors.len();
+    found.extend(scan.walk_problems());
     // A walk that could not read part of the tree may only have failed to
     // see a path, so the table is not truncated and nothing falls out:
     // what the walk did see is upserted over what was there.
@@ -118,10 +127,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // Documents identified during *this* scan, so N copies of one file
     // are classified once rather than N times.
     let mut seen_docs: HashMap<String, bool> = HashMap::new();
-    let mut unread: Vec<RecordProblem> = Vec::new();
-    if !scan.errors.is_empty() {
-        unread.extend(untried_records(opts.db.pool(), "pdf_paths", &scan).await?);
-    }
 
     for f in &scan.files {
         opts.progress.inc(1);
@@ -146,7 +151,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 // is not in `pdf_documents`.
                 Err(e) => {
                     summary.errors += 1;
-                    unread.push(RecordProblem::new("pdf_paths", &f.rel, format!("{e:#}")));
+                    found.record_failed("pdf_paths", &f.rel, format!("{e:#}"));
                     continue;
                 }
             }
@@ -167,26 +172,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     if !doc_batch.is_empty() || !path_batch.is_empty() {
         opts.db.write_batch(&doc_batch, &path_batch, &now).await?;
     }
-    // Every scan walks the whole tree and retries every document it
-    // could not identify, so each set replaces the last scan's.
-    download_problems::report_run(opts.db.pool(), &scan.walk_problems()).await;
-    download_problems::report_records(opts.db.pool(), &unread).await;
+    // Every scan retries every document it could not identify, so a row
+    // stands only on a path under an entry the walk could not read.
+    found.records_tried_all_but("pdf_paths", scan.unseen());
     Ok(summary)
-}
-
-/// The last scan's `record:{table}:` rows on paths this scan did not try
-/// again — under an entry its walk could not read — carried into this
-/// scan's set.
-async fn untried_records(
-    pool: &sqlx::SqlitePool,
-    table: &str,
-    scan: &fsscan::Scan,
-) -> Result<Vec<RecordProblem>> {
-    Ok(download_problems::earlier_records(pool, table, "")
-        .await?
-        .into_iter()
-        .filter(|r| scan.could_not_see(&r.id))
-        .collect())
 }
 
 fn is_pdf(p: &Path) -> bool {

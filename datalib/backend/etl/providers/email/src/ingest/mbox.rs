@@ -17,6 +17,7 @@ use datalib_etl::bulk::{
 use datalib_etl::control::DownloadControl;
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::{download_problems, file_checkpoint, fsscan};
 use mail_parser::MessageParser;
 use serde::Serialize;
@@ -233,6 +234,11 @@ impl Adjustments {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| read_files(opts, found)).await
+}
+
+async fn read_files(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = opts.db.clone();
 
     // One scan finds the `.mbox` files and says which have changed
@@ -250,6 +256,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     }
     let cursor = file_checkpoint::load_cursor(db.pool(), CHECKPOINT_SCOPE).await?;
     let changes = scan.changes_since(&cursor);
+    found.extend(scan.walk_problems());
     if scan.files.is_empty() && !changes.may_have_dropped_records() {
         return Ok(FetchSummary::default());
     }
@@ -339,7 +346,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut batch = PendingBatch::default();
     let mut emails_seen: u64 = 0;
     let mut files_processed: usize = 0;
-    let mut problems = scan.walk_problems();
     // A rewritten file is stamped only once the run has pruned what it
     // dropped: stamped before, the next run would not see it rewritten,
     // so it would never read every file and prune.
@@ -351,7 +357,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             Ok(messages) => messages,
             Err(e) => {
                 summary.parse_errors += 1;
-                problems.push(file_unread(f, &e));
+                found.push(file_unread(f, &e));
                 continue;
             }
         };
@@ -365,7 +371,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 // and is read again next run.
                 Err(e) => {
                     summary.parse_errors += 1;
-                    problems.push(file_unread(f, &e));
+                    found.push(file_unread(f, &e));
                     read_whole = false;
                     break;
                 }
@@ -471,15 +477,13 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         for (f, problem) in stamp_after_prune {
             stamp(&db, f, problem).await?;
         }
-        download_problems::report(
-            db.pool(),
-            &unmatched_labels(&opts.only_labels, &accumulator.labels_seen),
-        )
-        .await;
+        found.config(unmatched_labels(
+            &opts.only_labels,
+            &accumulator.labels_seen,
+        ));
     } else if read_all && changes.may_have_dropped_records() {
-        problems.push(fsscan::Scan::deletions_held_back(summary.parse_errors));
+        found.push(fsscan::Scan::deletions_held_back(summary.parse_errors));
     }
-    download_problems::report_run(db.pool(), &problems).await;
 
     // Record the config only once this run satisfied it, so a file it
     // could not read through leaves the previous record in place and the
@@ -1754,6 +1758,33 @@ mod tests {
     fn readable(path: &Path) {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+
+    /// A folder whose only entry could not be walked has no file to read,
+    /// and the run that returned early for that said nothing of the entry.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_walk_error_with_no_file_to_read_is_still_a_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let link = dir.path().join("c.mbox");
+        std::os::unix::fs::symlink(dir.path().join("nowhere"), &link).unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let db_path = work.path().join("e.doltlite_db");
+        let cache = test_cache().await;
+        let run = || {
+            run_once(&db_path, dir.path(), |db| {
+                FetchOptions::new(db, cache.clone())
+            })
+        };
+        run().await;
+        assert_eq!(
+            problems(&db_path).await,
+            [("listing:files".to_string(), "fetch_failed".to_string())]
+        );
+
+        std::fs::remove_file(&link).unwrap();
+        run().await;
+        assert!(problems(&db_path).await.is_empty());
     }
 
     /// A file that will not open costs that file: the run goes on, says

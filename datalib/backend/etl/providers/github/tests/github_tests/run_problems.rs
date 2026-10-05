@@ -317,11 +317,22 @@ fn unavailable(pb: &Path, num: u32) {
 /// When the shared retry loop gives up, the requests stop there — the
 /// PRs after it are not each tried and failed — but the run keeps what
 /// it fetched: a `phase:` row says it stopped short, the cursors stay,
-/// and the next run fetches the rest and clears the row.
+/// and the next run fetches the rest and clears the row. A run that gave
+/// up did not reach everything, so an earlier run's row stands until a
+/// run gets through.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_give_up_keeps_what_it_fetched() {
     let d = tempdir().unwrap();
     let out = d.path().join("out");
+    let db = RawDb::open(&db_path_for(&out)).await.unwrap();
+    datalib_etl::run_problems::collecting(db.pool(), &StopFlag::new(), |found| async move {
+        found.listing("search starfleet/defiant", "HTTP 502");
+        Ok(())
+    })
+    .await
+    .unwrap();
+    db.commit_all("an earlier run").await.unwrap();
+    db.close().await;
     let pb = tape(&d.path().join("one"), &[1, 2, 3, 4]);
     unavailable(&pb, 3);
     // One failed request spends the whole budget.
@@ -332,7 +343,13 @@ async fn a_give_up_keeps_what_it_fetched() {
         .expect("a give-up keeps what the run fetched");
 
     assert_eq!(stored_prs(&out), [1, 2]);
-    assert_eq!(problems(&out).await, [row("phase:fetch", "error")]);
+    assert_eq!(
+        problems(&out).await,
+        [
+            row("listing:search starfleet/defiant", "error"),
+            row("phase:fetch", "error")
+        ]
+    );
     assert_eq!(cursors(&out).await, []);
 
     let pb = tape(&d.path().join("two"), &[1, 2, 3, 4]);

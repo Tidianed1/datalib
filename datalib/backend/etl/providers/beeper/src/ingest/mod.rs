@@ -8,8 +8,8 @@ pub mod schema_raw;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use datalib_etl::download_problems::{self, RunProblem};
 use datalib_etl::download_run::DownloadRun;
+use datalib_etl::run_problems::{self, RunProblems};
 use serde::Serialize;
 use serde_json::json;
 use tracing::{info, instrument};
@@ -88,6 +88,11 @@ pub struct FetchSummary {
     db = %opts.db.pool().connect_options().get_filename().display()
 ))]
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| read_beeper(opts, found)).await
+}
+
+async fn read_beeper(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     if opts.sources.is_empty() {
         anyhow::bail!("no sources configured; set e.g. `sources: [\"signal\", \"googlechat\"]`");
     }
@@ -120,9 +125,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     let mut summary = FetchSummary::default();
     let result = (async {
-        // What the run could not read, as a whole: replaces the last
-        // run's rows once it gets to the end.
-        let mut run_problems: Vec<RunProblem> = Vec::new();
         let unmatched = index_db::ingest(
             &index_db_path,
             &dst,
@@ -131,7 +133,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             opts.media,
             &mut summary,
             &opts.progress,
-            &mut run_problems,
+            &found,
         )
         .await?;
         // After the index.db spine is in place, walk every
@@ -139,18 +141,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         // backfill external_event_id by joining on mxid. Cloud
         // bridges (slack/googlechat/…) have no local megabridge file
         // and are silently skipped.
-        megabridge::enrich(
-            &beeper_dir,
-            &dst,
-            &opts.sources,
-            &mut summary,
-            &mut run_problems,
-        )
-        .await?;
-        if !opts.control.stop.requested() {
-            download_problems::report(dst.pool(), &unmatched).await;
-            download_problems::report_run(dst.pool(), &run_problems).await;
-        }
+        megabridge::enrich(&beeper_dir, &dst, &opts.sources, &mut summary, &found).await?;
+        found.config(unmatched);
         Ok::<(), anyhow::Error>(())
     })
     .await;

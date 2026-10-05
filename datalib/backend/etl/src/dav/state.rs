@@ -14,7 +14,7 @@
 use anyhow::{Context, Result};
 use sqlx::SqlitePool;
 
-use crate::download_problems::{self, RecordProblem};
+use crate::download_problems::RecordProblem;
 
 pub const DDL: [&str; 2] = [
     "CREATE TABLE IF NOT EXISTS dav_unconfirmed (
@@ -123,30 +123,6 @@ pub async fn finish_listing(pool: &SqlitePool, collection: &str) -> Result<Vec<S
         .context("close the listing")?;
     tx.commit().await.context("commit")?;
     Ok(gone)
-}
-
-/// Every object of `collections` that could not be stored, as this run's
-/// record problems on `table`.
-pub async fn report_unstored(pool: &SqlitePool, table: &str, collections: &[String]) {
-    let rows: Result<Vec<(String, String, String)>, _> =
-        sqlx::query_as("SELECT collection, href, detail FROM dav_unstored ORDER BY href")
-            .fetch_all(pool)
-            .await;
-    let problems: Vec<RecordProblem> = match rows {
-        Ok(rows) => rows
-            .into_iter()
-            .filter(|(collection, _, _)| collections.contains(collection))
-            .map(|(_, href, detail)| RecordProblem::new(table, &href, detail))
-            .collect(),
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "dav: could not read the unstored objects; the Manage row will not show them"
-            );
-            return;
-        }
-    };
-    download_problems::report_records(pool, &problems).await;
 }
 
 /// Every object of `collections` that could not be stored, as this run's

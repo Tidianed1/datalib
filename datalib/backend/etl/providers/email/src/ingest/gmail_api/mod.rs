@@ -13,6 +13,7 @@ use datalib_etl::download_problems::{self, DownloadProblem, RecordProblem, RunPr
 use datalib_etl::download_run::DownloadRun;
 use datalib_etl::http::LatchkeySettings;
 use datalib_etl::progress::{Progress, RunBar};
+use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::scope_config::{self, FilterChange};
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
@@ -153,6 +154,15 @@ fn scope_config_blob(opts: &FetchOptions) -> Value {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    let sealer = opts.sealer.clone();
+    run_problems::collecting_sealed(&pool, &stop, sealer.as_ref(), |found| {
+        sync_account(opts, found)
+    })
+    .await
+}
+
+async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = opts.db.clone();
 
     // Stamp a `sync_runs` row for this pass, the same as every other
@@ -180,7 +190,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         &opts.only_labels,
     );
 
-    let result = run_sync(&db, &opts, &label_change).await;
+    let result = run_sync(&db, &opts, &label_change, &found).await;
     // Even on error, record a summary stub so the row has the same
     // fields a successful one does — the defaults populated as far as
     // the run got. Mirrors the JMAP path.
@@ -213,6 +223,7 @@ async fn run_sync(
     db: &RawDb,
     opts: &FetchOptions,
     label_change: &FilterChange,
+    found: &RunProblems,
 ) -> Result<FetchSummary> {
     let cfg = &opts.config;
     let user_id = cfg.user_id().to_string();
@@ -285,7 +296,7 @@ async fn run_sync(
     let resolved = index.ids_for_names(&opts.only_labels)?;
     let filter_label_ids = resolved.resolved;
     summary.problems = resolved.problems;
-    download_problems::report(db.pool(), &summary.problems).await;
+    found.config(summary.problems.clone());
     if !opts.only_labels.is_empty() {
         info!(
             event = "gmail_label_filter",
@@ -340,9 +351,10 @@ async fn run_sync(
     // and `fetch_ids` is called per `messages.list` page.
     let known_blobs = db.loaded_blob_ids().await?;
     let mut known_gmail_ids = load_known_gmail_ids(db).await?;
-    // What an earlier run could not use. The cursor moves past a message
-    // that would not store, and a message is fetched once however its
-    // `.eml` fared, so neither would come up again by itself.
+    // What an earlier run could not use, to ask for again. The cursor
+    // moves past a message that would not store, and a message is fetched
+    // once however its `.eml` fared, so neither would come up again by
+    // itself.
     let earlier_failures = earlier_record_problems(db).await?;
     let lacking_eml = missing_their_eml(db, opts.blob_size_limit_bytes).await?;
     // A Gmail message's bytes never change, so one this build could not
@@ -370,6 +382,7 @@ async fn run_sync(
     let mut state = RunState {
         db,
         sealer: opts.sealer.as_ref(),
+        found,
         index: &index,
         account_id: &account_id,
         user_id: &user_id,
@@ -447,22 +460,22 @@ async fn run_sync(
     }
 
     summary.quota_units_spent = throttle.spent_total();
-    // The set replaces the last run's, so an earlier failure this run
-    // never got to — a stop, the budget, an error — is carried over
-    // rather than read as fetched.
-    summary.records.extend(
-        earlier_failures
-            .into_iter()
-            .filter(|r| !state.attempted.contains(&r.id) && !state.known_gmail_ids.contains(&r.id)),
-    );
+    // An earlier failure this run never got to — a stop, the budget, an
+    // error — keeps its row rather than reading as fetched.
+    let attempted = std::mem::take(&mut state.attempted);
+    let mirrored = std::mem::take(&mut state.known_gmail_ids);
+    let untried = move |id: &str| !attempted.contains(id) && !mirrored.contains(id);
+    summary
+        .records
+        .extend(earlier_failures.into_iter().filter(|r| untried(&r.id)));
     // One row per message, however many times the run asked for it.
-    let mut reported = BTreeSet::new();
-    summary.records.retain(|r| reported.insert(r.id.clone()));
-    download_problems::report_records(db.pool(), &summary.records).await;
-    remember_unstorable(db, &account_id, &build, &state.unstorable, &reported).await?;
+    let mut with_a_row = BTreeSet::new();
+    summary.records.retain(|r| with_a_row.insert(r.id.clone()));
+    found.records_tried_all_but(GMAIL_MESSAGES_TABLE, untried);
+    remember_unstorable(db, &account_id, &build, &state.unstorable, &with_a_row).await?;
     // A walk the run never reached keeps its last row.
-    if walked.is_ok() && !summary.stopped_early() {
-        download_problems::report_run(db.pool(), &summary.listings).await;
+    if summary.stopped_early() {
+        found.cut_short();
     }
     walked?;
     info!(
@@ -710,6 +723,7 @@ struct RunState<'a> {
     /// Seals a flushed batch, so render can start on the mail already
     /// mirrored while the walk continues. `None` commits once at the end.
     sealer: Option<&'a datalib_etl::raw_store::Sealer>,
+    found: &'a RunProblems,
     index: &'a LabelIndex,
     account_id: &'a str,
     user_id: &'a str,
@@ -810,10 +824,10 @@ async fn full_sync(
                 // cursor makes walk again.
                 Err(e) => {
                     complete = false;
-                    summary.listings.push(RunProblem::listing(
-                        &format!("messages.list {label}"),
-                        format!("{e:#}"),
-                    ));
+                    let problem =
+                        RunProblem::listing(&format!("messages.list {label}"), format!("{e:#}"));
+                    state.found.push(problem.clone());
+                    summary.listings.push(problem);
                     break;
                 }
             };
@@ -945,11 +959,9 @@ async fn fetch_ids(
                 // this" on the Manage screen as a fetch that failed.
                 if !opts.control.stop.requested() {
                     state.attempted.insert(id.clone());
-                    summary.records.push(RecordProblem::new(
-                        GMAIL_MESSAGES_TABLE,
-                        id,
-                        format!("{e}"),
-                    ));
+                    let problem = RecordProblem::new(GMAIL_MESSAGES_TABLE, id, format!("{e}"));
+                    state.found.records_failed([problem.clone()]);
+                    summary.records.push(problem);
                 }
                 state.bar.did(1);
                 continue;
@@ -966,11 +978,9 @@ async fn fetch_ids(
                 // not make a record of them. A person wants to know
                 // which message, and a `warn!` reaches nobody.
                 state.unstorable.insert(msg.id.clone());
-                summary.records.push(RecordProblem::new(
-                    GMAIL_MESSAGES_TABLE,
-                    &msg.id,
-                    format!("{e}"),
-                ));
+                let problem = RecordProblem::new(GMAIL_MESSAGES_TABLE, &msg.id, format!("{e}"));
+                state.found.records_failed([problem.clone()]);
+                summary.records.push(problem);
                 continue;
             }
         };

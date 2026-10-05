@@ -70,7 +70,8 @@ pub async fn run(
                 control,
                 metrics.clone(),
                 diagnostics.clone(),
-            );
+            )
+            .streaming(proc.streams_output());
             let summary = proc
                 .run(&ctx)
                 .await

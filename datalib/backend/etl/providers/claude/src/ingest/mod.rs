@@ -17,10 +17,11 @@ use chrono::{DateTime, Utc};
 use datalib_etl::blob_cas::CasEdgeAccumulator;
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw::WirePayload;
-use datalib_etl::download_problems::{self, DownloadProblem, RunProblem};
+use datalib_etl::download_problems::{DownloadProblem, RunProblem};
 use datalib_etl::download_run::DownloadRun;
 use datalib_etl::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
 use datalib_etl::progress::RunBar;
+use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
 use datalib_problems::Reason;
 use datalib_time::IsoOffsetTimestamp;
@@ -173,6 +174,13 @@ pub struct FetchSummary {
     db = %opts.db.pool().connect_options().get_filename().display()
 ))]
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    let sealer = opts.sealer.clone();
+    run_problems::collecting_sealed(&pool, &stop, sealer.as_ref(), |found| download(opts, found))
+        .await
+}
+
+async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let _ = datalib_etl::latchkey::ensure_curl_router();
     let db = opts.db.clone();
 
@@ -257,7 +265,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             }
         };
 
-        let mut walk = Walk::default();
+        let mut walk = Walk::new(found);
 
         // users.json from the bulk export carries the account.uuid we
         // need on every conversation. If the DB doesn't have any user
@@ -286,9 +294,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     );
                 }
                 // Asked again next run, since there is still no user.
-                Err(e) => walk
-                    .run_problems
-                    .push(RunProblem::phase("account", e.to_string())),
+                Err(e) => walk.found.phase("account", e.to_string()),
             }
         }
 
@@ -392,14 +398,14 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         if !stop.requested() && !walk.rate_limited {
             retry_attachments(&db, &opts, &mut summary, &mut blake3_by_file, &mut walk).await?;
         }
-        // A stop may have cut any of it short; the last run's rows stand
-        // until a run gets through. A rate limit may have left configured
-        // entries unchecked, so their `config:` rows stand too.
-        if !stop.requested() {
-            if !walk.rate_limited {
-                download_problems::report(db.pool(), &summary.problems).await;
-            }
-            download_problems::report_run(db.pool(), &walk.run_problems()).await;
+        walk.found.extend(walk.refused_orgs());
+        // A rate limit may have left configured entries unchecked, so
+        // their `config:` rows stand, and it ended the run before every
+        // listing and phase was tried.
+        if walk.rate_limited {
+            walk.found.cut_short();
+        } else {
+            walk.found.config(summary.problems.clone());
         }
         Ok::<(), anyhow::Error>(())
     };
@@ -414,11 +420,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     Ok(summary)
 }
 
-/// What one run could not do, collected for the single report at its end,
-/// and what the retry pass needs to know about the walk.
-#[derive(Default)]
+/// What one run could not do, and what the retry pass needs to know
+/// about the walk.
 struct Walk {
-    run_problems: Vec<RunProblem>,
+    found: RunProblems,
     /// An org that refuses one request refuses them all: once it has
     /// answered 403 past the transient retries it is not asked again
     /// this run. The listing walk learns this from `list_conversations`;
@@ -433,26 +438,35 @@ struct Walk {
 }
 
 impl Walk {
-    fn give_up(&mut self, at: &str, reason: &str) {
-        self.rate_limited = true;
-        self.run_problems.push(RunProblem::phase(
-            at,
-            format!("stopped at the rate limit; the rest is left for the next run: {reason}"),
-        ));
+    fn new(found: RunProblems) -> Self {
+        Self {
+            found,
+            forbidden_orgs: BTreeMap::new(),
+            attachments_tried: HashSet::new(),
+            rate_limited: false,
+        }
     }
 
-    /// Everything for `report_run`: one row per org this credential
-    /// cannot read, keyed `listing:org:<name>`, so the Manage row says
-    /// why a whole org is missing, and every listing or phase that failed.
-    fn run_problems(&self) -> Vec<RunProblem> {
-        let orgs = self.forbidden_orgs.values().map(|name| {
+    fn give_up(&mut self, at: &str, reason: &str) {
+        self.rate_limited = true;
+        self.found.phase(
+            at,
+            format!("stopped at the rate limit; the rest is left for the next run: {reason}"),
+        );
+    }
+
+    /// One row per org this credential cannot read, keyed
+    /// `listing:org:<name>`, so the Manage row says why a whole org is
+    /// missing.
+    fn refused_orgs(&self) -> Vec<RunProblem> {
+        let org = |name: &String| {
             RunProblem::forbidden(
                 &format!("org:{name}"),
                 "this org refuses the credential's requests (conversations and projects); \
                  nothing from it is mirrored",
             )
-        });
-        orgs.chain(self.run_problems.iter().cloned()).collect()
+        };
+        self.forbidden_orgs.values().map(org).collect()
     }
 }
 
@@ -522,10 +536,8 @@ async fn walk_listings(
             }
             // Not pruned: it never reaches `listings_by_org`.
             Err(e) => {
-                walk.run_problems.push(RunProblem::listing(
-                    &format!("conversations org:{org_name}"),
-                    e.to_string(),
-                ));
+                walk.found
+                    .listing(&format!("conversations org:{org_name}"), e.to_string());
                 every_org_listed = false;
                 failed = Some(e.to_string());
                 continue;
@@ -785,10 +797,8 @@ async fn sync_projects(
                 continue;
             }
             Err(e) => {
-                walk.run_problems.push(RunProblem::listing(
-                    &format!("projects org:{org_name}"),
-                    e.to_string(),
-                ));
+                walk.found
+                    .listing(&format!("projects org:{org_name}"), e.to_string());
                 summary.errors += 1;
                 unlisted_orgs += 1;
                 continue;
@@ -883,16 +893,14 @@ async fn sync_projects(
                     return Ok(());
                 }
                 Err(e @ ClaudeError::Forbidden(_)) => {
-                    walk.run_problems.push(RunProblem::forbidden(
+                    walk.found.push(RunProblem::forbidden(
                         &format!("project_docs {label}"),
                         e.to_string(),
                     ));
                 }
                 Err(e) => {
-                    walk.run_problems.push(RunProblem::listing(
-                        &format!("project_docs {label}"),
-                        e.to_string(),
-                    ));
+                    walk.found
+                        .listing(&format!("project_docs {label}"), e.to_string());
                     summary.errors += 1;
                 }
             }

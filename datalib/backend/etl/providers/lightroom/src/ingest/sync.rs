@@ -9,11 +9,12 @@ use anyhow::{bail, Context, Result};
 use sqlx::sqlite::SqlitePool;
 
 use datalib_etl::doltlite_raw as dr;
-use datalib_etl::download_problems::{self, RecordProblem, RunProblem};
+use datalib_etl::download_problems::RecordProblem;
 use datalib_etl::file_checkpoint::{self, INGESTED_FILES_TABLE};
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan::{self, Scan, ScanOptions};
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::scope_config;
 use datalib_etl::stop::StopFlag;
 use datalib_etl_sqlite_mirror::{MirrorOptions, MirrorStats, KEY_RULE_VERSION};
@@ -54,14 +55,17 @@ pub struct SyncRun {
     /// The last backup mirrored.
     pub last: Option<MirrorStats>,
     pub problems: Vec<RecordProblem>,
-    /// A folder the scan could not read in full.
-    pub run_problems: Vec<RunProblem>,
-    /// The run was asked to stop before it was done, so its problems are
-    /// not the whole truth and must not replace the last run's.
+    /// The run was asked to stop before it was done.
     pub stopped: bool,
 }
 
 impl SyncRun {
+    fn could_not_mirror(&mut self, found: &RunProblems, backup: &str, why: String) {
+        let problem = RecordProblem::new(LEDGER, backup, why);
+        found.records_failed([problem.clone()]);
+        self.problems.push(problem);
+    }
+
     pub fn summary(&self) -> String {
         let catalog = if self.live.is_some() {
             " catalog=mirrored"
@@ -82,17 +86,6 @@ impl SyncRun {
         }
         s
     }
-
-    /// Record the run's problems, replacing the last run's, unless it was
-    /// stopped. Every run re-plans every backup and re-walks both inputs,
-    /// so a complete run's set is the whole truth.
-    pub async fn report(&self, pool: &SqlitePool) {
-        if self.stopped {
-            return;
-        }
-        download_problems::report_records(pool, &self.problems).await;
-        download_problems::report_run(pool, &self.run_problems).await;
-    }
 }
 
 /// Commits each backup and the live catalog as it mirrors them, and
@@ -105,6 +98,28 @@ pub async fn run(
     progress: &Progress,
     stop: &StopFlag,
     label: &str,
+) -> Result<SyncRun> {
+    run_problems::collecting(pool, stop, |found| async move {
+        let run =
+            mirror_inputs(pool, cache, inputs, options, progress, stop, label, &found).await?;
+        // Every run re-plans every backup, so one that was not stopped
+        // tried every backup an earlier run could not mirror.
+        found.records_tried_all(LEDGER);
+        Ok(run)
+    })
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn mirror_inputs(
+    pool: &SqlitePool,
+    cache: &FingerprintCache,
+    inputs: Inputs<'_>,
+    options: &MirrorOptions,
+    progress: &Progress,
+    stop: &StopFlag,
+    label: &str,
+    found: &RunProblems,
 ) -> Result<SyncRun> {
     sqlx::query(LEDGER_DDL)
         .execute(pool)
@@ -138,7 +153,7 @@ pub async fn run(
             let scan = fsscan::scan(cache, dir, &opts, |p| is_zip(p) || is_catalog(p))
                 .await
                 .with_context(|| format!("scan the backups folder {}", dir.display()))?;
-            run.run_problems.extend(scan.walk_problems_as("backups"));
+            found.extend(scan.walk_problems_as("backups"));
             let plan = backups::plan(backups::entries(&scan.files), &ledger);
             if plan.found.is_empty() {
                 bail!(
@@ -157,6 +172,7 @@ pub async fn run(
         .iter()
         .map(|(name, why)| RecordProblem::new(LEDGER, name, why))
         .collect();
+    found.records_failed(run.problems.iter().cloned());
 
     // Backups that would not mirror this run: problems, retried next run
     // since the ledger does not hold them, and never what HEAD ends on.
@@ -166,8 +182,7 @@ pub async fn run(
             run.stopped = true;
             return Ok(run);
         }
-        let Some(stats) =
-            mirror_backup(pool, backup, &options, progress, &mut run.problems).await?
+        let Some(stats) = mirror_backup(pool, backup, &options, progress, &mut run, found).await?
         else {
             failed.push(&backup.name);
             continue;
@@ -224,8 +239,7 @@ pub async fn run(
             Some((_, name)) if Some(name) == last => {}
             Some((_, name)) => match plan.found.iter().find(|b| b.name == name) {
                 Some(backup) => {
-                    match mirror_backup(pool, backup, &options, progress, &mut run.problems).await?
-                    {
+                    match mirror_backup(pool, backup, &options, progress, &mut run, found).await? {
                         Some(stats) => {
                             let msg = format!(
                                 "download {label}: backup {}, mirrored again {why}\n\n{}",
@@ -240,15 +254,15 @@ pub async fn run(
                 }
                 None => {
                     newest_missing = true;
-                    run.problems.push(RecordProblem::new(
-                        LEDGER,
+                    run.could_not_mirror(
+                        found,
                         name,
                         format!(
                             "the newest backup in the store is no longer on disk, so it could \
                              not be mirrored again {why}; HEAD is an older state until the \
                              next backup"
                         ),
-                    ));
+                    );
                 }
             },
             None => {}
@@ -268,7 +282,7 @@ pub async fn run(
 
     if let Some(catalog) = inputs.catalog {
         let scan = scan_catalog(cache, catalog).await?;
-        run.run_problems.extend(scan.walk_problems_as("catalog"));
+        found.extend(scan.walk_problems_as("catalog"));
         let changes =
             scan.changes_since(&file_checkpoint::load_cursor(pool, CATALOG_CURSOR).await?);
         // A backup committed this run is HEAD now, so the catalog goes
@@ -310,7 +324,8 @@ async fn mirror_backup(
     backup: &Backup,
     options: &MirrorOptions,
     progress: &Progress,
-    problems: &mut Vec<RecordProblem>,
+    run: &mut SyncRun,
+    found: &RunProblems,
 ) -> Result<Option<MirrorStats>> {
     let before = working_set(pool).await?;
     let err = match unpack::mirror_file(pool, &backup.file.path, options, progress).await {
@@ -320,7 +335,7 @@ async fn mirror_backup(
     if working_set(pool).await? != before {
         return Err(err);
     }
-    problems.push(RecordProblem::new(LEDGER, &backup.name, format!("{err:#}")));
+    run.could_not_mirror(found, &backup.name, format!("{err:#}"));
     Ok(None)
 }
 

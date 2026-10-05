@@ -2,6 +2,7 @@
 
 use datalib_etl::download_problems::SkippedRecord;
 use datalib_etl::fsscan;
+use datalib_etl::run_problems::RunProblems;
 use datalib_problems::{Problem, Reason};
 
 use anyhow::{Context, Result};
@@ -20,6 +21,7 @@ pub async fn ingest(
     db: &RawDb,
     scan: &fsscan::Scan,
     progress: &Progress,
+    found: &RunProblems,
 ) -> Result<SnapshotCounts> {
     let mut skipped = None;
     let n = file_checkpoint::ingest_snapshot(db.pool(), SCOPE, scan.file(FILE_REL), |bytes| {
@@ -67,7 +69,10 @@ pub async fn ingest(
         Ok(rows)
     })
     .await?;
-    super::report_skipped_if_read(db, "maps_reviews", skipped).await;
+    // `None`: the file was unchanged, and last run's rows still hold.
+    if let Some(skipped) = skipped {
+        found.skipped("maps_reviews", skipped);
+    }
     progress.set_message(&format!("maps_reviews: {}", n.written));
     Ok(n)
 }

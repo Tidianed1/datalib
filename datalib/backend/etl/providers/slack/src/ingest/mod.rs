@@ -14,10 +14,11 @@ use serde_json::{json, Value};
 use tracing::{info, info_span, instrument, warn, Instrument};
 
 use api::{call_slack, SlackCall, SlackError};
-use datalib_etl::download_problems::{self, DownloadProblem, RunProblem};
+use datalib_etl::download_problems::{DownloadProblem, RunProblem};
 use datalib_etl::events;
 use datalib_etl::http::LatchkeySettings;
 use datalib_etl::progress::RunBar;
+use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::scope_config;
 pub use db::{
     block_on_load_all, db_path_for, FetchTarget, LoadedMessage, LoadedRaw, MessageInput, RawDb,
@@ -1488,6 +1489,13 @@ pub struct FetchSummary {
 
 #[instrument(skip_all)]
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    let sealer = opts.sealer.clone();
+    run_problems::collecting_sealed(&pool, &stop, sealer.as_ref(), |found| download(opts, found))
+        .await
+}
+
+async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let _ = datalib_etl::latchkey::ensure_curl_router();
     let db = opts.db.clone();
 
@@ -1548,10 +1556,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // means the work future can return `Ok` on a run that did NOT cover
     // everything the config asked for — see `run_satisfied_config`.
     let mut walks_cut_short: usize = 0;
-    // What this run could not do as a whole: replaces the last run's rows
-    // once the run gets to the end.
-    let mut run_problems: Vec<RunProblem> = Vec::new();
-
     let work = async {
         // The step's own handle: setup only names what it is doing.
         let setup = opts.progress.clone();
@@ -1564,7 +1568,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         // so the DM progress labels need the user directory to already
         // be mirrored. A listing that fails leaves the stored one.
         if let Err(e) = fetch_users(&db, &setup, &opts.latchkey).await {
-            run_problems.push(listing_problem(M_USERS, &e));
+            found.push(listing_problem(M_USERS, &e));
         }
         let listed = match fetch_channels(
             &db,
@@ -1586,7 +1590,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 if stored.is_empty() {
                     return Err(e.context("no channels are stored from an earlier listing"));
                 }
-                run_problems.push(listing_problem(M_CHANNELS, &e));
+                found.push(listing_problem(M_CHANNELS, &e));
                 stored
             }
         };
@@ -1624,7 +1628,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                  not mirrored",
             ));
         }
-        download_problems::report(db.pool(), &grand.problems).await;
+        found.config(grand.problems.clone());
         info!(
             event = "slack_export_planned",
             channels = plan.targets.len() - plan.dm_targets,
@@ -1639,7 +1643,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             let (account, problems) =
                 fetch_account_state(&db, &targets, &opts.control.stop, &setup, &opts.latchkey)
                     .await?;
-            run_problems.extend(problems);
+            found.extend(problems);
             if let Some(sealer) = opts.sealer.as_ref() {
                 sealer
                     .wrote(
@@ -1741,7 +1745,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 }
                 Err(e) => {
                     walks_cut_short += 1;
-                    run_problems.push(listing_problem(&format!("{M_HISTORY} {name}"), &e));
+                    found.push(listing_problem(&format!("{M_HISTORY} {name}"), &e));
                 }
             }
         }
@@ -1763,11 +1767,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             .await;
         }
         bar.finish();
-        // A stop may have cut any listing short; the last run's rows
-        // stand until a run gets through them.
-        if !opts.control.stop.requested() {
-            download_problems::report_run(db.pool(), &run_problems).await;
-        }
         Ok::<(), anyhow::Error>(())
     };
 

@@ -257,8 +257,8 @@ and the sync goes on with the rest.
 - **A listing** — `users.list`, `conversations.list`, or one channel's
   `conversations.history` — is a `listing:` row (`listing:users.list`,
   `listing:conversations.history <channel>`). The run walks what an
-  earlier listing stored. The rows are replaced at the end of every run
-  that is not stopped, so the next run that lists cleanly clears them.
+  earlier listing stored. A run that gets to its end replaces the last
+  run's rows, so the next run that lists cleanly clears them.
 - **A thread** whose `conversations.replies` fails is a row on its root
   message (`messages:<team>#<channel>#<ts>`), a warning since the root
   and any earlier replies are still there. Render names that message's

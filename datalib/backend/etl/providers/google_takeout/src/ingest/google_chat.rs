@@ -8,9 +8,10 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::bulk::bulk_upsert_in_tx;
-use datalib_etl::download_problems::{self, SkippedRecord};
+use datalib_etl::download_problems::SkippedRecord;
 use datalib_etl::file_checkpoint;
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::RunProblems;
 use datalib_problems::{Problem, Reason};
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::Value;
@@ -54,7 +55,12 @@ fn read_json(f: &fsscan::ScannedFile) -> Result<Value> {
     serde_json::from_slice(&bytes).with_context(|| format!("parse {}", f.path.display()))
 }
 
-pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Result<ChatSummary> {
+pub async fn ingest(
+    db: &RawDb,
+    scan: &fsscan::Scan,
+    progress: &Progress,
+    found: &RunProblems,
+) -> Result<ChatSummary> {
     let prev = file_checkpoint::load_cursor(db.pool(), SCOPE).await?;
     let changes = scan.changes_since(&prev);
     let mut summary = ChatSummary::default();
@@ -212,7 +218,7 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
         file_checkpoint::record_file(&mut tx, SCOPE, f).await?;
     }
     tx.commit().await.context("commit google_chat tx")?;
-    download_problems::report_skipped(db.pool(), "google_chat", &skipped).await;
+    found.skipped("google_chat", skipped);
 
     for (group, kept) in &messages_by_group {
         summary.removed += delete_group_messages(db, group, kept).await?;

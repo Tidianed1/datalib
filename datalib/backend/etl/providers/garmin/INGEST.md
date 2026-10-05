@@ -157,10 +157,11 @@ carries downstream and the Manage screen counts:
 | a listing that was not an enumeration, or could not be asked for | `listing:<user_settings\|devices\|weight\|activities\|personal_records\|gear\|badges\|workouts\|goals>` | the next run in which it lists |
 | a phase that failed wholesale | `phase:<devices\|daily\|weight\|activities\|wellness\|items>` | the next run in which it runs |
 
-The `listing:` and `phase:` rows are replaced whole each run
-(`datalib_etl::download_problems::report_run`), so a listing that
-answers again clears its row without anyone doing anything; a row that
-persists keeps its `first_seen_at_utc`. A `warn!` alone is never the
+The `listing:` and `phase:` rows of a run that reached its end replace
+the last run's (`datalib_etl::run_problems`), so a listing that answers
+again clears its row without anyone doing anything; a run that was
+stopped or ended on an auth failure adds what it found and clears
+none; a row that persists keeps its `first_seen_at_utc`. A `warn!` alone is never the
 only record.
 
 Each file edge carries its own record's hash. An earlier build keyed

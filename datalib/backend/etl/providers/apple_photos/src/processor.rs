@@ -45,7 +45,7 @@ pub fn plan_ingest(
 
 /// The mirror processor. Owns its doltlite store end to end (open,
 /// register the interrupt hook, mirror, commit + close via
-/// `session.finish`).
+/// `run_store`).
 struct ApplePhotosIngest {
     id: String,
     raw_path: PathBuf,
@@ -61,14 +61,16 @@ impl DataProcessor for ApplePhotosIngest {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = raw_layout::entities_db(&self.raw_path);
         let pool = ingest::mirror::open_mirror(&entity_db).await?;
-        let session = ctx.open_store(pool.clone(), entity_db).await;
-        let stats = ingest::fetch(ingest::FetchOptions {
-            mirror_path: self.raw_path.clone(),
-            pool: Some(pool),
-            options: self.options.clone(),
-            progress: ctx.progress.clone(),
+        ctx.run_store(pool.clone(), None, |_| async {
+            let stats = ingest::fetch(ingest::FetchOptions {
+                mirror_path: self.raw_path.clone(),
+                pool: Some(pool),
+                options: self.options.clone(),
+                progress: ctx.progress.clone(),
+            })
+            .await?;
+            Ok(stats.summary())
         })
-        .await?;
-        session.finish(ctx, stats.summary()).await
+        .await
     }
 }

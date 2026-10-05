@@ -23,8 +23,9 @@ use tracing::{info, warn};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw as dr;
-use datalib_etl::download_problems::{self, RunProblem};
+use datalib_etl::download_problems::SilentEntry;
 use datalib_etl::progress::{Progress, RunBar};
+use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl_yolink_config::{YolinkDevice, YolinkSync};
 
 use schema_raw::{
@@ -279,6 +280,15 @@ pub(crate) async fn fetch_from<S: WindowSource>(
     opts: FetchOptions,
     src: &S,
 ) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| walk_devices(opts, src, found)).await
+}
+
+async fn walk_devices<S: WindowSource>(
+    opts: FetchOptions,
+    src: &S,
+    found: RunProblems,
+) -> Result<FetchSummary> {
     // Built before `opts.db` is moved out below.
     let scope_cfg = scope_config_blob(&opts.sync);
     let db = opts.db;
@@ -291,7 +301,6 @@ pub(crate) async fn fetch_from<S: WindowSource>(
         ..Default::default()
     };
     let now_ms = opts.now_ms;
-    let mut problems: Vec<RunProblem> = Vec::new();
     // Diff the per-device `start` dates against the ones that produced
     // the stored resume cursors. `None` (fresh store, or one written before
     // `sync_scope_config` existed) plans no backfill.
@@ -321,7 +330,7 @@ pub(crate) async fn fetch_from<S: WindowSource>(
             }
             Err(why) => {
                 s.errors += 1;
-                problems.push(RunProblem::listing(&dev.name, why));
+                found.listing(&dev.name, why);
             }
         }
     }
@@ -345,20 +354,15 @@ pub(crate) async fn fetch_from<S: WindowSource>(
             WalkEnd::Done | WalkEnd::Stopped => {}
             WalkEnd::Abandoned(why) | WalkEnd::Refused(why) => {
                 s.errors += 1;
-                problems.push(RunProblem::listing(&plan.dev.name, why));
+                found.listing(&plan.dev.name, why);
             }
         }
     }
     // A stopped run did not reach every device, so it has no verdict on
-    // the ones it missed, and leaves the last run's rows standing.
+    // which have gone quiet.
     if stop.requested() {
-        info!(
-            event = "yolink_stopped",
-            "told to stop; the run-level problems stay as the last run left them"
-        );
         return Ok(s);
     }
-    download_problems::report_run(db.pool(), &problems).await;
     let mut silent = Vec::new();
     for dev in &opts.sync.devices {
         let last: Option<i64> =
@@ -368,13 +372,13 @@ pub(crate) async fn fetch_from<S: WindowSource>(
                 .await
                 .with_context(|| format!("last reading of {}", dev.name))?;
         if let Some(detail) = silence(last, now_ms) {
-            silent.push(download_problems::SilentEntry {
+            silent.push(SilentEntry {
                 name: dev.name.clone(),
                 detail,
             });
         }
     }
-    download_problems::report_silent(db.pool(), &silent).await;
+    found.silent(silent);
     // Record the config only when every device succeeded: a device that
     // errored hasn't covered its widened `start`, and the blob is one
     // row for all of them.

@@ -12,11 +12,11 @@ use datalib_problems::{Outcome, Problem, Reason};
 use serde::Serialize;
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
-use datalib_etl::download_problems::{self, RecordProblem, RunProblem};
 use datalib_etl::file_checkpoint;
 use datalib_etl::fingerprint_cache::FingerprintCache;
-use datalib_etl::fsscan::{self, Scan, ScannedFile};
+use datalib_etl::fsscan::{self, ScannedFile};
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::RunProblems;
 
 /// The two tables every agent-session raw store keeps: `transcripts`,
 /// one row per session file, and `records`, one per line it keeps from
@@ -122,15 +122,16 @@ impl FetchSummary {
 type FileProblem = (Outcome, Problem);
 
 /// The files a run read, to stamp as read in the transaction that
-/// writes their rows, and what the run could not read.
+/// writes their rows.
 pub struct ReadFiles {
     read: Vec<(String, ScannedFile, Option<FileProblem>)>,
     /// `(scope, rel)` of files a clean walk no longer finds. Their rows
     /// stay; their stamps, and what a stamp says the file lacked, go.
     gone: Vec<(String, String)>,
-    walk_problems: Vec<RunProblem>,
-    unreadable: Vec<RecordProblem>,
 }
+
+/// Whether a path under one tree is one this run had no way to read.
+type Unseen = Box<dyn Fn(&str) -> bool + Send + Sync>;
 
 impl ReadFiles {
     pub async fn stamp(&self, tx: &mut Transaction<'_, Sqlite>) -> Result<()> {
@@ -141,14 +142,6 @@ impl ReadFiles {
             file_checkpoint::forget_file(tx, scope, rel).await?;
         }
         Ok(())
-    }
-
-    /// Once the rows are committed. Every run walks every tree and
-    /// re-reads every file it could not read before, so each set
-    /// replaces the last run's whole.
-    pub async fn report(&self, pool: &SqlitePool) {
-        download_problems::report_run(pool, &self.walk_problems).await;
-        download_problems::report_records(pool, &self.unreadable).await;
     }
 }
 
@@ -185,21 +178,25 @@ fn file_problem(lossy: bool, skipped: Option<String>) -> Option<FileProblem> {
 /// A tree that is not a directory fails the run only when nothing has
 /// been read from any tree yet; otherwise what is stored stands and the
 /// tree is a `listing:` problem.
+///
+/// Every run walks every tree and re-reads every file it could not read
+/// before, so an unreadable file's row stands only where this run could
+/// not look: under an entry a walk could not read, or a tree that is gone.
 pub async fn read_changed(
     pool: &SqlitePool,
     cache: &FingerprintCache,
     trees: &[SessionTree],
     progress: &Progress,
     provider: &str,
+    found: &RunProblems,
     mut read: impl FnMut(&str, &str) -> Option<SessionCounts>,
 ) -> Result<(FetchSummary, ReadFiles)> {
     let mut summary = FetchSummary::default();
     let mut out = ReadFiles {
         read: Vec::new(),
         gone: Vec::new(),
-        walk_problems: Vec::new(),
-        unreadable: Vec::new(),
     };
+    let mut unseen: Vec<(String, Unseen)> = Vec::new();
     let mut missing = Vec::new();
     let mut stored = 0;
     for tree in trees {
@@ -216,10 +213,9 @@ pub async fn read_changed(
             p.extension().is_some_and(|e| e == "jsonl")
         })
         .await?;
-        out.walk_problems.extend(scan.walk_problems_as(&tree.scope));
+        found.extend(scan.walk_problems_as(&tree.scope));
         if !scan.errors.is_empty() {
-            out.unreadable
-                .extend(unseen_unreadable(pool, &tree.rel_prefix, Some(&scan)).await?);
+            unseen.push((tree.rel_prefix.clone(), Box::new(scan.unseen())));
         }
         let changes = scan.changes_since(&prev);
         summary.files += scan.files.len();
@@ -236,11 +232,7 @@ pub async fn read_changed(
                 Ok(b) => b,
                 Err(e) => {
                     summary.unreadable += 1;
-                    out.unreadable.push(RecordProblem::new(
-                        "transcripts",
-                        &rel_path,
-                        e.to_string(),
-                    ));
+                    found.record_failed("transcripts", &rel_path, e.to_string());
                     continue;
                 }
             };
@@ -275,35 +267,19 @@ pub async fn read_changed(
         }
     }
     for tree in missing {
-        out.unreadable
-            .extend(unseen_unreadable(pool, &tree.rel_prefix, None).await?);
-        out.walk_problems.push(RunProblem::listing(
+        unseen.push((tree.rel_prefix.clone(), Box::new(|_| true)));
+        found.listing(
             &tree.scope,
             format!(
                 "{} is not a directory; what was read from it before is kept",
                 tree.root.display()
             ),
-        ));
+        );
     }
+    found.records_tried_all_but("transcripts", move |id| {
+        unseen
+            .iter()
+            .any(|(rel_prefix, unseen)| id.strip_prefix(rel_prefix.as_str()).is_some_and(unseen))
+    });
     Ok((summary, out))
-}
-
-/// The last run's unreadable files under `rel_prefix` that this run could
-/// not see — under an entry its walk could not read, or the whole tree
-/// when `scan` is `None` — carried into this run's set.
-async fn unseen_unreadable(
-    pool: &SqlitePool,
-    rel_prefix: &str,
-    scan: Option<&Scan>,
-) -> Result<Vec<RecordProblem>> {
-    Ok(
-        download_problems::earlier_records(pool, "transcripts", rel_prefix)
-            .await?
-            .into_iter()
-            .filter(|r| {
-                let rel = r.id.strip_prefix(rel_prefix).unwrap_or(&r.id);
-                scan.is_none_or(|scan| scan.could_not_see(rel))
-            })
-            .collect(),
-    )
 }

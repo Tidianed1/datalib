@@ -679,7 +679,7 @@ impl Export {
         self.problems().await.into_iter().map(|r| r.0).collect()
     }
 
-    /// The keys of a `report_skipped` part's rows end in a hash, so a
+    /// The keys of a part's `skipped:` rows end in a hash, so a
     /// test names the part.
     async fn skipped_parts(&self) -> Vec<String> {
         self.keys()

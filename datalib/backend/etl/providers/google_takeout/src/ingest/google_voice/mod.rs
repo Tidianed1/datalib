@@ -10,11 +10,12 @@ use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{blake3_hex, CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw::WirePayload;
-use datalib_etl::download_problems::{self, RunProblem, SkippedRecord};
+use datalib_etl::download_problems::{RunProblem, SkippedRecord};
 use datalib_etl::file_checkpoint;
 use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
 use datalib_etl::prune;
+use datalib_etl::run_problems::RunProblems;
 use datalib_problems::{Problem, Reason};
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::json;
@@ -48,6 +49,7 @@ pub async fn ingest(
     scan: &fsscan::Scan,
     include_spam: bool,
     progress: &Progress,
+    found: &RunProblems,
 ) -> Result<VoiceSummary> {
     // Voice keeps three kinds of file under one subtree, and they
     // already shared one cursor. Each section takes the changed files
@@ -242,7 +244,7 @@ pub async fn ingest(
         }
     }
     tx.commit().await.context("commit google_voice tx")?;
-    download_problems::report_skipped(db.pool(), "google_voice", &skipped).await;
+    found.skipped("google_voice", skipped);
 
     let mut summary = VoiceSummary {
         messages: n_messages,

@@ -158,7 +158,7 @@ async fn a_reset_and_resync_preserves_data_tables() {
         ..FetchOptions::new(db.clone())
     })
     .await;
-    // Seal before closing, as `session.finish` does in production. The
+    // Seal before closing, as the session does in production. The
     // read below opens its own pool, which lands on `main`; a download
     // that never sealed left its rows on the writer's branch, where no
     // reader can see them.

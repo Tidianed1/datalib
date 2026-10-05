@@ -152,17 +152,18 @@ goes on with what it has:
   skip-check queues it, and that run's report clears the row. A rate
   limit on an attachment ends the walk the same way, its conversation
   unwritten; one in the attachment retry ends that pass as
-  `phase:attachments`. A run cut short like this does not rewrite the
-  `config:` rows, since it did not check every named conversation.
+  `phase:attachments`. A run cut short like this adds its rows and
+  clears none, and does not rewrite the `config:` rows, since it did not
+  check every named conversation.
 - **A named conversation** (`conv_uuids`) that answers `404` is
   `config:conv_uuids:<value>`; any other failure is its
   `conversations:<id>` row, as above. Every named conversation is
   fetched every run, so both clear when it answers.
 - **An attachment** is its edge's row (see Attachments above).
 
-The `listing:`/`phase:` and `config:` rows are each written once, at the
-end of a run, replacing the last run's. A run that was asked to stop
-writes neither, and records nothing about a request the stop refused: a
+The `listing:`/`phase:` and `config:` rows of a run that got to its end
+replace the last run's. A run that was asked to stop clears none, and
+records nothing about a request the stop refused: a
 conversation whose attachments the stop cut short is not written at
 all, so the next run starts it over.
 
