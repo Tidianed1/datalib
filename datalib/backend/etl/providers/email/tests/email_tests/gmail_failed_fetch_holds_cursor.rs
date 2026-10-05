@@ -128,8 +128,8 @@ async fn a_transient_failure_that_outlasts_the_retries_ends_the_run() {
     );
     assert_eq!(
         mirrored,
-        BTreeSet::from([GOOD.to_string()]),
-        "the message fetched before the failure was dropped with the run",
+        BTreeSet::new(),
+        "a failed run commits nothing it wrote since its last seal",
     );
 }
 

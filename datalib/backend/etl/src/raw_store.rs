@@ -116,22 +116,16 @@ impl RawStoreSession {
 
     /// Run a download's `body` against this session's store and end the
     /// session whichever way the body returns, so no path leaves a pool
-    /// open. `Ok(summary)` is the run's last seal.
-    ///
-    /// What `Err` keeps depends on what the processor has said of its
-    /// store. One that streams its output has vouched that the store is
-    /// fit to read at any moment of a run, so what the failed run wrote
-    /// is sealed and the step still fails. For any other, nothing is
-    /// committed, since the run may have stopped between emptying a table
-    /// and refilling it, and the next writer's `open` discards what it
-    /// wrote; such a download that can still keep what it fetched records
-    /// a problem and returns `Ok`
+    /// open. `Ok(summary)` is the run's last seal. `Err` commits nothing:
+    /// the error may have struck between two writes that only make sense
+    /// together (a row stamped current before its attachments, a file
+    /// stamped read before its lookups), and a store sealed there would
+    /// read as complete and never be finished. What the run wrote since
+    /// its last seal, a point the download itself called consistent, the
+    /// next writer's `open` discards. A download that can still keep what
+    /// it fetched records a problem and returns `Ok`
     /// (docs/dev/data_architecture_ingestion.md §"Error handling").
-    pub async fn run<Fut>(
-        self,
-        ctx: &RunCtx<'_>,
-        body: impl FnOnce(Sealer) -> Fut,
-    ) -> Result<String>
+    pub async fn run<Fut>(self, body: impl FnOnce(Sealer) -> Fut) -> Result<String>
     where
         Fut: std::future::Future<Output = Result<String>>,
     {
@@ -143,16 +137,6 @@ impl RawStoreSession {
         match result {
             Ok(summary) => self.finish(summary).await,
             Err(e) => {
-                if ctx.streams_output() {
-                    let kept = self.state.commit_final(format!("failed: {e:#}")).await;
-                    if let Err(commit) = kept {
-                        tracing::warn!(
-                            source = %self.state.source_id,
-                            error = %format!("{commit:#}"),
-                            "could not seal what the failed run wrote; the next run fetches it again"
-                        );
-                    }
-                }
                 self.state.close_all().await;
                 Err(e)
             }
@@ -456,7 +440,11 @@ mod tests {
         );
     }
 
-    async fn a_failed_run(streams_output: bool) -> (i64, bool) {
+    /// Five test helpers once committed after a failed fetch, and so
+    /// showed work as kept that the processor throws away. An error
+    /// commits nothing since the last seal, and still closes the store.
+    #[tokio::test]
+    async fn a_failed_run_commits_nothing_and_closes_the_store() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("entities.doltlite_db");
         let entities = store(&path).await;
@@ -470,8 +458,7 @@ mod tests {
             &control,
             crate::download_metrics::DownloadMetrics::new(),
             datalib_obs::diagnostics::Diagnostics::new(),
-        )
-        .streaming(streams_output);
+        );
         let failed = ctx
             .run_store(entities.clone(), None, |_| async {
                 sqlx::query("INSERT INTO rows_t VALUES ('picard')")
@@ -489,26 +476,8 @@ mod tests {
             .await
             .unwrap();
         reopened.close().await;
-        (kept, entities.is_closed())
-    }
-
-    /// Two email tests asserted that a run ending in an error "keeps what
-    /// landed", and passed only because their helper committed after the
-    /// error where the processor did not. A streaming download's store is
-    /// fit to read at any moment, so its failed run is sealed; any other
-    /// may have failed between emptying a table and refilling it, and
-    /// keeps nothing. Both close the store.
-    #[tokio::test]
-    async fn a_failed_run_keeps_what_it_wrote_only_if_it_streams() {
-        let probe = tempfile::tempdir().unwrap();
-        let pool = store(&probe.path().join("probe.doltlite_db")).await;
-        let versioned = crate::doltlite_raw::has_dolt_extensions(&pool).await;
-        pool.close().await;
-        if !versioned {
-            return;
-        }
-        assert_eq!(a_failed_run(true).await, (1, true));
-        assert_eq!(a_failed_run(false).await, (0, true));
+        assert_eq!(kept, 0, "nothing the failed run wrote is kept");
+        assert!(entities.is_closed());
     }
 
     /// `finish` has to release every store the session was handed, not just

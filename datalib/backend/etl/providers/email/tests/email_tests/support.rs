@@ -34,9 +34,8 @@ impl Mirror {
     }
 
     /// Runs one download against the fixtures: the store is opened here,
-    /// handed to `download`, committed whichever way the download
-    /// returned, as the session does for a download that streams its
-    /// output, and closed.
+    /// handed to `download`, committed if the download returned `Ok`, as
+    /// the processor does, and closed.
     pub async fn run<T, F>(&self, download: impl FnOnce(RawDb) -> F) -> anyhow::Result<T>
     where
         F: Future<Output = anyhow::Result<T>>,
@@ -46,7 +45,9 @@ impl Mirror {
             .await
             .expect("open raw db");
         let out = download(db.clone()).await;
-        db.commit_all("test").await.unwrap();
+        if out.is_ok() {
+            db.commit_all("test").await.unwrap();
+        }
         db.close().await;
         std::env::remove_var(PLAYBACK_ENV);
         out

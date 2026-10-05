@@ -75,9 +75,6 @@ pub struct RunCtx<'a> {
     /// observability the orchestrator installs as scopes.
     metrics: Arc<DownloadMetrics>,
     diagnostics: Arc<Diagnostics>,
-    /// [`DataProcessor::streams_output`] of the processor this context
-    /// was built for.
-    streams_output: bool,
 }
 
 impl<'a> RunCtx<'a> {
@@ -99,20 +96,7 @@ impl<'a> RunCtx<'a> {
             control,
             metrics,
             diagnostics,
-            streams_output: false,
         }
-    }
-
-    /// Says the processor answers `true` to
-    /// [`DataProcessor::streams_output`]: its store is fit to read at
-    /// any moment of a run, so a run that fails keeps what it wrote.
-    pub fn streaming(mut self, streams_output: bool) -> Self {
-        self.streams_output = streams_output;
-        self
-    }
-
-    pub fn streams_output(&self) -> bool {
-        self.streams_output
     }
 
     /// How often this run seals partial output.
@@ -123,8 +107,8 @@ impl<'a> RunCtx<'a> {
     /// Run a download against its doltlite store: `body` gets the
     /// [`Sealer`](crate::raw_store::Sealer) for its own batch boundaries
     /// and returns the run's summary. The store, and `cas_pool` when the
-    /// source keeps a blob CAS, are committed and closed on `Ok`; on `Err`
-    /// they are closed, committed first only for a streaming processor; see
+    /// source keeps a blob CAS, are committed and closed on `Ok` and
+    /// closed uncommitted on `Err`; see
     /// [`RawStoreSession::run`](crate::raw_store::RawStoreSession::run).
     pub async fn run_store<Fut>(
         &self,
@@ -137,7 +121,7 @@ impl<'a> RunCtx<'a> {
     {
         crate::raw_store::RawStoreSession::open(pool, cas_pool, self)
             .await
-            .run(self, body)
+            .run(body)
             .await
     }
 
