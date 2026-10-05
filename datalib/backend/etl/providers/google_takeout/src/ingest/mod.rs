@@ -16,17 +16,15 @@ pub mod youtube_watch_history;
 
 pub use db::{db_path_for, RawDb};
 
-use datalib_etl::download_problems::{self, RunProblem, RunProblemKind};
+use datalib_etl::download_problems::RunProblemKind;
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan;
-use futures::FutureExt;
-use std::future::Future;
-use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 
 use anyhow::Result;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
@@ -126,6 +124,11 @@ pub(crate) fn product_exported(scan: &fsscan::Scan, product_dir: &str) -> bool {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| read_export(opts, found)).await
+}
+
+async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = opts.db.clone();
 
     let mut summary = FetchSummary::default();
@@ -140,39 +143,39 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         warn!(event = "takeout_walk_error", path = %e.path.display(), error = %e.error, "an entry of the export could not be walked");
     }
     let scan = &scan;
-    let mut problems = scan.walk_problems();
+    found.extend(scan.walk_problems());
 
     if opts.sync.maps_reviews {
-        if let Some(n) = feed(
-            "maps_reviews",
-            maps_reviews::ingest(&db, scan, progress),
-            &mut problems,
-        )
-        .await
+        if let Some(n) = found
+            .run_phase(
+                "maps_reviews",
+                maps_reviews::ingest(&db, scan, progress, &found),
+            )
+            .await
         {
             summary.maps_reviews = n.written;
             summary.removed += n.removed;
         }
     }
     if opts.sync.maps_saved_places {
-        if let Some(n) = feed(
-            "maps_saved_places",
-            maps_saved_places::ingest(&db, scan, progress),
-            &mut problems,
-        )
-        .await
+        if let Some(n) = found
+            .run_phase(
+                "maps_saved_places",
+                maps_saved_places::ingest(&db, scan, progress, &found),
+            )
+            .await
         {
             summary.maps_saved_places = n.written;
             summary.removed += n.removed;
         }
     }
     if opts.sync.maps_photos {
-        if let Some(s) = feed(
-            "maps_photos",
-            maps_photos::ingest(&db, scan, progress),
-            &mut problems,
-        )
-        .await
+        if let Some(s) = found
+            .run_phase(
+                "maps_photos",
+                maps_photos::ingest(&db, scan, progress, &found),
+            )
+            .await
         {
             summary.maps_photos = s.rows;
             summary.blobs_stored += s.blobs;
@@ -181,36 +184,36 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         }
     }
     if opts.sync.youtube_watch_history {
-        if let Some(n) = feed(
-            "youtube_watch_history",
-            youtube_watch_history::ingest(&db, scan, progress),
-            &mut problems,
-        )
-        .await
+        if let Some(n) = found
+            .run_phase(
+                "youtube_watch_history",
+                youtube_watch_history::ingest(&db, scan, progress, &found),
+            )
+            .await
         {
             summary.youtube_watch_history = n.written;
             summary.removed += n.removed;
         }
     }
     if opts.sync.youtube_subscriptions {
-        if let Some(n) = feed(
-            "youtube_subscriptions",
-            youtube_subscriptions::ingest(&db, scan, progress),
-            &mut problems,
-        )
-        .await
+        if let Some(n) = found
+            .run_phase(
+                "youtube_subscriptions",
+                youtube_subscriptions::ingest(&db, scan, progress, &found),
+            )
+            .await
         {
             summary.youtube_subscriptions = n.written;
             summary.removed += n.removed;
         }
     }
     if opts.sync.google_chat {
-        if let Some(s) = feed(
-            "google_chat",
-            google_chat::ingest(&db, scan, progress),
-            &mut problems,
-        )
-        .await
+        if let Some(s) = found
+            .run_phase(
+                "google_chat",
+                google_chat::ingest(&db, scan, progress, &found),
+            )
+            .await
         {
             summary.chat_groups += s.groups;
             summary.chat_users += s.users;
@@ -222,12 +225,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         }
     }
     if opts.sync.gemini_apps {
-        if let Some(s) = feed(
-            "gemini_apps",
-            gemini_apps::ingest(&db, scan, progress),
-            &mut problems,
-        )
-        .await
+        if let Some(s) = found
+            .run_phase("gemini_apps", gemini_apps::ingest(&db, scan, progress))
+            .await
         {
             summary.gemini_activity += s.activity;
             summary.gemini_attachments += s.attachments;
@@ -236,8 +236,14 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         }
     }
     if opts.sync.google_voice {
-        let voice = google_voice::ingest(&db, scan, opts.sync.google_voice_include_spam, progress);
-        if let Some(s) = feed("google_voice", voice, &mut problems).await {
+        let voice = google_voice::ingest(
+            &db,
+            scan,
+            opts.sync.google_voice_include_spam,
+            progress,
+            &found,
+        );
+        if let Some(s) = found.run_phase("google_voice", voice).await {
             summary.voice_messages += s.messages;
             summary.voice_bills += s.bills;
             summary.voice_greetings += s.greetings;
@@ -245,16 +251,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             summary.blobs_stored += s.blobs_stored;
             summary.removed += s.removed;
             summary.files_removed += s.files_removed;
-            problems.extend(s.held_back);
+            found.extend(s.held_back);
         }
     }
-    summary.feeds_failed = problems
-        .iter()
-        .filter(|p| p.kind == RunProblemKind::Phase)
-        .count();
-    if !opts.control.stop.requested() {
-        download_problems::report_run(db.pool(), &problems).await;
-    }
+    summary.feeds_failed = found.count(RunProblemKind::Phase);
 
     Ok(summary)
 }
@@ -278,88 +278,4 @@ pub(crate) fn require_some_read(file: &str, listed: usize, read: usize) -> Resul
         ));
     }
     Ok(())
-}
-
-/// Reports what a snapshot feed skipped, if it read its file this run:
-/// `None` means the file was unchanged and last run's rows still hold.
-pub(crate) async fn report_skipped_if_read(
-    db: &RawDb,
-    part: &str,
-    skipped: Option<Vec<download_problems::SkippedRecord>>,
-) {
-    if let Some(skipped) = skipped {
-        download_problems::report_skipped(db.pool(), part, &skipped).await;
-    }
-}
-
-/// Runs one feed so that its failure, an error or a panic, costs only
-/// that feed: it becomes a `phase:<feed>` problem and the others run.
-async fn feed<T>(
-    name: &str,
-    run: impl Future<Output = Result<T>>,
-    problems: &mut Vec<RunProblem>,
-) -> Option<T> {
-    // Unwind safety: a feed that panics mid-write drops its transaction,
-    // and a dropped sqlx transaction rolls back, so the store is left as
-    // the last feed that finished left it.
-    let detail = match AssertUnwindSafe(run).catch_unwind().await {
-        Ok(Ok(v)) => return Some(v),
-        Ok(Err(e)) => format!("{e:#}"),
-        Err(panic) => format!("panicked: {}", panic_message(&*panic)),
-    };
-    problems.push(RunProblem::phase(name, detail));
-    None
-}
-
-fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
-    payload
-        .downcast_ref::<&str>()
-        .copied()
-        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
-        .unwrap_or("a panic with no message")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use futures::executor::block_on;
-
-    /// A panic inside one feed once ended the whole Takeout step.
-    #[test]
-    fn a_feed_that_panics_costs_only_itself() {
-        let mut problems = Vec::new();
-        let got: Option<()> = block_on(feed(
-            "youtube_watch_history",
-            async { panic!("sliced through a character") },
-            &mut problems,
-        ));
-        assert!(got.is_none());
-        assert_eq!(
-            problems,
-            [RunProblem::phase(
-                "youtube_watch_history",
-                "panicked: sliced through a character"
-            )]
-        );
-        assert_eq!(
-            block_on(feed("maps_reviews", async { Ok(2) }, &mut problems)),
-            Some(2)
-        );
-        assert_eq!(problems.len(), 1);
-    }
-
-    #[test]
-    fn a_feed_that_errs_names_the_error_chain() {
-        let mut problems = Vec::new();
-        let failing =
-            async { Err::<(), _>(anyhow::anyhow!("not JSON").context("parse Saved Places.json")) };
-        assert!(block_on(feed("maps_saved_places", failing, &mut problems)).is_none());
-        assert_eq!(
-            problems,
-            [RunProblem::phase(
-                "maps_saved_places",
-                "parse Saved Places.json: not JSON"
-            )]
-        );
-    }
 }

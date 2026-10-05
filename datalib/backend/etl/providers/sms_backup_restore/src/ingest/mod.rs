@@ -12,11 +12,12 @@ use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw::WirePayload;
-use datalib_etl::download_problems::{self, RunProblem};
+use datalib_etl::download_problems::RunProblem;
 use datalib_etl::file_checkpoint;
 use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
 use datalib_etl::prune;
+use datalib_etl::run_problems::{self, RunProblems};
 use datalib_problems::{Outcome, Problem, Reason};
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
@@ -65,6 +66,11 @@ pub struct FetchSummary {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| read_backups(opts, found)).await
+}
+
+async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = opts.db.clone();
 
     // One scan answers what `.xml` files are there and which have
@@ -95,7 +101,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut done: Vec<&fsscan::ScannedFile> = Vec::new();
     let mut summary = FetchSummary::default();
     // Files that would not open. They are left unstamped, so the next run
-    // reads them again and its report replaces these rows.
+    // reads them again.
     let mut unread: Vec<RunProblem> = Vec::new();
     // Files that opened and would not parse. Reading them again gets the
     // same answer, so they are stamped with their problem and read again
@@ -221,7 +227,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     } else if read_all && changes.walk_errors == 0 && changes.may_have_dropped_records() {
         problems.push(fsscan::Scan::deletions_held_back(summary.parse_errors));
     }
-    download_problems::report_run(db.pool(), &problems).await;
+    found.extend(problems);
 
     Ok(summary)
 }

@@ -11,9 +11,10 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::CasEdgeAccumulator;
-use datalib_etl::download_problems::{self, DownloadProblem, RunProblem};
+use datalib_etl::download_problems::{DownloadProblem, RunProblem};
 use datalib_etl::download_run::DownloadRun;
 use datalib_etl::http::{latchkey_curl, HttpRequest, HttpService, LatchkeySettings};
+use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -1037,6 +1038,11 @@ async fn bfs_drain(
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| download(opts, found)).await
+}
+
+async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let _ = datalib_etl::latchkey::ensure_curl_router();
 
     let db = opts.db.clone();
@@ -1093,6 +1099,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 true,
             )
             .await?;
+            // One pass over named pages reaches none of a full run's
+            // listings and phases.
+            found.cut_short();
             return refused_from_the_start(&state_walk, &summary).map_or(Ok(()), Err);
         }
 
@@ -1114,10 +1123,12 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 true,
             )
             .await?;
+            // One pass over named pages reaches none of a full run's
+            // listings and phases.
+            found.cut_short();
             return refused_from_the_start(&state_walk, &summary).map_or(Ok(()), Err);
         }
 
-        let mut run_problems: Vec<RunProblem> = Vec::new();
         let mut config_problems: Vec<DownloadProblem> = Vec::new();
 
         // No roots means the whole workspace, and the whole workspace
@@ -1185,14 +1196,14 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             // rest of that window forever. A page that failed is in the
             // retry set, so moving past it is safe.
             match (&pass.cut_short, pass.newest_edited) {
-                (Some(e), _) => run_problems.push(RunProblem::listing(
+                (Some(e), _) => found.listing(
                     "search",
                     format!(
                         "the search stopped after {} pages of the workspace, so older edits \
                          were not looked at: {e}",
                         pass.ids.len()
                     ),
-                )),
+                ),
                 (None, Some(mark))
                     if !opts.control.stop.requested() && state_walk.ended.is_none() =>
                 {
@@ -1256,21 +1267,18 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             return Err(e);
         }
         if let Some(d) = &state_walk.comments_forbidden {
-            run_problems.push(comments_forbidden(d));
+            found.push(comments_forbidden(d));
         } else if let (false, Some(said)) = (state_walk.comments_asked, &comments_refused) {
-            run_problems.push(RunProblem::forbidden("comments", said.clone()));
+            found.push(RunProblem::forbidden("comments", said.clone()));
         }
-        if let Some(ended) = &state_walk.ended {
-            run_problems.push(ended.problem());
-        }
-        // A stop may have cut any of it short; the last run's rows
-        // stand until a run gets through. A walk that ended early did not
-        // reach every configured root, so their rows stand too.
-        if !opts.control.stop.requested() {
-            if state_walk.ended.is_none() {
-                download_problems::report(db.pool(), &config_problems).await;
+        // A walk that ended early did not reach every configured root,
+        // so their rows stand, nor every listing and phase.
+        match &state_walk.ended {
+            Some(ended) => {
+                found.push(ended.problem());
+                found.cut_short();
             }
-            download_problems::report_run(db.pool(), &run_problems).await;
+            None => found.config(config_problems),
         }
         Ok(())
     };

@@ -76,9 +76,10 @@ row, and the sync goes on with the rest.
   and fetches the rest; the row goes with it.
 - **A search** that fails is a `listing:search <scope>` row — a
   warning when GitHub refused the credential (401/403), an error
-  otherwise. That scope's cursor stays where it was. The rows are
-  replaced at the end of every discovery run that is not stopped, so
-  the next run whose search works clears them.
+  otherwise. That scope's cursor stays where it was. A discovery run that
+  gets to its end replaces the last run's rows, so the next run whose
+  searches all answer clears them; one that gave up adds its rows and
+  clears none.
 - **A PR** that could not be fetched whole — its own record, or one of
   its comment or review lists — is a row on it
   (`pull_requests:<owner>/<repo>#<n>`): an error when no copy of the PR

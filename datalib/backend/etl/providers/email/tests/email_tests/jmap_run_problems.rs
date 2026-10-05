@@ -105,10 +105,11 @@ async fn a_thread_that_did_not_answer_is_asked_for_again() {
 }
 
 /// A refused credential fails every download after it the same way, so
-/// it ends the run rather than writing one failure per `.eml` — and what
-/// downloaded before it is kept.
+/// it ends the run rather than writing one failure per `.eml`. The run
+/// fails, so what it wrote since its last seal goes with it: here, with
+/// no seal, all of it, and the next run downloads it again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_refused_download_ends_the_run_and_keeps_what_landed() {
+async fn a_refused_download_ends_the_run_and_keeps_what_was_sealed() {
     let m = Mirror::new();
     let tape = Tape::new(&m.playback);
     tape.account(
@@ -122,8 +123,8 @@ async fn a_refused_download_ends_the_run_and_keeps_what_landed() {
     assert!(format!("{err:#}").contains("HTTP 401"), "{err:#}");
     assert_eq!(
         blobs(&m).await,
-        [("M1".to_string(), true)],
-        "the download before the refusal is kept, and none after it was tried"
+        [],
+        "a failed run commits nothing it wrote since its last seal"
     );
     assert!(problems(&m).await.is_empty(), "{:?}", problems(&m).await);
 }

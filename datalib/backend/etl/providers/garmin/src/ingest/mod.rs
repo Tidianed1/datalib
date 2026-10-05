@@ -27,9 +27,10 @@ use datalib_etl::blob_cas::CasEdgeAccumulator;
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw::{self as dr, WirePayload};
-use datalib_etl::download_problems::{self, RunProblem};
+use datalib_etl::download_problems::RunProblem;
 use datalib_etl::progress::Progress;
 use datalib_etl::raw_store::Sealer;
+use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
 use datalib_etl_garmin_config::{GarminApi, DEFAULT_SINCE_DAYS};
 
@@ -239,6 +240,15 @@ fn walk_end(today: NaiveDate, until: Option<&str>) -> Result<NaiveDate> {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    let sealer = opts.sealer.clone();
+    run_problems::collecting_sealed(&pool, &stop, sealer.as_ref(), |found| {
+        walk_account(opts, found)
+    })
+    .await
+}
+
+async fn walk_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = opts.db;
     let api = opts.api;
     let recorded_since = db.cursor(DEFAULT_SINCE_SCOPE).await?;
@@ -272,9 +282,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // step driver commits and reports the store's problem counts only on
     // `Ok`, so `Err` here would hide the very rows that say what failed.
     let (account, settings_failed) = fetch_account(&mut client, &db, &opts.control.stop).await?;
-    if settings_failed.is_some() {
+    if let Some(problem) = settings_failed {
         s.errors += 1;
         s.listings_failed += 1;
+        found.push(problem);
     }
     db.repair_shared_file_hashes(api.activity_files(), api.wellness_files())
         .await?;
@@ -290,7 +301,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         sealer: opts.sealer.as_ref(),
         progress,
         stop: &opts.control.stop,
-        problems: settings_failed.into_iter().collect(),
+        found,
     };
 
     // A stop makes every request after it fail at once. None of those
@@ -311,7 +322,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 } else {
                     s.errors += 1;
                     s.phases_failed += 1;
-                    walk.problems.push(RunProblem::phase($name, detail));
+                    walk.found.phase($name, detail);
                 }
             }
         };
@@ -325,17 +336,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let requests = walk.client.requests;
     s.requests = requests;
     let stopped = walk.stopping();
-    // Every finished run, empty included: last run's rows go with it. A
-    // stopped run did not list everything, so it has no verdict on the
-    // listings it never reached and leaves last run's rows standing.
-    if stopped {
-        info!(
-            event = "garmin_stopped",
-            "told to stop; the run-level problems stay as the last run left them"
-        );
-    } else {
-        download_problems::report_run(db.pool(), &walk.problems).await;
-    }
     datalib_etl::scope_config::store_if_satisfied(
         db.pool(),
         SCOPE_CONFIG_KEY,
@@ -360,8 +360,7 @@ struct Walk<'a> {
     sealer: Option<&'a Sealer>,
     progress: &'a Progress,
     stop: &'a StopFlag,
-    /// What the run could not do as a whole, reported once at the end.
-    problems: Vec<RunProblem>,
+    found: RunProblems,
 }
 
 /// What a listing request came back as. Only a complete one is an
@@ -687,11 +686,12 @@ impl Walk<'_> {
         }
         s.errors += 1;
         let problem = RunProblem::listing(name, why);
-        if self.problems.iter().any(|p| p.key() == problem.key()) {
+        let counted = self.found.run_problems();
+        if counted.iter().any(|p| p.key() == problem.key()) {
             return;
         }
         s.listings_failed += 1;
-        self.problems.push(problem);
+        self.found.push(problem);
     }
 
     // ── devices ──────────────────────────────────────────────────────
@@ -1235,10 +1235,10 @@ impl Walk<'_> {
             let Some(first_page) = path(0) else {
                 // Not counted in `errors`: it is the account's shape, the
                 // same every run, and would hold back the scope record.
-                self.problems.push(RunProblem::listing(
+                self.found.listing(
                     kind.name,
                     "socialProfile carries no profileId, which the gear listing is keyed on",
-                ));
+                );
                 continue;
             };
             let Listed {

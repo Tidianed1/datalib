@@ -60,25 +60,21 @@ impl DataProcessor for GarminIngest {
             .with_context(|| format!("garmin: run stamp {:?}", ctx.now))?
             .inner()
             .date_naive();
-        let entity_db = ingest::db_path_for(&self.raw_path);
-        let db = ingest::RawDb::open(&entity_db).await?;
-        let session = datalib_etl::raw_store::RawStoreSession::open_with_blobs(
-            db.pool().clone(),
-            Some(db.cas().pool().clone()),
-            entity_db,
-            ctx,
-        )
-        .await;
-        let s = ingest::fetch(ingest::FetchOptions {
-            db,
-            creds,
-            api: self.api.clone(),
-            today,
-            progress: ctx.progress.clone(),
-            control: ctx.control.clone(),
-            sealer: Some(session.sealer()),
+        let db = ingest::RawDb::open(&ingest::db_path_for(&self.raw_path)).await?;
+        let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
+        ctx.run_store(pool, Some(cas_pool), |sealer| async {
+            let s = ingest::fetch(ingest::FetchOptions {
+                db,
+                creds,
+                api: self.api.clone(),
+                today,
+                progress: ctx.progress.clone(),
+                control: ctx.control.clone(),
+                sealer: Some(sealer),
+            })
+            .await?;
+            Ok(s.line())
         })
-        .await?;
-        session.finish(ctx, s.line()).await
+        .await
     }
 }

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use tracing::{debug, info};
 
-use datalib_etl::download_problems::RunProblem;
+use datalib_etl::run_problems::RunProblems;
 use serde_json::Value;
 
 use super::db::RawDb;
@@ -46,24 +46,21 @@ pub struct EnrichSummary {
 }
 
 /// A bridge database that will not read, or a data directory that will
-/// not list, is pushed onto `problems`: its events keep whatever
+/// not list, is reported to `found`: its events keep whatever
 /// `external_event_id` an earlier run gave them.
 pub async fn enrich(
     beeper_data_dir: &Path,
     dst: &RawDb,
     networks: &[String],
     summary: &mut FetchSummary,
-    problems: &mut Vec<RunProblem>,
+    found: &RunProblems,
 ) -> Result<EnrichSummary> {
     let mut enrich = EnrichSummary::default();
 
     let mut entries = match tokio::fs::read_dir(beeper_data_dir).await {
         Ok(e) => e,
         Err(e) => {
-            problems.push(RunProblem::phase(
-                "megabridge",
-                format!("{}: {e}", beeper_data_dir.display()),
-            ));
+            found.phase("megabridge", format!("{}: {e}", beeper_data_dir.display()));
             return Ok(enrich);
         }
     };
@@ -73,10 +70,7 @@ pub async fn enrich(
             Ok(Some(entry)) => entry,
             Ok(None) => break,
             Err(e) => {
-                problems.push(RunProblem::phase(
-                    "megabridge",
-                    format!("{}: {e}", beeper_data_dir.display()),
-                ));
+                found.phase("megabridge", format!("{}: {e}", beeper_data_dir.display()));
                 break;
             }
         };
@@ -108,10 +102,7 @@ pub async fn enrich(
         let rows = match read_bridge(&mb_path).await {
             Ok(rows) => rows,
             Err(e) => {
-                problems.push(RunProblem::phase(
-                    &format!("megabridge {network}"),
-                    format!("{e:#}"),
-                ));
+                found.phase(&format!("megabridge {network}"), format!("{e:#}"));
                 continue;
             }
         };

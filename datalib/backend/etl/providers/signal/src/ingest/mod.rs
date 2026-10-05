@@ -8,8 +8,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Context, Result};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::control::DownloadControl;
-use datalib_etl::download_problems::{self, RunProblem};
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl::stop::StopFlag;
 use datalib_signal_backup::{backup, decrypt_attachment, local_media_name, Snapshot};
 use serde::Serialize;
 use sqlx::Row;
@@ -76,6 +77,14 @@ pub struct FetchSummary {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let pool = opts.db.pool().clone();
+    // Not the run's stop flag: the walk does not stop, so even a stopped
+    // run read every frame, and the snapshot it stamps is never read again.
+    let never_stops = StopFlag::new();
+    run_problems::collecting(&pool, &never_stops, |found| read_snapshot(opts, found)).await
+}
+
+async fn read_snapshot(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = opts.db.clone();
 
     let aep_env_var = opts
@@ -122,6 +131,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             note = "skipping decrypt + walk; `datalib-dag --reset` this step to re-ingest",
             "this snapshot was ingested before; nothing to do"
         );
+        // Nothing was read, so what its one read could not decode stands.
+        found.cut_short();
         return Ok(FetchSummary {
             snapshot: snapshot_dir
                 .file_name()
@@ -306,26 +317,16 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // error annotations).
     flush_attachments(&db, pending_attachments).await?;
 
-    // Once per snapshot read, never on the already-ingested skip above:
-    // the next snapshot is read whole, so its report replaces this one.
-    // Even on a stopped run: the walk does not stop, so it read every
-    // frame, and the snapshot is stamped below and never read again.
-    {
-        let problems: Vec<RunProblem> = undecoded
-            .first()
-            .map(|first| {
-                RunProblem::phase(
-                    "frames",
-                    format!(
-                        "{} backup frame(s) did not decode, so their records are missing \
-                         until a newer backup reads; first: {first}",
-                        undecoded.len()
-                    ),
-                )
-            })
-            .into_iter()
-            .collect();
-        download_problems::report_run(db.pool(), &problems).await;
+    // The next snapshot is read whole, so its report replaces this one.
+    if let Some(first) = undecoded.first() {
+        found.phase(
+            "frames",
+            format!(
+                "{} backup frame(s) did not decode, so their records are missing \
+                 until a newer backup reads; first: {first}",
+                undecoded.len()
+            ),
+        );
     }
 
     db.record_snapshot_ingested(

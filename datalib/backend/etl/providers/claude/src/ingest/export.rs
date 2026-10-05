@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw::WirePayload;
-use datalib_etl::download_problems::{self, RunProblem};
 use datalib_etl::download_run::DownloadRun;
+use datalib_etl::run_problems::{self, RunProblems};
 use serde::Serialize;
 use serde_json::Value;
 use sqlx::{Sqlite, Transaction};
@@ -54,12 +54,17 @@ pub struct IngestSummary {
 
 #[instrument(skip_all, fields(export = %opts.input_path.display()))]
 pub async fn ingest(opts: IngestOptions) -> Result<IngestSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| read_export(opts, found)).await
+}
+
+async fn read_export(opts: IngestOptions, found: RunProblems) -> Result<IngestSummary> {
     let db = opts.db.clone();
 
     let run_config = serde_json::json!({ "input_path": opts.input_path });
     let run = DownloadRun::start(db.pool(), &run_config).await?;
     let mut summary = IngestSummary::default();
-    let result = ingest_all(&db, &opts, &mut summary).await;
+    let result = ingest_all(&db, &opts, &mut summary, &found).await;
     run.finish(&result, &summary).await;
     result?;
     Ok(summary)
@@ -67,7 +72,12 @@ pub async fn ingest(opts: IngestOptions) -> Result<IngestSummary> {
 
 /// The whole snapshot in one transaction: a half-written export is
 /// never what render sees.
-async fn ingest_all(db: &RawDb, opts: &IngestOptions, summary: &mut IngestSummary) -> Result<()> {
+async fn ingest_all(
+    db: &RawDb,
+    opts: &IngestOptions,
+    summary: &mut IngestSummary,
+    found: &RunProblems,
+) -> Result<()> {
     let dir = &opts.input_path;
     // Read every file before opening the transaction, so a malformed
     // one fails the run without having touched the store.
@@ -117,19 +127,15 @@ async fn ingest_all(db: &RawDb, opts: &IngestOptions, summary: &mut IngestSummar
     ));
 
     tx.commit().await.context("commit export ingest tx")?;
-    let problems: Vec<RunProblem> = (summary.without_uuid > 0)
-        .then(|| {
-            RunProblem::phase(
-                "export",
-                format!(
-                    "{} conversations or projects in the export have no uuid; they were not stored",
-                    summary.without_uuid
-                ),
-            )
-        })
-        .into_iter()
-        .collect();
-    download_problems::report_run(db.pool(), &problems).await;
+    if summary.without_uuid > 0 {
+        found.phase(
+            "export",
+            format!(
+                "{} conversations or projects in the export have no uuid; they were not stored",
+                summary.without_uuid
+            ),
+        );
+    }
     if summary.pruned > 0 {
         // Loud on purpose: this is the one path that removes stored
         // rows, and "the export got smaller" is worth seeing.

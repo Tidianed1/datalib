@@ -16,10 +16,11 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::bulk::bulk_upsert_in_tx;
-use datalib_etl::download_problems::{self, RunProblem};
+use datalib_etl::download_problems::RunProblem;
 use datalib_etl::download_run::DownloadRun;
 use datalib_etl::http::LatchkeySettings;
 use datalib_etl::progress::{Progress, RunBar};
+use datalib_etl::run_problems::{self, RunProblems};
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -324,6 +325,15 @@ const M_THREAD_GET: &str = "Thread/get";
 const BLOB_FAILURE_BUDGET: usize = 20;
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    let sealer = opts.sealer.clone();
+    run_problems::collecting_sealed(&pool, &stop, sealer.as_ref(), |found| {
+        sync_account(opts, found)
+    })
+    .await
+}
+
+async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = opts.db.clone();
 
     // Coarse per-phase progress so the bar moves even though we don't
@@ -371,7 +381,16 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         &opts.only_mailbox_labels,
     );
 
-    let result = run_sync(&db, &session, &account_id, &opts, &label_change, &bar).await;
+    let result = run_sync(
+        &db,
+        &session,
+        &account_id,
+        &opts,
+        &label_change,
+        &bar,
+        &found,
+    )
+    .await;
     bar.finish();
     // Record the config only once the run satisfied it, so a failure —
     // or a run that stopped when asked, with mailboxes still unwalked —
@@ -404,6 +423,7 @@ async fn run_sync(
     // widening needs its own enumeration.
     label_change: &datalib_etl::scope_config::FilterChange,
     bar: &RunBar,
+    found: &RunProblems,
 ) -> Result<FetchSummary> {
     let mut summary = FetchSummary {
         account_id: account_id.to_string(),
@@ -427,10 +447,6 @@ async fn run_sync(
         .unwrap_or_else(|| json!({}));
     upsert_account(db, &now, account_id, &account_payload).await?;
 
-    // What this run could not do as a whole; replaces the last run's
-    // rows once the run gets to the end.
-    let mut run_problems: Vec<RunProblem> = Vec::new();
-
     // ── mailboxes ───────────────────────────────────────────────────
     bar.doing("mailboxes");
     if let Err(e) = sync_mailboxes(db, &now, session, account_id, opts, &mut summary).await {
@@ -440,7 +456,7 @@ async fn run_sync(
         if !api::is_upstream(&e) || !(stored || opts.control.stop.requested()) {
             return Err(e);
         }
-        run_problems.push(RunProblem::listing(M_MAILBOX_GET, format!("{e:#}")));
+        found.listing(M_MAILBOX_GET, format!("{e:#}"));
     }
     bar.did(1);
 
@@ -488,7 +504,7 @@ async fn run_sync(
         Some(resolved.ids)
     };
     // Every run, so a filter corrected or removed takes its rows with it.
-    download_problems::report(db.pool(), &summary.problems).await;
+    found.config(summary.problems.clone());
 
     // Mailboxes newly admitted by a widened `only_extract_labels`.
     // `Email/changes` only reports what changed since the cursor, so
@@ -548,7 +564,7 @@ async fn run_sync(
         if !api::is_upstream(&e) || !(stored || opts.control.stop.requested()) {
             return Err(e);
         }
-        run_problems.push(RunProblem::listing(M_EMAIL_QUERY, format!("{e:#}")));
+        found.listing(M_EMAIL_QUERY, format!("{e:#}"));
     }
     bar.did(1);
 
@@ -568,7 +584,7 @@ async fn run_sync(
     )
     .await?
     {
-        run_problems.push(p);
+        found.push(p);
     }
     bar.did(1);
 
@@ -576,12 +592,6 @@ async fn run_sync(
     bar.doing("blobs");
     let blobs = sync_blobs(db, session, account_id, opts, bar, &mut summary).await;
     bar.did(1);
-
-    // A stop may have cut any phase short; the last run's rows stand
-    // until a run gets through them.
-    if !opts.control.stop.requested() {
-        download_problems::report_run(db.pool(), &run_problems).await;
-    }
     blobs?;
 
     info!(

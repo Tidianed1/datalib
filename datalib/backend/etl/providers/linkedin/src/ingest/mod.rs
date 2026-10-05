@@ -12,9 +12,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw::{self as dr};
-use datalib_etl::download_problems::{self, RunProblem};
 use datalib_etl::export_files::ExportFiles;
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
 use serde::Serialize;
 use serde_json::{Map, Value};
 use sqlx::sqlite::SqlitePool;
@@ -146,11 +146,16 @@ pub struct FetchSummary {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| read_export(opts, found)).await
+}
+
+async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = opts.db.clone();
 
     let mut summary = FetchSummary::default();
     let export = ExportFiles::walk(&opts.input_path)?;
-    let mut problems = export.walk_problems();
+    found.extend(export.walk_problems());
     let mut tx = db.pool().begin().await.context("begin linkedin tx")?;
 
     for path in export.with_extension("csv") {
@@ -168,10 +173,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             Err(e) => {
                 // The table keeps what the last good read of this file
                 // left in it; the file is read again next run.
-                problems.push(RunProblem::listing(
+                found.listing(
                     &format!("csv {}", relative(&opts.input_path, path)),
                     format!("{e:#}"),
-                ));
+                );
                 summary.parse_errors += 1;
                 continue;
             }
@@ -196,7 +201,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     if !articles.is_empty() {
         let read = read_articles(&opts.input_path, &articles);
         for (rel, e) in &read.failed {
-            problems.push(RunProblem::listing(&format!("articles {rel}"), e.clone()));
+            found.listing(&format!("articles {rel}"), e.clone());
             summary.parse_errors += 1;
         }
         // An article that would not read keeps its row, and a walk that
@@ -239,10 +244,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             gave_up = s.gave_up,
             "fetched the profile photos"
         );
-        problems.extend(s.problem());
-    }
-    if !opts.control.stop.requested() {
-        download_problems::report_run(db.pool(), &problems).await;
+        found.extend(s.problem());
     }
     Ok(summary)
 }

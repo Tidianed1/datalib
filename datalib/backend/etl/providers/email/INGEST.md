@@ -135,7 +135,7 @@ back on.
 - Some download failures end the blobs phase with an error: a refused
   credential (401/403), a retry loop that gave up, or twenty failures in
   a row. Any of these would fail every remaining `.eml` the same way.
-  What downloaded before is kept.
+  What the run had sealed before is kept; the rest is downloaded again.
 
 **Gmail API.**
 
@@ -157,7 +157,8 @@ back on.
   `listing:messages.list <label>` row. The other labels are still
   walked, nothing is pruned, and the cursor is held.
 - A refused credential, a spent daily quota, or a retry loop that gave
-  up ends the run with an error. What was fetched before it is kept.
+  up ends the run with an error. What the run had sealed before it is
+  kept; the rest is fetched again.
 
 **mbox.** A file that will not open, or whose read fails part-way, is a
 `listing:mbox <file>` row. It is not stamped, so the next run reads it

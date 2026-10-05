@@ -675,12 +675,12 @@ log when it fires.
 
 **An error or a warning about a record goes through `problems`, never
 only to the log.** A record a download could not fetch goes through
-`record_object_attempt` / `record_object_error`, or through
-`download_problems::report_records` when it failed before we had a row
-for it; a configured entry
-upstream does not have goes through `download_problems::report`, and
-a listing or phase the run could not do as a whole through
-`download_problems::report_run`; a record render could not fully
+`record_object_attempt` / `record_object_error`. Everything else a
+download could not do goes into the one `RunProblems` its `fetch` is
+handed (`run_problems::collecting`): a record that failed before we had
+a row for it, a configured entry upstream does not have, a listing or
+phase the run could not do as a whole. Each report says what the run
+covered, and only that is cleared. A record render could not fully
 project goes on its document's `RenderedMarkdown::problems`, or
 through `RenderCtx::report_*` when there is no document yet. The rows
 travel with the data to the index, and that is where a person sees

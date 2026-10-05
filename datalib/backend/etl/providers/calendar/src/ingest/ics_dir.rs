@@ -7,11 +7,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_etl::control::DownloadControl;
-use datalib_etl::download_problems::{self, RunProblem};
 use datalib_etl::file_checkpoint;
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
 use datalib_problems::{Outcome, Problem, Reason};
 use tracing::warn;
 
@@ -33,6 +33,11 @@ const CHECKPOINT_SCOPE: &str = "calendar/ics";
 const ACCOUNT_ID: &str = "ics";
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| read_folder(opts, found)).await
+}
+
+async fn read_folder(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = &opts.db;
     db.upsert_account(&AccountRow {
         id: ACCOUNT_ID.into(),
@@ -65,7 +70,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     opts.progress.set_length(Some(scan.files.len() as u64));
     opts.progress.inc(changes.unchanged as u64);
     let mut read: BTreeSet<&str> = BTreeSet::new();
-    let mut problems = scan.walk_problems();
+    found.extend(scan.walk_problems());
     for f in changes.needs_reading_by_path() {
         if opts.control.stop.requested() {
             break;
@@ -90,10 +95,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             // Not stamped, so the next run reads it again.
             Err(e) => {
                 summary.errors += 1;
-                problems.push(RunProblem::listing(
-                    &format!("ics {}", f.rel),
-                    format!("{e:#}"),
-                ));
+                found.listing(&format!("ics {}", f.rel), format!("{e:#}"));
             }
         }
         opts.progress.inc(1);
@@ -107,10 +109,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             .delete_file_calendar(&calendar_id, CHECKPOINT_SCOPE, rel)
             .await?;
         summary.files_removed += 1;
-    }
-    // A stop leaves files unread; their last rows stand.
-    if !opts.control.stop.requested() {
-        download_problems::report_run(db.pool(), &problems).await;
     }
     Ok(summary)
 }

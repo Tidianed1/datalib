@@ -13,7 +13,8 @@ use tracing::{debug, info};
 use super::db::{BeeperMediaAttachmentRow, EventRow, RawDb, RoomRow, UserRow};
 use super::FetchSummary;
 use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
-use datalib_etl::download_problems::{DownloadProblem, RunProblem};
+use datalib_etl::download_problems::DownloadProblem;
+use datalib_etl::run_problems::RunProblems;
 
 /// In-memory accumulator the per-thread walkers push into; flushed
 /// once in three chunked multi-row INSERTs at the end of [`ingest`].
@@ -127,7 +128,7 @@ pub(super) async fn query_json(db_path: &Path, sql: &str) -> Result<Vec<Value>> 
 /// users, messages → events, reactions → events, attachments →
 /// blobs).
 ///
-/// A thread whose rows will not read is pushed onto `problems` and
+/// A thread whose rows will not read is reported to `found` and
 /// stepped over; only the thread listing itself fails the run. Returns
 /// the configured networks no thread belongs to.
 #[allow(clippy::too_many_arguments)]
@@ -139,7 +140,7 @@ pub async fn ingest(
     download_media: bool,
     summary: &mut FetchSummary,
     progress: &datalib_etl::progress::Progress,
-    problems: &mut Vec<RunProblem>,
+    found: &RunProblems,
 ) -> Result<Vec<DownloadProblem>> {
     // ── threads → rooms ──────────────────────────────────────────────
     let thread_rows = query_json(db_path, "SELECT threadID, accountID, thread FROM threads;")
@@ -224,10 +225,7 @@ pub async fn ingest(
         }
         .await;
         if let Err(e) = walked {
-            problems.push(RunProblem::listing(
-                &format!("messages {thread_id}"),
-                format!("{e:#}"),
-            ));
+            found.listing(&format!("messages {thread_id}"), format!("{e:#}"));
         }
         dst.flush_media_attachments(&media.acc).await?;
         dst.bulk_upsert_media_attachments(&media.not_copied).await?;
@@ -248,13 +246,13 @@ pub async fn ingest(
     dst.bulk_upsert_users(&batch.users).await?;
     dst.bulk_upsert_events(&batch.events).await?;
     if let Some(first) = batch.attachments_without_id.first() {
-        problems.push(RunProblem::phase(
+        found.phase(
             "attachments",
             format!(
                 "{} attachment(s) carry no `id`, so they have no file to copy; first on event {first}",
                 batch.attachments_without_id.len()
             ),
-        ));
+        );
     }
     Ok(networks
         .iter()

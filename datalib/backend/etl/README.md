@@ -85,7 +85,11 @@ every render store's into the index. The
 pinned store is the complete truth about its source's problems at that
 commit, so the copy is the sweep and there is nothing to diff. Stamps
 travel with the row. The step then reports whole-store counts as
-`problems{severity=…}` metrics, which the Manage screen reads. Design
+`problems{severity=…}` metrics, which the Manage screen reads. A
+download reports them at every seal as well, right after it has written
+the problems its run has found so far (`run_problems::collecting_sealed`),
+and again when it ends, failed or not: a checkpoint's rows, its
+problems and its count move together. Design
 and surfaces: `docs/dev/plans/problem_visibility.md`.
 
 A download's problem names only its raw entity (`<table>:<id>`): the
@@ -539,8 +543,8 @@ calls it before it writes the edge rows. A reader pinned at any entities
 commit therefore finds every blob that commit names, and a reader of the
 CAS sees committed transactions only, so there is nothing to pin. The
 connection runs `synchronous=FULL` so that order survives a power cut.
-`RunCtx::open_store_with_blobs` hands the CAS to the session only so
-`finish` closes it.
+`RunCtx::run_store` is handed the CAS only so the session closes it,
+whichever way the run ends.
 
 **Nothing resets the CAS.** Delete `blobs.sqlite` and reset the ingest
 step together; deleting the file alone leaves edge rows naming bytes
@@ -660,7 +664,7 @@ then deletes the rows of each path in `gone_by_path(&read)` and calls
 only then, so a crash in between just retries. `gone_by_path` is empty
 whenever the walk reported an error, because a folder that failed to list
 looks the same as one whose files were deleted. Report `scan.walk_problems()`
-through `download_problems::report_run`, so the skipped deletions show on
+to the run's `RunProblems`, so the skipped deletions show on
 the Manage row. Key rows against `scan.given_resolved`, not the configured
 path: the scan's paths are resolved, and stripping an unresolved prefix
 fails whenever a symlink is in the way.

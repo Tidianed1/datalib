@@ -91,9 +91,11 @@ impl Harness {
         })
         .await;
         // Commit what the scan wrote, the way the processor's
-        // `RawStoreSession::finish` does in production: render pins HEAD, so
+        // `RawStoreSession::run` does in production: render pins HEAD, so
         // an uncommitted row is invisible to it.
-        datalib_etl::doltlite_raw::commit_run(db.pool(), "test: pdf scan").await?;
+        if summary.is_ok() {
+            datalib_etl::doltlite_raw::commit_run(db.pool(), "test: pdf scan").await?;
+        }
         // Closed, not dropped: `db` and `render` both reopen this store,
         // and one doltlite file takes one connection at a time.
         db.close().await;

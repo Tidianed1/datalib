@@ -104,7 +104,6 @@ impl Fixture {
         )
         .await;
         if let Ok(run) = &run {
-            run.report(&pool).await;
             dr::commit_run(&pool, &format!("download lightroom: {}", run.summary())).await?;
         }
         pool.close().await;
@@ -654,7 +653,6 @@ async fn a_stopped_run_leaves_the_last_runs_problems() -> Result<()> {
     )
     .await?;
     assert!(run.stopped);
-    run.report(&pool).await;
     dr::commit_run(&pool, "stopped").await?;
     pool.close().await;
     assert_eq!(problem_keys(&f).await, before);

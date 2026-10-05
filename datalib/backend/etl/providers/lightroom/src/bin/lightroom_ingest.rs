@@ -125,7 +125,6 @@ async fn main() -> Result<()> {
         "lightroom",
     )
     .await?;
-    run.report(&pool).await;
     let summary = run.summary();
     let commit = dr::commit_run(&pool, &format!("download lightroom: {summary}")).await?;
     pool.close().await;

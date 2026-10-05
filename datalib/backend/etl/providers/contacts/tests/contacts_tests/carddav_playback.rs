@@ -154,21 +154,35 @@ async fn run_with(
     store: &Path,
     control: datalib_etl::control::DownloadControl,
 ) -> ingest::FetchSummary {
+    run_named(playback, store, control, &["Bridge"])
+        .await
+        .expect("carddav fetch under playback")
+}
+
+/// Commits only a fetch that returned `Ok`, as the processor does.
+async fn run_named(
+    playback: &Path,
+    store: &Path,
+    control: datalib_etl::control::DownloadControl,
+    addressbooks: &[&str],
+) -> anyhow::Result<ingest::FetchSummary> {
     std::env::set_var(PLAYBACK_ENV, playback);
     let db = RawDb::open(&db_path_for(store)).await.expect("open store");
     let summary = ingest::fetch(ingest::FetchOptions {
         latchkey: LatchkeySettings::default(),
         db: db.clone(),
         server_url: format!("{HOST}/"),
-        addressbooks: vec!["Bridge".to_string()],
+        addressbooks: addressbooks.iter().map(|s| s.to_string()).collect(),
         progress: Default::default(),
         control,
     })
     .await;
-    db.commit_all("test").await.expect("commit");
+    if summary.is_ok() {
+        db.commit_all("test").await.expect("commit");
+    }
     db.close().await;
     std::env::remove_var(PLAYBACK_ENV);
-    summary.expect("carddav fetch under playback")
+    summary
 }
 
 async fn scalar(store: &Path, sql: &'static str) -> Option<String> {
@@ -486,4 +500,72 @@ async fn what_a_sync_could_not_store_is_a_problem_row_until_it_is_stored() {
         stored_uids(&store).await.as_deref(),
         Some("tng-data,tng-picard")
     );
+}
+
+/// A configured `addressbooks` name no address book has was passed over
+/// in silence, so a typo mirrored less than was asked for and said
+/// nothing; and with every name wrong the run synced nothing and
+/// reported success.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_configured_name_no_address_book_has_is_a_problem_row() {
+    let d = tempfile::tempdir().expect("tempdir");
+    let (one, two, store) = (
+        d.path().join("one"),
+        d.path().join("two"),
+        d.path().join("store"),
+    );
+    std::fs::create_dir_all(&store).unwrap();
+    let book = format!("{HOST}{BOOK}");
+    for root in [&one, &two] {
+        account_fixtures(root);
+    }
+    let v1 = cards(BRIDGE_V1);
+    fixture(
+        &one,
+        HttpMethod::Report,
+        &book,
+        "0",
+        &api::body_sync_collection(""),
+        xml(
+            207,
+            &multistatus(&format!(
+                "{}<sync-token>data:,1</sync-token>",
+                resource("tng-picard", "\"p1\"", card(&v1, "tng-picard")),
+            )),
+        ),
+    );
+    fixture(
+        &two,
+        HttpMethod::Report,
+        &book,
+        "0",
+        &api::body_sync_collection("data:,1"),
+        xml(207, &multistatus("<sync-token>data:,2</sync-token>")),
+    );
+
+    let first = run_named(&one, &store, Default::default(), &["Bridge", "Holodeck"])
+        .await
+        .expect("one name matched");
+    assert_eq!(first.contacts_new, 1, "{first:?}");
+    assert_eq!(
+        problem_keys(&store).await,
+        vec!["config:addressbooks:Holodeck".to_string()]
+    );
+
+    let none = run_named(
+        &two,
+        &store,
+        Default::default(),
+        &["Holodeck", "Ten Forward"],
+    )
+    .await
+    .expect_err("no name matched, and an empty filter means every address book");
+    assert!(
+        format!("{none:#}").contains("none of the configured addressbooks"),
+        "{none:#}"
+    );
+    assert_eq!(stored_uids(&store).await.as_deref(), Some("tng-picard"));
+
+    run(&two, &store).await;
+    assert_eq!(problem_keys(&store).await, Vec::<String>::new());
 }

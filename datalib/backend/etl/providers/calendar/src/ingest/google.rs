@@ -8,12 +8,12 @@ use std::collections::HashSet;
 
 use anyhow::{Context, Result};
 use datalib_etl::control::DownloadControl;
-use datalib_etl::download_problems::{self, RunProblem};
 use datalib_etl::http::{
     default_retryability, latchkey_curl_classified, percent_encode, HttpRequest, HttpResponse,
     HttpService, LatchkeySettings, Retryability,
 };
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
 use serde_json::Value;
 use tracing::warn;
 
@@ -37,6 +37,11 @@ pub struct FetchOptions {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| sync_account(opts, found)).await
+}
+
+async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = &opts.db;
     let lk = &opts.latchkey;
     let mut summary = FetchSummary::default();
@@ -55,14 +60,12 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     db.upsert_calendars(&rows).await?;
 
     let selected = select_calendars(
-        db,
+        &found,
         &opts.calendars,
         rows.iter().map(|c| (&c.id, c.display_name.as_deref())),
-    )
-    .await?;
+    )?;
     summary.calendars = selected.len();
 
-    let mut problems: Vec<RunProblem> = Vec::new();
     for cal in rows.iter().filter(|c| selected.contains(&c.id)) {
         if opts.control.stop.requested() {
             break;
@@ -73,16 +76,12 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         let listing = format!("calendar {label}");
         match sync_calendar(db, &cal.id, opts.window.as_ref(), lk, &mut summary).await {
             Ok(None) => {}
-            Ok(Some(held_back)) => problems.push(RunProblem::listing(&listing, held_back)),
+            Ok(Some(held_back)) => found.listing(&listing, held_back),
             Err(e) => {
                 summary.errors += 1;
-                problems.push(RunProblem::listing(&listing, format!("{e:#}")));
+                found.listing(&listing, format!("{e:#}"));
             }
         }
-    }
-    // A stop leaves calendars unsynced; their last rows stand.
-    if !opts.control.stop.requested() {
-        download_problems::report_run(db.pool(), &problems).await;
     }
     Ok(summary)
 }

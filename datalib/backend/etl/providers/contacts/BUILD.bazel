@@ -58,6 +58,7 @@ rust_test(
     deps = [
         ":datalib_etl_contacts",
         "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:anyhow",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",

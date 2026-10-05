@@ -40,7 +40,7 @@ pub fn plan_ingest(
 }
 
 /// Owns its doltlite store end to end: open, register the interrupt
-/// hook, mirror, commit + close via `session.finish`.
+/// hook, mirror, commit + close via `run_store`.
 struct AppleMessagesIngest {
     id: String,
     raw_path: PathBuf,
@@ -56,8 +56,10 @@ impl DataProcessor for AppleMessagesIngest {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = raw_layout::entities_db(&self.raw_path);
         let pool = mirror::open_mirror(&entity_db).await?;
-        let session = ctx.open_store(pool.clone(), entity_db).await;
-        let stats = mirror::run(&pool, &self.options, ctx.progress).await?;
-        session.finish(ctx, stats.summary()).await
+        ctx.run_store(pool.clone(), None, |_| async {
+            let stats = mirror::run(&pool, &self.options, ctx.progress).await?;
+            Ok(stats.summary())
+        })
+        .await
     }
 }

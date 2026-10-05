@@ -16,6 +16,7 @@ use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw::WirePayload;
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl_agent_sessions::{read_changed, SessionCounts, SessionTree};
 
 pub use datalib_etl_agent_sessions::FetchSummary;
@@ -43,6 +44,11 @@ pub struct FetchOptions {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| read_rollouts(opts, found)).await
+}
+
+async fn read_rollouts(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = opts.db.clone();
     let trees: Vec<SessionTree> = SESSION_DIRS
         .iter()
@@ -62,6 +68,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         &trees,
         &opts.progress,
         "codex",
+        &found,
         |rel_path, text| {
             let parsed = parse_rollout(text, rel_path)?;
             push_rows(&parsed, &mut transcript_rows, &mut record_rows);
@@ -80,7 +87,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     bulk_upsert_entity_in_tx(&mut tx, &record_rows).await?;
     read.stamp(&mut tx).await?;
     tx.commit().await.context("commit codex tx")?;
-    read.report(db.pool()).await;
     Ok(summary)
 }
 

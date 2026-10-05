@@ -44,15 +44,17 @@ impl DataProcessor for ClaudeCodeIngest {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = ingest::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
-        let session = ctx.open_store(db.pool().clone(), entity_db).await;
-        let s = ingest::fetch(ingest::FetchOptions {
-            cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
-            db,
-            input_path: self.input_path.clone(),
-            progress: ctx.progress.clone(),
-            control: ctx.control.clone(),
+        ctx.run_store(db.pool().clone(), None, |_| async {
+            let s = ingest::fetch(ingest::FetchOptions {
+                cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
+                db,
+                input_path: self.input_path.clone(),
+                progress: ctx.progress.clone(),
+                control: ctx.control.clone(),
+            })
+            .await?;
+            Ok(s.line())
         })
-        .await?;
-        session.finish(ctx, s.line()).await
+        .await
     }
 }

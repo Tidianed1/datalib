@@ -8,9 +8,9 @@ use anyhow::{Context, Result};
 use datalib_etl::control::DownloadControl;
 use datalib_etl::dav::state as dav_state;
 use datalib_etl::dav::sync::{CollectionSync, Page};
-use datalib_etl::download_problems::{self, RunProblem};
 use datalib_etl::http::LatchkeySettings;
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
 use tracing::info;
 
 use super::db::RawDb;
@@ -33,6 +33,11 @@ pub struct FetchOptions {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |problems| sync_account(opts, problems)).await
+}
+
+async fn sync_account(opts: FetchOptions, problems: RunProblems) -> Result<FetchSummary> {
     let db = &opts.db;
     let mut summary = FetchSummary::default();
     let lk = &opts.latchkey;
@@ -61,16 +66,14 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         .await?;
 
     let selected = select_calendars(
-        db,
+        &problems,
         &opts.calendars,
         calendars
             .iter()
             .map(|c| (&c.row.id, c.row.display_name.as_deref())),
-    )
-    .await?;
+    )?;
     summary.calendars = selected.len();
 
-    let mut run_problems: Vec<RunProblem> = Vec::new();
     let mut synced_ids: Vec<String> = Vec::new();
     for cal in calendars.iter().filter(|c| selected.contains(&c.row.id)) {
         if opts.control.stop.requested() {
@@ -84,21 +87,17 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         let listing = format!("calendar {label}");
         match synced {
             Ok(None) => {}
-            Ok(Some(cut_short)) => run_problems.push(RunProblem::listing(
+            Ok(Some(cut_short)) => problems.listing(
                 &listing,
                 format!("{cut_short}; nothing it has not reached is deleted until it finishes"),
-            )),
+            ),
             Err(e) => {
                 summary.errors += 1;
-                run_problems.push(RunProblem::listing(&listing, format!("{e:#}")));
+                problems.listing(&listing, format!("{e:#}"));
             }
         }
     }
-    // A stop leaves the rest unsynced; their last rows stand.
-    if !opts.control.stop.requested() {
-        download_problems::report_run(db.pool(), &run_problems).await;
-        dav_state::report_unstored(db.pool(), "ics_objects", &synced_ids).await;
-    }
+    dav_state::collect_unstored(db.pool(), &problems, "ics_objects", &synced_ids).await;
     Ok(summary)
 }
 

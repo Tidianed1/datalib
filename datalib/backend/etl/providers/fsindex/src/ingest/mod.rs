@@ -17,10 +17,11 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use datalib_etl::control::DownloadControl;
-use datalib_etl::download_problems::{self, RecordProblem};
+use datalib_etl::download_problems::RecordProblem;
 use datalib_etl::fingerprint_cache::{CachedTree, Fingerprint, FingerprintCache};
 use datalib_etl::fswalk::StampKind;
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
 
 pub use db::RawDb;
 
@@ -135,6 +136,11 @@ async fn forget_deleted(cache: &FingerprintCache, root: &Path, db: &RawDb) -> Re
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| scan_tree(opts, found)).await
+}
+
+async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let total_start = Instant::now();
     let db = opts.db.clone();
     if let Some(branch) = opts.target_doltlite_branch.as_deref() {
@@ -292,7 +298,15 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     // Every run re-walks the whole tree, so this run's set is the whole
     // truth and replaces the last one's.
-    report_records(&db, &mut walker_errors).await;
+    one_per_entry(&mut walker_errors);
+    found.records_failed(
+        walker_errors
+            .iter()
+            .map(|e| RecordProblem::new(e.table, &e.id, &e.message)),
+    );
+    for table in ["files", "dirs"] {
+        found.records_tried_all(table);
+    }
 
     // The commit and gc happen in the standalone binary, not here:
     // `fetch` stays commit-free per the framework's commit-lifecycle rule.
@@ -560,17 +574,12 @@ async fn streaming_pipeline(
     ))
 }
 
-/// One `problems` row per entry, for the first error it had: the walk
-/// and the stamping pass can both fail on one folder's options file, and
-/// two rows on one key would collide.
-async fn report_records(db: &RawDb, errors: &mut Vec<walker::WalkerError>) {
+/// Keeps the first error each entry had, so the summary's `errors` counts
+/// entries: the walk and the stamping pass can both fail on one folder's
+/// options file.
+fn one_per_entry(errors: &mut Vec<walker::WalkerError>) {
     let mut seen = std::collections::HashSet::new();
     errors.retain(|e| seen.insert((e.table, e.id.clone())));
-    let problems: Vec<RecordProblem> = errors
-        .iter()
-        .map(|e| RecordProblem::new(e.table, &e.id, &e.message))
-        .collect();
-    download_problems::report_records(db.pool(), &problems).await;
 }
 
 /// Post-write stamping pass. The scan has already streamed every row

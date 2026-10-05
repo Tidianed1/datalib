@@ -180,7 +180,8 @@ the run could not read keeps the `record:` rows it had (when a device
 cannot even say which serial it is, every serial the run did not read
 keeps them). A file that read but would not parse would not parse next
 time either, so it is stamped with its row and read again only once it
-changes. A run told to stop leaves the rows as the last run did. A description that will not parse leaves the
+changes. A run told to stop adds the rows it found before the stop and
+clears only the `record:` rows of the devices it read. A description that will not parse leaves the
 device row as it was rather than blanking its model, firmware and
 timezone.
 

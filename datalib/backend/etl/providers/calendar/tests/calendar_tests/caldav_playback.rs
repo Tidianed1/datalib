@@ -148,7 +148,9 @@ async fn run_with(
         control,
     })
     .await;
-    db.commit_all("test").await.expect("commit");
+    if summary.is_ok() {
+        db.commit_all("test").await.expect("commit");
+    }
     db.close().await;
     std::env::remove_var(PLAYBACK_ENV);
     summary.expect("caldav fetch under playback")
