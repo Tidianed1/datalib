@@ -1563,8 +1563,8 @@ impl ClosedRun {
 /// the sentence. Idempotent: a run already closed is left alone and
 /// reported as such.
 ///
-/// `step_state` is the caller's word for what a step that never reported
-/// became, because the scheduler's vocabulary is not this crate's
+/// `step_state` is the caller's word for what a step still running
+/// became; a step that never started is not part of the run and goes, because the scheduler's vocabulary is not this crate's
 /// business (see [`crate::LiveState`]). `why` goes on each step's
 /// `error`, so a person can tell a step that stopped itself from one the
 /// server gave up on.
@@ -1610,6 +1610,15 @@ async fn close_abandoned_run_in(
     .rows_affected()
         > 0;
 
+    // A step that never started was not part of the run, as when a run
+    // ends normally (`end`).
+    let never_started = sqlx::query("DELETE FROM step_runs WHERE run_id = ? AND state = ?")
+        .bind(run_id)
+        .bind(LiveState::Pending.as_str())
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+
     // The non-terminal states, from the one place that names them, so a
     // new `LiveState` variant is covered without editing this.
     let live: Vec<&'static str> = <LiveState as strum::VariantArray>::VARIANTS
@@ -1641,7 +1650,7 @@ async fn close_abandoned_run_in(
     if run_was_open {
         bump(&mut tx, StorePart::Runs).await?;
     }
-    if steps_closed > 0 {
+    if steps_closed + never_started > 0 {
         bump(&mut tx, StorePart::StepRuns).await?;
     }
     tx.commit().await?;
@@ -1726,7 +1735,10 @@ fn days_before(at: datalib_time::IsoOffsetTimestamp, days: u32) -> String {
 
 /// The process is over, and its run with it. Counted as a change to
 /// the runs so a watcher redraws a run that just finished; a launch
-/// ending is nobody's live question.
+/// ending is nobody's live question. A step still `pending` was in the
+/// plan and never started: the run served requests that did not reach
+/// it, so it was not part of this run, and its row goes rather than
+/// reading as waiting forever.
 async fn end(pool: &SqlitePool, scope: &Scope) -> Result<(), sqlx::Error> {
     let (finished_at_utc, _) = now_split();
     let mut tx = pool.begin().await?;
@@ -1742,6 +1754,15 @@ async fn end(pool: &SqlitePool, scope: &Scope) -> Result<(), sqlx::Error> {
             .execute(&mut *tx)
             .await?;
         bump(&mut tx, StorePart::Runs).await?;
+        let never_started = sqlx::query("DELETE FROM step_runs WHERE run_id = ? AND state = ?")
+            .bind(&run.run_id)
+            .bind(LiveState::Pending.as_str())
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+        if never_started > 0 {
+            bump(&mut tx, StorePart::StepRuns).await?;
+        }
     }
     tx.commit().await
 }

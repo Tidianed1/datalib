@@ -28,8 +28,9 @@ fn at(step: &str, state: &str) -> StepRunRow {
 /// The writer is used for the rows and then the run is re-opened by
 /// hand, because dropping a `RunWriter` closes its run — which is the
 /// whole point of it, and exactly what a SIGKILLed runner never gets to
-/// do. Reaching into the table is how the test reproduces that without a
-/// second process to kill.
+/// do. Closing it also drops the never-started step, so that row is put
+/// back by hand too. Reaching into the table is how the test reproduces
+/// a killed runner without a second process to kill.
 async fn abandoned(root: &std::path::Path, run_id: &str) {
     let writer =
         RunWriter::start(root, run_id, run_id, None, Retention::default()).expect("start the run");
@@ -44,6 +45,15 @@ async fn abandoned(root: &std::path::Path, run_id: &str) {
         .execute(&pool)
         .await
         .expect("re-open the run");
+    sqlx::query(
+        "INSERT INTO step_runs (run_id, step, state, attempt, updated_at_utc) \
+         VALUES (?, 'b/ingest', 'pending', 1, ?)",
+    )
+    .bind(run_id)
+    .bind(T0)
+    .execute(&pool)
+    .await
+    .expect("put back the step that never started");
     pool.close().await;
 }
 
@@ -56,9 +66,10 @@ async fn finished_at(root: &std::path::Path, run_id: &str) -> Option<String> {
         .finished_at_utc
 }
 
-/// An open run is closed, and every step that was still live takes the
-/// state the caller named, with the reason on it. A step that had
-/// already reported is left exactly as it was.
+/// An open run is closed, and a step that was still running takes the
+/// state the caller named, with the reason on it. A step that never
+/// started was not part of the run and goes. A step that had already
+/// reported is left exactly as it was.
 #[tokio::test]
 async fn it_closes_the_run_and_the_steps_that_never_reported() {
     let td = tempfile::tempdir().unwrap();
@@ -73,10 +84,7 @@ async fn it_closes_the_run_and_the_steps_that_never_reported() {
         .await
         .expect("close");
     assert!(closed.run_was_open);
-    assert_eq!(
-        closed.steps_closed, 2,
-        "the running one and the pending one"
-    );
+    assert_eq!(closed.steps_closed, 1, "the running one");
 
     assert!(finished_at(td.path(), "r1").await.is_some());
     let snapshot = snapshot_of(td.path(), Some("r1")).await;
@@ -89,7 +97,10 @@ async fn it_closes_the_run_and_the_steps_that_never_reported() {
             .clone()
     };
     assert_eq!(state("a/ingest").state, STOPPED);
-    assert_eq!(state("b/ingest").state, STOPPED);
+    assert!(
+        snapshot.steps.iter().all(|s| s.step != "b/ingest"),
+        "a step that never started is not part of the run"
+    );
     assert_eq!(
         state("a/ingest").error.as_deref(),
         Some("the server closed it"),

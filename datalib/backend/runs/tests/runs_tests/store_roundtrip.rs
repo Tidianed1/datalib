@@ -70,7 +70,14 @@ async fn what_is_published_is_readable() {
         "stamps are stored in UTC: {:?}",
         snap.finished_at_utc
     );
-    assert_eq!(snap.steps.len(), 2, "{snap:?}");
+    assert_eq!(
+        snap.steps
+            .iter()
+            .map(|r| r.step.as_str())
+            .collect::<Vec<_>>(),
+        ["slack/raw"],
+        "a step that never started goes with the run: {snap:?}"
+    );
     let fetch = snap.steps.iter().find(|r| r.step == "slack/raw").unwrap();
     assert_eq!(fetch.state, "running");
     assert_eq!(fetch.msg.as_deref(), Some("conversations.list"));
