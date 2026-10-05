@@ -345,14 +345,26 @@ async fn run_sync(
     // `.eml` fared, so neither would come up again by itself.
     let earlier_failures = earlier_record_problems(db).await?;
     let lacking_eml = missing_their_eml(db, opts.blob_size_limit_bytes).await?;
+    // A Gmail message's bytes never change, so one this build could not
+    // store will not store by fetching it again: only a new build can.
+    let build = build_identity();
+    let unstorable_here: BTreeSet<String> = db
+        .scopes_under(&unstorable_scope(&account_id, ""))
+        .await?
+        .into_iter()
+        .filter(|(_, by)| *by == build)
+        .map(|(id, _)| id)
+        .collect();
     let mut retry: BTreeSet<String> = earlier_failures
         .iter()
         .map(|r| r.id.clone())
-        .filter(|id| !known_gmail_ids.contains(id))
+        .filter(|id| !known_gmail_ids.contains(id) && !unstorable_here.contains(id))
         .collect();
+    let mut refetching = BTreeSet::new();
     for id in lacking_eml {
         known_gmail_ids.remove(&id);
-        retry.insert(id);
+        retry.insert(id.clone());
+        refetching.insert(id);
     }
 
     let mut state = RunState {
@@ -369,6 +381,9 @@ async fn run_sync(
         fetched: 0,
         known_blobs,
         known_gmail_ids,
+        unstorable_here,
+        refetching,
+        unstorable: BTreeSet::new(),
         attempted: BTreeSet::new(),
         threads: BTreeSet::new(),
         // Nothing fixed to seed it with: unlike the JMAP path, this one
@@ -444,6 +459,7 @@ async fn run_sync(
     let mut reported = BTreeSet::new();
     summary.records.retain(|r| reported.insert(r.id.clone()));
     download_problems::report_records(db.pool(), &summary.records).await;
+    remember_unstorable(db, &account_id, &build, &state.unstorable, &reported).await?;
     // A walk the run never reached keeps its last row.
     if walked.is_ok() && !summary.stopped_early() {
         download_problems::report_run(db.pool(), &summary.listings).await;
@@ -497,6 +513,8 @@ async fn walk(
 
     if let Some(changes) = &plan.history {
         summary.emails_destroyed = destroy(state.db, &changes.deleted).await?;
+        // A deleted message's failure is over, mirrored or not.
+        state.attempted.extend(changes.deleted.iter().cloned());
         let ids: Vec<String> = changes
             .added
             .iter()
@@ -715,6 +733,14 @@ struct RunState<'a> {
     /// Ids `messages.get` gave a final answer for this run: fetched,
     /// gone, or failed. An earlier failure not among them was not tried.
     attempted: BTreeSet<String>,
+    /// Messages this build already fetched and could not store: skipped
+    /// like the mirrored ones, their rows carried over.
+    unstorable_here: BTreeSet<String>,
+    /// Ones that fetched and would not store this run.
+    unstorable: BTreeSet<String>,
+    /// Mirrored messages fetched again for their `.eml`. A 404 for one is
+    /// a deletion.
+    refetching: BTreeSet<String>,
     /// Thread ids touched this run; membership is rebuilt from the
     /// `emails` table at the end, not from what this run happened to see.
     threads: BTreeSet<String>,
@@ -860,7 +886,7 @@ async fn fetch_ids(
         // Already mirrored: skip before spending 20 quota units on it.
         // This is what lets successive budget-limited runs walk forward
         // through a large mailbox instead of re-fetching the same prefix.
-        if state.known_gmail_ids.contains(id) {
+        if state.known_gmail_ids.contains(id) || state.unstorable_here.contains(id) {
             summary.messages_already_had += 1;
             // Ticked although nothing was fetched: the total counts ids
             // *listed*, and a re-walk of a mirrored mailbox is almost
@@ -897,6 +923,9 @@ async fn fetch_ids(
                 // mailbox, and nothing to come back for.
                 info!(event = "gmail_message_deleted_before_fetch", id = %id, "a listed message was gone before it could be fetched");
                 state.attempted.insert(id.clone());
+                if state.refetching.contains(id) {
+                    summary.emails_destroyed += destroy(state.db, std::slice::from_ref(id)).await?;
+                }
                 state.bar.did(1);
                 continue;
             }
@@ -936,6 +965,7 @@ async fn fetch_ids(
                 // Fetched but unusable: the bytes came back and we could
                 // not make a record of them. A person wants to know
                 // which message, and a `warn!` reaches nobody.
+                state.unstorable.insert(msg.id.clone());
                 summary.records.push(RecordProblem::new(
                     GMAIL_MESSAGES_TABLE,
                     &msg.id,
@@ -1166,6 +1196,43 @@ async fn earlier_record_problems(db: &RawDb) -> Result<Vec<RecordProblem>> {
             ))
         })
         .collect())
+}
+
+/// The build that is running: a message it could not store is tried
+/// again only by another.
+fn build_identity() -> String {
+    format!(
+        "{}+{}",
+        datalib_runtime::build_id::DATALIB_VERSION,
+        datalib_runtime::build_id::git_hash().unwrap_or_default()
+    )
+}
+
+/// Where the build that last failed to store a message is kept, beside
+/// the cursor and under its `gmail:` namespace.
+fn unstorable_scope(account_id: &str, gmail_id: &str) -> String {
+    format!("gmail:{account_id}:unstorable:{gmail_id}")
+}
+
+/// Record which build failed to store each message this run, and forget
+/// the ones that no longer have a row: stored, or gone.
+async fn remember_unstorable(
+    db: &RawDb,
+    account_id: &str,
+    build: &str,
+    failed_now: &BTreeSet<String>,
+    with_a_row: &BTreeSet<String>,
+) -> Result<()> {
+    for id in failed_now {
+        db.save_scope(&unstorable_scope(account_id, id), build)
+            .await?;
+    }
+    for (id, _) in db.scopes_under(&unstorable_scope(account_id, "")).await? {
+        if !with_a_row.contains(&id) {
+            db.forget_scope(&unstorable_scope(account_id, &id)).await?;
+        }
+    }
+    Ok(())
 }
 
 /// Mirrored messages whose `.eml` is not stored and would now fit under

@@ -139,11 +139,18 @@ back on.
 
 **Gmail API.**
 
-- A message that fetched but would not store, or that would not fetch,
-  is a `record:gmail_messages:<Gmail id>` row. The next run asks for it
-  by id, even when the cursor has moved past it.
+- A message that would not fetch is a `record:gmail_messages:<Gmail id>`
+  row. The next run asks for it by id, even when the cursor has moved
+  past it.
+- A message that fetched but would not store gets the same row. A Gmail
+  message's bytes never change, so fetching it again with the same build
+  would only spend 20 quota units for the same answer. The build that
+  failed is kept under `gmail:<account>:unstorable:<id>` in
+  `sync_scope_state`, and only a different build (version or git hash)
+  asks for the message again. A message deleted upstream drops its row.
 - A message whose `.eml` was over the limit is a warning on its `.eml`.
-  Once the limit allows it, a later run fetches the message again.
+  Once the limit allows it, a later run fetches the message again. If
+  Gmail answers 404 for it then, the message was deleted, and it goes.
 - A run that never reached an earlier failure, because it was stopped,
   hit the budget, or hit an error, keeps that failure's row.
 - A `messages.list` walk that fails is a

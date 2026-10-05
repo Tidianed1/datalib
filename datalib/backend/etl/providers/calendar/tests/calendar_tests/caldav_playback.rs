@@ -119,6 +119,22 @@ async fn run_in(
     store: &Path,
     window: Option<datalib_etl_calendar::ingest::Window>,
 ) -> FetchSummary {
+    run_with(playback, store, window, Default::default()).await
+}
+
+/// A run asked to stop before it syncs any calendar.
+async fn run_stopped(playback: &Path, store: &Path) -> FetchSummary {
+    let control = datalib_etl::control::DownloadControl::default();
+    control.stop.request();
+    run_with(playback, store, None, control).await
+}
+
+async fn run_with(
+    playback: &Path,
+    store: &Path,
+    window: Option<datalib_etl_calendar::ingest::Window>,
+    control: datalib_etl::control::DownloadControl,
+) -> FetchSummary {
     std::env::set_var(PLAYBACK_ENV, playback);
     let db = RawDb::open(&db_path_for(store)).await.expect("open store");
     let summary = caldav::fetch(caldav::FetchOptions {
@@ -128,7 +144,7 @@ async fn run_in(
         window,
         latchkey: LatchkeySettings::default(),
         progress: Default::default(),
-        control: Default::default(),
+        control,
     })
     .await;
     db.commit_all("test").await.expect("commit");
@@ -439,6 +455,13 @@ async fn a_sync_listing_cut_short_deletes_nothing() {
         stored_uids(&store).await.as_deref(),
         Some("tng-reception@enterprise.test,tng-staff@enterprise.test")
     );
+    assert_eq!(
+        problem_keys(&store).await,
+        vec!["listing:calendar Bridge Duty".to_string()]
+    );
+
+    // A run that stopped before the calendar has not listed it again.
+    run_stopped(&two, &store).await;
     assert_eq!(
         problem_keys(&store).await,
         vec!["listing:calendar Bridge Duty".to_string()]

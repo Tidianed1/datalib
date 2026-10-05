@@ -20,10 +20,12 @@ const PICARD: &str = "18c9f2a1b2c3d701";
 const RIKER: &str = "18c9f2a1b2c3d702";
 
 /// A message that fetched but would not store is behind the cursor the
-/// run then stores, so no later listing names it. The next run asks for
-/// it by id.
+/// run then stores, so no later listing names it. Its bytes never
+/// change, so fetching it again with the same build would cost 20 quota
+/// units every run for the same answer: the row stands, and a new build
+/// asks for it by id.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_message_that_would_not_store_is_fetched_again() {
+async fn a_message_that_would_not_store_is_fetched_again_by_a_new_build() {
     let m = Mirror::new();
     put_gmail_account(&m.playback, "9001", json!([inbox_label()]));
     put_gmail(
@@ -45,19 +47,65 @@ async fn a_message_that_would_not_store_is_fetched_again() {
         [format!("record:gmail_messages:{RIKER}")]
     );
 
-    // Nothing changed upstream since; the message now stores.
+    // Nothing changed upstream since.
     put_gmail(
         &m.playback,
         &gmail_history_url("9001"),
         &json!({ "historyId": "9001" }),
     );
+    let second = run(&m, |_| {}).await.expect("second run");
+    assert_eq!(
+        second.quota_units_spent, 4,
+        "profile, labels and history only; the message was fetched again: {second:?}"
+    );
+    assert_eq!(
+        problems(&m).await,
+        [format!("record:gmail_messages:{RIKER}")]
+    );
+
+    // A build that stores it.
     put_gmail(
         &m.playback,
         &gmail_get_url(RIKER),
         &gmail_message(RIKER, &["INBOX"], "Number One"),
     );
-    run(&m, |_| {}).await.expect("second run");
+    std::env::set_var(datalib_runtime::build_id::GIT_HASH_ENV, "f00dfacade");
+    let third = run(&m, |_| {}).await;
+    std::env::remove_var(datalib_runtime::build_id::GIT_HASH_ENV);
+    third.expect("third run");
     assert_eq!(m.gmail_ids().await, ids(&[PICARD, RIKER]));
+    assert!(problems(&m).await.is_empty());
+}
+
+/// A mirrored message fetched again for its `.eml` that Gmail no longer
+/// has was deleted: it goes, with its row.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_message_gone_when_fetched_for_its_eml_is_deleted() {
+    let m = Mirror::new();
+    put_gmail_account(&m.playback, "9001", json!([inbox_label()]));
+    put_gmail(
+        &m.playback,
+        &gmail_list_url(&[]),
+        &json!({ "messages": [{ "id": PICARD }] }),
+    );
+    put_gmail(
+        &m.playback,
+        &gmail_get_url(PICARD),
+        &gmail_message(PICARD, &["INBOX"], "Engage"),
+    );
+    run(&m, |o| o.blob_size_limit_bytes = Some(10))
+        .await
+        .expect("first run");
+    assert_eq!(problems(&m).await.len(), 1);
+
+    put_gmail(
+        &m.playback,
+        &gmail_history_url("9001"),
+        &json!({ "historyId": "9001" }),
+    );
+    put_gmail_response(&m.playback, &gmail_get_url(PICARD), &status(404));
+    run(&m, |_| {}).await.expect("second run");
+    assert!(m.gmail_ids().await.is_empty());
     assert!(problems(&m).await.is_empty());
 }
 

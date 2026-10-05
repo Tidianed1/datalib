@@ -51,6 +51,31 @@ impl RawDb {
         dr::upsert_scope_state(self.pool(), scope, token).await
     }
 
+    /// Every scope key that starts with `prefix`, with the prefix taken
+    /// off, and its value.
+    pub async fn scopes_under(&self, prefix: &str) -> Result<Vec<(String, String)>> {
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT scope, last_seen_at_utc FROM sync_scope_state WHERE INSTR(scope, ?) = 1",
+        )
+        .bind(prefix)
+        .fetch_all(self.pool())
+        .await
+        .context("select scopes under a prefix")?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(k, v)| Some((k.strip_prefix(prefix)?.to_string(), v)))
+            .collect())
+    }
+
+    pub async fn forget_scope(&self, scope: &str) -> Result<()> {
+        sqlx::query("DELETE FROM sync_scope_state WHERE scope = ?")
+            .bind(scope)
+            .execute(self.pool())
+            .await
+            .context("delete a scope")?;
+        Ok(())
+    }
+
     // ── loads (consumed by render) ───────────────────────────────
 
     pub async fn load_accounts(&self) -> Result<Vec<Value>> {
