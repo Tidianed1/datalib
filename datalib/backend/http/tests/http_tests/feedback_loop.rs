@@ -21,6 +21,10 @@ use tower::ServiceExt;
 
 const TEST_TOKEN: &str = "feedback-loop-test-token";
 
+/// A hang guard on hearing a file move, not a wait: with the disk busy
+/// enough, fseventsd has held events back for over 10s.
+const HEARD_WITHIN: Duration = Duration::from_secs(60);
+
 async fn state(root: &Path, root_tx: broadcast::Sender<RootFrame>) -> AppState {
     let root = Arc::new(root.to_path_buf());
     let app = AppStore::open(root.as_path())
@@ -56,27 +60,18 @@ async fn get(state: &AppState, uri: &str, cause: Option<u32>) -> Vec<u8> {
         .to_vec()
 }
 
-async fn next_log_frame(rx: &mut broadcast::Receiver<RootFrame>) -> RootFrame {
-    let frame = async {
-        loop {
-            let f = rx
-                .recv()
-                .await
-                .expect("the channel neither lags nor closes");
-            if f.event == (RootEvent::TableChanged { table: Table::Log }) {
-                return f;
-            }
-        }
-    };
-    tokio::time::timeout(Duration::from_secs(10), frame)
-        .await
-        .expect("the request's own line should come back as a log frame")
-}
-
 /// Plays a page that refetches on every `log` frame, for `hops` frames,
 /// echoing each frame's chain when `echo` is set. The chains it saw.
+///
+/// The page takes the newest log frame up to a barrier rather than the
+/// next one to arrive: fseventsd can hold events back and hand them over
+/// in one burst, and then a frame from an earlier commit would pass for
+/// this request's and two later commits would arrive as one frame, which
+/// leaves the last hop waiting for a frame that already came.
 async fn refetch_on_log_frames(
     state: &AppState,
+    root: &Path,
+    log: &ProcessLogWriter,
     rx: &mut broadcast::Receiver<RootFrame>,
     hops: usize,
     echo: bool,
@@ -85,7 +80,10 @@ async fn refetch_on_log_frames(
     get(state, "/api/health", None).await;
     let mut seen = Vec::new();
     for _ in 0..hops {
-        let frame = next_log_frame(rx).await;
+        let frame = settle(root, log, rx)
+            .await
+            .pop()
+            .expect("the request's own line should come back as a log frame");
         seen.push(frame.chain);
         get(state, "/api/health", frame.chain.filter(|_| echo)).await;
     }
@@ -101,27 +99,47 @@ async fn loop_warnings(state: &AppState) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// Commit every line logged so far, then drop every frame the commits
-/// caused. The watch takes filesystem events in the order they happened,
-/// so once a write of the test's own under `system/frontend/` comes back,
-/// whatever an earlier commit would report has been reported; a burst is
-/// sent whole, so what came with it is already queued.
-async fn settle(root: &Path, log: &ProcessLogWriter, rx: &mut broadcast::Receiver<RootFrame>) {
+/// Commit every line logged so far, then take every frame the commits
+/// caused; the `log` ones are returned, oldest first. The watch takes
+/// filesystem events in the order they happened, so once a write of the
+/// test's own under `system/frontend/` comes back, whatever an earlier
+/// commit would report has been reported; a burst is sent whole, so what
+/// came with it is already queued. Each barrier is a new file, so one
+/// barrier is never ended by another's leftovers.
+async fn settle(
+    root: &Path,
+    log: &ProcessLogWriter,
+    rx: &mut broadcast::Receiver<RootFrame>,
+) -> Vec<RootFrame> {
+    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     log.flush().await;
-    std::fs::write(root.join("system/frontend/barrier.js"), "").unwrap();
+    std::fs::write(root.join(format!("system/frontend/barrier-{n}.js")), "").unwrap();
+    let is_log = |f: &RootFrame| f.event == (RootEvent::TableChanged { table: Table::Log });
+    let mut logs = Vec::new();
     let barrier = async {
-        while rx
-            .recv()
-            .await
-            .expect("the channel neither lags nor closes")
-            .event
-            != RootEvent::FrontendChanged
-        {}
+        loop {
+            let f = rx
+                .recv()
+                .await
+                .expect("the channel neither lags nor closes");
+            if f.event == RootEvent::FrontendChanged {
+                return;
+            }
+            if is_log(&f) {
+                logs.push(f);
+            }
+        }
     };
-    tokio::time::timeout(Duration::from_secs(10), barrier)
+    tokio::time::timeout(HEARD_WITHIN, barrier)
         .await
         .expect("the barrier's own write never came back");
-    while rx.try_recv().is_ok() {}
+    while let Ok(f) = rx.try_recv() {
+        if is_log(&f) {
+            logs.push(f);
+        }
+    }
+    logs
 }
 
 #[tokio::test]
@@ -132,7 +150,7 @@ async fn a_page_refetching_on_its_own_echo_is_warned_about_once_the_chain_is_a_l
     let (tx, mut rx) = broadcast::channel(256);
     let state = state(root, tx.clone()).await;
     tokio::time::timeout(
-        Duration::from_secs(10),
+        HEARD_WITHIN,
         datalib_http::watch::spawn(root.to_path_buf(), tx).wait(),
     )
     .await
@@ -144,7 +162,7 @@ async fn a_page_refetching_on_its_own_echo_is_warned_about_once_the_chain_is_a_l
     // A page that does not echo: every frame is one hop from a fetch
     // nothing caused, so the chain never grows.
     let hops = LOOP_AT as usize + 3;
-    let seen = refetch_on_log_frames(&state, &mut rx, hops, false).await;
+    let seen = refetch_on_log_frames(&state, root, &log, &mut rx, hops, false).await;
     assert!(seen.iter().all(|c| *c == Some(1)), "{seen:?}");
     log.flush().await;
     assert!(loop_warnings(&state).await.is_empty());
@@ -152,7 +170,7 @@ async fn a_page_refetching_on_its_own_echo_is_warned_about_once_the_chain_is_a_l
     settle(root, &log, &mut rx).await;
 
     // The same page echoing: each hop is one longer than the last.
-    let seen = refetch_on_log_frames(&state, &mut rx, hops, true).await;
+    let seen = refetch_on_log_frames(&state, root, &log, &mut rx, hops, true).await;
     let expected: Vec<Option<u32>> = (1..=hops as u32).map(Some).collect();
     assert_eq!(seen, expected);
     log.flush().await;

@@ -50,6 +50,17 @@ impl Default for Timing {
 /// watch that has been set up is not yet one that reports.
 const READY_MARKER: &str = ".watch-ready";
 
+/// How often the marker is written again until the watch hears it.
+const MARKER_EVERY: Duration = Duration::from_millis(250);
+
+/// Sleep until `at`, or forever when there is nothing to wait for.
+async fn until(at: Option<Instant>) {
+    match at {
+        Some(at) => tokio::time::sleep_until(at).await,
+        None => std::future::pending().await,
+    }
+}
+
 /// A dataset the UI fetches, named by what serves it. A card subscribes
 /// to the ones it reads and refetches those; a change to anything else
 /// never reaches it. The set is closed and mirrored by hand in
@@ -540,23 +551,29 @@ pub fn spawn_with(root: PathBuf, tx: RootTx, timing: Timing) -> Ready {
             ..Default::default()
         };
         // Written once the stores are read, so whatever moves after the
-        // marker is heard is a move from what `seen` holds.
+        // marker is heard is a move from what `seen` holds. Rewritten
+        // until heard: a write made before the stream has started is
+        // never delivered, and under load it starts late.
         let mut ready_tx = Some(ready_tx);
         let mut listening = Some(listening);
-        let _ = std::fs::write(&marker, "");
+        let mut remark = tokio::time::interval(MARKER_EVERY);
+        let mut marks = 0u64;
         loop {
-            // Wait for a file to move, or for a held frame to come due.
-            let first = match throttle.next_due() {
-                Some(at) => tokio::select! {
-                    moved = raw_rx.recv() => moved,
-                    _ = tokio::time::sleep_until(at) => {
-                        for frame in throttle.due(Instant::now()) {
-                            let _ = tx.send(frame);
-                        }
-                        continue;
+            // Wait for a file to move, for a held frame to come due, or
+            // to write the marker again.
+            let first = tokio::select! {
+                moved = raw_rx.recv() => moved,
+                _ = until(throttle.next_due()) => {
+                    for frame in throttle.due(Instant::now()) {
+                        let _ = tx.send(frame);
                     }
-                },
-                None => raw_rx.recv().await,
+                    continue;
+                }
+                _ = remark.tick(), if ready_tx.is_some() => {
+                    marks += 1;
+                    let _ = std::fs::write(&marker, marks.to_string());
+                    continue;
+                }
             };
             let Some(first) = first else {
                 return;
@@ -951,10 +968,16 @@ mod tests {
         }
     }
 
+    /// A hang guard, not a wait: the event usually lands in
+    /// milliseconds, but with the disk busy enough (several bazel
+    /// servers and their tests) fseventsd has held every client's events
+    /// back for over 10s and then delivered them in one burst.
+    const DEADLINE: Duration = Duration::from_secs(60);
+
     async fn within<T>(what: &str, f: impl std::future::Future<Output = T>) -> T {
-        tokio::time::timeout(Duration::from_secs(10), f)
+        tokio::time::timeout(DEADLINE, f)
             .await
-            .unwrap_or_else(|_| panic!("no {what} within 10s"))
+            .unwrap_or_else(|_| panic!("no {what} within {DEADLINE:?}"))
     }
 
     /// A watch on `root` that has said it reports.
