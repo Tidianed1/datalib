@@ -67,7 +67,7 @@ async fn download(api: &Path, playback: &Path, out_db: &Path) {
         full_sync: true,
         refresh_window_days: 0,
         sleep_between: std::time::Duration::ZERO,
-        ..FetchOptions::new(db.clone())
+        ..FetchOptions::new(db.clone(), crate::tng_now())
     })
     .await;
     out.unwrap();

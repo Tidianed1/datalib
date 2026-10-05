@@ -79,7 +79,7 @@ async fn main() -> Result<()> {
         targets,
         full_sync: args.full,
         sleep_between: Duration::from_secs_f64(args.sleep_between.max(0.0)),
-        ..FetchOptions::new(db.clone())
+        ..FetchOptions::new(db.clone(), datalib_time::IsoOffsetTimestamp::now_local())
     };
 
     let span = info_span!("github_ingest", out = %args.out.display());

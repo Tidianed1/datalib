@@ -26,6 +26,25 @@ static LINK_NEXT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"<([^>]+)>;\s*rel="
 pub enum ForgeError {
     #[error("{0}")]
     Permanent(String),
+    #[error("{url}: HTTP {status} body={body:?}")]
+    Status {
+        url: String,
+        status: u16,
+        body: String,
+    },
+}
+
+impl ForgeError {
+    /// The forge would not give this credential what it asked for.
+    pub fn refused(&self) -> bool {
+        matches!(
+            self,
+            ForgeError::Status {
+                status: 401 | 403,
+                ..
+            }
+        )
+    }
 }
 
 pub struct ForgeClient {
@@ -94,11 +113,11 @@ impl ForgeClient {
             let headers: HashMap<String, String> = resp.headers.into_iter().collect();
             return Ok((value, headers));
         }
-        let preview: String = body.chars().take(300).collect();
-        Err(ForgeError::Permanent(format!(
-            "{url}: HTTP {} body={preview:?}",
-            resp.status
-        )))
+        Err(ForgeError::Status {
+            url: url.to_string(),
+            status: resp.status,
+            body: body.chars().take(300).collect(),
+        })
     }
 
     /// Walk `Link: rel=next` pagination until exhausted, accumulating

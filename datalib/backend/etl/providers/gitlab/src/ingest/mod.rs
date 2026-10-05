@@ -13,10 +13,13 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use datalib_etl::bulk::BulkUpsertable;
 use datalib_etl::http::{default_retryability, HttpService, LatchkeySettings};
+use datalib_etl::stop::StopFlag;
 use datalib_etl_forge_ingest_common::{
     get_change_request, sync, walk_children, Forge, ForgeClient, Listed, SyncOptions,
 };
+use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::{json, Value};
 use sqlx::SqlitePool;
@@ -25,6 +28,8 @@ pub use datalib_etl_forge_ingest_common::PER_PAGE;
 pub use db::{
     block_on_load_all, db_path_for, LoadedDiscussion, LoadedMergeRequest, LoadedRaw, RawDb,
 };
+
+use schema_raw::{mr_pk_recipe, MergeRequestRow};
 
 pub const BASE: &str = "https://gitlab.com/api/v4";
 
@@ -58,12 +63,15 @@ pub struct FetchOptions {
     pub progress: datalib_etl::progress::Progress,
     /// Cross-provider knobs (the checkpoint cadence, the stop flag).
     pub control: datalib_etl::control::DownloadControl,
+    /// The run's pinned clock; a scope's cursor is stamped with it.
+    pub now: IsoOffsetTimestamp,
 }
 
 impl FetchOptions {
-    /// Every field defaulted except the store, which has none to give:
-    /// it is a live handle the caller opens and closes.
-    pub fn new(db: RawDb) -> Self {
+    /// Every field defaulted except the store and the clock, which have
+    /// none to give: a live handle the caller opens and closes, and the
+    /// run's pinned now.
+    pub fn new(db: RawDb, now: IsoOffsetTimestamp) -> Self {
         Self {
             latchkey: LatchkeySettings::default(),
             db,
@@ -75,6 +83,7 @@ impl FetchOptions {
             sleep_between: Duration::ZERO,
             progress: datalib_etl::progress::Progress::noop(),
             control: datalib_etl::control::DownloadControl::default(),
+            now,
         }
     }
 }
@@ -101,6 +110,7 @@ pub(crate) fn project_full_path_from_web_url(web_url: &str) -> Option<String> {
 
 struct Gitlab<'a> {
     db: &'a RawDb,
+    stop: &'a StopFlag,
 }
 
 #[async_trait]
@@ -108,6 +118,7 @@ impl Forge for Gitlab<'_> {
     type Summary = FetchSummary;
     const ITEM: &'static str = "MR";
     const SIGIL: char = '!';
+    const ITEM_TABLE: &'static str = MergeRequestRow::TABLE;
     const SCOPE_CONFIG_KEY: &'static str = "gitlab:download";
 
     fn pool(&self) -> &SqlitePool {
@@ -122,8 +133,6 @@ impl Forge for Gitlab<'_> {
         self.db.upsert_self_identity(me).await
     }
 
-    /// `reviewer` is not a `scope` GitLab takes: it is a filter on the
-    /// user's own id.
     async fn search(
         &self,
         client: &ForgeClient,
@@ -131,19 +140,8 @@ impl Forge for Gitlab<'_> {
         me: &Value,
         since: Option<&str>,
     ) -> Result<Vec<Value>> {
-        let scope_param = if scope == "reviewer" {
-            let user_id = me.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
-            format!("reviewer_id={user_id}")
-        } else {
-            format!("scope={scope}")
-        };
-        let mut url = format!(
-            "{BASE}/merge_requests?{scope_param}&state=all&per_page={PER_PAGE}&order_by=updated_at&sort=desc"
-        );
-        if let Some(s) = since {
-            url.push_str(&format!("&updated_after={}", urlencoding::encode(s)));
-        }
-        Ok(client.paginate(&url).await?)
+        let user_id = me.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
+        Ok(client.paginate(&search_url(scope, user_id, since)).await?)
     }
 
     fn listed(&self, item: &Value) -> Option<Listed> {
@@ -163,6 +161,10 @@ impl Forge for Gitlab<'_> {
         })
     }
 
+    fn item_key(&self, container: &str, number: u32) -> String {
+        mr_pk_recipe(container, number)
+    }
+
     async fn any_stored(&self) -> Result<bool> {
         self.db.any_merge_requests().await
     }
@@ -176,31 +178,48 @@ impl Forge for Gitlab<'_> {
         client: &ForgeClient,
         cr: &Listed,
         summary: &mut FetchSummary,
-    ) -> Result<()> {
+    ) -> Result<Vec<String>> {
         let (proj, iid) = (cr.container.as_str(), cr.number);
         let pid = urlencoding::encode(proj);
         let mr_url = format!("{BASE}/projects/{pid}/merge_requests/{iid}");
-        let Some(mr_data) = get_change_request(client, &mr_url, "MR", cr).await else {
-            return Ok(());
+        let mr_data = match get_change_request(client, &mr_url).await {
+            Ok(v) => v,
+            Err(e) => return Ok(vec![e]),
         };
-        self.db.upsert_merge_request(proj, iid, &mr_data).await?;
-        summary.new_mrs += 1;
-
         // The endpoint returns this MR's *whole* discussion list, so a
         // discussion we hold that it did not mention was deleted on
         // GitLab.
         let disc_url =
             format!("{BASE}/projects/{pid}/merge_requests/{iid}/discussions?per_page={PER_PAGE}");
-        let Some(discussions) = walk_children(client, &disc_url, cr, "discussions").await else {
-            return Ok(());
+        let discussions = walk_children(client, &disc_url, "discussions").await;
+        // The MR's stored `updated_at` is what lets the next run skip
+        // it. A stop cut its discussions short; storing it now would
+        // skip them until the MR next changes.
+        if discussions.is_err() && self.stop.requested() {
+            return Ok(Vec::new());
+        }
+        self.db.upsert_merge_request(proj, iid, &mr_data).await?;
+        summary.new_mrs += 1;
+        let discussions = match discussions {
+            Ok(d) => d,
+            Err(e) => return Ok(vec![e]),
         };
+        let without_id = discussions
+            .iter()
+            .filter(|d| d.get("id").and_then(|v| v.as_str()).is_none())
+            .count();
+        if without_id > 0 {
+            return Ok(vec![format!(
+                "{without_id} of its discussions came back without an id"
+            )]);
+        }
         self.db.upsert_discussions(proj, iid, &discussions).await?;
         summary.new_discussions += discussions.len();
         summary.pruned += self
             .db
             .prune_mr_discussions(proj, iid, &discussions)
             .await?;
-        Ok(())
+        Ok(Vec::new())
     }
 
     fn record_skipped(&self, summary: &mut FetchSummary) {
@@ -210,6 +229,23 @@ impl Forge for Gitlab<'_> {
     fn record_requests(&self, summary: &mut FetchSummary, requests: u64) {
         summary.requests = requests;
     }
+}
+
+/// The merge-request listing for one discovery scope. `reviewer` is not
+/// a `scope` GitLab takes: it is a filter on the user's own id.
+pub fn search_url(scope: &str, user_id: i64, since: Option<&str>) -> String {
+    let scope_param = if scope == "reviewer" {
+        format!("reviewer_id={user_id}")
+    } else {
+        format!("scope={scope}")
+    };
+    let mut url = format!(
+        "{BASE}/merge_requests?{scope_param}&state=all&per_page={PER_PAGE}&order_by=updated_at&sort=desc"
+    );
+    if let Some(s) = since {
+        url.push_str(&format!("&updated_after={}", urlencoding::encode(s)));
+    }
+    url
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
@@ -226,7 +262,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         "full_sync": opts.full_sync,
     });
     sync(
-        &Gitlab { db: &opts.db },
+        &Gitlab {
+            db: &opts.db,
+            stop: &opts.control.stop,
+        },
         &client,
         SyncOptions {
             scopes: &opts.scopes,
@@ -234,6 +273,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             max_items: opts.max_mrs,
             targets: &opts.targets,
             full_sync: opts.full_sync,
+            now: &opts.now,
+            stop: &opts.control.stop,
             sleep_between: opts.sleep_between,
             progress: &opts.progress,
             run_config,
@@ -264,6 +305,17 @@ pub fn parse_mr_ref(s: &str) -> Result<(String, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_mr_key_splits_back_into_project_and_iid() {
+        assert_eq!(
+            datalib_etl_forge_ingest_common::split_item_key(
+                &mr_pk_recipe("starfleet/enterprise", 1701),
+                <Gitlab<'_> as Forge>::SIGIL
+            ),
+            Some(("starfleet/enterprise".to_string(), 1701))
+        );
+    }
 
     #[test]
     fn parse_mr_ref_accepts_bang_form_and_url() {
