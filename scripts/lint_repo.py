@@ -386,6 +386,13 @@ _CURSOR_WITHOUT_SCOPE_CONFIG: dict[str, str] = {
     # listing, so a widened filter surfaces what it admits on its own.
     # The marker is "when did I last sweep", not a position in a walk.
     "claude": "listing-diff; the sweep marker is not a resume cursor",
+    # No cursor at all: what is owed is the calendar and the listing
+    # minus what the store holds (docs/dev/plans/sync_state.md). What it
+    # writes here pins the window's start and marks a one-time repair.
+    "garmin": "no resume cursor; owed is derived from the store",
+    # History is owed by coverage spans; what it writes here only says
+    # when a listing was last swept.
+    "slack": "sweep markers schedule a listing; history is owed by coverage",
 }
 
 

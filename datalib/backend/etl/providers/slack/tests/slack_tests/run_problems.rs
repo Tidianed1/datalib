@@ -119,12 +119,12 @@ async fn a_channel_that_fails_is_a_problem_until_it_walks() {
     assert_eq!(problems(&out).await, [], "the channel walked this time");
 }
 
-/// A thread whose replies will not come is a row on its root message —
-/// the one the render can name, so it reaches the thread's document —
-/// and the channel is mirrored all the same. A later run asks for the
-/// thread again even though its root is past the walk, and the row goes.
+/// A thread whose replies will not come is a row on the thread's own
+/// stamp, keyed like its root message so the render can name it, and the
+/// channel is mirrored all the same. A later run asks for the thread
+/// again though no walk lists its root, and the row goes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_thread_that_fails_is_a_problem_on_its_root_until_it_fetches() {
+async fn a_thread_that_fails_is_a_problem_on_the_thread_until_it_fetches() {
     let d = tempdir().unwrap();
     let out = d.path().join("out_raw");
     let channels = json!([channel("C1", "bridge")]);
@@ -156,12 +156,12 @@ async fn a_thread_that_fails_is_a_problem_on_its_root_until_it_fetches() {
     assert_eq!(stored_ts(&out), [A, B]);
     assert_eq!(
         problems(&out).await,
-        [row(&format!("messages:T1#C1#{A}"), "warning")],
-        "the root is stored, so the thread is stale rather than missing"
+        [row(&format!("replies_pages:T1#C1#{A}"), "error")],
+        "its replies have never been read, so they are missing, not stale"
     );
 
-    // The resumed walk lists nothing at or before `B`, so only the
-    // failure itself can bring the thread back.
+    // The resumed walk lists nothing at or before `B`: the thread comes
+    // back because the store holds a root whose replies it does not.
     let api2 = d.path().join("api2");
     record_listings(&api2, channels);
     resumed("C1", B).record(&api2, json!([])).unwrap();

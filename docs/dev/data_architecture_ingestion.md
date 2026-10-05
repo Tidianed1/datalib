@@ -564,7 +564,8 @@ There is no fingerprint compare beside it: rewriting an identical row to a conte
 ## Cursor / resume strategy
 Cursor / resume is the **download-side specialization** of the [Incremental update](#efficiently-incremental) pattern: "what was the last upstream identifier we successfully recorded?" answers "where does the next walk start?" Three patterns in the tree, picked by upstream API shape:
 
-- **Forward-walk + refresh window** (slack, github, gitlab): resume from `max(ts)` of previously-recorded items; also re-query the trailing `refresh_window_days` to catch edits / late-arriving items. Dedup collapses the overlap to zero writes.
+- **Coverage spans + refresh window** (slack): each page of a channel's history records the stretch it covered, in the transaction that stores its messages ([`coverage.rs`](/datalib/backend/etl/src/coverage.rs)). A run walks the gaps in `[since, ∞)` and re-reads the trailing `refresh_window_days` to catch edits and deletions. A newest stored message is never read as "fetched up to here".
+- **Forward-walk + refresh window** (github, gitlab): resume from the newest `updated_at` previously recorded; also re-query the trailing `refresh_window_days` to catch edits / late-arriving items. Dedup collapses the overlap to zero writes.
 - **Listing diff** (claude, chatgpt): re-list everything each run and compare each item's listing `updated_at`/`update_time` against the stored copy; only new/changed items get a detail fetch. An optional `since` bounds the diff — items updated before it are never detail-fetched, and chatgpt's newest-first paginated listing additionally stops walking once it pages past the cutoff.
 - **Time-windowed sampling** (yolink): walk `[start, now]` in fixed-stride windows. Windows align across runs and devices. Per-window UPSERT dedups re-fetched samples.
 
@@ -599,7 +600,6 @@ So the rule has two halves:
    on `result.is_ok()`. Gmail's `FetchSummary::drained()` is the
    pattern: `!stopped_early() && messages_failed == 0`, consulted once,
    and both the cursor and the scope record are written under it.
-   Slack's `walked_everything` is the same predicate by another name.
 2. **Take the token early, store it late.** A live state token is
    often only available on the first response of a walk; hold it in a
    local and write it when the walk completes. Writing it where it was
@@ -609,8 +609,12 @@ So the rule has two halves:
 **The test that catches it** is the same for every marker: end the run
 early on purpose — the stop flag, raised from the progress sink after
 the first unit, is the deterministic way — and assert the marker was
-*not* written (`slack/tests/slack_tests/interrupt.rs`). A test that only
-checks the happy path checks the write, not the gate.
+*not* written. A test that only checks the happy path checks the
+write, not the gate. A provider with no marker to gate is tested the
+other way round: cut the run off at every request and require that
+running it again ends where an uninterrupted run does
+([`interrupt.rs`](/datalib/backend/etl/src/interrupt.rs); Garmin and
+Slack).
 
 `scripts/lint_repo.py` check 8 catches a provider that keeps a cursor
 and never records the scope config at all. It does not catch a record
@@ -654,19 +658,18 @@ Current consumers, and what each does when the knob widens:
 
 | Provider | Knob | Reaction |
 |---|---|---|
-| slack | `since` | Walk `[since, min(ts)]` per channel |
-| slack | `media` | Re-walk from `since` (the knob only reaches messages the walk visits); a raised `blob_size_limit_bytes` needs nothing, since every run retries the files it skipped |
+| slack | — | Keeps no record. An earlier `since` is a gap below the spans held, and the next run walks it; `media` turned on makes every stored file edge without bytes owed, with no re-walk |
 | github, gitlab | `refresh_window_days` | `scope_state::since_for_scope`, given the prior record, reaches back to the earlier of the cursor and `now - window` |
 | email (JMAP) | `only_extract_labels` | `Email/query` scoped to the newly-added mailboxes |
 | email (Gmail) | `only_extract_labels` | `history.list` since the cursor as usual, plus a `messages.list` walk over the newly-added labels (or the whole account when the filter was removed) |
 | email (mbox) | `only_extract_labels` | Re-read every file |
-| garmin | `since` | Re-walk from the new start |
+| garmin | — | Keeps no cursor and no record. An earlier `since` leaves days with no row and start dates with no `coverage` span, and the next run fetches exactly those |
 | notion | `refresh_window_days` | Re-examine the widened window |
 | yolink | `devices[].start` | Re-walk that device from the new start |
 
 The longest write-up of the reasoning, including what is deliberately
-*not* recorded and why, is `providers/slack/INGEST.md` § "Config
-changes the cursor would otherwise swallow"; Gmail's is in
+*not* recorded and why, is `providers/slack/INGEST.md` § "A changed
+config"; Gmail's is in
 [`email_download_modes.md`](email_download_modes.md).
 
 **The rule is opt-in, and that is how it gets missed.**

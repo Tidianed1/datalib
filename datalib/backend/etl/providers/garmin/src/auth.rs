@@ -165,6 +165,17 @@ impl Credentials {
         }
     }
 
+    /// A credential whose every [`Self::bearer`] fails, as one does when
+    /// the token exchange is refused.
+    #[cfg(test)]
+    pub(crate) fn without_a_bearer() -> Self {
+        Self {
+            dir: None,
+            oauth1: None,
+            oauth2: None,
+        }
+    }
+
     pub fn domain(&self) -> &str {
         self.oauth1
             .as_ref()

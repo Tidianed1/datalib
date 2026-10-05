@@ -39,8 +39,8 @@ fn spec_path() -> PathBuf {
 }
 
 pub(crate) struct Account {
-    _dir: tempfile::TempDir,
-    playback: PathBuf,
+    pub(crate) dir: tempfile::TempDir,
+    pub(crate) playback: PathBuf,
     raw: PathBuf,
     spec_file: PathBuf,
     pub(crate) spec: Value,
@@ -56,7 +56,7 @@ impl Account {
         let spec: Value = serde_json::from_slice(&std::fs::read(spec_path()).unwrap()).unwrap();
         let spec_file = dir.path().join("spec.json");
         let account = Self {
-            _dir: dir,
+            dir,
             playback,
             raw,
             spec_file,
@@ -187,13 +187,6 @@ impl Account {
         db.commit_all("test").await.unwrap();
         db.close().await;
     }
-
-    pub(crate) async fn set_cursor(&self, scope: &str, value: &str) {
-        let db = RawDb::open(&db_path_for(&self.raw)).await.unwrap();
-        db.set_cursor(scope, value).await.unwrap();
-        db.commit_all("test").await.unwrap();
-        db.close().await;
-    }
 }
 
 pub(crate) fn status(code: u16, body: &str) -> HttpResponse {
@@ -320,8 +313,8 @@ async fn a_listing_answering_nothing_does_not_prune() {
     assert!(a.problems().await.is_empty());
 }
 
-/// A phase that fails wholesale — here the weight walk, handed a cursor
-/// it cannot parse — is a `problems` row, not only a log line, and the
+/// A phase that fails wholesale — here the weight walk, whose table
+/// refuses the write — is a `problems` row, not only a log line, and the
 /// run still returns `Ok` so the other phases' work is committed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_phase_that_fails_wholesale_is_a_problems_row_and_the_run_stays_green() {
@@ -330,10 +323,13 @@ async fn a_phase_that_fails_wholesale_is_a_problems_row_and_the_run_stays_green(
     a.run().await;
     assert_eq!(a.count("SELECT COUNT(*) FROM garmin_weigh_ins").await, 4);
 
-    a.set_cursor("garmin:weight", "stardate 46944.2").await;
+    a.exec(
+        "CREATE TRIGGER no_weigh_ins BEFORE INSERT ON garmin_weigh_ins \
+         BEGIN SELECT RAISE(ABORT, 'the scale is offline'); END",
+    )
+    .await;
     let s = a.run().await;
     assert_eq!(s.errors, 1, "{}", s.line());
-    assert_eq!(s.weigh_ins, 0, "the phase never listed: {}", s.line());
     assert_eq!(
         s.items,
         4,
@@ -348,11 +344,11 @@ async fn a_phase_that_fails_wholesale_is_a_problems_row_and_the_run_stays_green(
         "{problems:?}"
     );
     assert!(
-        problems["phase:weight"].contains("stardate"),
+        problems["phase:weight"].contains("garmin_weigh_ins"),
         "the sample carries the error: {problems:?}"
     );
 
-    a.set_cursor("garmin:weight", "2369-04-15").await;
+    a.exec("DROP TRIGGER no_weigh_ins").await;
     let s = a.run().await;
     assert_eq!(s.errors, 0, "{}", s.line());
     assert!(a.problems().await.is_empty());
