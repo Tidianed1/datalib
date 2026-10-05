@@ -71,7 +71,16 @@ pub async fn call(session: &Session, method: &str, args: Value) -> Result<Value>
         .cloned()
         .ok_or_else(|| answer("methodResponses[0][1] missing".into()))?;
     if name == "error" {
-        return Err(answer(format!("error: {args}")).into());
+        return Err(JmapError::Method {
+            method: method.to_string(),
+            kind: args
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            args,
+        }
+        .into());
     }
     Ok(args)
 }
@@ -92,6 +101,14 @@ pub enum JmapError {
     },
     #[error("JMAP {method}: {detail}")]
     Answer { method: String, detail: String },
+    /// The server answered the call with a method-level error; `kind`
+    /// is its `type`.
+    #[error("JMAP {method}: error: {args}")]
+    Method {
+        method: String,
+        kind: String,
+        args: Value,
+    },
 }
 
 impl JmapError {
@@ -112,6 +129,15 @@ impl JmapError {
 /// The request failed upstream, rather than the store refusing a write.
 pub fn is_upstream(e: &anyhow::Error) -> bool {
     e.downcast_ref::<JmapError>().is_some()
+}
+
+/// The server no longer keeps the changes since the state it was asked
+/// about (RFC 8620 §5.2): only a new listing can say what it has now.
+pub fn cannot_calculate_changes(e: &anyhow::Error) -> bool {
+    matches!(
+        e.downcast_ref::<JmapError>(),
+        Some(JmapError::Method { kind, .. }) if kind == "cannotCalculateChanges"
+    )
 }
 
 /// See [`JmapError::is_terminal`].

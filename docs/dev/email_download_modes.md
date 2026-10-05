@@ -39,8 +39,10 @@ table in `src/ingest/labels.rs` is where they are reconciled.
 
 - `src/ingest/schema_raw.rs` is one schema for every mode: `accounts`,
   `mailboxes`, `threads`, `emails`, `email_blobs`, the two join tables
-  `email_mailboxes` and `email_keywords`, and `gmail_messages` (Gmail's
-  own id → the row it produced, used only by the Gmail mode).
+  `email_mailboxes` and `email_keywords`, and the three tables the two
+  API modes keep their progress in: `listed_messages`,
+  `fetched_messages` (upstream's own id → the row it produced) and
+  `listed_whole`.
 - `src/mailbox_labels.rs` resolves `Parent/Child` label paths the same
   way for a JMAP `parentId` tree and a flat Gmail label list, so
   `only_extract_labels` / `only_render_labels` mean the same thing in
@@ -184,60 +186,61 @@ fails at load with the new spelling in the error.
 
 ### Sync
 
+The Gmail mode keeps the same three tables as the JMAP mode, and the
+same rule: what Gmail **listed** (`listed_messages`, a row per message
+id with the `historyId` that last named it as changed) is stored apart
+from what is **held** (`fetched_messages`: Gmail's id → the `emails` row
+it produced and the `historyId` it was fetched for), and what is
+**owed** is asked of the store each time. The provider's
+[`INGEST.md`](/datalib/backend/etl/providers/email/INGEST.md)
+§"Incrementality" has the rule in full.
+
 The cursor is the mailbox `historyId`, stored per account in the shared
 `sync_scope_state` table under a `gmail:<account>:historyId` key — the
-same namespacing discipline as the JMAP path's `jmap:` keys.
+same namespacing discipline as the JMAP path's `jmap:` keys. A run:
 
-- no cursor, or `full_resync` → full sync: `messages.list` paged, then
-  `messages.get?format=RAW` per id.
-- a cursor → `history.list`. `messagesAdded` and relabeled ids are
-  fetched; `messagesDeleted` hard-deletes the row (doltlite history
-  retains the prior state), matching what the JMAP path does with
-  `Email/changes` destroyed ids.
-- `history.list` 404 means the cursor aged out of Google's retention
-  window (documented as "typically at least one week"). That is not an
-  error — it is the documented signal to fall back to a full sync,
-  structurally the same as JMAP's `cannotCalculateChanges`.
-- a cursor, and `only_extract_labels` wider than when the cursor was
-  stored → both: `history.list` as above, then a `messages.list` walk
-  over the newly-added labels, or the whole account when the filter was
-  removed. `history.list` only names what *changed*, and mail that
-  already sat outside the old labels did not, so without the walk a
-  widened filter mirrors nothing. The filter the cursor was
-  taken under is recorded in `sync_scope_config` under `gmail:download`,
-  the same mechanism the JMAP mode uses; see
-  `docs/dev/data_architecture_ingestion.md` § "When the cursor swallows
-  a config change".
+1. **Replays `history.list`** from the cursor. Its pages are collected,
+   then one transaction lists every `messagesAdded` and relabeled id
+   under the new `historyId`, deletes every `messagesDeleted` id (the
+   email, what was listed and held for it, and its place in its thread;
+   doltlite history retains the prior state), and stores the new
+   `historyId`. The cursor moves with the listing and never waits on a
+   fetch. A relabel names a message again, so it is fetched again
+   although it is held.
+   A `history.list` 404 means the cursor aged out of Google's retention
+   window (documented as "typically at least one week"). That is not an
+   error: with no cursor to replay from — that, a first run, or
+   `full_resync` — the run stores the `historyId` the profile reported
+   before any walk, and forgets which labels were listed whole. What is
+   already held is not fetched again, at 20 units a message; so a label
+   change made while no cursor was replaying is not seen.
+2. **Walks `messages.list`** over each configured label (or the whole
+   account) that has no `listed_whole` row, listing each page's ids. A
+   message already listed is left as it is. A walk starts again every
+   run until it reaches its end; then its label is recorded as listed
+   whole, and a walk over the whole account also deletes every listed
+   message it did not name — the deletions `history.list` never
+   reported. `history.list` only names what *changed*, and mail that
+   already sat under a newly configured label did not, so a widened
+   `only_extract_labels` is a label with no row, and is walked.
+3. **Fetches what is owed** with `messages.get?format=RAW`, newest id
+   first: a listed message not held at its listed `historyId`; one held
+   with no `.eml` stored that now fits under `blob_size_limit_bytes`;
+   one a different build could not store. Fetched messages are written
+   200 at a time, the email rows, thread rows and held rows in one
+   transaction. A message Gmail answers 404 for, or that carries none
+   of the configured labels, loses its listing and whatever was held.
+   A message that will not fetch stays owed, with a
+   `listed_messages:<id>` row in `problems` and its attempts counted.
 
-The cursor and the recorded filter both advance only when the run
-drained its work — no `message_budget` stop, no interruption, no
-`messages.get` failure other than a 404, no `messages.list` walk that
-failed — because either one stored
-after a partial run tells the next run it is caught up, and the next
-run's `history.list` never names a message that merely failed to fetch.
-A held cursor makes the next run re-enumerate, which is cheap:
-`messages.list` is 5 units a page, and every id already in
-`gmail_messages` is skipped before `messages.get`'s 20 are spent.
+Labels are reconciled every run, walk or not: `labels.list` is always
+the whole set. Ingest stamps `_source: { via, gmailMessageId,
+gmailThreadId }` into the envelope payload as provenance.
 
-A message an earlier run could not use keeps its `record:gmail_messages:`
-row, and every run fetches those ids again first, whatever the cursor
-says; so is an `.eml` once skipped as too large, once the limit allows
-it. A `messages.list` walk that fails is a `listing:messages.list
-<label>` row; the other labels are still walked and nothing is pruned.
-
-A walk over the whole mailbox (no label filter, not budget-limited) is
-also when deletions `history.list` never reported are found: rows the
-walk did not list are pruned. Labels are reconciled every run, walk or
-not: `labels.list` is always the whole set.
-
-Deletions carry Gmail's own message id, and the delete looks the row
-up in `gmail_messages`, which also says which rows this mode wrote. Ingest
-also stamps `_source: { via, gmailMessageId, gmailThreadId }` into the
-envelope payload as provenance.
-
-Thread rows are rebuilt from the `emails` table for every thread the
-run touched, not from the messages this run fetched — relabeling one
-message of a ten-message thread must not shrink the thread to one.
+A thread row is the ids of the emails held for that thread, written in
+the transaction that writes or deletes one of them — so relabeling one
+message of a ten-message thread does not shrink the thread to one, and
+no email is ever without its thread row.
 
 ### Throughput and the budget
 
@@ -258,8 +261,8 @@ into it and keep going, the way the Slack provider does.
   HTTP chokepoint (`latchkey_curl_classified` with `gmail_retryability`).
   Google spells the per-user limit two ways — 429 `rateLimitExceeded`
   and **403 `userRateLimitExceeded`** — and a 403 read as an auth error
-  is the trap: the run would hold the cursor, walk on, and "succeed"
-  with every remaining message marked failed. 500 `backendError` is
+  is the trap: the run would walk on and "succeed" with every
+  remaining message marked failed. 500 `backendError` is
   retried too, per Google's own guidance; a 403 about scopes, or
   `dailyLimitExceeded`, is not — nothing shorter than a person, or a
   day, fixes those.
@@ -271,12 +274,12 @@ into it and keep going, the way the Slack provider does.
   instead of hitting it once a minute.
 - **When the retry loop gives up** — the run's `download` bounds
   (`DownloadParams`: by default thirty minutes without a successful
-  request, or fifty failures in a row) — the run stops with
-  an error rather than walking on to fail every remaining id one attempt
-  at a time. So does a refused credential (401, or a 403 that is not a
-  rate limit) or `dailyLimitExceeded`. What was fetched and not yet
-  flushed is flushed first, the sealed batches are already committed and
-  the cursor is held, so the next run resumes.
+  request, or fifty failures in a row) — the fetch stops rather than
+  walking on to fail every remaining id one attempt at a time. So does
+  a refused credential (401, or a 403 that is not a rate limit) or
+  `dailyLimitExceeded`. What was fetched is written, the run records one
+  `phase:messages.get` row and succeeds, and the next run fetches what
+  is still owed. Only with nothing mirrored at all does the run fail.
 
 A 100k-message mailbox is still ~6 hours of backfill; the run is
 expected to take that long. `message_budget` stops a run early with a
@@ -304,10 +307,10 @@ Each of these fails silently: a single run passes.
 - **Repeated `labelIds` intersect.** `only_extract_labels` means
   "carrying **any** of these", and `messages.list` cannot express a
   union: asking for three labels at once returns the messages carrying
-  all three, usually none — and a run that lists nothing stores its
-  cursor and reports success, so every later run finds nothing new. The
-  enumeration is one walk per label, deduped into one id set
-  (`enumeration_walks` in `src/ingest/gmail_api/mod.rs`), and
+  all three, usually none — and a run that lists nothing reports
+  success, so every later run finds nothing new. The enumeration is one
+  walk per label, each listing into the same `listed_messages` table
+  (`walk_unlisted_scopes` in `src/ingest/gmail_api/mod.rs`), and
   `api::list_messages` takes one `Option<&str>` label so the combined
   request cannot be built. A one-label test cannot tell union from
   intersection; `gmail_label_union` (hermetic) and
@@ -366,7 +369,10 @@ Unit tests cover the pure parts (label vocabulary, envelope synthesis,
 history parsing, base64url, the quota throttle). Hermetic tests in
 `tests/email_tests/` replay synthesized Gmail conversations through
 `DATALIB_HTTP_PLAYBACK`: `gmail_label_union`,
-`gmail_widened_labels_backfill` and `gmail_failed_fetch_holds_cursor`.
+`gmail_widened_labels_backfill`, `gmail_failed_fetch_is_owed`,
+`gmail_history_replay` and `gmail_interrupt` (a download cut off at each
+request in turn and run again must leave the store an uninterrupted run
+leaves).
 Incremental correctness against the real service needs the **live
 test** — the `live` module of `tests/email_tests/`, which the
 `email_tests` target skips with `--skip live::`:

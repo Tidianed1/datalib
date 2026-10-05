@@ -1,6 +1,6 @@
 //! Open + non-DDL data-manipulation for the JMAP raw store.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -51,31 +51,6 @@ impl RawDb {
         dr::upsert_scope_state(self.pool(), scope, token).await
     }
 
-    /// Every scope key that starts with `prefix`, with the prefix taken
-    /// off, and its value.
-    pub async fn scopes_under(&self, prefix: &str) -> Result<Vec<(String, String)>> {
-        let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT scope, last_seen_at_utc FROM sync_scope_state WHERE INSTR(scope, ?) = 1",
-        )
-        .bind(prefix)
-        .fetch_all(self.pool())
-        .await
-        .context("select scopes under a prefix")?;
-        Ok(rows
-            .into_iter()
-            .filter_map(|(k, v)| Some((k.strip_prefix(prefix)?.to_string(), v)))
-            .collect())
-    }
-
-    pub async fn forget_scope(&self, scope: &str) -> Result<()> {
-        sqlx::query("DELETE FROM sync_scope_state WHERE scope = ?")
-            .bind(scope)
-            .execute(self.pool())
-            .await
-            .context("delete a scope")?;
-        Ok(())
-    }
-
     // ── loads (consumed by render) ───────────────────────────────
 
     pub async fn load_accounts(&self) -> Result<Vec<Value>> {
@@ -88,22 +63,6 @@ impl RawDb {
 
     pub async fn load_threads(&self) -> Result<Vec<Value>> {
         dr::load_payloads(self.pool(), "threads").await
-    }
-
-    pub async fn thread_email_counts(&self) -> Result<HashMap<String, i64>> {
-        let rows = sqlx::query("SELECT id, email_count FROM threads")
-            .fetch_all(self.pool())
-            .await
-            .context("select thread_email_counts")?;
-        let mut out = HashMap::with_capacity(rows.len());
-        for r in rows {
-            let id: String = r.try_get("id").unwrap_or_default();
-            let n: Option<i64> = r.try_get("email_count").ok();
-            if !id.is_empty() {
-                out.insert(id, n.unwrap_or(0));
-            }
-        }
-        Ok(out)
     }
 
     pub async fn load_emails(&self) -> Result<Vec<LoadedEmail>> {
@@ -180,43 +139,6 @@ impl RawDb {
             keywords,
             attachments: HashMap::new(),
         })
-    }
-
-    pub async fn known_email_ids(&self) -> Result<HashSet<String>> {
-        let rows = sqlx::query("SELECT id FROM emails WHERE blob_id != ''")
-            .fetch_all(self.pool())
-            .await
-            .context("select known_email_ids")?;
-        let mut out = HashSet::with_capacity(rows.len());
-        for r in rows {
-            if let Ok(id) = r.try_get::<String, _>("id") {
-                out.insert(id);
-            }
-        }
-        Ok(out)
-    }
-
-    /// Whether an earlier run stored any of this account's emails.
-    pub async fn holds_emails(&self, account_id: &str) -> Result<bool> {
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM emails WHERE account_id = ?)")
-            .bind(account_id)
-            .fetch_one(self.pool())
-            .await
-            .context("ask whether the account has emails")
-    }
-
-    /// The threads this account's emails name that have no row of their
-    /// own: the ones a `Thread/get` did not answer for.
-    pub async fn threads_without_a_row(&self, account_id: &str) -> Result<Vec<String>> {
-        sqlx::query_scalar(
-            "SELECT DISTINCT e.thread_id FROM emails e
-             WHERE e.account_id = ? AND e.thread_id != ''
-               AND NOT EXISTS (SELECT 1 FROM threads t WHERE t.id = e.thread_id)",
-        )
-        .bind(account_id)
-        .fetch_all(self.pool())
-        .await
-        .context("select the threads with no row")
     }
 
     /// This account's mailbox rows: id → name.
@@ -335,34 +257,7 @@ impl RawDb {
             .begin()
             .await
             .context("begin delete emails tx")?;
-        for id in ids {
-            // The `.eml`'s fetch problem goes with it: an email upstream no
-            // longer has cannot fail to download.
-            sqlx::query(
-                "DELETE FROM problems WHERE scope_kind = ? AND scope_key IN \
-                 (SELECT 'email_blobs:' || id FROM email_blobs WHERE email_id = ?)",
-            )
-            .bind(datalib_problems::ScopeKind::Entity.as_str())
-            .bind(id)
-            .execute(&mut *tx)
-            .await
-            .with_context(|| format!("forget the problems of email {id}"))?;
-            for sql in [
-                "DELETE FROM email_mailboxes WHERE email_id = ?",
-                "DELETE FROM email_keywords WHERE email_id = ?",
-                "DELETE FROM email_blobs_bookkeeping
-                   WHERE id IN (SELECT id FROM email_blobs WHERE email_id = ?)",
-                "DELETE FROM email_blobs WHERE email_id = ?",
-                "DELETE FROM emails WHERE id = ?",
-                "DELETE FROM emails_bookkeeping WHERE id = ?",
-            ] {
-                sqlx::query(sql)
-                    .bind(id)
-                    .execute(&mut *tx)
-                    .await
-                    .with_context(|| format!("delete email {id}"))?;
-            }
-        }
+        delete_emails_in_tx(&mut tx, ids).await?;
         tx.commit().await.context("commit delete emails tx")?;
         Ok(())
     }
@@ -389,6 +284,39 @@ impl RawDb {
         }
         Ok(out)
     }
+}
+
+/// Delete these email rows with their joins, `.eml` edges and sidecars.
+pub async fn delete_emails_in_tx(tx: &mut Transaction<'_, Sqlite>, ids: &[String]) -> Result<()> {
+    for id in ids {
+        // The `.eml`'s fetch problem goes with it: an email upstream no
+        // longer has cannot fail to download.
+        sqlx::query(
+            "DELETE FROM problems WHERE scope_kind = ? AND scope_key IN \
+             (SELECT 'email_blobs:' || id FROM email_blobs WHERE email_id = ?)",
+        )
+        .bind(datalib_problems::ScopeKind::Entity.as_str())
+        .bind(id)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("forget the problems of email {id}"))?;
+        for sql in [
+            "DELETE FROM email_mailboxes WHERE email_id = ?",
+            "DELETE FROM email_keywords WHERE email_id = ?",
+            "DELETE FROM email_blobs_bookkeeping
+               WHERE id IN (SELECT id FROM email_blobs WHERE email_id = ?)",
+            "DELETE FROM email_blobs WHERE email_id = ?",
+            "DELETE FROM emails WHERE id = ?",
+            "DELETE FROM emails_bookkeeping WHERE id = ?",
+        ] {
+            sqlx::query(sql)
+                .bind(id)
+                .execute(&mut **tx)
+                .await
+                .with_context(|| format!("delete email {id}"))?;
+        }
+    }
+    Ok(())
 }
 
 // Email join-table refresh
@@ -636,7 +564,7 @@ mod tests {
                 .fetch_one(db.pool())
                 .await
                 .unwrap();
-        assert_eq!(version, "1");
+        assert_eq!(version, super::LADDER.len().to_string());
         db.close().await;
     }
 

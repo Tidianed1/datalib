@@ -1,6 +1,6 @@
 # Sync state: what is owed is what upstream listed, minus what we hold
 
-**Status: decided 2026-10-05; steps 0 to 2 of §7 are built (the three fixes, Garmin, Slack).** This is the design and
+**Status: decided 2026-10-05; steps 0 to 3 of §7 are built (the three fixes, Garmin, Slack, email's two API paths).** This is the design and
 the order of work. It came out of the audit in
 [`audits/2026-10-05_loose_ends.md`](../audits/2026-10-05_loose_ends.md)
 and a read of the four downloads with the most resume state (Slack,
@@ -407,7 +407,7 @@ enumeration on any error. Stays: the delta tokens, the quota throttle
 and budgets (policy), refile on a label that is gone, the body
 worklist. mbox is a local source and moves in step 6.
 
-### What doing them showed
+### What doing these three showed
 
 - **A first sync hides these bugs.** Garmin's old code passed every one
   of 275 cuts from an empty store, and failed at cut 30 of 42 once the
@@ -424,4 +424,18 @@ worklist. mbox is a local source and moves in step 6.
   lists is now three or four queries over the store.
 - **An existing store is walked again once.** By the new rules it holds
   nothing: no spans, no fetched-on dates, no listing hashes.
+- **Email's enumeration saves its token when it starts, not when it
+  closes.** A walk that restarts next run would otherwise sample a
+  newer state and miss a change to something it had already listed.
+  What says "this scope was listed whole" is its own row, written with
+  the prune, so the token is free to move early.
+- **JMAP no longer fetches threads.** Nothing read upstream's thread
+  object; membership is written from the email rows in their
+  transaction, on both API paths.
+- **Three providers, three hand-built versions of the same thing.**
+  Each added its own "held version" (Garmin five columns, email a
+  table, Slack a table it already had) and its own fetch loop. Before
+  Notion: move the held version into the `_bookkeeping` sidecar every
+  table already has, so "owed" is one shared query, and write one
+  fetch loop whose unit is a batch with an outcome per item.
 

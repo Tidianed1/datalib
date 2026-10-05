@@ -1,22 +1,13 @@
-//! When part of a Fastmail (JMAP) sync fails: a listing or a phase that
-//! did not answer is a `problems` row and the rest of the run goes on; a
+//! When part of a Fastmail (JMAP) sync fails: a listing that did not
+//! answer is a `problems` row and the rest of the run goes on; a
 //! download the server refused ends the `.eml` phase, keeping what
 //! landed; and each row clears only once the thing it is about is tried
 //! again and works.
 
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use datalib_etl_email::ingest::{FetchOptions, FetchSummary, RawDb};
 
-use datalib_etl::http::{HttpRequest, HttpResponse, HttpService};
-use datalib_etl::synthesize::{json_response, write_fixture};
-use datalib_etl_email::ingest::session::Session;
-use datalib_etl_email::ingest::{api, FetchOptions, FetchSummary, RawDb};
-use serde_json::{json, Value};
-
+use crate::jmap_tape::{mailbox_get_args, query_args, status, Account, Tape, HOST};
 use crate::support::Mirror;
-
-const HOST: &str = "jmap.example.test";
-const ACCOUNT: &str = "A1";
 
 /// A full re-list whose `Mailbox/get` fails keeps the mailboxes an
 /// earlier run stored and still mirrors the mail.
@@ -24,15 +15,14 @@ const ACCOUNT: &str = "A1";
 async fn a_mailbox_listing_that_fails_is_a_row_and_the_run_goes_on() {
     let m = Mirror::new();
     let tape = Tape::new(&m.playback);
-    tape.account(&[("MB1", "Inbox")], &[("M1", &["MB1"])]);
+    tape.serve(&Account::new(&[("MB1", "Inbox")], &[("M1", &["MB1"])]));
     run(&m, |_| {}).await.expect("first run");
 
-    tape.account(&[("MB1", "Inbox")], &[("M1", &["MB1"]), ("M2", &["MB1"])]);
-    tape.refuse(
-        "Mailbox/get",
-        json!({ "accountId": ACCOUNT, "ids": null }),
-        400,
-    );
+    tape.serve(&Account::new(
+        &[("MB1", "Inbox")],
+        &[("M1", &["MB1"]), ("M2", &["MB1"])],
+    ));
+    tape.refuse("Mailbox/get", mailbox_get_args(None), 400);
     let second = run(&m, |_| {})
         .await
         .expect("a mailbox listing that fails does not fail the run");
@@ -40,7 +30,10 @@ async fn a_mailbox_listing_that_fails_is_a_row_and_the_run_goes_on() {
     assert_eq!(problems(&m).await, [row("listing:Mailbox/get", "error")]);
     assert_eq!(mailboxes(&m).await, ["MB1"]);
 
-    tape.account(&[("MB1", "Inbox")], &[("M1", &["MB1"]), ("M2", &["MB1"])]);
+    tape.serve(&Account::new(
+        &[("MB1", "Inbox")],
+        &[("M1", &["MB1"]), ("M2", &["MB1"])],
+    ));
     run(&m, |_| {}).await.expect("third run");
     assert!(
         problems(&m).await.is_empty(),
@@ -55,10 +48,13 @@ async fn a_mailbox_listing_that_fails_is_a_row_and_the_run_goes_on() {
 async fn an_email_listing_that_fails_deletes_nothing() {
     let m = Mirror::new();
     let tape = Tape::new(&m.playback);
-    tape.account(&[("MB1", "Inbox")], &[("M1", &["MB1"]), ("M2", &["MB1"])]);
+    tape.serve(&Account::new(
+        &[("MB1", "Inbox")],
+        &[("M1", &["MB1"]), ("M2", &["MB1"])],
+    ));
     run(&m, |_| {}).await.expect("first run");
 
-    tape.refuse("Email/query", query_args(), 400);
+    tape.refuse("Email/query", query_args(0, &[]), 400);
     run(&m, |_| {})
         .await
         .expect("an email listing that fails does not fail the run");
@@ -67,41 +63,11 @@ async fn an_email_listing_that_fails_deletes_nothing() {
 
     let fresh = Mirror::new();
     let tape = Tape::new(&fresh.playback);
-    tape.account(&[("MB1", "Inbox")], &[]);
-    tape.refuse("Email/query", query_args(), 400);
+    tape.serve(&Account::new(&[("MB1", "Inbox")], &[]));
+    tape.refuse("Email/query", query_args(0, &[]), 400);
     run(&fresh, |_| {})
         .await
         .expect_err("with no email stored, a listing that fails fails the run");
-}
-
-/// A thread `Thread/get` did not answer for is asked for again by the
-/// next run, although none of its emails changed to name it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_thread_that_did_not_answer_is_asked_for_again() {
-    let m = Mirror::new();
-    let tape = Tape::new(&m.playback);
-    tape.account(&[("MB1", "Inbox")], &[("M1", &["MB1"])]);
-    tape.refuse(
-        "Thread/get",
-        json!({ "accountId": ACCOUNT, "ids": ["TM1"] }),
-        400,
-    );
-    let first = run(&m, |_| {})
-        .await
-        .expect("a thread phase that fails does not fail the run");
-    assert_eq!(first.blobs_downloaded, 1, "the blobs still download");
-    assert_eq!(problems(&m).await, [row("phase:Thread/get", "error")]);
-    assert!(threads(&m).await.is_empty());
-
-    // Nothing changed upstream: the next run is incremental and replays
-    // no email.
-    tape.unchanged_since("mbox-1", "email-1");
-    tape.threads(&["M1"]);
-    run(&m, |o| o.full_resync = false)
-        .await
-        .expect("second run");
-    assert_eq!(threads(&m).await, ["TM1"]);
-    assert!(problems(&m).await.is_empty());
 }
 
 /// A refused credential fails every download after it the same way, so
@@ -113,7 +79,7 @@ async fn a_refused_download_stops_the_phase_and_keeps_what_downloaded() {
     let m = Mirror::new();
     let tape = Tape::new(&m.playback);
     let mail: [(&str, &[&str]); 3] = [("M1", &["MB1"]), ("M2", &["MB1"]), ("M3", &["MB1"])];
-    tape.account(&[("MB1", "Inbox")], &mail);
+    tape.serve(&Account::new(&[("MB1", "Inbox")], &mail));
     tape.blob("M2", status(401));
     let first = run(&m, |o| o.blob_download_concurrency = Some(1))
         .await
@@ -127,7 +93,7 @@ async fn a_refused_download_stops_the_phase_and_keeps_what_downloaded() {
         "{said}"
     );
 
-    tape.account(&[("MB1", "Inbox")], &mail);
+    tape.serve(&Account::new(&[("MB1", "Inbox")], &mail));
     let second = run(&m, |_| {}).await.expect("second run");
     assert_eq!(second.blobs_downloaded, 2, "{second:?}");
     assert_eq!(
@@ -146,7 +112,7 @@ async fn a_run_of_failed_downloads_stops_the_phase_and_keeps_what_downloaded() {
     let tape = Tape::new(&m.playback);
     let ids: Vec<String> = (1..=25).map(|n| format!("M{n:02}")).collect();
     let mail: Vec<(&str, &[&str])> = ids.iter().map(|id| (id.as_str(), &["MB1"][..])).collect();
-    tape.account(&[("MB1", "Inbox")], &mail);
+    tape.serve(&Account::new(&[("MB1", "Inbox")], &mail));
     for id in &ids[3..23] {
         tape.blob(id, status(404));
     }
@@ -173,7 +139,7 @@ async fn a_run_of_failed_downloads_stops_the_phase_and_keeps_what_downloaded() {
         "{said}"
     );
 
-    tape.account(&[("MB1", "Inbox")], &mail);
+    tape.serve(&Account::new(&[("MB1", "Inbox")], &mail));
     let second = run(&m, |_| {}).await.expect("second run");
     assert_eq!(second.blobs_downloaded, 22, "{second:?}");
     assert!(blobs(&m).await.iter().all(|(_, landed)| *landed));
@@ -188,10 +154,10 @@ async fn a_run_of_failed_downloads_stops_the_phase_and_keeps_what_downloaded() {
 async fn bodies_are_written_and_sealed_as_they_land() {
     let m = Mirror::new();
     let tape = Tape::new(&m.playback);
-    tape.account(
+    tape.serve(&Account::new(
         &[("MB1", "Inbox")],
         &[("M1", &["MB1"]), ("M2", &["MB1"]), ("M3", &["MB1"])],
-    );
+    ));
     m.run_sealing(|db, sealer| {
         let mut opts = FetchOptions::new(db);
         opts.hostname = HOST.to_string();
@@ -243,7 +209,7 @@ async fn bodies_are_written_and_sealed_as_they_land() {
 async fn an_oversize_eml_is_a_skip_not_a_failure() {
     let m = Mirror::new();
     let tape = Tape::new(&m.playback);
-    tape.account(&[("MB1", "Inbox")], &[("M1", &["MB1"])]);
+    tape.serve(&Account::new(&[("MB1", "Inbox")], &[("M1", &["MB1"])]));
     run(&m, |o| o.blob_size_limit_bytes = Some(10))
         .await
         .expect("run");
@@ -271,7 +237,7 @@ async fn an_oversize_eml_is_a_skip_not_a_failure() {
 async fn an_unmatched_label_row_goes_when_the_filter_does() {
     let m = Mirror::new();
     let tape = Tape::new(&m.playback);
-    tape.account(&[("MB1", "Inbox")], &[("M1", &["MB1"])]);
+    tape.serve(&Account::new(&[("MB1", "Inbox")], &[("M1", &["MB1"])]));
     run(&m, |o| o.only_mailbox_labels = vec!["Starbase".into()])
         .await
         .expect("first run");
@@ -337,10 +303,6 @@ async fn emails(m: &Mirror) -> Vec<String> {
     ids(m, "SELECT id FROM emails ORDER BY id").await
 }
 
-async fn threads(m: &Mirror) -> Vec<String> {
-    ids(m, "SELECT id FROM threads ORDER BY id").await
-}
-
 /// Each `email_blobs` edge: its email, and whether its bytes landed.
 async fn blobs(m: &Mirror) -> Vec<(String, bool)> {
     m.read(|db: RawDb| async move {
@@ -350,194 +312,4 @@ async fn blobs(m: &Mirror) -> Vec<(String, bool)> {
             .unwrap()
     })
     .await
-}
-
-fn status(code: u16) -> HttpResponse {
-    HttpResponse {
-        status: code,
-        headers: BTreeMap::new(),
-        body: b"{}".to_vec(),
-        duration_ms: 0,
-    }
-}
-
-fn query_args() -> Value {
-    json!({
-        "accountId": ACCOUNT,
-        "sort": [{ "property": "receivedAt", "isAscending": false }],
-        "limit": 500,
-        "position": 0,
-        "calculateTotal": true,
-    })
-}
-
-/// The fixtures a run reads. Each request is keyed on its exact bytes,
-/// built by `api::method_request` as the provider builds it, and a later
-/// write to the same request replaces the answer.
-struct Tape {
-    out: PathBuf,
-    session: Session,
-}
-
-impl Tape {
-    fn new(out: &Path) -> Self {
-        let session_json = json!({
-            "apiUrl": "https://jmap.example.test/jmap/api/",
-            "downloadUrl": "https://jmap.example.test/jmap/download/{accountId}/{blobId}/{name}?type={type}",
-            "uploadUrl": "https://jmap.example.test/jmap/upload/{accountId}/",
-            "primaryAccounts": { "urn:ietf:params:jmap:mail": ACCOUNT },
-            "accounts": { ACCOUNT: { "name": "t@example.test", "isPersonal": true } },
-        });
-        write_fixture(
-            out,
-            &HttpRequest::get(
-                HttpService::Jmap,
-                format!("https://{HOST}/.well-known/jmap"),
-            ),
-            &json_response(&session_json),
-        )
-        .expect("write the session fixture");
-        Self {
-            out: out.to_path_buf(),
-            session: Session::from_value(session_json).expect("parse the fixture session"),
-        }
-    }
-
-    fn answer(&self, method: &str, args: Value, response: &HttpResponse) {
-        let req = api::method_request(&self.session, method, args).expect("build the request");
-        write_fixture(&self.out, &req, response).expect("write fixture");
-    }
-
-    fn call(&self, method: &str, args: Value, result: Value) {
-        let body = json!({ "methodResponses": [[method, result, "a"]] });
-        self.answer(method, args, &json_response(&body));
-    }
-
-    fn refuse(&self, method: &str, args: Value, code: u16) {
-        self.answer(method, args, &status(code));
-    }
-
-    /// A whole account: its mailboxes, its emails, their threads (one
-    /// each, `T<id>`) and their `.eml`s.
-    fn account(&self, mailboxes: &[(&str, &str)], emails: &[(&str, &[&str])]) {
-        self.call(
-            "Mailbox/get",
-            json!({ "accountId": ACCOUNT, "ids": null }),
-            json!({
-                "state": "mbox-1",
-                "list": mailboxes
-                    .iter()
-                    .map(|(id, name)| json!({ "id": id, "name": name, "parentId": null }))
-                    .collect::<Vec<_>>(),
-            }),
-        );
-        let ids: Vec<&str> = emails.iter().map(|(id, _)| *id).collect();
-        self.call(
-            "Email/query",
-            query_args(),
-            json!({ "ids": ids, "queryState": "q-1", "total": ids.len() }),
-        );
-        self.call(
-            "Email/get",
-            json!({
-                "accountId": ACCOUNT,
-                "ids": ids,
-                "properties": [
-                    "id", "blobId", "threadId", "mailboxIds", "keywords", "from",
-                    "subject", "sentAt", "receivedAt", "size", "messageId",
-                    "hasAttachment", "attachments",
-                ],
-            }),
-            json!({
-                "state": "email-1",
-                "list": emails.iter().map(|(id, filed)| email(id, filed)).collect::<Vec<_>>(),
-            }),
-        );
-        self.threads(&ids);
-        for id in ids {
-            self.blob(id, eml(id));
-        }
-    }
-
-    fn threads(&self, email_ids: &[&str]) {
-        let thread_ids: Vec<String> = email_ids.iter().map(|id| format!("T{id}")).collect();
-        self.call(
-            "Thread/get",
-            json!({ "accountId": ACCOUNT, "ids": thread_ids }),
-            json!({
-                "state": "thread-1",
-                "list": email_ids
-                    .iter()
-                    .map(|id| json!({ "id": format!("T{id}"), "emailIds": [id] }))
-                    .collect::<Vec<_>>(),
-            }),
-        );
-    }
-
-    fn blob(&self, email_id: &str, response: HttpResponse) {
-        let url = self.session.download_url_for(
-            ACCOUNT,
-            &format!("B{email_id}"),
-            "message.eml",
-            "message/rfc822",
-        );
-        write_fixture(
-            &self.out,
-            &HttpRequest::get(HttpService::Jmap, url),
-            &response,
-        )
-        .expect("write a blob fixture");
-    }
-
-    /// An incremental run's answers when nothing changed.
-    fn unchanged_since(&self, mailbox_state: &str, email_state: &str) {
-        for (method, state) in [
-            ("Mailbox/changes", mailbox_state),
-            ("Email/changes", email_state),
-        ] {
-            self.call(
-                method,
-                json!({ "accountId": ACCOUNT, "sinceState": state, "maxChanges": 5000 }),
-                json!({
-                    "created": [], "updated": [], "destroyed": [],
-                    "newState": state, "hasMoreChanges": false,
-                }),
-            );
-        }
-    }
-}
-
-fn email(id: &str, filed: &[&str]) -> Value {
-    let mailbox_ids: serde_json::Map<String, Value> = filed
-        .iter()
-        .map(|m| (m.to_string(), Value::Bool(true)))
-        .collect();
-    json!({
-        "id": id,
-        "blobId": format!("B{id}"),
-        "threadId": format!("T{id}"),
-        "mailboxIds": mailbox_ids,
-        "keywords": { "$seen": true },
-        "subject": format!("Stardate log {id}"),
-        "receivedAt": "2026-09-01T10:00:00Z",
-        "size": 256,
-        "hasAttachment": false,
-    })
-}
-
-fn eml(id: &str) -> HttpResponse {
-    let body = format!(
-        "Message-ID: <{id}@enterprise.starfleet>\r\n\
-         Date: Tue, 1 Sep 2026 10:00:00 +0000\r\n\
-         From: data@enterprise.starfleet\r\n\
-         Subject: Stardate log {id}\r\n\
-         \r\n\
-         body of {id}\r\n",
-    );
-    HttpResponse {
-        status: 200,
-        headers: [("content-type".to_string(), "message/rfc822".to_string())].into(),
-        body: body.into_bytes(),
-        duration_ms: 0,
-    }
 }

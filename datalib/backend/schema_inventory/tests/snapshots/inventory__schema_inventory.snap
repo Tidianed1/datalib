@@ -459,10 +459,11 @@ emails_bookkeeping
     last_error
     volatile_payload
     tz_offset
-gmail_messages
-    gmail_id
+fetched_messages
+    id
     email_id
-    thread_id
+    fetched_for
+    unstorable_by
 ingested_files
     scope
     rel_path
@@ -470,6 +471,19 @@ ingested_files
     size_bytes
     last_finished_at_utc
     tz_offset
+listed_messages
+    id
+    stamp
+listed_messages_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+listed_whole
+    scope
 mailboxes
     id
     payload
