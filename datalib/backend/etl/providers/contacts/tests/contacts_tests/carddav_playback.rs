@@ -278,3 +278,184 @@ async fn discovers_through_well_known_and_syncs_incrementally() {
         Some("data:,2")
     );
 }
+
+async fn problem_keys(store: &Path) -> Vec<String> {
+    let db = RawDb::open(&db_path_for(store))
+        .await
+        .expect("reopen store");
+    let keys: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems ORDER BY scope_key")
+        .fetch_all(db.pool())
+        .await
+        .expect("query problems");
+    db.close().await;
+    keys
+}
+
+async fn stored_uids(store: &Path) -> Option<String> {
+    scalar(
+        store,
+        "SELECT group_concat(uid, ',') FROM (SELECT uid FROM contacts ORDER BY uid)",
+    )
+    .await
+}
+
+/// RFC 6578 answers a sync token the server no longer honours with 403
+/// `valid-sync-token`. That used to read as "sync-collection
+/// unsupported": the run logged a fallback that did not exist, kept the
+/// dead token, and the address book never synced again (audit
+/// 2026-10-02 §5). Now the token is dropped and the book listed whole,
+/// and a card the whole listing does not name — deleted while no token
+/// was held — goes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_expired_token_lists_the_book_whole_again() {
+    let d = tempfile::tempdir().expect("tempdir");
+    let (one, two, store) = (
+        d.path().join("one"),
+        d.path().join("two"),
+        d.path().join("store"),
+    );
+    std::fs::create_dir_all(&store).unwrap();
+    let book = format!("{HOST}{BOOK}");
+    for root in [&one, &two] {
+        account_fixtures(root);
+    }
+    let listing = |cards: &[(String, String)], token: &str| {
+        let listed: String = cards
+            .iter()
+            .map(|(uid, vcard)| resource(uid, &format!("\"{uid}-{token}\""), vcard))
+            .collect();
+        xml(
+            207,
+            &multistatus(&format!("{listed}<sync-token>{token}</sync-token>")),
+        )
+    };
+    let (v1, v2) = (cards(BRIDGE_V1), cards(BRIDGE_V2));
+    fixture(
+        &one,
+        HttpMethod::Report,
+        &book,
+        "0",
+        &api::body_sync_collection(""),
+        listing(&v1, "data:,1"),
+    );
+    fixture(
+        &two,
+        HttpMethod::Report,
+        &book,
+        "0",
+        &api::body_sync_collection("data:,1"),
+        xml(
+            403,
+            r#"<?xml version="1.0"?><error xmlns="DAV:"><valid-sync-token/></error>"#,
+        ),
+    );
+    fixture(
+        &two,
+        HttpMethod::Report,
+        &book,
+        "0",
+        &api::body_sync_collection(""),
+        listing(&v2, "data:,5"),
+    );
+
+    run(&one, &store).await;
+    let second = run(&two, &store).await;
+    assert_eq!(
+        (second.contacts_new, second.contacts_deleted, second.errors),
+        (1, 1, 0),
+        "{second:?}"
+    );
+    assert_eq!(
+        stored_uids(&store).await.as_deref(),
+        Some("tng-picard,tng-riker,tng-senior-staff,tng-worf")
+    );
+    assert_eq!(
+        scalar(&store, "SELECT sync_token FROM addressbooks")
+            .await
+            .as_deref(),
+        Some("data:,5")
+    );
+    assert!(scalar(
+        &store,
+        "SELECT json_extract(payload, '$.vcard') FROM contacts WHERE uid = 'tng-picard'"
+    )
+    .await
+    .unwrap()
+    .contains("NCC-1701-E"));
+    assert_eq!(problem_keys(&store).await, Vec::<String>::new());
+}
+
+/// A card with no UID cannot be stored, and an address book whose sync
+/// fails is not synced; each was only a `warn!`, so nothing reached the
+/// Manage row. Each is a `problems` row now, and a clean run clears them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn what_a_sync_could_not_store_is_a_problem_row() {
+    let d = tempfile::tempdir().expect("tempdir");
+    let (one, two, three, store) = (
+        d.path().join("one"),
+        d.path().join("two"),
+        d.path().join("three"),
+        d.path().join("store"),
+    );
+    std::fs::create_dir_all(&store).unwrap();
+    let book = format!("{HOST}{BOOK}");
+    for root in [&one, &two, &three] {
+        account_fixtures(root);
+    }
+    let v1 = cards(BRIDGE_V1);
+    let no_uid = card(&v1, "tng-data").replace("UID:tng-data\r\n", "");
+    fixture(
+        &one,
+        HttpMethod::Report,
+        &book,
+        "0",
+        &api::body_sync_collection(""),
+        xml(
+            207,
+            &multistatus(&format!(
+                "{}{}<sync-token>data:,1</sync-token>",
+                resource("tng-picard", "\"p1\"", card(&v1, "tng-picard")),
+                resource("no-uid", "\"n1\"", &no_uid),
+            )),
+        ),
+    );
+    fixture(
+        &two,
+        HttpMethod::Report,
+        &book,
+        "0",
+        &api::body_sync_collection("data:,1"),
+        xml(500, "Internal Server Error"),
+    );
+    fixture(
+        &three,
+        HttpMethod::Report,
+        &book,
+        "0",
+        &api::body_sync_collection("data:,1"),
+        xml(207, &multistatus("<sync-token>data:,2</sync-token>")),
+    );
+
+    let first = run(&one, &store).await;
+    assert_eq!((first.contacts_new, first.errors), (1, 1), "{first:?}");
+    assert_eq!(
+        problem_keys(&store).await,
+        vec![format!("record:contacts:{BOOK}no-uid.vcf")]
+    );
+    let listing_keys = |keys: Vec<String>| -> Vec<String> {
+        keys.into_iter()
+            .filter(|k| k.starts_with("listing:"))
+            .collect()
+    };
+    let second = run(&two, &store).await;
+    assert_eq!(second.errors, 1, "{second:?}");
+    assert_eq!(
+        listing_keys(problem_keys(&store).await),
+        vec!["listing:addressbook Bridge".to_string()]
+    );
+    run(&three, &store).await;
+    assert_eq!(
+        listing_keys(problem_keys(&store).await),
+        Vec::<String>::new()
+    );
+}

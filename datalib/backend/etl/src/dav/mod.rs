@@ -3,7 +3,9 @@
 //! Servers disagree on namespace prefixes (`d:`, `D:`, none) and on text
 //! encoding (Fastmail wraps every value in CDATA), so the walker matches
 //! elements by local name and hands each provider the properties it asked
-//! for through [`DavProps`].
+//! for through [`DavProps`]. Keeping one collection in step is [`sync`].
+
+pub mod sync;
 
 use std::collections::BTreeMap;
 use std::time::Duration;
