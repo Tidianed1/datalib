@@ -12,7 +12,7 @@ use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw::WirePayload;
-use datalib_etl::download_problems;
+use datalib_etl::download_problems::{self, RunProblem};
 use datalib_etl::file_checkpoint;
 use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
@@ -93,6 +93,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut acc = CasEdgeAccumulator::new();
     let mut done: Vec<&fsscan::ScannedFile> = Vec::new();
     let mut summary = FetchSummary::default();
+    // Files that would not read or parse. They are left unstamped, so the
+    // next run reads them again and its report replaces these rows.
+    let mut unread: Vec<RunProblem> = Vec::new();
 
     for f in to_read {
         let path = &f.path;
@@ -100,6 +103,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             Ok(x) => x,
             Err(e) => {
                 warn!(event = "sms_file_unreadable", path = %path.display(), error = %e, "a backup file could not be read");
+                unread.push(file_problem(&f.rel, &e.to_string()));
                 summary.parse_errors += 1;
                 continue;
             }
@@ -120,6 +124,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 }
                 Err(e) => {
                     warn!(event = "sms_parse_failed", path = %path.display(), error = %e, "a backup file did not parse");
+                    unread.push(file_problem(&f.rel, &format!("{e:#}")));
                     summary.parse_errors += 1;
                 }
             },
@@ -134,6 +139,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 }
                 Err(e) => {
                     warn!(event = "sms_calls_parse_failed", path = %path.display(), error = %e, "a calls file did not parse");
+                    unread.push(file_problem(&f.rel, &format!("{e:#}")));
                     summary.parse_errors += 1;
                 }
             },
@@ -174,6 +180,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     .await?;
 
     let mut problems = scan.walk_problems();
+    problems.extend(unread);
     if read_all && changes.walk_errors == 0 {
         if summary.parse_errors == 0 {
             summary.removed = prune_unseen(&db, &message_rows, &call_rows).await?;
@@ -187,6 +194,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     download_problems::report_run(db.pool(), &problems).await;
 
     Ok(summary)
+}
+
+fn file_problem(rel: &str, detail: &str) -> RunProblem {
+    RunProblem::listing(&format!("file {rel}"), detail)
 }
 
 /// Delete the messages and calls no file holds, with their attachment
@@ -294,6 +305,16 @@ fn ingest_mms(
             Some(blob.name.clone()),
         );
         *n_attachments += 1;
+        attachment_refs.push(ref_name);
+    }
+    // Listed with the rest, so render draws the gap where the part was.
+    for (name, why) in &m.failed_blobs {
+        let ref_name = format!("{id}/{name}");
+        acc.add_failed(
+            &id,
+            &ref_name,
+            format!("the part's base64 did not decode: {why}"),
+        );
         attachment_refs.push(ref_name);
     }
 

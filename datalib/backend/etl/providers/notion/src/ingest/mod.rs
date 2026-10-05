@@ -10,8 +10,11 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use datalib_etl::blob_cas::CasEdgeAccumulator;
+use datalib_etl::download_problems::{self, DownloadProblem, RunProblem};
 use datalib_etl::download_run::DownloadRun;
 use datalib_etl::http::{latchkey_curl, HttpRequest, HttpService, LatchkeySettings};
+use datalib_etl::stop::StopFlag;
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -52,6 +55,8 @@ pub struct FetchOptions {
     pub progress: datalib_etl::progress::Progress,
     /// Cross-provider knobs (the checkpoint cadence, the stop flag).
     pub control: datalib_etl::control::DownloadControl,
+    /// The run's pinned now, which `refresh_window_days` counts back from.
+    pub now: datalib_time::IsoOffsetTimestamp,
 }
 
 impl FetchOptions {
@@ -72,6 +77,7 @@ impl FetchOptions {
             sleep_between: Duration::ZERO,
             progress: datalib_etl::progress::Progress::noop(),
             control: datalib_etl::control::DownloadControl::default(),
+            now: datalib_time::IsoOffsetTimestamp::now_local(),
         }
     }
 }
@@ -107,6 +113,11 @@ pub struct FetchSummary {
     /// thousands — but see the all-failed check at the end of [`fetch`]:
     /// when this is the ONLY thing that happened, the run fails.
     pub failed_pages: usize,
+    /// Pages fetched again for an earlier failure that failed again.
+    /// Kept out of `failed_pages`: in a steady-state run they can be all
+    /// that was attempted, and a page gone for good must not fail every
+    /// run.
+    pub failed_retries: usize,
     pub official_requests: u64,
 }
 
@@ -138,21 +149,23 @@ fn host_is_notion(url: &str) -> bool {
 /// `slots` are unsigned URLs — stable identity, but not fetchable on
 /// their own. `signed` maps each slot to the live pre-signed URL from
 /// this run's response, which expires in about an hour; that is why the
-/// bytes are pulled in the same run that read the markdown.
+/// bytes are pulled in the same run that read the markdown, and why a
+/// failed one is retried by fetching its page again.
 ///
 /// A slot whose edge already carries a `blake3` is skipped: signatures
-/// rotate, bytes don't. Failures are recorded against the edge and never
-/// fail the run — the page has already landed, and the stored markdown
-/// is correct and stable regardless.
+/// rotate, bytes don't. A failed fetch is an edge with no bytes and a
+/// `problems` row, and never fails the run.
 async fn fetch_attachments(
     db: &RawDb,
     page_id: &str,
     slots: &[String],
     signed: &HashMap<String, String>,
+    stop: &StopFlag,
     summary: &mut FetchSummary,
-) {
+) -> Result<()> {
+    let mut acc = CasEdgeAccumulator::new();
     for slot in slots {
-        if db.blob_exists(slot).await.unwrap_or(false) {
+        if db.blob_exists(slot).await? {
             summary.skipped_blobs += 1;
             continue;
         }
@@ -163,28 +176,26 @@ async fn fetch_attachments(
         if !host_is_notion(url) {
             req = req.plain();
         }
-        match latchkey_curl(&req).await {
+        let failure = match latchkey_curl(&req).await {
             Ok(resp) if resp.status >= 200 && resp.status < 300 => {
-                let content_type = resp.header("content-type");
-                if let Err(e) = db.store_blob(page_id, slot, content_type, &resp.body).await {
-                    tracing::warn!(slot = %slot, error = %format!("{e:#}"), "attachment upsert failed");
-                    summary.failed_blobs += 1;
-                } else {
-                    summary.new_blobs += 1;
-                }
+                let content_type = resp.header("content-type").map(String::from);
+                acc.add_fetched(page_id, slot, resp.body, content_type, None);
+                summary.new_blobs += 1;
+                continue;
             }
-            Ok(resp) => {
-                tracing::warn!(slot = %slot, status = resp.status, "attachment fetch non-2xx");
-                let _ = db.record_blob_error(page_id, slot).await;
-                summary.failed_blobs += 1;
-            }
-            Err(e) => {
-                tracing::warn!(slot = %slot, error = %format!("{e}"), "attachment fetch failed");
-                let _ = db.record_blob_error(page_id, slot).await;
-                summary.failed_blobs += 1;
-            }
+            Ok(resp) => format!("HTTP {}", resp.status),
+            Err(e) => e.to_string(),
+        };
+        // The transport refuses every request once a stop is asked for;
+        // the page is fetched whole again next run.
+        if stop.requested() {
+            break;
         }
+        tracing::warn!(slot = %slot, error = %failure, "attachment fetch failed");
+        acc.add_failed(page_id, slot, failure);
+        summary.failed_blobs += 1;
     }
+    db.flush_attachments(&acc).await
 }
 
 /// Map each slot back to the live signed URL it came from, so the bytes
@@ -274,28 +285,40 @@ async fn fetch_all_comments(client: &NotionOfficialClient, page_id: &str) -> Res
 /// wanted ~1,385 of these) can't dominate a run.
 const MAX_HOLE_FOLLOWUPS: usize = 64;
 
+/// What the follow-ups for a truncated body could not fill.
+#[derive(Default)]
+struct Holes {
+    /// `(block id, error)` for each follow-up that failed.
+    failed: Vec<(String, String)>,
+    /// How many follow-ups the body wanted, when that was more than
+    /// one run follows.
+    over_cap: Option<usize>,
+}
+
+impl Holes {
+    fn followed_all(&self) -> bool {
+        self.failed.is_empty() && self.over_cap.is_none()
+    }
+}
+
 async fn fill_holes(
     client: &NotionOfficialClient,
     body: &mut markdown::PageBody,
     summary: &mut FetchSummary,
-) {
+) -> Holes {
+    let mut holes = Holes::default();
     let todo: Vec<String> = body
         .fetchable_holes()
         .map(|u| u.block_id.clone())
         .take(MAX_HOLE_FOLLOWUPS)
         .collect();
     if todo.is_empty() {
-        return;
+        return holes;
     }
     let total_fetchable = body.fetchable_holes().count();
     if total_fetchable > MAX_HOLE_FOLLOWUPS {
-        tracing::warn!(
-            event = "notion_hole_followups_capped",
-            wanted = total_fetchable,
-            cap = MAX_HOLE_FOLLOWUPS,
-            "page has more truncated subtrees than one run will follow"
-        );
         summary.pages_left_incomplete += 1;
+        holes.over_cap = Some(total_fetchable);
     }
     for id in todo {
         match client.get_page_markdown(&id).await {
@@ -313,11 +336,10 @@ async fn fill_holes(
                 }
                 summary.hole_followups += 1;
             }
-            Err(e) => {
-                tracing::warn!(block = %id, error = %e, "truncated-subtree fetch failed");
-            }
+            Err(e) => holes.failed.push((id, e.to_string())),
         }
     }
+    holes
 }
 
 /// Scope the search resume cursor is stored under. One workspace per
@@ -347,21 +369,28 @@ const SCOPE_CONFIG_KEY: &str = "notion:download";
 /// do not survive it — that distinction is why the qualifier is worth
 /// carrying.
 ///
-/// Returns the page ids to mirror, and the newest `last_edited_time`
-/// seen — the point the next run resumes from.
+/// Fails only when the first page of results does; a later page that
+/// fails ends the walk with what it had (see [`SearchPass::cut_short`]).
 async fn search_since(
     client: &NotionOfficialClient,
     since: Option<&str>,
     max_pages: Option<usize>,
-) -> Result<(Vec<String>, Option<String>)> {
+) -> Result<SearchPass> {
     let mut ids: Vec<String> = Vec::new();
     let mut newest_edited: Option<String> = None;
     let mut cursor: Option<String> = None;
     loop {
-        let resp = client
-            .search(cursor.as_deref(), false)
-            .await
-            .map_err(|e| anyhow::anyhow!("notion search: {e}"))?;
+        let resp = match client.search(cursor.as_deref(), false).await {
+            Ok(resp) => resp,
+            Err(e) if cursor.is_none() => return Err(anyhow::anyhow!("notion search: {e}")),
+            Err(e) => {
+                return Ok(SearchPass {
+                    ids,
+                    newest_edited,
+                    cut_short: Some(e.to_string()),
+                })
+            }
+        };
         let results = resp
             .get("results")
             .and_then(|v| v.as_array())
@@ -384,7 +413,11 @@ async fn search_since(
                         discovered = ids.len(),
                         "the search reached what the last run already had; stopping"
                     );
-                    return Ok((ids, newest_edited));
+                    return Ok(SearchPass {
+                        ids,
+                        newest_edited,
+                        cut_short: None,
+                    });
                 }
             }
             // A data_source is a container; its rows come back from
@@ -411,7 +444,22 @@ async fn search_since(
             None => break,
         }
     }
-    Ok((ids, newest_edited))
+    Ok(SearchPass {
+        ids,
+        newest_edited,
+        cut_short: None,
+    })
+}
+
+struct SearchPass {
+    /// The page ids to mirror.
+    ids: Vec<String>,
+    /// The newest `last_edited_time` seen — the point the next run
+    /// resumes from, once this one has landed its pages.
+    newest_edited: Option<String>,
+    /// Why the walk ended before the resume cursor. Everything older
+    /// than the last result read is unseen, so the cursor must not move.
+    cut_short: Option<String>,
 }
 
 /// What a walk has already resolved, so one run spends at most one
@@ -422,6 +470,11 @@ pub struct WalkState {
     pub pages: HashMap<String, PageState>,
     pub users: HashSet<String>,
     pub anchors: HashSet<String>,
+    /// Pages fetched again though upstream has not moved them, because
+    /// part of an earlier fetch failed ([`RawDb::pages_to_refetch`]).
+    pub retry: HashSet<String>,
+    /// Pages whose object would not fetch this run, and why.
+    pub unreadable: HashMap<String, NotionOfficialError>,
 }
 
 /// Plain text of a block, whatever its type carries rich text under.
@@ -442,15 +495,17 @@ fn block_plain_text(block: &Value) -> Option<String> {
 /// is fetched once ever, and a block only when a comment hangs off it —
 /// one request per *commented* block, not per block. `GET /v1/users`
 /// (list all) is not an option: personal access tokens cannot call it.
+#[allow(clippy::too_many_arguments)]
 async fn resolve_people_and_anchors(
     client: &NotionOfficialClient,
     db: &RawDb,
     pid: &str,
     page: &Value,
     comments: &[Value],
+    stop: &StopFlag,
     state: &mut WalkState,
     summary: &mut FetchSummary,
-) {
+) -> Result<()> {
     // ── users ────────────────────────────────────────────────────────
     let mut wanted: Vec<String> = Vec::new();
     let mut want = |v: Option<&Value>| {
@@ -478,24 +533,7 @@ async fn resolve_people_and_anchors(
         if state.users.contains(&id) {
             continue;
         }
-        match client.get_user(&id).await {
-            Ok(u) => {
-                let name = u.get("name").and_then(|v| v.as_str()).map(String::from);
-                let payload = serde_json::to_string(&u).unwrap_or_else(|_| "null".into());
-                if let Err(e) = db.upsert_users(&[(id.clone(), name, payload)]).await {
-                    tracing::warn!(user = %id, error = %format!("{e:#}"), "user upsert failed");
-                } else {
-                    summary.users_resolved += 1;
-                }
-                state.users.insert(id);
-            }
-            Err(e) => {
-                // A user we cannot read is not a reason to fail a page.
-                // The author simply falls back to an id prefix.
-                tracing::warn!(user = %id, error = %e, "user fetch failed");
-                state.users.insert(id);
-            }
-        }
+        resolve_user(client, db, &id, stop, state, summary).await?;
     }
 
     // ── comment anchors ──────────────────────────────────────────────
@@ -524,19 +562,14 @@ async fn resolve_people_and_anchors(
             Ok(b) => {
                 let block_type = b.get("type").and_then(|v| v.as_str()).map(String::from);
                 let text = block_plain_text(&b);
-                if let Err(e) = db
-                    .upsert_comment_anchors(&[db::CommentAnchorUpsert {
-                        id: bid.clone(),
-                        page_id: Some(pid.to_string()),
-                        block_type,
-                        plain_text: text,
-                    }])
-                    .await
-                {
-                    tracing::warn!(block = %bid, error = %format!("{e:#}"), "anchor upsert failed");
-                } else {
-                    summary.anchors_resolved += 1;
-                }
+                db.upsert_comment_anchors(&[db::CommentAnchorUpsert {
+                    id: bid.clone(),
+                    page_id: Some(pid.to_string()),
+                    block_type,
+                    plain_text: text,
+                }])
+                .await?;
+                summary.anchors_resolved += 1;
                 state.anchors.insert(bid);
             }
             Err(e) => {
@@ -547,6 +580,54 @@ async fn resolve_people_and_anchors(
             }
         }
     }
+    Ok(())
+}
+
+/// One user, stored, or a failure kept on its row until a later run's
+/// retry ([`retry_failed_users`]) reads it. A user that cannot be read
+/// does not fail its page: the author falls back to an id prefix.
+async fn resolve_user(
+    client: &NotionOfficialClient,
+    db: &RawDb,
+    id: &str,
+    stop: &StopFlag,
+    state: &mut WalkState,
+    summary: &mut FetchSummary,
+) -> Result<()> {
+    match client.get_user(id).await {
+        Ok(u) => {
+            let name = u.get("name").and_then(|v| v.as_str()).map(String::from);
+            let payload = serde_json::to_string(&u).unwrap_or_else(|_| "null".into());
+            db.upsert_users(&[(id.to_string(), name, payload)]).await?;
+            summary.users_resolved += 1;
+        }
+        Err(_) if stop.requested() => return Ok(()),
+        Err(e) => {
+            tracing::warn!(user = %id, error = %e, "user fetch failed");
+            db.record_fetch_error("users", id, &e.to_string()).await?;
+        }
+    }
+    state.users.insert(id.to_string());
+    Ok(())
+}
+
+/// Users an earlier run could not read and this one did not meet again.
+async fn retry_failed_users(
+    client: &NotionOfficialClient,
+    db: &RawDb,
+    stop: &StopFlag,
+    state: &mut WalkState,
+    summary: &mut FetchSummary,
+) -> Result<()> {
+    for id in db.failed_user_ids().await? {
+        if stop.requested() {
+            break;
+        }
+        if !state.users.contains(&id) {
+            resolve_user(client, db, &id, stop, state, summary).await?;
+        }
+    }
+    Ok(())
 }
 
 /// Mirror one page: its object, its body, its attachments and its
@@ -554,6 +635,11 @@ async fn resolve_people_and_anchors(
 ///
 /// Three requests where the block walk needed one per container block
 /// (measured median 11, and ≥60 on the deepest pages sampled).
+///
+/// The body is stored last, stamped with the `last_edited_time` it was
+/// fetched at: a page whose stored body is behind its stored object is
+/// fetched again next run, which is what a stop part-way through a page
+/// leaves behind.
 #[tracing::instrument(skip_all, fields(page_id = %pid, origin = %origin, skipped))]
 async fn mirror_page(
     client: &NotionOfficialClient,
@@ -564,13 +650,20 @@ async fn mirror_page(
     state: &mut WalkState,
     summary: &mut FetchSummary,
 ) -> Result<Vec<String>> {
+    let stop = &opts.control.stop;
     let page = match client.get_page(pid).await {
         Ok(p) => p,
+        Err(_) if stop.requested() => return Ok(Vec::new()),
         Err(e) => {
             let msg = format!("{e}");
             tracing::warn!(page = pid, error = %msg, "page fetch failed; recording");
-            let _ = db.record_page_error(pid, &msg).await;
-            summary.failed_pages += 1;
+            db.record_page_error(pid, &msg).await?;
+            if state.retry.contains(pid) {
+                summary.failed_retries += 1;
+            } else {
+                summary.failed_pages += 1;
+            }
+            state.unreadable.insert(pid.to_string(), e);
             return Ok(Vec::new());
         }
     };
@@ -587,6 +680,8 @@ async fn mirror_page(
     if was_present
         && last_edited.is_some()
         && prior.and_then(|s| s.last_edited_time.clone()) == last_edited
+        && prior.and_then(|s| s.body_edited_time.clone()) == last_edited
+        && !state.retry.contains(pid)
     {
         summary.skipped_pages += 1;
         tracing::Span::current().record("skipped", true);
@@ -623,6 +718,7 @@ async fn mirror_page(
         PageState {
             last_edited_time: last_edited.clone(),
             has_payload: true,
+            body_edited_time: None,
         },
     );
     if was_present {
@@ -633,11 +729,17 @@ async fn mirror_page(
 
     // ── body ─────────────────────────────────────────────────────────
     let mut children: Vec<String> = Vec::new();
+    let mut fetched_body: Option<(db::PageMarkdownUpsert, Holes)> = None;
     match client.get_page_markdown(pid).await {
         Ok(resp) => {
             let mut body = markdown::parse(&resp);
-            if body.truncated {
-                fill_holes(client, &mut body, summary).await;
+            let holes = if body.truncated {
+                fill_holes(client, &mut body, summary).await
+            } else {
+                Holes::default()
+            };
+            if stop.requested() {
+                return Ok(Vec::new());
             }
             let permanent = body.permanent_holes();
             if !permanent.is_empty() {
@@ -658,27 +760,32 @@ async fn mirror_page(
                 .iter()
                 .map(|u| u.block_id.as_str())
                 .collect();
-            db.upsert_page_markdown(&[db::PageMarkdownUpsert {
-                id: pid.to_string(),
-                markdown: stable,
-                truncated: body.truncated,
-                unresolved_block_ids: (!unresolved.is_empty())
-                    .then(|| serde_json::to_string(&unresolved).unwrap_or_default()),
-                source_last_edited_time: last_edited.clone(),
-            }])
-            .await
-            .with_context(|| format!("upsert page_markdown {pid}"))?;
-            summary.bodies += 1;
-            if body.markdown.is_empty() {
-                summary.empty_bodies += 1;
-            }
             if opts.attachments && !slots.is_empty() {
-                fetch_attachments(db, pid, &slots, &signed, summary).await;
+                fetch_attachments(db, pid, &slots, &signed, stop, summary).await?;
             }
+            // A body missing a subtree may be missing a link too.
+            if holes.followed_all() {
+                db.forget_failed_attachments(pid, &slots.iter().cloned().collect())
+                    .await?;
+            }
+            fetched_body = Some((
+                db::PageMarkdownUpsert {
+                    id: pid.to_string(),
+                    markdown: stable,
+                    truncated: body.truncated,
+                    unresolved_block_ids: (!unresolved.is_empty())
+                        .then(|| serde_json::to_string(&unresolved).unwrap_or_default()),
+                    source_last_edited_time: last_edited.clone(),
+                },
+                holes,
+            ));
             children = body.child_pages;
         }
+        Err(_) if stop.requested() => return Ok(Vec::new()),
         Err(e) => {
             tracing::warn!(page = pid, error = %e, "markdown fetch failed; page object kept");
+            db.record_fetch_error("page_markdown", pid, &e.to_string())
+                .await?;
             summary.failed_bodies += 1;
         }
     }
@@ -686,7 +793,13 @@ async fn mirror_page(
     // ── comments ─────────────────────────────────────────────────────
     let mut comments: Vec<Value> = Vec::new();
     if opts.comments {
-        comments = fetch_all_comments(client, pid).await.unwrap_or_default();
+        match fetch_all_comments(client, pid).await {
+            Ok(c) => comments = c,
+            Err(_) if stop.requested() => return Ok(Vec::new()),
+            // The page itself is stored, so this is a warning on it, and
+            // it keeps the page among the ones fetched again.
+            Err(e) => db.record_page_error(pid, &format!("comments: {e}")).await?,
+        }
         if !comments.is_empty() {
             let mut rows: Vec<db::CommentUpsert> = Vec::with_capacity(comments.len());
             for c in &comments {
@@ -723,7 +836,42 @@ async fn mirror_page(
         }
     }
 
-    resolve_people_and_anchors(client, db, pid, &page, &comments, state, summary).await;
+    resolve_people_and_anchors(client, db, pid, &page, &comments, stop, state, summary).await?;
+    if stop.requested() {
+        return Ok(Vec::new());
+    }
+
+    if let Some((row, holes)) = fetched_body {
+        let empty = row.markdown.is_empty();
+        db.upsert_page_markdown(&[row])
+            .await
+            .with_context(|| format!("upsert page_markdown {pid}"))?;
+        summary.bodies += 1;
+        if empty {
+            summary.empty_bodies += 1;
+        }
+        if let Some((block, e)) = holes.failed.first() {
+            db.record_fetch_error(
+                "page_markdown",
+                pid,
+                &format!(
+                    "{} truncated subtree(s) did not fetch, so the body is incomplete; \
+                     first: block {block}: {e}",
+                    holes.failed.len()
+                ),
+            )
+            .await?;
+        } else if let Some(wanted) = holes.over_cap {
+            db.record_body_cut_short(
+                pid,
+                &format!(
+                    "the body has {wanted} truncated subtrees and one run follows \
+                     {MAX_HOLE_FOLLOWUPS}, so the rest is missing"
+                ),
+            )
+            .await?;
+        }
+    }
 
     Ok(children)
 }
@@ -743,6 +891,11 @@ async fn bfs_drain(
 ) -> Result<()> {
     while let Some(pid) = queue.pop_front() {
         if opts.max_pages.is_some_and(|m| visited.len() >= m) {
+            break;
+        }
+        // The transport refuses every request from here on; a page
+        // started now would only fail.
+        if opts.control.stop.requested() {
             break;
         }
         if !visited.insert(pid.clone()) {
@@ -792,6 +945,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         pages: db.page_states().await?,
         users: db.known_user_ids().await?,
         anchors: db.known_anchor_ids().await?,
+        retry: db.pages_to_refetch(opts.attachments).await?,
+        unreadable: HashMap::new(),
     };
 
     // Run the actual work. We capture the result so we can always stamp
@@ -845,6 +1000,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             return Ok(());
         }
 
+        let mut run_problems: Vec<RunProblem> = Vec::new();
+        let mut config_problems: Vec<DownloadProblem> = Vec::new();
+
         // No roots means the whole workspace, and the whole workspace
         // means search — resumed where the last run stopped, so a
         // steady-state run reads one page of results rather than 124.
@@ -854,24 +1012,32 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             let state = datalib_etl::scope_state::snapshot(db.pool()).await?;
             let prior = datalib_etl::scope_config::load(db.pool(), SCOPE_CONFIG_KEY).await?;
             let since = datalib_etl::scope_state::since_for_scope(
-                &datalib_time::IsoOffsetTimestamp::now_local(),
+                &opts.now,
                 &state,
                 SEARCH_SCOPE,
                 opts.refresh_window_days,
                 opts.full_sync,
                 prior.as_ref(),
             );
-            let (ids, newest_edited) =
-                search_since(&official, since.as_deref(), opts.max_pages).await?;
-            summary.discovered = ids.len();
+            let pass = match search_since(&official, since.as_deref(), opts.max_pages).await {
+                Err(_) if opts.control.stop.requested() => return Ok(()),
+                pass => pass?,
+            };
+            summary.discovered = pass.ids.len();
             tracing::info!(
                 event = "notion_search_pass",
                 since = since.as_deref().unwrap_or("(cold start)"),
-                discovered = ids.len(),
+                discovered = pass.ids.len(),
+                retries = state_walk.retry.len(),
                 "one pass of the search"
             );
+            // Search names only what moved since the resume cursor; a
+            // page that failed earlier has not moved, so it is queued
+            // beside them.
+            let mut retries: Vec<String> = state_walk.retry.iter().cloned().collect();
+            retries.sort();
             let mut q: VecDeque<String> = VecDeque::new();
-            for id in ids {
+            for id in pass.ids.iter().cloned().chain(retries) {
                 if queued.insert(id.clone()) {
                     q.push_back(id);
                 }
@@ -894,29 +1060,41 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             )
             .await?;
             // Only after the pages actually landed: a resume cursor
-            // recorded over a failed pass would skip that window
-            // forever.
-            if let Some(mark) = newest_edited {
-                datalib_etl::doltlite_raw::upsert_scope_state(db.pool(), SEARCH_SCOPE, &mark)
+            // recorded over a pass that did not reach it would skip the
+            // rest of that window forever. A page that failed is in the
+            // retry set, so moving past it is safe.
+            match (&pass.cut_short, pass.newest_edited) {
+                (Some(e), _) => run_problems.push(RunProblem::listing(
+                    "search",
+                    format!(
+                        "the search stopped after {} pages of the workspace, so older edits \
+                         were not looked at: {e}",
+                        pass.ids.len()
+                    ),
+                )),
+                (None, Some(mark)) if !opts.control.stop.requested() => {
+                    datalib_etl::doltlite_raw::upsert_scope_state(db.pool(), SEARCH_SCOPE, &mark)
+                        .await?;
+                    datalib_etl::scope_config::store(
+                        db.pool(),
+                        SCOPE_CONFIG_KEY,
+                        &datalib_etl::scope_state::refresh_window_blob(opts.refresh_window_days),
+                    )
                     .await?;
-                datalib_etl::scope_config::store(
-                    db.pool(),
-                    SCOPE_CONFIG_KEY,
-                    &datalib_etl::scope_state::refresh_window_blob(opts.refresh_window_days),
-                )
-                .await?;
+                }
+                (None, _) => {}
             }
-            return Ok(());
-        }
-
-        // Pass 1: subtree seeds.
-        {
+        } else {
+            // Subtree seeds. A page that failed earlier is reached again
+            // by the walk, which descends into every stored child.
             let span = tracing::info_span!("notion_subtree_pass", pages = opts.subtree_pages.len());
             let _enter = span.enter();
+            let mut roots: Vec<(&str, String)> = Vec::new();
             let mut subtree_queue: VecDeque<String> = VecDeque::new();
             for raw in &opts.subtree_pages {
                 let stripped = datalib_etl::ids::normalize_id_token(raw);
                 let id = format_uuid(&stripped);
+                roots.push((raw, id.clone()));
                 if queued.insert(id.clone()) {
                     subtree_queue.push_back(id);
                 }
@@ -935,8 +1113,23 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             )
             .await?;
             tracing::info!(visited = visited.len(), "subtree pass done");
+            config_problems = roots_upstream_lacks(&roots, &state_walk.unreadable);
         }
 
+        retry_failed_users(
+            &official,
+            &db,
+            &opts.control.stop,
+            &mut state_walk,
+            &mut summary,
+        )
+        .await?;
+        // A stop may have cut any of it short; the last run's rows
+        // stand until a run gets through.
+        if !opts.control.stop.requested() {
+            download_problems::report(db.pool(), &config_problems).await;
+            download_problems::report_run(db.pool(), &run_problems).await;
+        }
         Ok(())
     };
 
@@ -970,6 +1163,26 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     run.finish(&result, &summary).await;
     result?;
     Ok(summary)
+}
+
+/// The configured roots Notion says it does not have, or will not show
+/// this credential.
+fn roots_upstream_lacks(
+    roots: &[(&str, String)],
+    unreadable: &HashMap<String, NotionOfficialError>,
+) -> Vec<DownloadProblem> {
+    roots
+        .iter()
+        .filter_map(|(raw, id)| match unreadable.get(id)? {
+            NotionOfficialError::NotFound(d) => Some(DownloadProblem::not_found(
+                "roots",
+                raw,
+                format!("Notion has no page by that id that this credential can see: {d}"),
+            )),
+            NotionOfficialError::Forbidden(d) => Some(DownloadProblem::forbidden("roots", raw, d)),
+            NotionOfficialError::Permanent(_) => None,
+        })
+        .collect()
 }
 
 /// Public re-export: the legacy entity name constants are still

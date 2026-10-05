@@ -55,6 +55,8 @@ impl DataProcessor for NotionIngest {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
+        let now = datalib_time::parse_strict(ctx.now)
+            .with_context(|| format!("notion: run stamp {:?}", ctx.now))?;
         let entity_db = ingest::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
         let session = ctx
@@ -80,6 +82,7 @@ impl DataProcessor for NotionIngest {
             sleep_between: Duration::ZERO,
             progress: ctx.progress.clone(),
             control: ctx.control.clone(),
+            now,
             ..ingest::FetchOptions::new(db)
         })
         .await?;

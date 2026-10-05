@@ -24,6 +24,10 @@ pub const PAGE_SIZE: u32 = 100;
 pub enum NotionOfficialError {
     #[error("forbidden: {0}")]
     Forbidden(String),
+    /// Notion answers 404 for a page that does not exist and for one the
+    /// credential was never given; the two are indistinguishable.
+    #[error("not found: {0}")]
+    NotFound(String),
     #[error("{0}")]
     Permanent(String),
 }
@@ -129,6 +133,11 @@ impl NotionOfficialClient {
             )));
         }
         let preview: String = body_text.chars().take(300).collect();
+        if status == 404 {
+            return Err(NotionOfficialError::NotFound(format!(
+                "{method} {path} -> HTTP 404 body={preview:?}"
+            )));
+        }
         Err(NotionOfficialError::Permanent(format!(
             "{method} {path}: HTTP {status} body={preview:?}"
         )))

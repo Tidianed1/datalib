@@ -58,6 +58,8 @@ pub struct MmsRecord {
     pub text: String,
     /// Image / audio / video part blobs.
     pub blobs: Vec<MmsBlob>,
+    /// Parts whose bytes did not decode, as `(name, why)`.
+    pub failed_blobs: Vec<(String, String)>,
 }
 
 /// One `<call>` record.
@@ -170,20 +172,14 @@ fn parse_mms_body(reader: &mut Reader<&[u8]>, head: Attrs) -> Result<MmsRecord> 
                     }
                 } else if let Some(b64) = opt(&a, "data") {
                     // image/* | audio/* | video/* | … — decode the bytes.
+                    let name = part_name(&a, ct, rec.blobs.len() + rec.failed_blobs.len());
                     match decode_base64(&b64) {
                         Ok(bytes) => rec.blobs.push(MmsBlob {
-                            name: part_name(&a, ct, rec.blobs.len()),
+                            name,
                             content_type: ct.to_string(),
                             bytes,
                         }),
-                        Err(e) => {
-                            tracing::warn!(
-                                event = "sms_mms_part_base64_failed",
-                                ct,
-                                error = %e,
-                                "an MMS part's base64 did not decode; skipped it"
-                            );
-                        }
+                        Err(e) => rec.failed_blobs.push((name, format!("{e:#}"))),
                     }
                 }
             }
@@ -233,6 +229,7 @@ fn mms_from_attrs(a: &Attrs) -> MmsRecord {
         contact_name: opt(a, "contact_name"),
         text: String::new(),
         blobs: Vec::new(),
+        failed_blobs: Vec::new(),
     }
 }
 
