@@ -170,6 +170,10 @@ datalib/
                    source that reads local files (fsscan, the
                    fingerprint cache, the per-feed file checkpoint).
                    Only those sources link it.
+    etl/web/       `datalib_etl_web`: what a source that reaches a web
+                   service shares — `latchkey curl` with retries and
+                   stops, HTTP playback, DAV, the owed-record
+                   bookkeeping. Only those sources link it.
     etl/render/    `datalib_etl_render`: the render store, the
                    unified-index load, `RenderCtx`. Everything that knows
                    `datalib_schema` sits here or above.
@@ -602,8 +606,8 @@ for a file-backed source"; `lightroom`'s `ingest/sync.rs` is a small example.
 download stores what upstream *listed* (key and version), the version
 each record's content satisfies (`held_version` on its `_bookkeeping`
 sidecar, written with the content), and for a range, the spans already
-walked (`datalib_etl::coverage`). What is owed is a query over those;
-`datalib_etl::owed` fetches it and records every outcome. A stored
+walked (`datalib_etl_web::coverage`). What is owed is a query over those;
+`datalib_etl_web::owed` fetches it and records every outcome. A stored
 cursor is the bug this replaces: a run that stopped halfway, or a
 config widened later, leaves work no cursor will ever name. The one
 position kept is upstream's own delta token, written with the page it

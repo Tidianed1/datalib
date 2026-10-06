@@ -1,7 +1,7 @@
 //! Raw-store schema for the Claude provider.
 //!
 //! What a table holds, and at what version, is `held_version` in its
-//! `_bookkeeping` sidecar (`datalib_etl::owed`): a conversation and a
+//! `_bookkeeping` sidecar (`datalib_etl_web::owed`): a conversation and a
 //! project at the `updated_at` the listing named, a project's docs
 //! listing at the `updated_at` it was read for, an attachment edge at
 //! the version its conversation is held at. No table carries a stamp of

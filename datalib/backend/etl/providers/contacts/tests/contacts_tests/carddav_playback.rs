@@ -7,11 +7,11 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use datalib_etl::dav;
-use datalib_etl::http::{HttpMethod, HttpResponse, LatchkeySettings, PLAYBACK_ENV};
 use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::write_fixture;
 use datalib_etl_contacts::ingest::{self, api, db_path_for, RawDb};
+use datalib_etl_web::dav;
+use datalib_etl_web::http::{HttpMethod, HttpResponse, LatchkeySettings, PLAYBACK_ENV};
+use datalib_etl_web::synthesize::write_fixture;
 
 pub(crate) const HOST: &str = "https://carddav.enterprise.test";
 pub(crate) const PRINCIPAL: &str = "/dav/principals/user/picard@enterprise.test/";
@@ -490,7 +490,7 @@ async fn what_a_sync_could_not_store_is_a_problem_row_until_it_is_stored() {
 
     let unstored = format!(
         "dav_resources:{}",
-        datalib_etl::dav::state::resource_id(
+        datalib_etl_web::dav::state::resource_id(
             &datalib_etl_contacts::ingest::db::addressbook_pk("carddav.enterprise.test", BOOK),
             &format!("{BOOK}tng-data.vcf")
         )

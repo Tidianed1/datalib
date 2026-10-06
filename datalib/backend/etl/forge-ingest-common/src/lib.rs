@@ -12,7 +12,7 @@
 //! cursor. What is held is the change-request table's sidecar
 //! `held_version`, written in the one transaction that writes the
 //! record and its children. Owed is the difference, fetched through
-//! `datalib_etl::owed` (docs/dev/plans/sync_state.md).
+//! `datalib_etl_web::owed` (docs/dev/plans/sync_state.md).
 
 pub mod client;
 
@@ -21,14 +21,14 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use datalib_etl::coverage::{self, Span};
 use datalib_etl::download_problems::RunProblem;
 use datalib_etl::download_run::DownloadRun;
-use datalib_etl::owed::{self, BatchError, Fetched, Fetcher, Loop, Outcome};
 use datalib_etl::progress::Progress;
 use datalib_etl::raw_store::Sealer;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
+use datalib_etl_web::coverage::{self, Span};
+use datalib_etl_web::owed::{self, BatchError, Fetched, Fetcher, Loop, Outcome};
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::Value;
@@ -216,7 +216,7 @@ async fn sync_collecting<F: Forge>(
     opts: SyncOptions<'_>,
     found: RunProblems,
 ) -> Result<F::Summary> {
-    let _ = datalib_etl::latchkey::ensure_curl_router();
+    let _ = datalib_etl_web::latchkey::ensure_curl_router();
     let run = DownloadRun::start(forge.pool(), &opts.run_config).await?;
     let fetcher = ChangeRequests {
         forge,

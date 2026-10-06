@@ -352,7 +352,7 @@ impl RawDb {
         let mut contacts = 0;
         for id in gone {
             contacts += Self::delete_addressbook(&mut tx, id).await?;
-            datalib_etl::dav::state::forget_collection(&mut tx, id).await?;
+            datalib_etl_web::dav::state::forget_collection(&mut tx, id).await?;
         }
         tx.commit().await.context("commit delete addressbooks tx")?;
         Ok(contacts)

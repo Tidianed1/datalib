@@ -187,7 +187,7 @@ pub fn full_ddl() -> Vec<String> {
         DiscussionRow::ddl(),
         DISCUSSIONS_BY_MR_INDEX_DDL.to_string(),
         LISTED_DDL.to_string(),
-        datalib_etl::coverage::DDL.to_string(),
+        datalib_etl_web::coverage::DDL.to_string(),
     ];
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));

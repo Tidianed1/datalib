@@ -3,11 +3,11 @@
 
 use std::path::Path;
 
-use datalib_etl::http::{fixture_key, HttpRequest, HttpResponse, HttpService, PLAYBACK_ENV};
 use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::{json_response, write_fixture};
 use datalib_etl_notion::ingest::official::{BASE, PAGE_SIZE};
 use datalib_etl_notion::ingest::{fetch, FetchOptions, FetchSummary, RawDb};
+use datalib_etl_web::http::{fixture_key, HttpRequest, HttpResponse, HttpService, PLAYBACK_ENV};
+use datalib_etl_web::synthesize::{json_response, write_fixture};
 use serde_json::{json, Value};
 
 pub const BRIDGE: &str = "1701d000-0000-4000-8000-000000000001";

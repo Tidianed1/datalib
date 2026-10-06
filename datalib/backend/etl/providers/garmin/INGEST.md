@@ -57,7 +57,7 @@ growing.
 **No walk keeps a cursor.** What a run fetches is what the window lists
 less what the store already holds, worked out from the store each run
 ([`sync_state.md`](/docs/dev/plans/sync_state.md)). The shared form is
-`datalib_etl::owed`: a listing is a key and a version per record; what
+`datalib_etl_web::owed`: a listing is a key and a version per record; what
 a row is held at is `held_version` in its table's `_bookkeeping`
 sidecar, written in the transaction that stores the row; a record is
 owed while the two differ, or while no fetch has landed. Each kind

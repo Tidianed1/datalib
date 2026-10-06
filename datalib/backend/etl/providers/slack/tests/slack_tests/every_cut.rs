@@ -1,4 +1,4 @@
-//! The interruption test (`datalib_etl::interrupt`): a download cut off
+//! The interruption test (`datalib_etl_web::interrupt`): a download cut off
 //! at any request and run again ends with the store an uninterrupted run
 //! leaves. The tape is a small workspace that makes the download do every
 //! kind of work it has: listings of more than one page, a channel whose
@@ -12,13 +12,13 @@ use std::path::Path;
 use anyhow::Result;
 use async_trait::async_trait;
 use datalib_etl::control::DownloadControl;
-use datalib_etl::http::{HttpRequest, HttpResponse, HttpService};
-use datalib_etl::interrupt::{dump_tables, every_cut_resumes, How, Rig};
 use datalib_etl::stop::StopFlag;
 use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::write_fixture;
 use datalib_etl_slack::ingest::{db_path_for, fetch, FetchOptions, RawDb};
 use datalib_etl_slack::recorded::{record_auth, record_call, DEFAULT_SINCE_TS};
+use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService};
+use datalib_etl_web::interrupt::{dump_tables, every_cut_resumes, How, Rig};
+use datalib_etl_web::synthesize::write_fixture;
 use serde_json::{json, Value};
 
 use crate::support::Tree;

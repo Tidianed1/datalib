@@ -190,7 +190,7 @@ pub const LADDER: &[Migration] = &[Migration {
     version: 1,
     name: "dav_resources lists what each CalDAV calendar holds",
     apply: |conn| {
-        Box::pin(datalib_etl::dav::state::adopt(
+        Box::pin(datalib_etl_web::dav::state::adopt(
             conn,
             "ics_objects",
             "calendar_id",
@@ -214,7 +214,7 @@ pub fn full_ddl() -> Vec<String> {
         // have not moved is not read again.
         datalib_etl_files::file_checkpoint::INGESTED_FILES_DDL.to_string(),
     ];
-    out.extend(datalib_etl::dav::state::ddl());
+    out.extend(datalib_etl_web::dav::state::ddl());
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));
     }

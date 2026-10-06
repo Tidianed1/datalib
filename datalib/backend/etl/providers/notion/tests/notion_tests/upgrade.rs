@@ -6,11 +6,11 @@
 
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::doltlite_raw::{self as dr};
-use datalib_etl::owed;
 use datalib_etl_notion::ingest::schema_raw::{
     NotionAttachmentRow, COMMENTS_DDL, COMMENT_ANCHORS_DDL, PAGES_DDL, USERS_DDL,
 };
 use datalib_etl_notion::ingest::{db_path_for, RawDb};
+use datalib_etl_web::owed;
 use serde_json::json;
 
 use crate::support::*;

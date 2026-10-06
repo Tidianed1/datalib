@@ -205,7 +205,7 @@ impl RawDb {
         let mut events = 0;
         for id in gone {
             events += Self::delete_calendar(&mut tx, id).await?;
-            datalib_etl::dav::state::forget_collection(&mut tx, id).await?;
+            datalib_etl_web::dav::state::forget_collection(&mut tx, id).await?;
         }
         tx.commit().await.context("commit delete calendars tx")?;
         Ok(events)

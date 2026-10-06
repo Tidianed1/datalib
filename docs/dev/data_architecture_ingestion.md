@@ -391,7 +391,7 @@ therefore what it can see:
 | --- | --- | --- |
 | `email` (JMAP) | `Email/changes` / `Mailbox/changes` tombstones | emails, mailboxes, and the label joins |
 | `email` (Gmail) | `history.list` deletions; a whole-account walk whenever the account is not listed whole | emails, via the same cascade |
-| `contacts` (CardDAV), `calendar` (CalDAV) | RFC 6578 sync-collection `404`/`410`; a whole listing on a first sync or after the server calls the token invalid, and every run for a windowed calendar; the home listing of address books or calendars, whole by nature | contacts or events a whole listing does not name, once it reaches its end: a listing the server cut short (a 507 it would not page past, or 50 pages) deletes nothing until a later run carries it to the end (`dav_unconfirmed`); an address book or calendar the home listing no longer names, with everything stored for it; `datalib_etl::dav` |
+| `contacts` (CardDAV), `calendar` (CalDAV) | RFC 6578 sync-collection `404`/`410`; a whole listing on a first sync or after the server calls the token invalid, and every run for a windowed calendar; the home listing of address books or calendars, whole by nature | contacts or events a whole listing does not name, once it reaches its end: a listing the server cut short (a 507 it would not page past, or 50 pages) deletes nothing until a later run carries it to the end (`dav_unconfirmed`); an address book or calendar the home listing no longer names, with everything stored for it; `datalib_etl_web::dav` |
 | `contacts` (`.vcf` folder), `calendar` (`.ics` folder) | the folder's scan, and each re-read file | a gone file's address book or calendar; cards or events a re-read file dropped. Nothing is deleted when the walk reported an error |
 | `google_takeout` Chat, Maps photos | the export's scan, and each re-read `messages.json` | a gone file's user, group, messages or photo; messages a re-read file dropped. A missing `Google Chat/` or photos folder deletes nothing |
 | `google_takeout` Maps reviews and saved places, YouTube, Gemini | each re-read file, which is the feed's whole table | records the file no longer lists, and a Gemini activity's attachment edges. A missing file deletes nothing, and so does one in a layout the reader does not know (no list, or entries none of which it could read): that fails the feed as a `phase:` problem |
@@ -585,10 +585,10 @@ Nothing is marked done, and no position in a walk is stored.
   readings, an activity list by date), the spans already walked, in
   `coverage`, written in the transaction that stores what the walk
   found, an empty stretch included
-  ([`coverage.rs`](/datalib/backend/etl/src/coverage.rs)).
+  ([`coverage.rs`](/datalib/backend/etl/web/src/coverage.rs)).
 
 What is **owed** is the listing minus what is held, plus the gaps in the
-range wanted. [`owed.rs`](/datalib/backend/etl/src/owed.rs) asks the
+range wanted. [`owed.rs`](/datalib/backend/etl/web/src/owed.rs) asks the
 store for it and fetches it: in batches, as many requests at once as
 the provider allows, a flush per transaction by count or by bytes, a
 stop that writes what was answered, and one outcome per record (got;
@@ -663,7 +663,7 @@ other way round as well: cut the run off at every request, from an
 empty store and from one an earlier run wrote against a moved
 upstream, and require that running it again ends where an
 uninterrupted run does
-([`interrupt.rs`](/datalib/backend/etl/src/interrupt.rs); each
+([`interrupt.rs`](/datalib/backend/etl/web/src/interrupt.rs); each
 provider's `tests/*/interrupt.rs`). Nothing mechanical catches a claim
 written too early, which is why the rule is written here.
 
@@ -745,7 +745,7 @@ The yolink provider's `CONSECUTIVE_FAILURE_BUDGET = 30` is a template for a fail
 
 There are existing chokepoint mechanisms to enforce some of these rules, but not all can be generically enforced (Slack's HTTP-200 `error:"ratelimited"` body; GitHub's `403 + x-ratelimit-remaining:0`).
 
-A rate limit is not slept through. The shared HTTP chokepoint ([`http.rs`](/datalib/backend/etl/src/http.rs)) honours `Retry-After` and backs off exponentially until the source's give-up guard ([`retry.rs`](/datalib/backend/etl/src/retry.rs)) says the run has gone too long without progress; then the provider stops cleanly with what it committed, and the next run resumes from the cursor. ChatGPT's `RateLimited` error is the worked example.
+A rate limit is not slept through. The shared HTTP chokepoint ([`http.rs`](/datalib/backend/etl/web/src/http.rs)) honours `Retry-After` and backs off exponentially until the source's give-up guard ([`retry.rs`](/datalib/backend/etl/web/src/retry.rs)) says the run has gone too long without progress; then the provider stops cleanly with what it committed, and the next run resumes from the cursor. ChatGPT's `RateLimited` error is the worked example.
 
 ## Transient vs non-transient
 The retry mechanism is for *transient* failures. Some signals deserve a different mark:

@@ -21,8 +21,8 @@ use std::collections::HashSet;
 use anyhow::{Context, Result};
 use sqlx::{Sqlite, SqliteConnection, SqlitePool, Transaction};
 
-use crate::doltlite_raw as dr;
 use crate::owed::{self, Listed};
+use datalib_etl::doltlite_raw as dr;
 
 pub const RESOURCES: &str = "dav_resources";
 
@@ -193,7 +193,7 @@ pub async fn begin_whole(tx: &mut Transaction<'_, Sqlite>, collection: &str) -> 
 /// updated one in a run's summary.
 pub async fn stored(pool: &SqlitePool, ids: &[String]) -> Result<HashSet<String>> {
     let mut out = HashSet::new();
-    for chunk in ids.chunks(crate::bulk::SQL_CHUNK) {
+    for chunk in ids.chunks(datalib_etl::bulk::SQL_CHUNK) {
         // Audited: one `?` per id, every id bound.
         let sql = format!(
             "SELECT id FROM dav_resources_bookkeeping \

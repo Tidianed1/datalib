@@ -16,13 +16,13 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::Utc;
 use datalib_etl::bulk::BulkUpsertable;
-use datalib_etl::http::{
-    default_retryability, HttpResponse, HttpService, LatchkeySettings, Retryability,
-};
 use datalib_etl::raw_store::Sealer;
 use datalib_etl_forge_ingest_common::{
     get_change_request, sync, walk_children, Answer, Bounds, Forge, ForgeClient, Listed, Search,
     SyncOptions,
+};
+use datalib_etl_web::http::{
+    default_retryability, HttpResponse, HttpService, LatchkeySettings, Retryability,
 };
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;

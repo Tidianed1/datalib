@@ -25,9 +25,9 @@ use super::state::{self, Resource, RESOURCES};
 use super::{escape_xml, report, DavError, DavProps, DavResponse, Multistatus};
 use crate::http::{HttpService, LatchkeySettings};
 use crate::owed::{self, BatchError, Fetched, Fetcher, Listed, Loop, Outcome};
-use crate::raw_store::Sealer;
-use crate::run_problems::RunProblems;
-use crate::stop::StopFlag;
+use datalib_etl::raw_store::Sealer;
+use datalib_etl::run_problems::RunProblems;
+use datalib_etl::stop::StopFlag;
 
 /// How many truncated `sync-collection` replies one run follows; the
 /// next run resumes from the token taken so far.
@@ -317,7 +317,7 @@ async fn hold(
 ) -> Result<()> {
     owed::hold(tx, RESOURCES, id, etag).await?;
     if let Outcome::Unusable(_, reason, why) = outcome {
-        crate::doltlite_raw::record_object_unusable(tx, RESOURCES, id, *reason, why).await?;
+        datalib_etl::doltlite_raw::record_object_unusable(tx, RESOURCES, id, *reason, why).await?;
     }
     Ok(())
 }

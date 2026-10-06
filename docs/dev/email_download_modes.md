@@ -144,7 +144,7 @@ converts to decimal so one conversation stays one thread.
 ### Auth is free
 
 latchkey ships a built-in `google-gmail` service and routes by URL host,
-so `datalib_etl::http::latchkey_curl` — the same path every other HTTP
+so `datalib_etl_web::http::latchkey_curl` — the same path every other HTTP
 provider uses — injects and refreshes the token. Setup is one command:
 
 ```sh
@@ -175,7 +175,7 @@ latchkey refuses the request rather than mirroring the wrong mailbox
 ([`latchkey.md`](latchkey.md#accounts-who-names-them)).
 
 The setting reaches the wire as `HttpRequest::latchkey`. It is
-deliberately **not** part of `fixture_key` (`datalib_etl::http`): which
+deliberately **not** part of `fixture_key` (`datalib_etl_web::http`): which
 identity fetched a response doesn't change the response's shape, and
 folding it in would make one user's playback fixtures unusable by
 another. It is a source-level block rather than a Gmail knob because

@@ -35,7 +35,7 @@ tells you.
 
 A run is a **listing** and five **loops**. The listing stores page
 objects; each loop then fetches what the store lists and does not yet
-hold, through `datalib_etl::owed`: a page's body, an attachment's
+hold, through `datalib_etl_web::owed`: a page's body, an attachment's
 bytes, a page's comments, a commented block, a user. What a table holds
 is `held_version` in its `_bookkeeping` sidecar, written in the
 transaction that wrote the content; what is owed is the difference,
@@ -247,7 +247,7 @@ document.
 ~3 requests/second per connection, plus a workspace-wide limit that
 scales with plan. `429` and `502`–`504` are retried, honouring
 `Retry-After`, by the shared HTTP layer
-(`datalib_etl::http::default_retryability`). Expect roughly one
+(`datalib_etl_web::http::default_retryability`). Expect roughly one
 empty-body response per 130 requests on a long walk; a loop that read
 one as the end of a listing would silently truncate.
 

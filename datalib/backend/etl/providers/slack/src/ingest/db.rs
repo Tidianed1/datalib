@@ -13,10 +13,10 @@ use sqlx::{Row, Sqlite, Transaction};
 
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::bulk::{bulk_upsert_in_tx, BulkUpsertable, EventBatch};
-use datalib_etl::coverage::{self, Span};
 use datalib_etl::doltlite_raw::{self as dr, bulk_upsert_with_tape, bulk_upsert_with_tape_split};
 use datalib_etl::event_tape::EventTape;
-use datalib_etl::owed::{Fetched, Listed, Outcome};
+use datalib_etl_web::coverage::{self, Span};
+use datalib_etl_web::owed::{Fetched, Listed, Outcome};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -1265,7 +1265,7 @@ mod tests {
 
     async fn owed_threads(db: &RawDb) -> Vec<String> {
         let listed = db.threads_listed("C1").await.unwrap();
-        datalib_etl::owed::owed(db.pool(), THREADS, listed)
+        datalib_etl_web::owed::owed(db.pool(), THREADS, listed)
             .await
             .unwrap()
             .into_iter()
@@ -1288,7 +1288,7 @@ mod tests {
         db.store_threads(&mut tx, std::slice::from_ref(&fetched))
             .await
             .unwrap();
-        datalib_etl::owed::hold(&mut tx, THREADS, &key, Some(latest_reply))
+        datalib_etl_web::owed::hold(&mut tx, THREADS, &key, Some(latest_reply))
             .await
             .unwrap();
         tx.commit().await.unwrap();

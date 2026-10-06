@@ -5,10 +5,10 @@
 
 use std::path::Path;
 
-use datalib_etl::http::{HttpRequest, HttpService};
-use datalib_etl::synthesize::{json_response, write_fixture};
 use datalib_etl_forge_ingest_common::Bounds;
 use datalib_etl_github::ingest::{search_url, FetchOptions, BASE};
+use datalib_etl_web::http::{HttpRequest, HttpService};
+use datalib_etl_web::synthesize::{json_response, write_fixture};
 use serde_json::{json, Value};
 use tempfile::tempdir;
 

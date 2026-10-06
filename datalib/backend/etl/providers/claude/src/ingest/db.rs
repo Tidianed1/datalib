@@ -1,7 +1,7 @@
 //! Doltlite-backed raw store for the Claude provider: what the store
 //! lists for the attachment loop, the sweep markers that say when a
 //! listing is due, and how a fetched record is written in the
-//! transaction the loop hands over. The loop (`datalib_etl::owed`)
+//! transaction the loop hands over. The loop (`datalib_etl_web::owed`)
 //! records what is held; nothing here stamps a record done on its own.
 
 use std::collections::{HashMap, HashSet};
@@ -15,7 +15,7 @@ use sqlx::{Row, Sqlite, Transaction};
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::bulk::{bulk_upsert_entity_in_tx, bulk_upsert_in_tx};
 use datalib_etl::doltlite_raw::{self as dr, WirePayload};
-use datalib_etl::owed::{self, Listed};
+use datalib_etl_web::owed::{self, Listed};
 use datalib_time::IsoOffsetTimestamp;
 
 use super::schema_raw::{

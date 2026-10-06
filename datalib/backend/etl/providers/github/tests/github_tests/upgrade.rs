@@ -7,13 +7,13 @@
 
 use datalib_etl::bulk::bulk_upsert;
 use datalib_etl::doltlite_raw::{self as dr, WirePayloadRow as _};
-use datalib_etl::owed;
 use datalib_etl_github::ingest::schema_raw::{
     pr_pk, IssueCommentRow, PrReviewCommentRow, PrReviewRow, PullRequestRow, SelfIdentityRow,
     DATA_TABLES, ISSUE_COMMENTS_BY_PR_INDEX_DDL, PR_REVIEWS_BY_PR_INDEX_DDL,
     PR_REVIEW_COMMENTS_BY_PR_INDEX_DDL, PULL_REQUESTS_BY_REPO_INDEX_DDL,
 };
 use datalib_etl_github::ingest::{db_path_for, RawDb};
+use datalib_etl_web::owed;
 use serde_json::json;
 
 use crate::support::*;

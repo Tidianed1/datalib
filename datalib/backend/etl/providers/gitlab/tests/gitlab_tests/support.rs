@@ -4,9 +4,9 @@
 
 use std::path::Path;
 
-use datalib_etl::http::{HttpRequest, HttpService};
-use datalib_etl::synthesize::{json_response, write_fixture};
 use datalib_etl_gitlab::ingest::{BASE, PER_PAGE};
+use datalib_etl_web::http::{HttpRequest, HttpService};
+use datalib_etl_web::synthesize::{json_response, write_fixture};
 use serde_json::{json, Value};
 
 pub const PROJECT: &str = "starfleet/enterprise";

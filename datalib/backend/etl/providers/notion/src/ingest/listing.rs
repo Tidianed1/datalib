@@ -12,9 +12,9 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
-use datalib_etl::coverage::{self, Span};
 use datalib_etl::doltlite_raw as dr;
-use datalib_etl::owed::{self, Held};
+use datalib_etl_web::coverage::{self, Span};
+use datalib_etl_web::owed::{self, Held};
 use serde_json::Value;
 
 use super::db::PageUpsert;

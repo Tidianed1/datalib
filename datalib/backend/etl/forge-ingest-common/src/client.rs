@@ -1,5 +1,5 @@
 //! A forge's REST client. Every request goes through
-//! [`datalib_etl::http::latchkey_curl_classified`], which handles the
+//! [`datalib_etl_web::http::latchkey_curl_classified`], which handles the
 //! latchkey subprocess, the rate-limit and transient retries, and
 //! playback from disk fixtures. Latchkey injects the credential for the
 //! service — don't add it here.
@@ -12,7 +12,7 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::Value;
 
-use datalib_etl::http::{
+use datalib_etl_web::http::{
     latchkey_curl_classified, HttpError, HttpRequest, HttpResponse, HttpService, LatchkeySettings,
     Retryability,
 };

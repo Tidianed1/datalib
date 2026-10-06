@@ -5,11 +5,11 @@
 
 use std::path::Path;
 
-use datalib_etl::http::{HttpRequest, HttpResponse, HttpService};
-use datalib_etl::owed;
-use datalib_etl::synthesize::write_fixture;
 use datalib_etl_notion::ingest::official::BASE;
 use datalib_etl_notion::ingest::RawDb;
+use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService};
+use datalib_etl_web::owed;
+use datalib_etl_web::synthesize::write_fixture;
 use serde_json::json;
 use tempfile::tempdir;
 
@@ -318,7 +318,7 @@ async fn a_retry_guard_that_gives_up_keeps_what_it_fetched() {
         None,
     );
     let tick = std::time::Duration::from_millis(1);
-    let guard = datalib_etl::retry::RetryGuard::new(
+    let guard = datalib_etl_web::retry::RetryGuard::new(
         std::time::Duration::from_secs(3600),
         1,
         tick,
@@ -326,7 +326,7 @@ async fn a_retry_guard_that_gives_up_keeps_what_it_fetched() {
         datalib_etl::stop::StopFlag::default(),
     );
 
-    datalib_etl::retry::scope(guard, run(&tape, &store, &[]))
+    datalib_etl_web::retry::scope(guard, run(&tape, &store, &[]))
         .await
         .unwrap();
     assert_eq!(

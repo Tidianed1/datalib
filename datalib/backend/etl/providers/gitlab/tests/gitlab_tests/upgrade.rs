@@ -7,12 +7,12 @@
 
 use datalib_etl::bulk::bulk_upsert;
 use datalib_etl::doltlite_raw::{self as dr, WirePayloadRow as _};
-use datalib_etl::owed;
 use datalib_etl_gitlab::ingest::schema_raw::{
     mr_pk_recipe, DiscussionRow, MergeRequestRow, SelfIdentityRow, DATA_TABLES,
     DISCUSSIONS_BY_MR_INDEX_DDL, MERGE_REQUESTS_BY_PROJ_INDEX_DDL,
 };
 use datalib_etl_gitlab::ingest::{db_path_for, RawDb};
+use datalib_etl_web::owed;
 use serde_json::json;
 
 use crate::support::*;

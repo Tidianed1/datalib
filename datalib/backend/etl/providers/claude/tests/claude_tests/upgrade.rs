@@ -6,11 +6,11 @@
 
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::doltlite_raw::{self as dr, WirePayloadRow as _};
-use datalib_etl::owed::{self, Listed};
 use datalib_etl_claude::ingest::schema_raw::{
     ConversationAttachmentRow, ConversationRow, OrgRow, ProjectDocRow, ProjectRow, UserRow,
 };
 use datalib_etl_claude::ingest::{db_path_for, RawDb};
+use datalib_etl_web::owed::{self, Listed};
 use datalib_problems::Reason;
 
 /// The sidecar as the build before `held_version` wrote it.
