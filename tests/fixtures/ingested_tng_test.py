@@ -1068,6 +1068,39 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ],
             "WhatsApp's address book, as each chat's contacts",
         )
+        # Signal ties a number to an ACI: Riker's account carries both,
+        # so a link made through either finds the other; Q, whom the
+        # backup knows by ACI alone, has the ACI as his handle; Guinan,
+        # known by PNI alone, has none and is not a person the index
+        # knows.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT h.handle || '|' || c.name || '|' "
+                "|| (SELECT group_concat(json_extract(j.value, '$.handle'), ' ') "
+                "    FROM json_each(c.contact_json, '$.handles') j) "
+                "FROM source_contact_handles h JOIN source_contacts c "
+                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
+                "JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
+                "WHERE m.source_id = 'signal' AND (c.name IN ('Will Riker', 'Q', 'Guinan') "
+                "OR h.handle LIKE 'signal_aci:%') GROUP BY 1 ORDER BY 1;",
+            ),
+            [
+                (
+                    "signal_aci:0195683a-d140-87f9-bdf6-234da6d6880c|Will Riker|"
+                    "tel:+17015550101 signal_aci:0195683a-d140-87f9-bdf6-234da6d6880c"
+                ),
+                (
+                    "signal_aci:0195683a-d140-87f9-bdf6-234da6d6880f|Q|"
+                    "signal_aci:0195683a-d140-87f9-bdf6-234da6d6880f"
+                ),
+                (
+                    "tel:+17015550101|Will Riker|"
+                    "tel:+17015550101 signal_aci:0195683a-d140-87f9-bdf6-234da6d6880c"
+                ),
+            ],
+            "Signal's account of a person: number and ACI together",
+        )
         # A Slack mention is a chip link: the viewer resolves the href to
         # the person, and any other markdown viewer shows a link whose
         # title says who it names (docs/dev/plans/chips.md).

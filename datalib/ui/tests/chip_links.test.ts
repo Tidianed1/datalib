@@ -12,6 +12,10 @@ describe("handleFromUri / uriFromHandle", () => {
       ["email:riker@enterprise.org", "mailto:riker@enterprise.org"],
       ["tel:+15550123456", "tel:+15550123456"],
       ["slack:T01/U02", "slack://user?team=T01&id=U02"],
+      [
+        "signal_aci:0195683a-d140-87f9-bdf6-234da6d6880c",
+        "datalib:handle/signal_aci/0195683a-d140-87f9-bdf6-234da6d6880c",
+      ],
     ]) {
       expect(uriFromHandle(handle)).toBe(uri);
       expect(handleFromUri(uri)).toBe(handle);
@@ -25,6 +29,10 @@ describe("handleFromUri / uriFromHandle", () => {
     expect(handleFromUri("datalib:group/slack")).toBeNull();
     expect(handleFromUri("datalib:handle/tel/+15550123456")).toBe("tel:+15550123456");
     expect(handleFromUri("datalib:handle/fax/+15550123456")).toBeNull();
+    expect(handleFromUri("datalib:handle/signal_aci/0195683AD14087F9BDF6234DA6D6880C")).toBe(
+      "signal_aci:0195683a-d140-87f9-bdf6-234da6d6880c",
+    );
+    expect(handleFromUri("datalib:handle/signal_aci/0195683a")).toBeNull();
     expect(handleFromUri("mailto:not an address")).toBeNull();
     expect(uriFromHandle("fax:+15550123456")).toBeNull();
   });
