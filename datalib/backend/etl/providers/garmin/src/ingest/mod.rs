@@ -1143,6 +1143,7 @@ impl Fetcher<Option<Vec<u8>>> for Fits<'_> {
                 }
                 Err(e) => Outcome::Unusable(
                     None,
+                    datalib_problems::Reason::Undeserializable,
                     format!("the download held no readable FIT file: {e:#}"),
                 ),
             })
@@ -1228,7 +1229,7 @@ async fn store_rows<T: BulkUpsertable + Clone + Sync>(
     let rows: Vec<T> = batch
         .iter()
         .filter_map(|f| match &f.outcome {
-            Outcome::Got(row) | Outcome::Unusable(row, _) => Some(row.clone()),
+            Outcome::Got(row) | Outcome::Unusable(row, ..) => Some(row.clone()),
             _ => None,
         })
         .collect();
@@ -1248,7 +1249,7 @@ async fn store_edges<R: BulkUpsertable + Sync>(
     let answered: Vec<(&str, Option<&[u8]>)> = batch
         .iter()
         .filter_map(|f| match &f.outcome {
-            Outcome::Got(bytes) | Outcome::Unusable(bytes, _) => {
+            Outcome::Got(bytes) | Outcome::Unusable(bytes, ..) => {
                 Some((f.listed.key.as_str(), bytes.as_deref()))
             }
             _ => None,

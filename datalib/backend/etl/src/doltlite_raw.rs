@@ -1948,6 +1948,22 @@ pub async fn record_object_skipped(
     record_fetch_problem(tx, table, id, Some(NotFetched::Skipped { reason, detail })).await
 }
 
+/// A record that was fetched and stored with part of it lost — a file
+/// that will not decode, a body cut short by a rule. The bookkeeping
+/// carries what was lost in `last_error`; the `problems` row is a
+/// warning with the reason, since the mirror holds the record. The
+/// caller has already stamped the fetch.
+pub async fn record_object_unusable(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    table: &str,
+    id: &str,
+    reason: datalib_problems::Reason,
+    detail: &str,
+) -> Result<()> {
+    record_object_bookkeeping(tx, table, id, Some(detail)).await?;
+    record_fetch_problem(tx, table, id, Some(NotFetched::Skipped { reason, detail })).await
+}
+
 /// Why a record has no payload after this run touched it. A failure is
 /// something that went wrong and may not next time; a skip is a rule we
 /// applied on purpose. They must not read the same on the Manage

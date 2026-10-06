@@ -88,7 +88,7 @@ impl Fetcher<Body> for Bodies<'_> {
         batch: &[Fetched<Body>],
     ) -> Result<()> {
         for f in batch {
-            if let Outcome::Got(body) | Outcome::Unusable(body, _) = &f.outcome {
+            if let Outcome::Got(body) | Outcome::Unusable(body, ..) = &f.outcome {
                 self.0
                     .db
                     .store_body(tx, &body.row, &body.slots, body.complete)
@@ -179,6 +179,7 @@ impl Bodies<'_> {
                     .fetch_add(1, Ordering::Relaxed);
                 Outcome::Unusable(
                     fetched,
+                    datalib_problems::Reason::DeliberateLoss,
                     format!(
                         "the body has {wanted} truncated subtrees and one run follows \
                          {MAX_HOLE_FOLLOWUPS}, so the rest is missing"
@@ -297,7 +298,7 @@ impl Fetcher<Blob> for Attachments<'_> {
         let inserts: Vec<CasInsert<'_>> = batch
             .iter()
             .filter_map(|f| match &f.outcome {
-                Outcome::Got(blob) | Outcome::Unusable(blob, _) => {
+                Outcome::Got(blob) | Outcome::Unusable(blob, ..) => {
                     blob.fetched
                         .as_ref()
                         .map(|(bytes, content_type)| CasInsert {
@@ -312,7 +313,7 @@ impl Fetcher<Blob> for Attachments<'_> {
         self.0.db.cas().put_many(&inserts).await?;
         for f in batch {
             match &f.outcome {
-                Outcome::Got(blob) | Outcome::Unusable(blob, _) => {
+                Outcome::Got(blob) | Outcome::Unusable(blob, ..) => {
                     self.0
                         .db
                         .store_blob(tx, &f.listed.key, &blob.blake3)
@@ -447,7 +448,7 @@ impl Fetcher<Vec<CommentUpsert>> for Comments<'_> {
         batch: &[Fetched<Vec<CommentUpsert>>],
     ) -> Result<()> {
         for f in batch {
-            if let Outcome::Got(rows) | Outcome::Unusable(rows, _) = &f.outcome {
+            if let Outcome::Got(rows) | Outcome::Unusable(rows, ..) = &f.outcome {
                 self.0.db.store_comments(tx, &f.listed.key, rows).await?;
                 self.0
                     .counts
@@ -538,7 +539,7 @@ impl Fetcher<Anchor> for Anchors<'_> {
         batch: &[Fetched<Anchor>],
     ) -> Result<()> {
         for f in batch {
-            if let Outcome::Got(anchor) | Outcome::Unusable(anchor, _) = &f.outcome {
+            if let Outcome::Got(anchor) | Outcome::Unusable(anchor, ..) = &f.outcome {
                 self.ctx
                     .db
                     .store_anchor(
@@ -612,7 +613,7 @@ impl Fetcher<User> for Users<'_> {
         batch: &[Fetched<User>],
     ) -> Result<()> {
         for f in batch {
-            if let Outcome::Got(user) | Outcome::Unusable(user, _) = &f.outcome {
+            if let Outcome::Got(user) | Outcome::Unusable(user, ..) = &f.outcome {
                 self.0
                     .db
                     .store_user(

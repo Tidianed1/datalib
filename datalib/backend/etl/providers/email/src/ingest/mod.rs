@@ -957,7 +957,7 @@ fn got_and_gone(fetched: &[Fetched<EmailRow>]) -> (Vec<EmailRow>, Vec<String>) {
     let mut gone = Vec::new();
     for f in fetched {
         match &f.outcome {
-            Outcome::Got(row) | Outcome::Unusable(row, _) => got.push(row.clone()),
+            Outcome::Got(row) | Outcome::Unusable(row, ..) => got.push(row.clone()),
             Outcome::Gone => gone.push(f.listed.key.clone()),
             Outcome::Failed(_) | Outcome::Skipped(..) => {}
         }
@@ -1148,7 +1148,7 @@ impl Fetcher<Eml> for EmlDownload<'_> {
         let bodies: Vec<(&Eml, String)> = batch
             .iter()
             .filter_map(|f| match &f.outcome {
-                Outcome::Got(eml) | Outcome::Unusable(eml, _) => {
+                Outcome::Got(eml) | Outcome::Unusable(eml, ..) => {
                     Some((eml, blake3_hex(&eml.bytes)))
                 }
                 Outcome::Gone | Outcome::Failed(_) | Outcome::Skipped(..) => None,
