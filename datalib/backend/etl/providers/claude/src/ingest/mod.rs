@@ -935,12 +935,15 @@ impl Ctx<'_> {
         // answers "how close is the whole sync to done?".
         self.bar.expect(owed.len() as u64);
         let drained = self
+            // One conversation per transaction: each is one slow request,
+            // and a seal may follow every one, so a long first sync
+            // reaches the grid as it goes.
             .drain(
                 CONVERSATIONS,
                 "conversations",
                 owed,
                 &Conversations { ctx: self, org_of },
-                25,
+                1,
             )
             .await?;
         s.fetched = drained.got;
