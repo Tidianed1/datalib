@@ -216,6 +216,11 @@ impl Handle {
                 let (team, user) = self.value().split_once('/').unwrap_or((self.value(), ""));
                 format!("slack://user?team={team}&id={user}")
             }
+            // No app follows a link to a Signal account id, so it takes
+            // the spelling for a kind with no scheme of its own.
+            HandleKind::SignalAci => {
+                format!("datalib:handle/{}/{}", self.kind().as_str(), self.value())
+            }
         }
     }
 
@@ -261,7 +266,7 @@ impl Handle {
         match self.kind() {
             HandleKind::Email => format!("{shown} <{}>", self.value()),
             HandleKind::Tel => format!("{shown} ({})", self.value()),
-            HandleKind::Slack => format!("{shown} ({})", self.as_str()),
+            HandleKind::Slack | HandleKind::SignalAci => format!("{shown} ({})", self.as_str()),
         }
     }
 
@@ -560,10 +565,19 @@ mod tests {
                 Handle::slack("T01", "U02").unwrap(),
                 "slack://user?team=T01&id=U02",
             ),
+            (
+                Handle::signal_aci("0195683ad14087f9bdf6234da6d6880c").unwrap(),
+                "datalib:handle/signal_aci/0195683a-d140-87f9-bdf6-234da6d6880c",
+            ),
         ] {
             assert_eq!(h.to_uri(), uri);
             assert_eq!(Handle::from_uri(uri), Some(h));
         }
+        assert_eq!(
+            Handle::from_uri("datalib:handle/signal_aci/0195683AD14087F9BDF6234DA6D6880C"),
+            Handle::signal_aci("0195683ad14087f9bdf6234da6d6880c"),
+            "an older or looser spelling still reads back"
+        );
         assert_eq!(
             Handle::from_uri("mailto:Riker@Enterprise.org?subject=hi"),
             Handle::email("riker@enterprise.org")
@@ -601,5 +615,10 @@ mod tests {
         assert_eq!(tel.describe("Will Riker"), "Will Riker (+15550123456)");
         let slack = Handle::slack("T01", "U02").unwrap();
         assert_eq!(slack.describe("Data"), "Data (slack:T01/U02)");
+        let aci = Handle::signal_aci("0195683ad14087f9bdf6234da6d6880f").unwrap();
+        assert_eq!(
+            aci.describe("Q"),
+            "Q (signal_aci:0195683a-d140-87f9-bdf6-234da6d6880f)"
+        );
     }
 }

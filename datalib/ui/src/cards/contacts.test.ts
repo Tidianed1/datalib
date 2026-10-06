@@ -159,6 +159,9 @@ describe("copy", () => {
     );
     expect(copyText("tel:+15550123456", "Will Riker")).toBe("Will Riker (+15550123456)");
     expect(copyText("slack:T1/U2", "Data")).toBe("Data (slack:T1/U2)");
+    expect(copyText("signal_aci:0195683a-d140-87f9-bdf6-234da6d6880f", "Q")).toBe(
+      "Q (signal_aci:0195683a-d140-87f9-bdf6-234da6d6880f)",
+    );
     expect(copyText("tel:+15550123456", "+15550123456")).toBe("+15550123456");
   });
 
