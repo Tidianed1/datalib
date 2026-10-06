@@ -191,7 +191,7 @@ mod tests {
     #[tokio::test]
     async fn a_second_ask_waits_for_the_list_being_made() {
         let cache = Arc::new(ResultCache::default());
-        let k = key("miller columns", "c1");
+        let k = key("warp core", "c1");
         let first = cache.turn(&k).await;
 
         let ranked_again = Arc::new(std::sync::atomic::AtomicBool::new(false));

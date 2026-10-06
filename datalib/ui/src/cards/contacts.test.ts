@@ -295,13 +295,13 @@ describe("isAbsent", () => {
 
 describe("chip.css", () => {
   /// A message header is a wrapping flex row, so a chip in it shrank to
-  /// its longest word and "Thad Hughes" broke over two lines.
+  /// its longest word and "Jean-Luc Picard" broke over two lines.
   it("keeps a chip's name on one line", () => {
     const style = document.createElement("style");
     style.textContent = chipCss;
     document.head.append(style);
-    const el = dom(chip(TEL, "Thad Hughes")).querySelector<HTMLElement>("a")!;
-    drawChip(el, chipLook(TEL, "Thad Hughes", NOBODY, false));
+    const el = dom(chip(TEL, "Jean-Luc Picard")).querySelector<HTMLElement>("a")!;
+    drawChip(el, chipLook(TEL, "Jean-Luc Picard", NOBODY, false));
     document.body.append(el);
     expect(getComputedStyle(el).whiteSpace).toBe("nowrap");
     style.remove();
