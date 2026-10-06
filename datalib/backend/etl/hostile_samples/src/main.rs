@@ -231,6 +231,7 @@ fn chat_common(scratch: &Path) -> Result<Vec<Document>> {
     };
     let reaction = |uuid: &str, emoji: String, who: String| NormalizedReaction {
         reaction_uuid: uuid.to_string(),
+        reactor_handle: None,
         reactor_display: who,
         emoji,
         date_ms: Some(12_602_794_200_000),

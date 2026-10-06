@@ -64,6 +64,11 @@ pub struct NormalizedReaction {
     /// anchor on the reaction's rendered span and as the PK of its
     /// own grid_row.
     pub reaction_uuid: String,
+    /// Who reacted, as an identifier a contact can be linked to; `None`
+    /// where the provider has none for them, or the reactor is the
+    /// account itself. Not written into the bullet by the provider:
+    /// chat-common draws the reactor from it.
+    pub reactor_handle: Option<datalib_handle::Handle>,
     /// Human-readable label for the reactor ("Me" / "Will Riker" / …).
     pub reactor_display: String,
     /// The emoji or short string (`🫡`, `🔥`, …).

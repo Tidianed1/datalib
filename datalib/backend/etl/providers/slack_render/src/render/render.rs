@@ -413,6 +413,7 @@ fn build_reactions(
             let id = ids::reaction(source_id, &m.team_id, &m.channel_id, &m.ts, name, "");
             out.push(NormalizedReaction {
                 reaction_uuid: id.uuid.clone(),
+                reactor_handle: None,
                 reactor_display: format!("{count}"),
                 emoji,
                 date_ms,
@@ -423,6 +424,7 @@ fn build_reactions(
                 let id = ids::reaction(source_id, &m.team_id, &m.channel_id, &m.ts, name, u);
                 out.push(NormalizedReaction {
                     reaction_uuid: id.uuid.clone(),
+                    reactor_handle: Handle::slack(&m.team_id, u),
                     reactor_display: user_labels.get(u).cloned().unwrap_or_else(|| u.to_string()),
                     emoji: emoji.clone(),
                     date_ms,
