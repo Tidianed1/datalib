@@ -487,7 +487,8 @@ address book as accounts; Signal's ACI as a handle, and its recipients
 as accounts tying number to ACI; a reaction carries its reactor's
 handle (Slack, WhatsApp, Messages) and the people baseline counts
 reactors, though the bullet shows no chip until chips.md's step 2
-draws it. Not yet: mentions, `row_handles`, groups, merge, undo,
+draws it; a Slack `<@U…>` mention as a chip link. Not yet: mentions in
+other providers, `row_handles`, groups, merge, undo,
 adopting a card's handles,
 the contact card, chips in the grid, and phases 4–6.
 
