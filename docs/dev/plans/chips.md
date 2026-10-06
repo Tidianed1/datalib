@@ -1,12 +1,14 @@
 # Chips: a link the app can resolve, drawn as the thing it names
 
-*Decided 2026-10-06. Steps 1 and 3 of §"Order of work" are built
-(#1022, #1026): a person in a document is a chip link, drawn and copied
-as this plan says, with the right-click menu and the double-click; step
-2 is landing provider by provider in the contacts work; steps 4 and 5
-are not built. The facts about the tree were read that
-day and are cited by path; check one before relying on it. The first
-slice of chips for people landed in #958 and is described in
+*Decided 2026-10-06; for people, built the same day. A person is a chip
+link wherever a renderer has their handle: an author and a recipient
+(#1022), a reactor, a Slack mention (#1027), a Signal recipient known
+only by ACI (#1023). The document view's right-click and double-click
+are #1026; the grid's Author cell is #1028; photos are #1029 and #1030.
+What is not built is groups and steps as chips (§"In a grid", the
+Manage rows) and system events. The facts about the tree were read on
+2026-10-06 and are cited by path; check one before relying on it. The
+first slice of chips for people landed in #958 and is described in
 [`contacts.md`](contacts.md) — this plan replaces its §"Chips" and
 generalizes it to every kind of entity.*
 
@@ -137,7 +139,8 @@ to a shared `chip.css` so the grid draws the same thing.
 had it) and gains `photo_url: Option<String>` beside it: a URL the app
 serves, app-relative, which the chip and the hover card lead with. The
 contacts applet's `/photo/<contact_id>` for your contact; the index's
-asset route for a source's inline photo out of the blob CAS. A remote
+asset route for a source's inline photo, written beside the page
+when it renders. A remote
 `Photo::Url` never becomes a `photo_url`: the app makes no request to a
 remote host without the person's say (`sanitize.ts`), so a Slack avatar
 stays out until something fetches it into the CAS. A group's or a step's mark is the
@@ -264,15 +267,14 @@ out here over the frame, as `ChatBody.ce.vue` does now.
    snapshots updated, the render preview now showing unresolved chips.
    The chat-common README's header section and the sanitizer's
    vocabulary test change in the same PR.
-2. **Chips in bodies.** Reactions: `NormalizedReaction` gains
-   `reactor_handle` (the contacts work fills it for Slack, WhatsApp,
-   Signal and Beeper), and chat-common emits the reactor as a link; no
-   provider writes a span or a link of its own. Slack `<@U…>` mentions
-   are the Slack render's own mrkdwn conversion
-   (`slack_render/src/render/mrkdwn.rs`), so they become
-   `[@Name](slack://user?team=T&id=U)` in a Slack PR after step 1
-   gives it `Handle::to_uri`. System events as each provider gets a
-   handle for them.
+2. **Chips in bodies.** Reactions: `NormalizedReaction::reactor_handle`
+   (filled for Slack, WhatsApp and Apple Messages; Beeper has none yet,
+   Signal has no reactions), and chat-common writes the reactor as a
+   chip link, in a message's reactions and in the orphan list alike, and
+   gives a reaction's grid row the reactor's handle. Slack `<@U…>`
+   mentions are the Slack render's own mrkdwn conversion
+   (`slack_render/src/render/mrkdwn.rs`) through `chip_link`. System
+   events as each provider gets a handle for them.
 3. **Clicks in the viewer.** `chipMenu`; right-click in `DocCard`;
    double-click; the click handler's `detail` guard.
 4. **The grid.** `Identity.id` as a URI on Manage; `author_handle` and

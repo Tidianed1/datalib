@@ -8,9 +8,10 @@ ingest step's params, sharing one renderer:
 | `[steps.params.api]`       | walks the live `claude.ai` API             | yes               |
 | `[steps.params.export]`    | reads an unpacked bulk export off its `path` | no              |
 
-Both write **the same six tables of the same raw store** — `users`,
+Both write **the same tables of the same raw store** — `users`,
 `orgs`, `projects`, `project_docs`, `conversations`,
-`claude_attachments` — which is the whole point: `render` has one
+`claude_attachments`, and for the `api` method `project_docs_listings`
+— which is the whole point: `render` has one
 input shape to be correct against, and there is exactly one parser.
 
 The store is `<data_root>/<group>/ingest/entities.doltlite_db`, with a
@@ -96,23 +97,24 @@ the step.
 | `/account`, with no user stored | `phase:account` | the next run, which asks again while there is no user |
 | one org's conversation listing (not a 403) | `listing:conversations org:<name>` | the next run that lists it; until then nothing of that org is pruned |
 | one org's project listing | `listing:projects org:<name>` | the next run that lists it |
-| one project's docs listing | `listing:project_docs <project>` (a warning for a 403) | the next listing of them: a failed listing clears the project's sweep marker, so it is due again even when its metadata was stored this run |
+| one project's docs listing | `project_docs_listings:<project uuid>` (a warning for a 403, or when docs from an earlier listing are held) | the next listing of them: a listing that failed is not held, so it is due again whatever its sweep marker says |
 | a configured `project_uuids` entry no listed org has | `config:project_uuids:<value>` | a run in which it matches, or the config dropping it |
 | a configured `conv_uuids` entry every org answers 404 or 403 for | `config:conv_uuids:<value>` | as above |
-| one conversation's detail fetch | `conversations:<id>` on its bookkeeping row | its next successful fetch: a conversation never fetched has no `updated_at`, so the next run queues it as missing |
+| one conversation's detail fetch | `conversations:<id>` on its bookkeeping row | its next successful fetch: a conversation not held at the `updated_at` listed is owed, so the next run asks again |
 | one file | `claude_attachments:<conversation>#<file>`, with the real reason | the file landing; see Attachments |
-| the rate limit (the shared give-up guard tripped) | `phase:conversations`, `phase:projects` or `phase:attachments`, wherever it stopped | the next run that gets through; the walk stops there, since every later request would be refused too |
+| the rate limit (the shared give-up guard tripped), or 25 failures in a row in one loop | `phase:conversations`, `phase:projects` or `phase:attachments`, wherever it stopped | the next run that gets through; the walk stops there, since every later request would be refused too |
 | a conversation or project in a bulk export with no `uuid` | `phase:export` | the next export ingest without one |
 
 Render shows a `conversations:` or `claude_attachments:` row on the
-conversation's page. The `listing:`/`phase:` rows and the `config:` rows
+conversation's page. A `404` on the detail of a conversation the
+listing names is a failure like any other: what the mirror holds stays,
+and only a listing that leaves the conversation out deletes it. The `listing:`/`phase:` rows and the `config:` rows
 of a run that got to its end replace the last run's, on both the listing
 path and the `conv_uuids` path. A run the rate limit cut short adds its
 `listing:`/`phase:` rows and clears none, and does not rewrite the
 `config:` rows, since it did not check every configured entry. A run
 that was asked to stop clears none either, and records nothing about a
-request the stop refused: a conversation whose files the stop cut short is not written
-at all, so the next run starts it over.
+request the stop refused. What it did not reach is still owed.
 
 ## Projects
 
@@ -145,20 +147,25 @@ a visible truncation marker. Raising it and re-rendering backfills.
 
 ### Incrementality
 
-The project listing is refetched every run — one request per org — and a
-project whose `updated_at` matches the stored row is not re-written.
-Knowledge docs are the awkward part: **we have not confirmed that
-editing a document bumps its project's `updated_at`**, and if it does
-not, an `updated_at`-only rule would let docs go stale forever. So the
-docs listing sits behind a per-project sweep marker in
-`sync_scope_state` (`claude:sweep:project_docs:<uuid>`) with a
-`PROJECT_DOCS_TTL` of 24h. Docs are refetched when the project's
-metadata changed, when no sweep has ever completed, or when the last one
-aged out — worst case one extra request per project per day. The
-`/organizations` listing sits behind the same kind of marker
-(`claude:sweep:orgs`, 6h). Both are stamped with, and aged against, the
-run's pinned now (`DATALIB_DAG_NOW`), not the wall clock, so whether a
-run asks for a listing is the same on every replay of it.
+The project listing is refetched every run — one request per org — and
+it is the whole of a project's metadata: a project is held, in its
+sidecar, at the `updated_at` the listing names, and one held at that
+stamp is not written again. Knowledge docs are a listing of their own,
+`…/projects/{id}/docs`, one row per project in `project_docs_listings`
+whose sidecar holds the project `updated_at` the docs were listed for.
+They are written in one transaction with the docs and the sweep marker.
+
+**We have not confirmed that editing a document bumps its project's
+`updated_at`**, so the docs are owed when either is true: the listing is
+not held at the project's current `updated_at` (never listed, failed,
+cut off, or the project changed), or its sweep marker in
+`sync_scope_state` (`claude:sweep:project_docs:<uuid>`) is older than
+`PROJECT_DOCS_TTL`, 24h — worst case one extra request per project per
+day. The `/organizations` listing sits behind the same kind of marker
+(`claude:sweep:orgs`, 6h), written with the orgs it lists. Both are
+stamped with, and aged against, the run's pinned now
+(`DATALIB_DAG_NOW`), not the wall clock, so whether a run asks for a
+listing is the same on every replay of it.
 
 A reset (`datalib-dag --reset`) empties `sync_scope_state` with the
 rest, so the next sync sweeps every project again;
@@ -246,41 +253,41 @@ address: its content is already in `conversations.payload`. If Claude
 ever starts keeping those binaries (a download URL appears in the
 payload), they would get edges like `files[]`.
 
-A file that does not land is still an edge row, with no `blake3`; its
-bookkeeping and its `problems` row say why. The walk reaches a
-conversation's files only when it fetches the conversation, and an
-unchanged one is not fetched again, so after the walk every
-conversation with such an edge is read back from the store and its
-files tried again from the file objects its payload carries.
+The edges are written in the conversation's transaction, one per
+`file_uuid` its messages name, with no `blake3`; a refetch that no
+longer names a file drops its edge. The file loop then fetches every
+edge not held at its conversation's version, from the file object the
+conversation carries. Bytes the CAS already holds for the file, under
+any conversation, are not fetched again. A file that does not land is
+owed, its bookkeeping and its `problems` row saying why, and the next
+run asks again.
 
 A file claude.ai answers `404` or `410` for, or one whose object names
-no URL, is not there to fetch rather than failed: its row is a
-`not_found` warning and the retry pass leaves it alone. It is asked for
-again only when its conversation changes and is refetched.
+no URL, is not there to fetch rather than failed: its edge is held with
+a `not_found` warning, and asked for again only when its conversation
+changes and is refetched.
 
-## Resume + prioritization
+## What is owed
 
-There is no checkpoint file. On each run the downloader classifies
-every listing item. Items whose listing `updated_at` predates the
-configured `since` (`api.since` / CLI `--since`; RFC 3339 or
-`YYYY-MM-DD`, assumed UTC) are out of scope: they are never
-detail-fetched and are invisible to overlap selection. The filter only
-gates fetching — already-stored rows are untouched — so moving `since`
-further back later backfills the newly-in-scope conversations as
-"missing" on that run. Everything in scope is classified into one of:
+There is no checkpoint file and no cursor. Each run lists every org's
+conversations, and a listed conversation is owed when the store does
+not hold it at the `updated_at` listed: the sidecar's `held_version`,
+written in the transaction that stores the row and its attachment
+edges, so a run cut off anywhere leaves nothing reading as done that
+is not (`tests/claude_tests/interrupt.rs` cuts a replayed run at every
+request and requires the store an uninterrupted run leaves). The ones
+never fetched come first, then the stale, so genuinely new
+conversations are fetched first. The N most recently updated
+conversations of each org (`refresh_most_recent_n_chat_count`, CLI
+`--overlap`) are fetched every run, held or not, as a check against the
+live copy.
 
-  1. **missing** — no row in `conversations` yet.
-  2. **stale** — a row exists, but its stored `updated_at` differs from
-     the listing's. Also where an **overlap** item lands: the N
-     most-recently-updated conversations (`refresh_most_recent_n_chat_count`,
-     CLI `--overlap`) are forced into this bucket regardless of
-     `updated_at`, as a sanity check against the live copy.
-  3. **up to date** — stored `updated_at` matches the listing's. Skipped.
-
-The per-org work queue is `missing` first, then `stale`, so genuinely
-new conversations are fetched first. The comparison is against the
-`conversations` table and nothing else, which is what makes
-bootstrapping from an export work (next section).
+Items whose listing `updated_at` predates the configured `since`
+(`api.since` / CLI `--since`; RFC 3339 or `YYYY-MM-DD`, assumed UTC)
+are out of scope: they are never detail-fetched and are invisible to
+the overlap. The filter only gates fetching — already-stored rows are
+untouched — so moving `since` further back later lists the newly in
+scope conversations as owed on that run.
 
 `/chat_conversations` returns an org's whole list in one response, so a
 conversation the store holds for that org that the listing does not
@@ -308,12 +315,13 @@ current.
 Because both methods write the same tables of the same store, most
 of this already works:
 
-  * **Incrementality falls out for free.** The API listing pass compares
-    each conversation's stored `updated_at` against the listing's, and
-    the export ingest fills that column from the export payload. So an
-    export-seeded store is already "up to date" for everything that has
-    not changed since the export was taken — the first API run fetches
-    only what actually moved, not the whole account.
+  * **Incrementality falls out for free.** The API walk owes what its
+    sidecars do not hold at the listed `updated_at`, and the export
+    ingest holds each conversation at the `updated_at` its payload
+    carries. So an export-seeded store is already "up to date" for
+    everything that has not changed since the export was taken — the
+    first API run fetches only what actually moved, not the whole
+    account.
   * **Identity survives the switch.** `grid_rows.uuid` is minted from
     Anthropic's own conversation UUID under the group id
     (`docs/dev/entity_ids.md`), and neither changes when the ingest step
@@ -360,7 +368,8 @@ rows alone. The export prune has no such limit, and `users` /
 
 `api.conv_uuids` (CLI `--conv-uuid`, once per target; bare UUIDs or
 `https://claude.ai/chat/<uuid>` URLs) fetches exactly those
-conversations instead of walking the listing, and prunes nothing. Each
+conversations, every run, instead of walking the listing, and prunes
+nothing. Each
 org is tried in turn; a `404`, or a `403` that outlasts the retries,
 means "wrong org, try the next". The rows are upserted beside what the
 store already holds.

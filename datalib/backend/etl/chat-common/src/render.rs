@@ -27,7 +27,7 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// v10 moved only the `source_contacts` rows (`people.rs` counts
 /// reactors), and every document had to be rendered again for an
 /// existing root to hold them.
-pub const LAYOUT_VERSION: u32 = 10;
+pub const LAYOUT_VERSION: u32 = 11;
 
 /// What every chat-common provider declares through
 /// `RenderProcessor::render_params`, merged with its own knobs: the
@@ -449,6 +449,16 @@ fn render_markdown(
     sections
 }
 
+/// Who reacted: a chip link where the provider has their handle, so the
+/// reactor resolves to a contact as an author does
+/// (docs/dev/plans/chips.md); the name as shown otherwise.
+fn reactor(r: &crate::types::NormalizedReaction) -> String {
+    match &r.reactor_handle {
+        Some(h) => chip_link(&r.reactor_display, h),
+        None => escape_md_inline(&r.reactor_display),
+    }
+}
+
 /// Reactions the provider could not place on any message in this
 /// document, listed at the end under the upstream id they name.
 fn render_orphan_reactions(doc: &NormalizedDoc) -> Option<String> {
@@ -467,7 +477,7 @@ fn render_orphan_reactions(doc: &NormalizedDoc) -> Option<String> {
                 "  - <span id=\"m-{uuid}\" data-section-uuid=\"{uuid}\">{emoji} {who}</span> ({ts})\n",
                 uuid = r.reaction_uuid,
                 emoji = escape_md_inline(&r.emoji),
-                who = escape_md_inline(&r.reactor_display),
+                who = reactor(r),
                 ts = timestamp_html(r.date_ms),
             ));
         }
@@ -604,7 +614,7 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
                 "- <span id=\"m-{uuid}\" data-section-uuid=\"{uuid}\">{emoji} {who}</span>\n",
                 uuid = r.reaction_uuid,
                 emoji = escape_md_inline(&r.emoji),
-                who = escape_md_inline(&r.reactor_display),
+                who = reactor(r),
             ));
         }
     }
@@ -942,6 +952,7 @@ fn reaction_row(
         .upstream_account(chat.upstream_account.clone())
         .created_at(stamp_from_ms(r.date_ms, profile.stamp_precision))
         .author(non_empty(&r.reactor_display))
+        .author_handle(r.reactor_handle.as_ref().map(|h| h.as_str().to_string()))
         .account(chat.account.clone())
         .org_uuid(chat.org_uuid.clone())
         .org_name(chat.org_name.clone())
@@ -1967,6 +1978,29 @@ mod tests {
             assert_eq!(r.org_uuid.as_deref(), Some("org-123"));
             assert_eq!(r.org_name.as_deref(), Some("Starfleet"));
         }
+    }
+
+    /// A reactor with a handle resolves to a contact as an author does,
+    /// so the bullet carries a chip link; one without stays the name.
+    #[test]
+    fn a_reactor_with_a_handle_is_a_chip_link() {
+        use crate::types::NormalizedReaction;
+        let r = |handle, display: &str| NormalizedReaction {
+            reaction_uuid: "r".into(),
+            reactor_handle: handle,
+            reactor_display: display.into(),
+            emoji: "🖖".into(),
+            date_ms: None,
+            source_ref: None,
+        };
+        assert_eq!(
+            reactor(&r(
+                datalib_handle::Handle::email("riker@enterprise.org"),
+                "Will Riker"
+            )),
+            "[Will Riker](mailto:riker@enterprise.org \"Will Riker <riker@enterprise.org>\")"
+        );
+        assert_eq!(reactor(&r(None, "[Me]")), "\\[Me\\]");
     }
 
     #[test]
