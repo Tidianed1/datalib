@@ -92,19 +92,22 @@ writes or deletes one of them.
 
 The store keeps what upstream **listed** apart from what it **holds**,
 and works out what it **owes** from the two each time it is asked
-([`docs/dev/plans/sync_state.md`](/docs/dev/plans/sync_state.md) §2;
-`src/ingest/listed.rs`). The Gmail API mode keeps the same three tables.
+([`docs/dev/plans/sync_state.md`](/docs/dev/plans/sync_state.md) §2).
+The holding and the owing are the shared `datalib_etl::owed`; what is
+email's is the listing and how a batch is fetched and written
+(`src/ingest/listed.rs`). The Gmail API mode keeps the same tables.
 
 - `listed_messages` has a row per email upstream named, keyed by
   upstream's id, with a **stamp**: the state token of the response that
-  last named it as changed.
-- `fetched_messages` has a row per email fetched: the `emails` row it
-  produced and the stamp it was fetched for. It is written in the
-  transaction that writes the email.
+  last named it as changed. It is stored because a delta's answer cannot
+  be asked for again once the token has moved.
+- What is held for an email is `held_version` on its
+  `listed_messages_bookkeeping` row: the stamp its row was fetched for,
+  written by the loop in the transaction that writes the email.
 - An email is **owed** when it is listed and not held at its listed
-  stamp. Nothing marks an email as done and nothing remembers which
-  emails a run meant to fetch, so a run that is killed, stopped or
-  refused part-way leaves exactly the unfetched emails owed.
+  stamp (`owed::owed`). Nothing marks an email as done and nothing
+  remembers which emails a run meant to fetch, so a run that is killed,
+  stopped or refused part-way leaves exactly the unfetched emails owed.
 - `listed_whole` has a row per scope (a mailbox id, or `*` for the
   account) that an enumeration has listed to its end.
 
@@ -130,26 +133,34 @@ A run does three things with emails, in this order:
    `only_extract_labels` is therefore an admitted mailbox with no row,
    and it is enumerated until an enumeration of it finishes. A label
    path that matches no mailbox is a `problems` row.
-3. **Fetches what is owed**, fifty to an `Email/get`, one transaction
-   per batch: the email rows, their thread rows and the stamp they
-   satisfy. An email the server answers `notFound` for, or that a label
-   filter keeps out, loses its listing and whatever was held for it.
+3. **Fetches what is owed** with `owed::drain`, fifty to an
+   `Email/get`, one transaction per batch: the email rows, their thread
+   rows and the stamp they satisfy. An email the server answers
+   `notFound` for, or that a label filter keeps out, is gone: its
+   listing, its row and whatever was held for it go.
 
-Then the `.eml` phase downloads the body of every email that has none.
+Then the `.eml` phase downloads the body of every email that has none:
+the same `owed::drain`, keyed by the `email_blobs` edge, eight
+downloads at once. A flush is 256 bodies or 32 MB of them, whichever
+comes first: the bodies go into the CAS, then the edge rows that name
+them are written.
 
 Destroyed emails hard-delete the row, its mailbox and keyword joins, its
-`email_blobs` edge, what was listed and held for it, and their
-bookkeeping, and its thread row is rewritten or goes. The bytes stay in
-the CAS — another email may share the same `.eml` blob, and doltlite's
-history retains the prior state either way.
+`email_blobs` edge, its listing and the sidecar row that held it, and
+its thread row is rewritten or goes. The bytes stay in the CAS — another
+email may share the same `.eml` blob, and doltlite's history retains the
+prior state either way.
 
 A mailbox a full `Mailbox/get` does not list comes off every email and
 its row goes, the same as one `Mailbox/changes` reports destroyed.
 
-A store written before these tables existed is carried over by a rung
-of the migration ladder (`listed::migrate_from_cursors`): what it holds
-is listed and held under no stamp, so its tokens stay good and nothing
-is fetched again.
+A store written before these tables existed is carried over by two
+rungs of the migration ladder (`listed::migrate_from_cursors`, then
+`listed::migrate_held_into_the_sidecar`): what it holds is listed and
+held under no stamp, so its tokens stay good and nothing is fetched
+again. A store from the days of a `fetched_messages` table climbs the
+second rung alone, which moves the stamp each email was fetched for
+into the sidecar.
 
 ## When part of a sync fails
 
@@ -171,9 +182,9 @@ with nothing listed to go on with.
   fetched. Nothing is deleted, and its scopes are not recorded as listed
   whole, so the next run walks again.
 - An `Email/get` that fails leaves its emails owed, and each gets a
-  `listed_messages:<email id>` row with the attempts counted on its
-  `listed_messages_bookkeeping` row; the fetch that works clears both.
-  A refused credential, a retry loop that gave up, or three failed
+  `listed_messages:<email id>` row with the attempt counted on its
+  `listed_messages_bookkeeping` row; the fetch that works clears the
+  row. A refused credential, a retry loop that gave up, or three failed
   batches in a row end the phase with one `phase:Email/get` row.
 - An `.eml` that does not download is an `email_blobs:<edge id>` row,
   and every run tries again any `.eml` it does not hold. One over
@@ -188,24 +199,19 @@ with nothing listed to go on with.
   and the row clears once a run gets through the phase. The step does
   not fail here, because the emails themselves are already stored by
   the time the `.eml` phase runs.
-- The `.eml` bodies are written as they arrive, every 32 MB or 256
-  downloads, and each write is a point where the run may seal. A run
-  that is killed keeps what it had sealed.
+- The `.eml` bodies wait in memory for their flush (256 of them, or
+  32 MB), then go to the CAS and their edge rows are written; each
+  write is a point where the run may seal. A run that is killed keeps
+  what it had sealed.
 
 **Gmail API.**
 
 - A message that would not fetch stays owed, and gets a
-  `listed_messages:<Gmail id>` row with the attempts counted on its
+  `listed_messages:<Gmail id>` row with the attempt counted on its
   `listed_messages_bookkeeping` row. Every later run asks for it again,
-  and the fetch that works clears both. It does not hold the
-  `historyId` cursor.
-- A message that fetched but would not store gets the same row. A Gmail
-  message's bytes never change, so fetching it again with the same build
-  would only spend 20 quota units for the same answer. Its
-  `fetched_messages` row says which build could not store it
-  (`unstorable_by`), and it is owed again only to a different build
-  (version or git hash), or once Gmail lists it anew. A message deleted
-  upstream drops its row.
+  and the fetch that works clears the row. It does not hold the
+  `historyId` cursor. A message that fetched but would not store is the
+  same: owed, with its row, until a fetch stores it.
 - A message whose `.eml` was over the limit is a warning on its `.eml`.
   It is owed again once it fits under the limit, because it is held with
   no bytes. If Gmail answers 404 for it then, the message was deleted,
@@ -289,8 +295,7 @@ hash.
 | table | shape |
 |---|---|
 | `accounts`, `mailboxes`, `threads`, `emails` | payload-shaped entity tables, each with a paired `<table>_bookkeeping` sidecar; a mailbox's counts live in the sidecar's `volatile_payload` |
-| `listed_messages` | JMAP and Gmail API modes: a row per message upstream named, with the token that last named it as changed; its `_bookkeeping` sidecar counts failed fetches |
-| `fetched_messages` | JMAP and Gmail API modes: upstream's message id → the `emails` row it produced and the token it was fetched for |
+| `listed_messages` | JMAP and Gmail API modes: a row per message upstream named, with the token that last named it as changed; its `_bookkeeping` sidecar counts the fetches and holds, in `held_version`, the token the email was fetched for |
 | `listed_whole` | JMAP and Gmail API modes: the mailboxes or labels (or `*`) an enumeration has listed to its end |
 | `email_mailboxes`, `email_keywords` | N:M join tables with a synthesized `id` PK, refreshed delete-then-insert per email upsert; no sidecars |
 | `email_blobs` | CAS edge carrying the `.eml` `blake3`, NULL until the bytes land |

@@ -257,6 +257,9 @@ fn to_reaction(source_id: &str, r: &Event) -> NormalizedReaction {
         // Beeper's own event_uuid already collapses sender+target+emoji
         // on the source side, so it is the reaction's identity.
         reaction_uuid: ids::event(source_id, &r.native_event_id, r.timestamp_ms).uuid,
+        // A Matrix user id has no handle kind yet (contacts.md's table
+        // lists `beeper` as a later one).
+        reactor_handle: None,
         reactor_display: r.sender_label.clone().unwrap_or_else(|| "?".into()),
         emoji: r.reaction_emoji.clone().unwrap_or_else(|| "?".into()),
         date_ms: Some(r.timestamp_ms),

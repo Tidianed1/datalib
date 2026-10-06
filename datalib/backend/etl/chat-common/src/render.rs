@@ -22,7 +22,12 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// `datalib_step`'s render step checks that every version stored on
 /// disk is one its processors declare, so this must not be mixed into
 /// the stored value.
-pub const LAYOUT_VERSION: u32 = 9;
+///
+/// It also covers what `render_markdown` writes beside the markdown:
+/// v10 moved only the `source_contacts` rows (`people.rs` counts
+/// reactors), and every document had to be rendered again for an
+/// existing root to hold them.
+pub const LAYOUT_VERSION: u32 = 10;
 
 /// What every chat-common provider declares through
 /// `RenderProcessor::render_params`, merged with its own knobs: the
@@ -1066,6 +1071,7 @@ mod tests {
                     attachments: vec![],
                     reactions: vec![NormalizedReaction {
                         reaction_uuid: "44444444-4444-4444-4444-444444444444".to_string(),
+                        reactor_handle: None,
                         reactor_display: "Will Riker".to_string(),
                         emoji: "🫡".to_string(),
                         date_ms: Some(12442118410000),
@@ -1457,6 +1463,7 @@ mod tests {
             target_native_id: "gone-upstream".to_string(),
             reactions: vec![NormalizedReaction {
                 reaction_uuid: "55555555-5555-5555-5555-555555555555".to_string(),
+                reactor_handle: None,
                 reactor_display: "Will Riker".to_string(),
                 emoji: "\u{1fae1}".to_string(),
                 // Ten seconds after the message, which only the long
