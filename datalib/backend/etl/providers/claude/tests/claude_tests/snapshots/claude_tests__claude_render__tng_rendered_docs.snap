@@ -10,6 +10,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "Data",
+      "author_handle": null,
       "byte_size": 529,
       "channel": "Stellar Cartography",
       "content_hash": "5f5cd01e1cd88bbb02719b4ce43e1ac84c13059fdf12f9ffc39e77a8604b6cb7",
@@ -45,6 +46,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "Description",
+      "author_handle": null,
       "byte_size": 155,
       "channel": "Stellar Cartography",
       "content_hash": "5c3b1355670d32c061e866c8acdd1069ab41de450464776ec9ef1dd9571950b0",
@@ -80,6 +82,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "Custom instructions",
+      "author_handle": null,
       "byte_size": 137,
       "channel": "Stellar Cartography",
       "content_hash": "635bd442161b71aa1a1b5ba23c1794256f6f05bd34d7e3276d23d5c0ff9940db",
@@ -115,6 +118,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "charting-conventions.md",
+      "author_handle": null,
       "byte_size": 237,
       "channel": "Stellar Cartography",
       "content_hash": "1eff84d783a868d8ee4d1258b1fce39ef280cbf2580ef4e32ba905d6a0eff778",
@@ -157,6 +161,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": null,
+      "author_handle": null,
       "byte_size": 82,
       "channel": "Poisoned: a message with an unreadable stamp",
       "content_hash": "888bf1cb829d2fa163a313100f1fab47bd8993b681e4875982dc24bbbd8ff462",
@@ -192,6 +197,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "Human",
+      "author_handle": null,
       "byte_size": 30,
       "channel": "Poisoned: a message with an unreadable stamp",
       "content_hash": "5c36862d8318d11c9051c104d6db231c6379843cc2ca1446c026fbcf0388cb9a",
@@ -227,6 +233,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
+      "author_handle": null,
       "byte_size": 52,
       "channel": "Poisoned: a message with an unreadable stamp",
       "content_hash": "8bde8b052ebd63b4317bd38c1f3910f19cfcc9649d92404dc40f58394fb16682",
@@ -269,6 +276,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": null,
+      "author_handle": null,
       "byte_size": 1299,
       "channel": "Klingon Diplomatic Greeting Drafting",
       "content_hash": "a22c6d06dba17cd6106731422cfe86e9ae72e66a7305c252630413f13b18631d",
@@ -304,6 +312,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "Human",
+      "author_handle": null,
       "byte_size": 123,
       "channel": "Klingon Diplomatic Greeting Drafting",
       "content_hash": "e0930d893f1d9f20b12a19283e238723cad85ad9ce321fd02a4c39e672ef4777",
@@ -339,6 +348,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
+      "author_handle": null,
       "byte_size": 243,
       "channel": "Klingon Diplomatic Greeting Drafting",
       "content_hash": "c5c9d42a9c735e03835f7c51e3d108bf7179b498021f1faac470158b0ee26311",
@@ -374,6 +384,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
+      "author_handle": null,
       "byte_size": 175,
       "channel": "Klingon Diplomatic Greeting Drafting",
       "content_hash": "6e3775dc8e8d0eddc7ac938fdb02cabbbfe72479b16467e1a9b6beffb1de4053",
@@ -409,6 +420,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
+      "author_handle": null,
       "byte_size": 243,
       "channel": "Klingon Diplomatic Greeting Drafting",
       "content_hash": "1a238e9167a047bd60d3c0ad3415b9c9eb061f9dd6daac90ed1ef8130a630844",
@@ -444,6 +456,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
+      "author_handle": null,
       "byte_size": 495,
       "channel": "Klingon Diplomatic Greeting Drafting",
       "content_hash": "97f935caf0cb4240c7c1bcd7503e6ee4f14f000374be26378552f3ba84edbc36",
@@ -479,6 +492,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "Human",
+      "author_handle": null,
       "byte_size": 20,
       "channel": "Klingon Diplomatic Greeting Drafting",
       "content_hash": "01b5e6ab96b8d432127d9398d63c4a525f0e2aef5d5909dfc7e70e4fb4e21c85",
@@ -521,6 +535,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": null,
+      "author_handle": null,
       "byte_size": 1077,
       "channel": "Borg Encryption Signature Lookup",
       "content_hash": "f779dbe41451fb058b15bebe3513d22b33976a5b5131eee65b9f47c681cc62c2",
@@ -556,6 +571,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "Human",
+      "author_handle": null,
       "byte_size": 97,
       "channel": "Borg Encryption Signature Lookup",
       "content_hash": "a5a9bd51162c6cba5ba10ceac15650d036d6895d15c1ffb668190c65905d417f",
@@ -591,6 +607,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
+      "author_handle": null,
       "byte_size": 186,
       "channel": "Borg Encryption Signature Lookup",
       "content_hash": "ac6545ac3353738b2394da74b62094f0322647d79704c21a3f31f88b97f61082",
@@ -626,6 +643,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
+      "author_handle": null,
       "byte_size": 204,
       "channel": "Borg Encryption Signature Lookup",
       "content_hash": "c484e7a09f943fcf851e32c035f059086acddb88825cdd63fbe444052570dd2f",
@@ -661,6 +679,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
+      "author_handle": null,
       "byte_size": 205,
       "channel": "Borg Encryption Signature Lookup",
       "content_hash": "112cf3e880af67b4e9ea0d072cfd4b61f84370a448835e5558336efacbfa473a",
@@ -696,6 +715,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
+      "author_handle": null,
       "byte_size": 163,
       "channel": "Borg Encryption Signature Lookup",
       "content_hash": "6f2af03bb36ed41d694c275879db71ef2bc6335e15d973e744287393a1ed7cf3",
@@ -731,6 +751,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
+      "author_handle": null,
       "byte_size": 222,
       "channel": "Borg Encryption Signature Lookup",
       "content_hash": "612a2b37dc50aae768a2ca2ac9697649194df31307be097de04dbe3b4f2d6695",
@@ -773,6 +794,7 @@ expression: docs_bundle(&docs)
     {
       "account": "bcrusher@enterprise.starfleet.test",
       "author": null,
+      "author_handle": null,
       "byte_size": 254,
       "channel": "Tricorder Image Diagnostic",
       "content_hash": "b91ae1638a9c346a69a905fd12ccc4490340cb5e59b77348661201bf3206058e",
@@ -808,6 +830,7 @@ expression: docs_bundle(&docs)
     {
       "account": "bcrusher@enterprise.starfleet.test",
       "author": "Human",
+      "author_handle": null,
       "byte_size": 49,
       "channel": "Tricorder Image Diagnostic",
       "content_hash": "b205d38a07bd38b3b827ffcfb18ad6b11d0c50f0a43558306c89ef9db84831ba",
@@ -843,6 +866,7 @@ expression: docs_bundle(&docs)
     {
       "account": "bcrusher@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
+      "author_handle": null,
       "byte_size": 205,
       "channel": "Tricorder Image Diagnostic",
       "content_hash": "acb2523aa70679822a022daffe3f26cf6034c62884c228ad18d7959c7cab247e",
@@ -885,6 +909,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "Jean-Luc Picard",
+      "author_handle": null,
       "byte_size": 565,
       "channel": "Bridge Operations",
       "content_hash": "ce016c5821ab5285a9077c916998e357329f7e093ae17eb4390092e1ad61ed54",
@@ -920,6 +945,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "Description",
+      "author_handle": null,
       "byte_size": 115,
       "channel": "Bridge Operations",
       "content_hash": "983bb7f97a9f09df7b2ecfbcf2588faf39d0bd1e5160cb642089545d6baa687c",
@@ -955,6 +981,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "Custom instructions",
+      "author_handle": null,
       "byte_size": 157,
       "channel": "Bridge Operations",
       "content_hash": "c4f56afd7bc1c6775cfe2ec2700bbb4e9eeaeebc4f9244f1e658a73447c02034",
@@ -990,6 +1017,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "hailing-frequencies.md",
+      "author_handle": null,
       "byte_size": 167,
       "channel": "Bridge Operations",
       "content_hash": "3f045c299bf3e81cee36342056b07848945b2a5e415d59e7eb25152e0e6d3e68",
@@ -1025,6 +1053,7 @@ expression: docs_bundle(&docs)
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "escalation-ladder.txt",
+      "author_handle": null,
       "byte_size": 126,
       "channel": "Bridge Operations",
       "content_hash": "a430d4c242cf017ced2734f624e485c530c256fdab89ece2330ae92326792cb6",

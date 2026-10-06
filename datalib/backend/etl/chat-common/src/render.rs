@@ -862,6 +862,7 @@ fn build_grid_rows(
                 // null — never a row whose author is the empty string,
                 // and never a stand-in like "unknown".
                 .author(non_empty(&item.author_display))
+                .author_handle(item.author_handle.as_ref().map(|h| h.as_str().to_string()))
                 .account(chat.account.clone())
                 .org_uuid(chat.org_uuid.clone())
                 .org_name(chat.org_name.clone())
