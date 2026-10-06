@@ -30,6 +30,10 @@ pub struct KnownFile {
 /// the walker, but enumerated in [`KNOWN_FILES`] like everything else.
 pub const ARTICLES_TABLE: &str = "articles";
 
+/// Raw table of `Connections.csv`, keyed by [`connection_key`]: the rows
+/// the photo fetch and its prune join on.
+pub const CONNECTIONS_TABLE: &str = "connections";
+
 /// Every file a complete LinkedIn export can contain, as of the
 /// 06-2026 "Complete" export format. Adding a row here is documentation;
 /// the walker already ingests unlisted CSVs (with a WARN). Keep this

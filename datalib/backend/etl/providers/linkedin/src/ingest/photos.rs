@@ -89,6 +89,47 @@ impl PhotoSummary {
     }
 }
 
+/// Delete the photo edges of connections a clean read of Connections.csv
+/// no longer lists, in the transaction that rewrites `connections`.
+/// `connections` is that read's row ids, which are the connection keys.
+/// Returns how many connections lost their edges.
+pub(crate) async fn prune_to_connections_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    connections: &std::collections::HashSet<String>,
+) -> Result<usize> {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)",
+    )
+    .bind(CONTACT_PHOTOS_TABLE)
+    .fetch_one(&mut **tx)
+    .await
+    .context("look for contact_photos")?;
+    if !exists {
+        return Ok(0);
+    }
+    let owners: Vec<String> = sqlx::query_scalar("SELECT DISTINCT owner_id FROM contact_photos")
+        .fetch_all(&mut **tx)
+        .await
+        .context("load contact_photos owners")?;
+    let gone: Vec<String> = owners
+        .into_iter()
+        .filter(|o| !connections.contains(o))
+        .collect();
+    for chunk in gone.chunks(datalib_etl::bulk::SQL_CHUNK) {
+        let mut sql = String::from("DELETE FROM contact_photos WHERE owner_id IN (");
+        datalib_etl::bulk::push_placeholder_list(&mut sql, chunk.len());
+        sql.push(')');
+        // Audited: the IN-list is a `?,?,?` run sized from the chunk, and
+        // every owner is bound.
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+        for owner in chunk {
+            q = q.bind(owner);
+        }
+        q.execute(&mut **tx).await.context("prune contact_photos")?;
+    }
+    Ok(gone.len())
+}
+
 pub async fn fetch_connection_photos(
     db: &RawDb,
     cas: &BlobCas,

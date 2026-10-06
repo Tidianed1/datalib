@@ -22,7 +22,7 @@ use std::collections::HashSet;
 use tracing::warn;
 use uuid::Uuid;
 
-use schema_raw::{canonical_table, known_file, linkedin_ns, ARTICLES_TABLE};
+use schema_raw::{canonical_table, known_file, linkedin_ns, ARTICLES_TABLE, CONNECTIONS_TABLE};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -143,6 +143,8 @@ pub struct FetchSummary {
     pub files: usize,
     pub rows: usize,
     pub parse_errors: usize,
+    /// Photo edges of connections the export no longer lists.
+    pub photos_removed: usize,
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
@@ -185,6 +187,11 @@ async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
         };
         let keep: HashSet<String> = rows.iter().map(|(id, _)| id.clone()).collect();
         write_table(&mut tx, &table, &rows, Some(&keep)).await?;
+        // Only a clean read says who is connected: a Connections.csv left
+        // out or unreadable never reaches here.
+        if table == CONNECTIONS_TABLE {
+            summary.photos_removed += photos::prune_to_connections_in_tx(&mut tx, &keep).await?;
+        }
         summary.files += 1;
         summary.rows += rows.len();
         opts.progress.set_message(&format!(

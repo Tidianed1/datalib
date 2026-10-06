@@ -879,18 +879,19 @@ async fn a_connection_dropped_from_the_export_loses_its_photo_edge() -> Result<(
     assert_eq!(owners().await.len(), 2, "a CSV left out keeps both");
 
     fs::write(export.join("Connections.csv"), both)?;
-    fetch().await?;
+    assert_eq!(fetch().await?.photos_removed, 0);
     fs::write(
         export.join("Connections.csv"),
         "First Name,Last Name,URL,Email Address,Company,Position,Connected On\n\
          Jean-Luc,Picard,https://www.linkedin.com/in/jlp,,Starfleet,Captain,16 Jun 2026\n",
     )?;
-    fetch().await?;
+    let s = fetch().await?;
     assert_eq!(
         owners().await,
         ["https://www.linkedin.com/in/jlp"],
         "Crusher is no longer a connection"
     );
+    assert_eq!(s.photos_removed, 1);
     db.close().await;
     Ok(())
 }
