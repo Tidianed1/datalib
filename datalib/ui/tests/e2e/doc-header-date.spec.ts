@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { clickRowByUuid, docBody, EVERY_ROW } from "./grid-helpers";
+import { selectRowByUuid, docBody, EVERY_ROW } from "./grid-helpers";
 
 // The document header printed the raw `created_at` right above the first
 // message, which shows the same moment in its own short form (#902). The
@@ -28,7 +28,7 @@ test("the document header does not repeat the raw created_at", async ({ page, re
 
   await page.goto(EVERY_ROW);
   await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
-  await clickRowByUuid(page, pick!.uuid);
+  await selectRowByUuid(page, pick!.uuid);
 
   const card = page.locator(`.chat-preview[data-markdown-uuid="${pick!.markdown_uuid}"]`);
   // The body's own stamp being drawn means the document has loaded, so
