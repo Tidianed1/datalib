@@ -167,7 +167,7 @@ instants do. The TNG fixtures' stardate `ts`es have an eleventh digit.
 
 **Threads.** After a channel's history, `RawDb::threads_listed` lists
 every stored root with replies at the `latest_reply` its payload
-carries, and `datalib_etl::owed` subtracts the threads held at that
+carries, and `datalib_etl_web::owed` subtracts the threads held at that
 version (`held_version` in `threads_bookkeeping`, keyed like the root).
 It is a query over every stored root, not over the roots this run
 happened to list, so a root stored by a run that died before its replies

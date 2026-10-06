@@ -33,7 +33,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 /// `auth browser` and `curl` are forwarded to the gateway, and every
 /// command that manages local state — `ensure-browser`, `services
 /// register`, `auth set`, `auth clear` — is refused outright. The same
-/// rule `datalib_etl::latchkey` applies, restated here because this
+/// rule `datalib_etl_web::latchkey` applies, restated here because this
 /// crate links no ETL code.
 const GATEWAY_ENV_VAR: &str = "LATCHKEY_GATEWAY";
 
@@ -572,7 +572,7 @@ pub async fn start_connect(
         .insert(id.clone(), slot.clone());
 
     // `--account` is a latchkey *global* option and must precede the
-    // subcommand — the same rule `datalib_etl::latchkey` writes down
+    // subcommand — the same rule `datalib_etl_web::latchkey` writes down
     // for `curl`. Built here rather than reused from there because
     // this crate deliberately links no ETL code.
     let mut args: Vec<String> = Vec::new();
@@ -785,7 +785,7 @@ async fn latchkey_output(args: &[String]) -> anyhow::Result<String> {
 }
 
 async fn latchkey_output_env(args: &[String], env: &[(&str, &str)]) -> anyhow::Result<String> {
-    // The same resolution `datalib_etl::latchkey` uses, reached through
+    // The same resolution `datalib_etl_web::latchkey` uses, reached through
     // `datalib_core` so the pin is not spelled twice.
     let mut cmd: Command = datalib_core::node_runtime::latchkey_command()?.into();
     cmd.args(args)

@@ -6,9 +6,9 @@ use anyhow::{Context, Result};
 use sqlx::Row;
 
 use datalib_etl::bulk::bulk_upsert_in_tx;
-use datalib_etl::coverage::{self, Span};
 use datalib_etl::doltlite_raw::{self as dr};
-use datalib_etl::owed::{self, Listed};
+use datalib_etl_web::coverage::{self, Span};
+use datalib_etl_web::owed::{self, Listed};
 
 use super::schema_raw::{full_ddl, ActivityRow, FILE_KIND_FIT, LADDER};
 

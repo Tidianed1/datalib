@@ -4,9 +4,9 @@
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobCas;
 use datalib_etl::download_problems::RunProblem;
-use datalib_etl::http::{latchkey_curl, HttpRequest, HttpService};
 use datalib_etl::progress::Progress;
 use datalib_etl::stop::StopFlag;
+use datalib_etl_web::http::{latchkey_curl, HttpRequest, HttpService};
 use serde::Serialize;
 use serde_json::Value;
 use sqlx::Row;

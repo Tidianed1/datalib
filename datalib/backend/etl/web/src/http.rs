@@ -308,19 +308,6 @@ pub const PLAYBACK_HOLD_SEALED_ENV: &str = "DATALIB_HTTP_PLAYBACK_HOLD_SEALED";
 
 const HOLD_POLL: Duration = Duration::from_millis(50);
 
-static SEALED_A_CHECKPOINT: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-/// Called by the raw store each time a checkpoint commit lands; only
-/// [`PLAYBACK_HOLD_SEALED_ENV`] reads it.
-pub(crate) fn record_seal() {
-    SEALED_A_CHECKPOINT.store(true, std::sync::atomic::Ordering::SeqCst);
-}
-
-fn has_sealed() -> bool {
-    SEALED_A_CHECKPOINT.load(std::sync::atomic::Ordering::SeqCst)
-}
-
 enum Mode {
     Live,
     Playback {
@@ -351,7 +338,7 @@ impl Mode {
 }
 
 /// Waits while `hold` exists; `true` when a stop ended the wait instead.
-async fn held(stop: &crate::stop::StopFlag, hold: &Path) -> bool {
+async fn held(stop: &datalib_etl::stop::StopFlag, hold: &Path) -> bool {
     while hold.exists() {
         if stop.requested() {
             return true;
@@ -504,7 +491,7 @@ where
         // through, so the per-source API-call total is captured here with
         // zero provider-side code. File-based ingestion never reaches this
         // path, so it correctly reports zero requests.
-        crate::download_metrics::record_api_request();
+        datalib_etl::download_metrics::record_api_request();
         let outcome = match Mode::current() {
             Mode::Live => live::send(req).await,
             Mode::Playback {
@@ -516,7 +503,8 @@ where
                 if !delay.is_zero() {
                     tokio::time::sleep(delay).await;
                 }
-                let hold = hold.or(hold_sealed.filter(|_| has_sealed()));
+                let hold = hold
+                    .or(hold_sealed.filter(|_| datalib_etl::raw_store::has_sealed_a_checkpoint()));
                 if let Some(hold) = hold {
                     if held(guard.stop(), &hold).await {
                         return Err(HttpError::Interrupted {
@@ -1145,7 +1133,7 @@ pub(crate) mod tests {
             3,
             fast,
             fast,
-            crate::stop::StopFlag::default(),
+            datalib_etl::stop::StopFlag::default(),
         );
         let err = with_playback(
             dir.path(),
@@ -1187,7 +1175,7 @@ pub(crate) mod tests {
         let req = HttpRequest::get(HttpService::Slack, "https://slack.com/api/auth.test");
         always_429(dir.path(), &req);
 
-        let stop = crate::stop::StopFlag::new();
+        let stop = datalib_etl::stop::StopFlag::new();
         // A backoff long enough that only the stop can end this test in time.
         let long = Duration::from_secs(600);
         let guard =
@@ -1243,7 +1231,7 @@ pub(crate) mod tests {
             3,
             fast,
             fast,
-            crate::stop::StopFlag::default(),
+            datalib_etl::stop::StopFlag::default(),
         );
         let releaser = hold.clone();
         let released_at = std::sync::Arc::new(std::sync::Mutex::new(None));
@@ -1279,7 +1267,7 @@ pub(crate) mod tests {
         let hold = dir.path().join("hold");
         std::fs::write(&hold, b"").unwrap();
 
-        let stop = crate::stop::StopFlag::new();
+        let stop = datalib_etl::stop::StopFlag::new();
         let fast = Duration::from_millis(1);
         let guard =
             crate::retry::RetryGuard::new(Duration::from_secs(3600), 3, fast, fast, stop.clone());
@@ -1313,7 +1301,7 @@ pub(crate) mod tests {
         ok_fixture(dir.path(), &req);
         let hold = dir.path().join("hold");
         std::fs::write(&hold, b"").unwrap();
-        record_seal();
+        datalib_etl::raw_store::record_seal();
 
         let fast = Duration::from_millis(1);
         let guard = crate::retry::RetryGuard::new(
@@ -1321,7 +1309,7 @@ pub(crate) mod tests {
             3,
             fast,
             fast,
-            crate::stop::StopFlag::default(),
+            datalib_etl::stop::StopFlag::default(),
         );
         let releaser = hold.clone();
         let released_at = std::sync::Arc::new(std::sync::Mutex::new(None));
@@ -1354,7 +1342,7 @@ pub(crate) mod tests {
         let req = HttpRequest::get(HttpService::Slack, "https://slack.com/api/auth.test");
         // No fixture written: a request that left would fail as a playback
         // miss, not as Interrupted.
-        let stop = crate::stop::StopFlag::new();
+        let stop = datalib_etl::stop::StopFlag::new();
         stop.request();
         let fast = Duration::from_millis(1);
         let guard = crate::retry::RetryGuard::new(Duration::from_secs(3600), 3, fast, fast, stop);

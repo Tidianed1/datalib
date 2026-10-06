@@ -14,10 +14,10 @@ use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw::WirePayload;
 use datalib_etl::download_problems::DownloadProblem;
 use datalib_etl::download_run::DownloadRun;
-use datalib_etl::http::LatchkeySettings;
-use datalib_etl::http::IMPERSONATE_MARKER_HEADER;
-use datalib_etl::latchkey::latchkey_curl_command;
 use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_web::http::LatchkeySettings;
+use datalib_etl_web::http::IMPERSONATE_MARKER_HEADER;
+use datalib_etl_web::latchkey::latchkey_curl_command;
 use datalib_problems::Reason;
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
@@ -128,7 +128,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 }
 
 async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
-    let _ = datalib_etl::latchkey::ensure_curl_router();
+    let _ = datalib_etl_web::latchkey::ensure_curl_router();
     let db = opts.db.clone();
 
     // Canonicalized to whole-second epoch, the same grain the

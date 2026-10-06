@@ -6,11 +6,11 @@ pub mod dav;
 
 use anyhow::{Context, Result};
 use datalib_etl::control::DownloadControl;
-use datalib_etl::dav::state as dav_state;
-use datalib_etl::dav::sync::{CollectionSync, Page};
-use datalib_etl::http::LatchkeySettings;
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_web::dav::state as dav_state;
+use datalib_etl_web::dav::sync::{CollectionSync, Page};
+use datalib_etl_web::http::LatchkeySettings;
 use tracing::info;
 
 use super::db::RawDb;
@@ -142,7 +142,7 @@ async fn discover(
     lk: &LatchkeySettings,
     summary: &mut FetchSummary,
 ) -> Result<Discovered> {
-    let principal_url = datalib_etl::dav::find_principal(
+    let principal_url = datalib_etl_web::dav::find_principal(
         dav::HTTP_SERVICE,
         server_url,
         "caldav",

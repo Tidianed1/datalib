@@ -6,9 +6,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use datalib_etl::http::HttpResponse;
 use datalib_etl_email::ingest::gmail_api::{self, FetchOptions, FetchSummary};
 use datalib_etl_email::ingest::RawDb;
+use datalib_etl_web::http::HttpResponse;
 use serde_json::json;
 
 use crate::support::{

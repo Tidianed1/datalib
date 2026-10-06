@@ -14,7 +14,7 @@ sign-in, the wizard's Connection section, or a provider's HTTP client.
   `datalib/backend/runtime/src/node_runtime.rs` names it, and the
   bundled runtime ships that version beside its own Node. Nothing runs
   whatever `latchkey` happens to be on the PATH.
-- **Requests** go through `datalib_etl::http::latchkey_curl`, which
+- **Requests** go through `datalib_etl_web::http::latchkey_curl`, which
   sets `LATCHKEY_CURL` to our router curl so that Cloudflare-fronted
   hosts get the Chrome-impersonating curl
   ([`curl_impersonate.md`](curl_impersonate.md)).

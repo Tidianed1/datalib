@@ -215,7 +215,7 @@ mod tests {
     #[tokio::test]
     async fn a_span_is_recorded_with_the_rows_it_covers_and_merges_with_its_neighbours() {
         let d = tempfile::tempdir().unwrap();
-        let pool = crate::doltlite_raw::open(&d.path().join("c.doltlite_db"), &[DDL])
+        let pool = datalib_etl::doltlite_raw::open(&d.path().join("c.doltlite_db"), &[DDL])
             .await
             .unwrap();
         for (scope, lo, hi) in [

@@ -1,5 +1,5 @@
 //! ChatGPT API transport. Every request goes through
-//! [`datalib_etl::http::latchkey_curl`], which captures the full
+//! [`datalib_etl_web::http::latchkey_curl`], which captures the full
 //! response (status, every header, body) and supports playback from
 //! disk fixtures. Mirrors `src/ingest/chatgpt_web.py:_curl_get`.
 
@@ -9,7 +9,7 @@ use serde_json::Value;
 use tracing::instrument;
 
 use datalib_etl::events;
-use datalib_etl::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
+use datalib_etl_web::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
 
 pub const BASE: &str = "https://chatgpt.com";
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(120);

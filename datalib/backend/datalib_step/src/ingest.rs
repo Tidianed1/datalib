@@ -57,8 +57,10 @@ pub async fn run(
     // step can only claim what all of them can support. `all` on an empty
     // iterator is `true`, which is why the emptiness check above matters.
     emitter.declare_streams_output(processors.iter().all(|p| p.streams_output()));
-    let guard =
-        datalib_etl::retry::RetryGuard::from_params(&planned.download_params, control.stop.clone());
+    let guard = datalib_etl_web::retry::RetryGuard::from_params(
+        &planned.download_params,
+        control.stop.clone(),
+    );
 
     let body = async {
         for proc in processors {
@@ -81,7 +83,7 @@ pub async fn run(
     };
     datalib_obs::diagnostics::scope(
         diagnostics.clone(),
-        datalib_etl::retry::scope(
+        datalib_etl_web::retry::scope(
             guard,
             datalib_etl::download_metrics::scope(metrics.clone(), body),
         ),

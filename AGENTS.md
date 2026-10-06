@@ -170,6 +170,10 @@ datalib/
                    source that reads local files (fsscan, the
                    fingerprint cache, the per-feed file checkpoint).
                    Only those sources link it.
+    etl/web/       `datalib_etl_web`: what a source that reaches a web
+                   service shares — `latchkey curl` with retries and
+                   stops, HTTP playback, DAV, the owed-record
+                   bookkeeping. Only those sources link it.
     etl/render/    `datalib_etl_render`: the render store, the
                    unified-index load, `RenderCtx`. Everything that knows
                    `datalib_schema` sits here or above.

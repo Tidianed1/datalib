@@ -68,8 +68,8 @@ Which credential to use, and how to make it read-only, is in
   and `calendar-query` returned the same at Depth 0, 1 and none, on
   each of 6 calendars. We send what the RFCs define (0, 0 and 1).
 
-The loop is `datalib_etl::dav::sync`, which CardDAV shares, and what a
-listing owes the store across runs is `datalib_etl::dav::state`. A
+The loop is `datalib_etl_web::dav::sync`, which CardDAV shares, and what a
+listing owes the store across runs is `datalib_etl_web::dav::state`. A
 listing that stops short leaves a `listing:calendar <name>` problem and
 deletes nothing until a later run carries it to the end. A server
 without `sync-collection` fails the calendar: there is no second way

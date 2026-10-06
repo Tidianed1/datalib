@@ -4,7 +4,7 @@
 //! held at their `last_edited_time` (`listing`); each loop then fetches
 //! what the store lists and does not yet hold at that stamp — bodies,
 //! attachment bytes, comments, commented blocks, users — through
-//! `datalib_etl::owed`, which owns the stop, the failure budget, the
+//! `datalib_etl_web::owed`, which owns the stop, the failure budget, the
 //! flush and what each outcome means for a record. Nothing is marked
 //! done: holding the content at the listed stamp is done
 //! (docs/dev/plans/sync_state.md).
@@ -24,11 +24,11 @@ use std::sync::Mutex;
 use anyhow::Result;
 use datalib_etl::download_problems::{DownloadProblem, RunProblem};
 use datalib_etl::download_run::DownloadRun;
-use datalib_etl::http::LatchkeySettings;
-use datalib_etl::owed::{self, Fetcher, Listed, Loop};
 use datalib_etl::raw_store::Sealer;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
+use datalib_etl_web::http::LatchkeySettings;
+use datalib_etl_web::owed::{self, Fetcher, Listed, Loop};
 use serde::Serialize;
 use serde_json::json;
 
@@ -377,7 +377,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 }
 
 async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
-    let _ = datalib_etl::latchkey::ensure_curl_router();
+    let _ = datalib_etl_web::latchkey::ensure_curl_router();
     let db = opts.db.clone();
     let run_config = json!({
         "roots": opts.subtree_pages,

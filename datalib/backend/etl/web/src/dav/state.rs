@@ -14,7 +14,7 @@
 use anyhow::{Context, Result};
 use sqlx::SqlitePool;
 
-use crate::download_problems::RecordProblem;
+use datalib_etl::download_problems::RecordProblem;
 
 pub const DDL: [&str; 2] = [
     "CREATE TABLE IF NOT EXISTS dav_unconfirmed (
@@ -130,7 +130,7 @@ pub async fn finish_listing(pool: &SqlitePool, collection: &str) -> Result<Vec<S
 /// time loses its row.
 pub async fn collect_unstored(
     pool: &SqlitePool,
-    problems: &crate::run_problems::RunProblems,
+    problems: &datalib_etl::run_problems::RunProblems,
     table: &str,
     collections: &[String],
 ) {

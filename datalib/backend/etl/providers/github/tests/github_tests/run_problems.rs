@@ -10,17 +10,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use datalib_etl::event_store::{diff_and_save, make_record};
-use datalib_etl::http::{fixture_key, HttpRequest, HttpService, PLAYBACK_ENV};
 use datalib_etl::progress::{Progress, ProgressSink};
-use datalib_etl::retry::RetryGuard;
 use datalib_etl::stop::StopFlag;
 use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::{json_response, write_fixture, Synthesizer};
 use datalib_etl_github::ingest::{
     block_on_load_all, db_path_for, fetch, search_url, FetchOptions, FetchSummary, RawDb, BASE,
     DEFAULT_SCOPES, ENTITY_PR, ENTITY_SELF,
 };
 use datalib_etl_github::synthesize::GithubSynth;
+use datalib_etl_web::http::{fixture_key, HttpRequest, HttpService, PLAYBACK_ENV};
+use datalib_etl_web::retry::RetryGuard;
+use datalib_etl_web::synthesize::{json_response, write_fixture, Synthesizer};
 use serde_json::{json, Map};
 use tempfile::tempdir;
 
@@ -338,7 +338,7 @@ async fn a_give_up_keeps_what_it_fetched() {
     // One failed request spends the whole budget.
     let quick = Duration::from_millis(1);
     let guard = RetryGuard::new(Duration::from_secs(3600), 1, quick, quick, StopFlag::new());
-    datalib_etl::retry::scope(guard, run(&out, &pb, |o| o))
+    datalib_etl_web::retry::scope(guard, run(&out, &pb, |o| o))
         .await
         .expect("a give-up keeps what the run fetched");
 

@@ -5,13 +5,13 @@
 use datalib_probe::{ProbeAsk, ProbeList};
 use std::path::Path;
 
-use datalib_etl::http::{HttpRequest, HttpResponse, LatchkeySettings, PLAYBACK_ENV};
 use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::{json_response, write_fixture};
 use datalib_etl_calendar::ingest::google::{
     self, calendar_list_url, events_url, windowed_events_url,
 };
 use datalib_etl_calendar::ingest::{db_path_for, FetchSummary, RawDb, Window};
+use datalib_etl_web::http::{HttpRequest, HttpResponse, LatchkeySettings, PLAYBACK_ENV};
+use datalib_etl_web::synthesize::{json_response, write_fixture};
 use serde_json::{json, Value};
 
 const PRIMARY: &str = "picard@enterprise.test";

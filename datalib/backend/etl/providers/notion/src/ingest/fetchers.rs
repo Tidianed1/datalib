@@ -1,7 +1,7 @@
 //! What each loop fetches and how a flush of it is stored, one
 //! [`Fetcher`] per kind: a page's body, an attachment's bytes, a page's
 //! comments listed whole, a commented block, a user. Each is one request
-//! per record; the loop (`datalib_etl::owed`) owns the stop, the
+//! per record; the loop (`datalib_etl_web::owed`) owns the stop, the
 //! failure budget, the flush and what each outcome means for the
 //! record's sidecar.
 
@@ -11,8 +11,8 @@ use std::sync::atomic::Ordering;
 use anyhow::Result;
 use async_trait::async_trait;
 use datalib_etl::blob_cas::{blake3_hex, CasInsert};
-use datalib_etl::http::{latchkey_curl, HttpError, HttpRequest, HttpService};
-use datalib_etl::owed::{BatchError, Fetched, Fetcher, Listed, Outcome};
+use datalib_etl_web::http::{latchkey_curl, HttpError, HttpRequest, HttpService};
+use datalib_etl_web::owed::{BatchError, Fetched, Fetcher, Listed, Outcome};
 use serde_json::Value;
 use sqlx::{Sqlite, Transaction};
 

@@ -8,12 +8,12 @@ use std::collections::HashSet;
 
 use anyhow::{Context, Result};
 use datalib_etl::control::DownloadControl;
-use datalib_etl::http::{
+use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_web::http::{
     default_retryability, latchkey_curl_classified, percent_encode, HttpRequest, HttpResponse,
     HttpService, LatchkeySettings, Retryability,
 };
-use datalib_etl::progress::Progress;
-use datalib_etl::run_problems::{self, RunProblems};
 use serde_json::Value;
 use tracing::warn;
 

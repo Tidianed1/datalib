@@ -10,14 +10,14 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use async_trait::async_trait;
 use datalib_etl::control::DownloadControl;
-use datalib_etl::http::PLAYBACK_ENV;
-use datalib_etl::interrupt::{dump_tables, every_cut_resumes, How, Rig};
 use datalib_etl::progress::Progress;
-use datalib_etl::retry::{self, RetryGuard};
 use datalib_etl::stop::StopFlag;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_garmin::ingest::{db_path_for, fetch, FetchOptions, RawDb, ACTIVITY_PAGE};
 use datalib_etl_garmin_config::GarminApi;
+use datalib_etl_web::http::PLAYBACK_ENV;
+use datalib_etl_web::interrupt::{dump_tables, every_cut_resumes, How, Rig};
+use datalib_etl_web::retry::{self, RetryGuard};
 use serde_json::json;
 
 use crate::prune_gate::{Account, PLAYBACK, TODAY};

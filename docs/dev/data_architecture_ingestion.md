@@ -391,7 +391,7 @@ therefore what it can see:
 | --- | --- | --- |
 | `email` (JMAP) | `Email/changes` / `Mailbox/changes` tombstones | emails, mailboxes, and the label joins |
 | `email` (Gmail) | `history.list` deletions; a whole-account walk whenever the account is not listed whole | emails, via the same cascade |
-| `contacts` (CardDAV), `calendar` (CalDAV) | RFC 6578 sync-collection `404`/`410`; a whole listing on a first sync or after the server calls the token invalid, and every run for a windowed calendar | contacts or events a whole listing does not name, once it reaches its end: a listing the server cut short (a 507 it would not page past, or 50 pages) deletes nothing until a later run carries it to the end (`dav_unconfirmed`); `datalib_etl::dav` |
+| `contacts` (CardDAV), `calendar` (CalDAV) | RFC 6578 sync-collection `404`/`410`; a whole listing on a first sync or after the server calls the token invalid, and every run for a windowed calendar | contacts or events a whole listing does not name, once it reaches its end: a listing the server cut short (a 507 it would not page past, or 50 pages) deletes nothing until a later run carries it to the end (`dav_unconfirmed`); `datalib_etl_web::dav` |
 | `contacts` (`.vcf` folder), `calendar` (`.ics` folder) | the folder's scan, and each re-read file | a gone file's address book or calendar; cards or events a re-read file dropped. Nothing is deleted when the walk reported an error |
 | `google_takeout` Chat, Maps photos | the export's scan, and each re-read `messages.json` | a gone file's user, group, messages or photo; messages a re-read file dropped. A missing `Google Chat/` or photos folder deletes nothing |
 | `google_takeout` Maps reviews and saved places, YouTube, Gemini | each re-read file, which is the feed's whole table | records the file no longer lists, and a Gemini activity's attachment edges. A missing file deletes nothing, and so does one in a layout the reader does not know (no list, or entries none of which it could read): that fails the feed as a `phase:` problem |
@@ -564,7 +564,7 @@ There is no fingerprint compare beside it: rewriting an identical row to a conte
 ## Cursor / resume strategy
 Cursor / resume is the **download-side specialization** of the [Incremental update](#efficiently-incremental) pattern: "what was the last upstream identifier we successfully recorded?" answers "where does the next walk start?" Three patterns in the tree, picked by upstream API shape:
 
-- **Coverage spans + refresh window** (slack): each page of a channel's history records the stretch it covered, in the transaction that stores its messages ([`coverage.rs`](/datalib/backend/etl/src/coverage.rs)). A run walks the gaps in `[since, ∞)` and re-reads the trailing `refresh_window_days` to catch edits and deletions. A newest stored message is never read as "fetched up to here".
+- **Coverage spans + refresh window** (slack): each page of a channel's history records the stretch it covered, in the transaction that stores its messages ([`coverage.rs`](/datalib/backend/etl/web/src/coverage.rs)). A run walks the gaps in `[since, ∞)` and re-reads the trailing `refresh_window_days` to catch edits and deletions. A newest stored message is never read as "fetched up to here".
 - **Forward-walk + refresh window** (github, gitlab): resume from the newest `updated_at` previously recorded; also re-query the trailing `refresh_window_days` to catch edits / late-arriving items. Dedup collapses the overlap to zero writes.
 - **Listing diff** (claude, chatgpt): re-list everything each run and compare each item's listing `updated_at`/`update_time` against the stored copy; only new/changed items get a detail fetch. An optional `since` bounds the diff — items updated before it are never detail-fetched, and chatgpt's newest-first paginated listing additionally stops walking once it pages past the cutoff.
 - **Time-windowed sampling** (yolink): walk `[start, now]` in fixed-stride windows. Windows align across runs and devices. Per-window UPSERT dedups re-fetched samples.
@@ -614,7 +614,7 @@ the first unit, is the deterministic way — and assert the marker was
 write, not the gate. A provider with no marker to gate is tested the
 other way round: cut the run off at every request and require that
 running it again ends where an uninterrupted run does
-([`interrupt.rs`](/datalib/backend/etl/src/interrupt.rs); Garmin and
+([`interrupt.rs`](/datalib/backend/etl/web/src/interrupt.rs); Garmin and
 Slack).
 
 `scripts/lint_repo.py` check 8 catches a provider that keeps a cursor
@@ -738,7 +738,7 @@ The yolink provider's `CONSECUTIVE_FAILURE_BUDGET = 30` is a template for a fail
 
 There are existing chokepoint mechanisms to enforce some of these rules, but not all can be generically enforced (Slack's HTTP-200 `error:"ratelimited"` body; GitHub's `403 + x-ratelimit-remaining:0`).
 
-A rate limit is not slept through. The shared HTTP chokepoint ([`http.rs`](/datalib/backend/etl/src/http.rs)) honours `Retry-After` and backs off exponentially until the source's give-up guard ([`retry.rs`](/datalib/backend/etl/src/retry.rs)) says the run has gone too long without progress; then the provider stops cleanly with what it committed, and the next run resumes from the cursor. ChatGPT's `RateLimited` error is the worked example.
+A rate limit is not slept through. The shared HTTP chokepoint ([`http.rs`](/datalib/backend/etl/web/src/http.rs)) honours `Retry-After` and backs off exponentially until the source's give-up guard ([`retry.rs`](/datalib/backend/etl/web/src/retry.rs)) says the run has gone too long without progress; then the provider stops cleanly with what it committed, and the next run resumes from the cursor. ChatGPT's `RateLimited` error is the worked example.
 
 ## Transient vs non-transient
 The retry mechanism is for *transient* failures. Some signals deserve a different mark:

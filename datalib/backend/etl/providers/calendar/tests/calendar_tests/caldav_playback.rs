@@ -7,11 +7,11 @@ use datalib_probe::{ProbeAsk, ProbeList};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use datalib_etl::http::{HttpMethod, HttpResponse, LatchkeySettings, PLAYBACK_ENV};
 use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::write_fixture;
 use datalib_etl_calendar::ingest::caldav::{self, dav};
 use datalib_etl_calendar::ingest::{db_path_for, FetchSummary, RawDb};
+use datalib_etl_web::http::{HttpMethod, HttpResponse, LatchkeySettings, PLAYBACK_ENV};
+use datalib_etl_web::synthesize::write_fixture;
 
 const HOST: &str = "https://caldav.enterprise.test";
 const PRINCIPAL: &str = "/dav/principals/user/picard@enterprise.test/";

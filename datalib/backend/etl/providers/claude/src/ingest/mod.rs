@@ -19,10 +19,10 @@ use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw::WirePayload;
 use datalib_etl::download_problems::{DownloadProblem, RunProblem};
 use datalib_etl::download_run::DownloadRun;
-use datalib_etl::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
 use datalib_etl::progress::RunBar;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
+use datalib_etl_web::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
 use datalib_problems::Reason;
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
@@ -181,7 +181,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 }
 
 async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
-    let _ = datalib_etl::latchkey::ensure_curl_router();
+    let _ = datalib_etl_web::latchkey::ensure_curl_router();
     let db = opts.db.clone();
 
     let since = opts
@@ -1056,7 +1056,7 @@ pub fn credential_hint(e: ClaudeError) -> anyhow::Error {
     if !setup_problem {
         return anyhow::anyhow!("list orgs: {s}");
     }
-    let lk = datalib_etl::latchkey::latchkey_cli_hint();
+    let lk = datalib_etl_web::latchkey::latchkey_cli_hint();
     anyhow::anyhow!(
         "claude.ai credentials are not set up: {s}\n\
          The credential is the `sessionKey` cookie. Copy the one your\n\

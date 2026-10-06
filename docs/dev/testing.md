@@ -394,7 +394,7 @@ bazelisk run //datalib/ui:e2e -- --project chromium-data-sources-streaming
 Three pieces make that possible, and each is small:
 
 * `DATALIB_HTTP_PLAYBACK_DELAY_MS` beside `DATALIB_HTTP_PLAYBACK`
-  ([`http.rs`](/datalib/backend/etl/src/http.rs)): a replayed request
+  ([`http.rs`](/datalib/backend/etl/web/src/http.rs)): a replayed request
   waits that long before it answers. Playback only; a fixture that
   answers instantly hides everything that depends on a download taking
   time. Its sibling `DATALIB_HTTP_PLAYBACK_HOLD` names a file: while it

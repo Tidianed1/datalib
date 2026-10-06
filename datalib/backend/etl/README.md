@@ -5,10 +5,11 @@ raw store (`doltlite_raw.rs`, `bulk.rs`), the blob CAS (`blob_cas.rs`), the
 diff scan a render cursor drives (`doltlite_raw::scan_buckets`), the
 content-line grammar iCalendar and vCard share (`content_line.rs`:
 unfolding, quoted parameters, TEXT unescaping, splitting a structured
-value on its unescaped `;`), and the HTTP/auth plumbing (`http.rs`,
-`latchkey.rs`). The render side's shared code is `render/`; a source that
-reads local files also takes `files/` (`datalib_etl_files`), which asks
-the disk what changed.
+value on its unescaped `;`). The render side's shared code is `render/`.
+A source that reads local files also takes `files/` (`datalib_etl_files`),
+which asks the disk what changed; one that reaches a web service takes
+`web/` (`datalib_etl_web`): every request through `latchkey curl`, HTTP
+playback, DAV, and the "listed minus held" bookkeeping.
 
 Provider-specific code does **not** belong here. A provider crate lives in
 `providers/<name>/` and describes only its own tables and its own upserts.

@@ -1,5 +1,5 @@
 //! The files a channel's stored messages carry, fetched into the blob
-//! CAS through `datalib_etl::owed`: an edge without bytes is owed, a
+//! CAS through `datalib_etl_web::owed`: an edge without bytes is owed, a
 //! batch of them is one request's worth of downloads, and `store` puts
 //! a flush's bytes into the CAS before giving each edge its `blake3`.
 
@@ -15,9 +15,9 @@ use tracing::debug;
 
 use datalib_etl::blob_cas::{blake3_hex, CasInsert};
 use datalib_etl::events;
-use datalib_etl::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
-use datalib_etl::owed::{BatchError, Fetched, Fetcher, Listed, Outcome};
 use datalib_etl::progress::RunBar;
+use datalib_etl_web::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
+use datalib_etl_web::owed::{BatchError, Fetched, Fetcher, Listed, Outcome};
 
 use super::api::{served, LATCHKEY_FILE_TIMEOUT};
 use super::db::{OwedFile, RawDb};

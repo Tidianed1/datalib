@@ -93,7 +93,7 @@ writes or deletes one of them.
 The store keeps what upstream **listed** apart from what it **holds**,
 and works out what it **owes** from the two each time it is asked
 ([`docs/dev/plans/sync_state.md`](/docs/dev/plans/sync_state.md) §2).
-The holding and the owing are the shared `datalib_etl::owed`; what is
+The holding and the owing are the shared `datalib_etl_web::owed`; what is
 email's is the listing and how a batch is fetched and written
 (`src/ingest/listed.rs`). The Gmail API mode keeps the same tables.
 
@@ -241,7 +241,7 @@ Fastmail doesn't 429 us in practice — JMAP's batch shape (one
 methodCalls envelope = one HTTP request, regardless of how many
 created/updated ids it carries) keeps the request count tame. A 429 or
 502–504 is retried with backoff, honouring `Retry-After`, by the shared
-HTTP layer (`datalib_etl::http::default_retryability`).
+HTTP layer (`datalib_etl_web::http::default_retryability`).
 
 ## Tests
 

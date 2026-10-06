@@ -25,9 +25,9 @@ use async_trait::async_trait;
 use futures::stream::{FuturesUnordered, StreamExt};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
-use crate::raw_store::Sealer;
-use crate::run_problems::RunProblems;
-use crate::stop::StopFlag;
+use datalib_etl::raw_store::Sealer;
+use datalib_etl::run_problems::RunProblems;
+use datalib_etl::stop::StopFlag;
 
 /// A record upstream lists, at the version it lists it at. `None` is a
 /// listing with no version: the record only has to have been fetched.
@@ -81,7 +81,7 @@ pub async fn held_versions<'k>(
 ) -> Result<HashMap<String, Held>> {
     let keys: Vec<&str> = keys.into_iter().collect();
     let mut out = HashMap::with_capacity(keys.len());
-    for chunk in keys.chunks(crate::bulk::SQL_CHUNK) {
+    for chunk in keys.chunks(datalib_etl::bulk::SQL_CHUNK) {
         // Audited: `table` is a provider's `&'static str`; the
         // placeholders are one `?` per key, every key bound.
         let sql = format!(
@@ -114,7 +114,7 @@ pub async fn hold(
     key: &str,
     version: Option<&str>,
 ) -> Result<()> {
-    crate::doltlite_raw::record_object_attempt(tx, table, key, None).await?;
+    datalib_etl::doltlite_raw::record_object_attempt(tx, table, key, None).await?;
     set_held_version(tx, table, key, version).await
 }
 
@@ -145,8 +145,7 @@ pub async fn forget(tx: &mut Transaction<'_, Sqlite>, table: &str, key: &str) ->
         .execute(&mut **tx)
         .await
         .with_context(|| format!("forget {table}={key}"))?;
-    crate::prune::forget_problems_in_tx(tx, table, "?", std::slice::from_ref(&key.to_string()))
-        .await
+    datalib_etl::prune::forget_record_problems_in_tx(tx, table, key).await
 }
 
 /// What one fetch of one owed record came to.
@@ -412,8 +411,10 @@ async fn write<T: Send, F: Fetcher<T>>(
             }
             Outcome::Unusable(_, reason, said) => {
                 hold(&mut tx, l.table, key, version).await?;
-                crate::doltlite_raw::record_object_unusable(&mut tx, l.table, key, *reason, said)
-                    .await?;
+                datalib_etl::doltlite_raw::record_object_unusable(
+                    &mut tx, l.table, key, *reason, said,
+                )
+                .await?;
                 done.got += 1;
             }
             Outcome::Gone => {
@@ -421,12 +422,14 @@ async fn write<T: Send, F: Fetcher<T>>(
                 done.gone += 1;
             }
             Outcome::Failed(said) => {
-                crate::doltlite_raw::record_object_error(&mut tx, l.table, key, said).await?;
+                datalib_etl::doltlite_raw::record_object_error(&mut tx, l.table, key, said).await?;
                 done.failed += 1;
             }
             Outcome::Skipped(reason, said) => {
-                crate::doltlite_raw::record_object_skipped(&mut tx, l.table, key, *reason, said)
-                    .await?;
+                datalib_etl::doltlite_raw::record_object_skipped(
+                    &mut tx, l.table, key, *reason, said,
+                )
+                .await?;
                 done.skipped += 1;
             }
         }
@@ -477,10 +480,10 @@ mod tests {
     async fn store_at(dir: &tempfile::TempDir) -> SqlitePool {
         let ddl = [
             "CREATE TABLE IF NOT EXISTS things (id TEXT PRIMARY KEY, body TEXT NULL)",
-            &crate::doltlite_raw::bookkeeping_ddl_for(T),
+            &datalib_etl::doltlite_raw::bookkeeping_ddl_for(T),
         ];
         let ddl: Vec<&str> = ddl.iter().map(|s| &**s).collect();
-        crate::doltlite_raw::open(&dir.path().join("o.doltlite_db"), &ddl)
+        datalib_etl::doltlite_raw::open(&dir.path().join("o.doltlite_db"), &ddl)
             .await
             .unwrap()
     }

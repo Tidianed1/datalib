@@ -9,16 +9,16 @@ pub use db::{db_path_for, RawDb};
 
 use anyhow::{Context, Result};
 use datalib_etl::control::DownloadControl;
-use datalib_etl::dav::state as dav_state;
-use datalib_etl::dav::sync::{CollectionSync, Page};
 use datalib_etl::download_problems;
-use datalib_etl::http::LatchkeySettings;
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_web::dav::state as dav_state;
+use datalib_etl_web::dav::sync::{CollectionSync, Page};
+use datalib_etl_web::http::LatchkeySettings;
 use tracing::info;
 
 use api::ContactProps;
-use datalib_etl::dav::absolutize;
+use datalib_etl_web::dav::absolutize;
 use db::{addressbook_pk, ContactRow};
 
 /// Options for one `fetch` run. Mirrors the FetchOptions shape every
@@ -219,7 +219,7 @@ async fn discover(
     summary: &mut FetchSummary,
     latchkey: &LatchkeySettings,
 ) -> Result<(String, String)> {
-    let principal_url = datalib_etl::dav::find_principal(
+    let principal_url = datalib_etl_web::dav::find_principal(
         api::HTTP_SERVICE,
         server_url,
         "carddav",
