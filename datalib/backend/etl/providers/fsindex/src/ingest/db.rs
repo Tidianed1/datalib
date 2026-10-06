@@ -10,7 +10,7 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use datalib_etl::bulk::{
-    bulk_upsert_entity_in_tx, bulk_upsert_in_tx, push_placeholder_list, SQL_CHUNK,
+    bulk_upsert_entity_in_tx, bulk_upsert_first_seen_in_tx, push_placeholder_list, SQL_CHUNK,
 };
 use datalib_etl::doltlite_raw as dr;
 
@@ -50,15 +50,23 @@ impl RawDb {
         self.close_all().await;
     }
 
-    /// Empty `scan_meta`, which each scan writes whole.
-    pub async fn clear_scan_meta(&self) -> Result<()> {
+    /// Drop the `scan_meta` rows of any source but this one; each scan
+    /// writes its own row whole.
+    pub async fn clear_other_scan_meta(&self, source_id: &str) -> Result<()> {
         let mut tx = self
             .pool
             .begin()
             .await
             .context("begin scan_meta clear tx")?;
-        for sql in ["DELETE FROM scan_meta", "DELETE FROM scan_meta_bookkeeping"] {
-            sqlx::query(sql).execute(&mut *tx).await.context(sql)?;
+        for sql in [
+            "DELETE FROM scan_meta WHERE id != ?",
+            "DELETE FROM scan_meta_bookkeeping WHERE id != ?",
+        ] {
+            sqlx::query(sql)
+                .bind(source_id)
+                .execute(&mut *tx)
+                .await
+                .context(sql)?;
         }
         tx.commit().await.context("commit scan_meta clear tx")?;
         Ok(())
@@ -184,15 +192,18 @@ impl RawDb {
     /// scan's working set into a single `dolt_log` entry,
     /// so `dolt diff HEAD^ HEAD` is exactly "what this scan changed,"
     /// and — crucially — nothing is left dirty for the next
-    /// [`RawDb::open`] to discard. Returns the wall time.
-    pub async fn commit(&self, msg: &str) -> Result<std::time::Duration> {
-        let started = std::time::Instant::now();
-        sqlx::query("SELECT dolt_commit('-Am', ?)")
+    /// [`RawDb::open`] to discard. `None` when the scan changed nothing,
+    /// which a rescan of an unchanged tree does.
+    pub async fn commit(&self, msg: &str) -> Result<Option<String>> {
+        let committed = sqlx::query_scalar::<_, Option<String>>("SELECT dolt_commit('-Am', ?)")
             .bind(datalib_etl::doltlite_raw::stamp_run(msg))
-            .execute(&self.pool)
-            .await
-            .context("dolt_commit")?;
-        Ok(started.elapsed())
+            .fetch_one(&self.pool)
+            .await;
+        match committed {
+            Ok(hash) => Ok(hash),
+            Err(e) if e.to_string().contains("nothing to commit") => Ok(None),
+            Err(e) => Err(anyhow::Error::new(e).context("dolt_commit")),
+        }
     }
 
     /// Root-relative ids of every directory row, in id order. Used by
@@ -268,7 +279,7 @@ impl RawDb {
         let now = datalib_time::parse_strict(now)
             .with_context(|| format!("parse the run's now {now:?}"))?;
         let mut tx = self.pool.begin().await.context("begin scan_meta tx")?;
-        bulk_upsert_in_tx(&mut tx, std::slice::from_ref(row), &now).await?;
+        bulk_upsert_first_seen_in_tx(&mut tx, std::slice::from_ref(row), &now).await?;
         tx.commit().await.context("commit scan_meta tx")?;
         Ok(())
     }

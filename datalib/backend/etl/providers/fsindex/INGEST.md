@@ -86,8 +86,8 @@ and stable.
 
 Every scan upserts a row for each entry it walks, then deletes the
 `files` and `dirs` rows it did not write, in one transaction after the
-walk (`RawDb::prune_unseen`). `scan_meta` is emptied first and written
-whole. Two reasons this works:
+walk (`RawDb::prune_unseen`). `scan_meta` keeps only this source's row,
+written whole. Two reasons this works:
 
 1. **Deletions fall out naturally.** A file present at scan-A and
    gone at scan-B is not written by scan-B, so the prune takes its
@@ -95,7 +95,8 @@ whole. Two reasons this works:
 2. **The rewrite is free.** Rewriting the same row for an unchanged
    file is no change
    ([doltlite.md § Diffs](/docs/dev/doltlite.md#diffs)), so the diff
-   between two scans is exactly what changed on disk.
+   between two scans is exactly what changed on disk, and a scan of
+   an unchanged tree commits nothing.
 
 **An entry the walk found and could not read keeps its rows.** A
 folder that will not list, a child that will not `stat`, a file that
@@ -117,7 +118,9 @@ cache, which lives outside it; to force a full rehash, drop the cache
 file.
 
 `files` and `dirs` carry no bookkeeping sidecar; `scan_meta` is the one
-table with one, recording when the root was last scanned.
+table with one, recording when the root was first scanned. It is not
+re-stamped on later scans, or every scan would commit; when a scan
+happened is its commit's date.
 
 ## The fast-rescan trick
 
