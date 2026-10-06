@@ -441,7 +441,13 @@ async fn discover<F: Forge>(
                 break;
             }
             let bounds = bounds_of(&gap, &now);
-            tracing::info!(scope, ?bounds, "searching {}s", F::ITEM);
+            tracing::info!(
+                scope,
+                from = bounds.lo.as_deref().unwrap_or(""),
+                to = bounds.hi.as_deref().unwrap_or(""),
+                "searching {}s",
+                F::ITEM
+            );
             let search = match forge.search(client, scope, me, &bounds).await {
                 Ok(search) => search,
                 // After a stop every request fails at once; that is not
