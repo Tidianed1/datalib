@@ -357,25 +357,14 @@ offered — the feature is absent, not degraded.
 
 ## Chips
 
-The `identity` cell type (`{id, label, icon, detail}`, `cards.md` §
-"typed cells") is already a chip in all but name; it becomes one Vue
-`IdentityChip` used by grid cells and by documents alike.
-
-- **The icon is a token or a URL.** A token (`slack`, `gmail`) maps to
-  a bundled asset as today (`ui/src/config/icons.ts`); a contact's
-  photo is a URL the applet serves.
-- **In a document**, a `decorateHandles` pass beside
-  `decorateRemoteMedia` in `ChatBody.ce.vue` collects every
-  `[data-handle]`, asks who they are (the core's `DatalibContact`s and
-  the contacts app's, one call each per document), and draws chips. A
-  chip draws the top-ranked one: your contact's name and photo, or else
-  the best a source gave — an address-book name and photo, a Slack
-  avatar — with the handle kind's mark and a quiet "+", since it is not
-  yet a contact of yours.
-- **In the grid**, the search applet returns each row's author handle
-  beside its display name, and the grid resolves the visible rows'
-  handles through the same `resolve` call, so authors read as contacts
-  too. The search applet never opens the contacts store.
+How a handle is drawn — in a document, in a grid cell, on copy, and
+what click, double-click and right-click do — is decided in
+[`chips.md`](chips.md), which generalizes the chip to groups, steps
+and whatever is named next. In one line: a chip is a link whose href
+the app can resolve, `[Name](mailto:…)` in the markdown, drawn from
+what the resolver answers. What is built today is #958's first slice:
+`decorateHandles` in `ui/src/cards/contacts.ts` chips the header's
+author span and the recipients line, and nothing else.
 
 ## Editing
 
