@@ -46,7 +46,9 @@ use datalib_schema::providers::Provider;
 /// v9: the author span carries the author's handle as `data-handle`.
 /// v10: each thread carries its authors' Slack profiles (title, email).
 /// v11: a `<@U…>` mention in a body is a chip link to the user.
-pub const RENDER_VERSION: u32 = 11;
+/// v12: a mention in code is `@12ame`, not a link's markdown, and a `!`
+///     typed before a mention or link no longer makes it an image.
+pub const RENDER_VERSION: u32 = 12;
 
 #[derive(Debug, Default)]
 pub struct RenderSummary {

@@ -18,7 +18,7 @@ use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
 
-use datalib_contact_schema::{ContactHandle, DatalibContact, Medium, Photo};
+use datalib_contact_schema::{is_drawable_photo, ContactHandle, DatalibContact, Medium, Photo};
 
 use crate::types::ContactDoc;
 
@@ -161,15 +161,22 @@ fn render_one(
 }
 
 /// The contact as the index will hold it: with the photo this render
-/// wrote beside the page as the URL the app serves it at. The index's
-/// asset route takes `<markdown_uuid>/<path relative to the page>`.
+/// wrote beside the page as the URL the app serves it at, where it is an
+/// image a browser draws. The index's asset route takes
+/// `<markdown_uuid>/<path relative to the page>`.
 fn with_photo_url(
     contact: &DatalibContact,
     doc_uuid: &str,
     photo_rel: Option<&str>,
 ) -> DatalibContact {
+    let drawable = matches!(
+        &contact.photo,
+        Some(Photo::Inline { content_type, .. }) if is_drawable_photo(content_type)
+    );
     let mut out = contact.clone();
-    out.photo_url = photo_rel.map(|rel| format!("/applet/unified_index/asset/{doc_uuid}/{rel}"));
+    out.photo_url = photo_rel
+        .filter(|_| drawable)
+        .map(|rel| format!("/applet/unified_index/asset/{doc_uuid}/{rel}"));
     out
 }
 
@@ -590,6 +597,14 @@ mod tests {
         });
         let mut without = mk_contact();
         without.doc_uuid = "33333333-3333-3333-3333-333333333333".to_string();
+        // Written beside the page as the source gave it, but no browser
+        // draws it: no URL, so the chip draws an initial.
+        let mut opaque = mk_contact();
+        opaque.doc_uuid = "44444444-4444-4444-4444-444444444444".to_string();
+        opaque.contact.photo = Some(Photo::Inline {
+            content_type: "application/octet-stream".to_string(),
+            bytes: b"who knows".to_vec(),
+        });
         let mut got: Vec<RenderedMarkdown> = Vec::new();
         let mut sink = |r: RenderedMarkdown| -> Result<()> {
             got.push(r);
@@ -597,7 +612,7 @@ mod tests {
         };
         render_all(
             &mk_profile(),
-            &[with_photo, without],
+            &[with_photo, without, opaque],
             dir.path(),
             "linkedin",
             &Progress::default(),
@@ -617,7 +632,17 @@ mod tests {
                         .to_string()
                 ),
                 None,
+                None,
             ]
+        );
+        assert!(
+            got[2]
+                .md_path
+                .parent()
+                .unwrap()
+                .join("blobs/44444444-4444-4444-4444-444444444444.bin")
+                .is_file(),
+            "the undrawable photo is still kept beside its page"
         );
         let written = got[0]
             .md_path
