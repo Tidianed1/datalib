@@ -436,7 +436,14 @@ function paint() {
   decorateLongMessages(el);
   void redrawHandles();
   decorateEdgeSources();
-  applySelection(bodyChanged);
+  if (bodyChanged) {
+    // The desktop app's WebKit could leave a body scrolled before it was
+    // first drawn unpainted until the wheel moved it; scroll once it is.
+    const win = el.ownerDocument.defaultView;
+    win?.requestAnimationFrame(() => win.requestAnimationFrame(() => applySelection(true)));
+  } else {
+    applySelection(false);
+  }
   bodyChanged = false;
   applyHoverDst();
 }
