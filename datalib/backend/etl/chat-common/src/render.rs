@@ -952,6 +952,7 @@ fn reaction_row(
         .upstream_account(chat.upstream_account.clone())
         .created_at(stamp_from_ms(r.date_ms, profile.stamp_precision))
         .author(non_empty(&r.reactor_display))
+        .author_handle(r.reactor_handle.as_ref().map(|h| h.as_str().to_string()))
         .account(chat.account.clone())
         .org_uuid(chat.org_uuid.clone())
         .org_name(chat.org_name.clone())

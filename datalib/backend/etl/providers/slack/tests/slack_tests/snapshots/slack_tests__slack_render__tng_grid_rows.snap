@@ -510,7 +510,7 @@ expression: rows
   {
     "account": "picard@enterprise.starfleet",
     "author": "William T. Riker",
-    "author_handle": null,
+    "author_handle": "slack:T_NCC1701D/U_RIKER",
     "byte_size": null,
     "channel": "#bridge",
     "content_hash": "e8f07336d2153266bfb719523fc4adde69941747c53f5ac185c4fcd012efe251",
@@ -546,7 +546,7 @@ expression: rows
   {
     "account": "picard@enterprise.starfleet",
     "author": "Jean-Luc Picard",
-    "author_handle": null,
+    "author_handle": "slack:T_NCC1701D/U_PICARD",
     "byte_size": null,
     "channel": "#bridge",
     "content_hash": "e8f07336d2153266bfb719523fc4adde69941747c53f5ac185c4fcd012efe251",
@@ -582,7 +582,7 @@ expression: rows
   {
     "account": "picard@enterprise.starfleet",
     "author": "Lt. Cmdr. Data",
-    "author_handle": null,
+    "author_handle": "slack:T_NCC1701D/U_DATA",
     "byte_size": null,
     "channel": "#bridge",
     "content_hash": "7ada4c27e7784645272bb4347399601ddc00c3265da8afee628bac91daf20413",
@@ -618,7 +618,7 @@ expression: rows
   {
     "account": "picard@enterprise.starfleet",
     "author": "William T. Riker",
-    "author_handle": null,
+    "author_handle": "slack:T_NCC1701D/U_RIKER",
     "byte_size": null,
     "channel": "#ten-forward",
     "content_hash": "430b3069d2626b842ef2fb8b624df5c9cddd33b9ac583f7f732cab48247c12c4",
@@ -654,7 +654,7 @@ expression: rows
   {
     "account": "picard@enterprise.starfleet",
     "author": "Jean-Luc Picard",
-    "author_handle": null,
+    "author_handle": "slack:T_NCC1701D/U_PICARD",
     "byte_size": null,
     "channel": "@Lt. Cmdr. Data",
     "content_hash": "e8f07336d2153266bfb719523fc4adde69941747c53f5ac185c4fcd012efe251",
