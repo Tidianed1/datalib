@@ -75,8 +75,15 @@ pub struct ParsedSignal {
 #[derive(Debug, Clone)]
 pub struct ParsedRecipient {
     pub id: String,
+    /// `+<e164>` where the backup has the number; otherwise the ACI or
+    /// PNI as bare hex, which does not say which. A handle comes from
+    /// the number, else from [`ParsedRecipient::aci`].
     pub identifier: Option<String>,
     pub display_name: Option<String>,
+    /// The account's id, as a UUID, read from the recipient frame
+    /// itself; `None` for a group, the account, or a contact the backup
+    /// knows by PNI alone.
+    pub aci: Option<String>,
 }
 
 impl ParsedRecipient {
@@ -266,24 +273,56 @@ async fn parse_async(
 
 async fn load_recipients(pool: &sqlx::SqlitePool) -> Result<HashMap<String, ParsedRecipient>> {
     let mut recipients: HashMap<String, ParsedRecipient> = HashMap::new();
-    let rrows = sqlx::query("SELECT id, identifier, display_name FROM recipients")
-        .fetch_all(pool)
-        .await
-        .context("read recipients")?;
+    let rrows = sqlx::query(
+        "SELECT id, identifier, display_name, json(payload) AS payload FROM recipients",
+    )
+    .fetch_all(pool)
+    .await
+    .context("read recipients")?;
     for r in &rrows {
         let id: String = r.try_get("id")?;
         let identifier: Option<String> = r.try_get("identifier")?;
         let display_name: Option<String> = r.try_get("display_name")?;
+        let payload: String = r.try_get("payload")?;
         recipients.insert(
             id.clone(),
             ParsedRecipient {
                 id,
                 identifier,
                 display_name,
+                aci: aci_of(&payload),
             },
         );
     }
     Ok(recipients)
+}
+
+/// The ACI in a stored recipient frame, as a dashed lowercase UUID.
+/// The frame is the proto as JSON (`WirePayload`, read back through
+/// `json(payload)`), so a field the download never promoted to a column
+/// is still there to read.
+fn aci_of(payload: &str) -> Option<String> {
+    use datalib_signal_backup::backup::{recipient::Destination, Recipient};
+    let frame: Recipient = serde_json::from_str(payload).ok()?;
+    let Some(Destination::Contact(contact)) = frame.destination else {
+        return None;
+    };
+    uuid_of(contact.aci.as_deref()?)
+}
+
+fn uuid_of(bytes: &[u8]) -> Option<String> {
+    if bytes.len() != 16 {
+        return None;
+    }
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    Some(format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    ))
 }
 
 async fn load_chats(pool: &sqlx::SqlitePool) -> Result<HashMap<String, ParsedChat>> {
@@ -584,5 +623,49 @@ mod tests {
             OutgoingMessageDetails::default(),
         )));
         assert!(outgoing.outgoing && !outgoing.unread);
+    }
+}
+
+#[cfg(test)]
+mod recipient_tests {
+    use super::aci_of;
+    use datalib_signal_backup::backup::{self, recipient::Destination};
+
+    fn frame(destination: Option<Destination>) -> String {
+        serde_json::to_string(&backup::Recipient { id: 7, destination }).unwrap()
+    }
+
+    /// The ACI is read from the frame the download stored whole, so a
+    /// recipient with no number still names a person.
+    #[test]
+    fn the_aci_is_read_from_the_stored_frame() {
+        let aci: Vec<u8> = (0..16).map(|i| 0x10 * i as u8 + i as u8).collect();
+        let contact = |aci: Option<Vec<u8>>, pni: Option<Vec<u8>>| {
+            frame(Some(Destination::Contact(backup::Contact {
+                aci,
+                pni,
+                ..Default::default()
+            })))
+        };
+        assert_eq!(
+            aci_of(&contact(Some(aci.clone()), None)).as_deref(),
+            Some("00112233-4455-6677-8899-aabbccddeeff")
+        );
+        assert_eq!(
+            aci_of(&contact(None, Some(aci.clone()))),
+            None,
+            "a PNI is no ACI"
+        );
+        assert_eq!(
+            aci_of(&contact(Some(vec![1, 2, 3]), None)),
+            None,
+            "not a UUID"
+        );
+        assert_eq!(
+            aci_of(&frame(Some(Destination::Self_(backup::Self_::default())))),
+            None
+        );
+        assert_eq!(aci_of(&frame(None)), None);
+        assert_eq!(aci_of("not json"), None);
     }
 }
