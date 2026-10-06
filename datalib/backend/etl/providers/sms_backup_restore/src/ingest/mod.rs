@@ -3,7 +3,7 @@
 pub mod parse;
 pub mod schema_raw;
 
-use datalib_etl::fingerprint_cache::FingerprintCache;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -13,11 +13,11 @@ use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw::WirePayload;
 use datalib_etl::download_problems::RunProblem;
-use datalib_etl::file_checkpoint;
-use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
 use datalib_etl::prune;
 use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_files::file_checkpoint;
+use datalib_etl_files::fsscan;
 use datalib_problems::{Outcome, Problem, Reason};
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;

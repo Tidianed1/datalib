@@ -5,12 +5,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use datalib_etl::http::{HttpRequest, HttpResponse, HttpService, PLAYBACK_ENV};
-use datalib_etl::retry::{self, RetryGuard};
 use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::{write_fixture, Synthesizer};
 use datalib_etl_claude::ingest::{db_path_for, fetch, FetchOptions, FetchSummary, RawDb};
 use datalib_etl_claude::synthesize::{ClaudeSynth, BASE, DETAIL_QUERY};
+use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService, PLAYBACK_ENV};
+use datalib_etl_web::retry::{self, RetryGuard};
+use datalib_etl_web::synthesize::{write_fixture, Synthesizer};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 

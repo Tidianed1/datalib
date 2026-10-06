@@ -215,6 +215,28 @@ impl Detail {
     }
 }
 
+/// The image types a browser draws in an `<img>`: what a `photo_url`
+/// may serve. Anything else is kept as the source gave it and has no
+/// URL, so the chip draws an initial.
+pub const DRAWABLE_PHOTO_TYPES: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
+
+/// Whether `content_type` (parameters and case ignored, `image/jpg`
+/// read as `image/jpeg`) is one of [`DRAWABLE_PHOTO_TYPES`].
+pub fn is_drawable_photo(content_type: &str) -> bool {
+    let ct = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    let ct = if ct == "image/jpg" {
+        "image/jpeg".to_string()
+    } else {
+        ct
+    };
+    DRAWABLE_PHOTO_TYPES.contains(&ct.as_str())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Photo {
     /// The image itself, from the source's own record.
@@ -231,6 +253,28 @@ pub enum Photo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_an_image_a_browser_draws_is_drawable() {
+        for ok in [
+            "image/png",
+            "IMAGE/JPEG",
+            "image/jpg",
+            "image/webp; q=1",
+            "image/gif",
+        ] {
+            assert!(is_drawable_photo(ok), "{ok}");
+        }
+        for no in [
+            "application/octet-stream",
+            "image/svg+xml",
+            "image/heic",
+            "",
+            "text/html",
+        ] {
+            assert!(!is_drawable_photo(no), "{no}");
+        }
+    }
 
     #[test]
     fn a_number_without_its_country_code_is_kept_without_a_handle() {

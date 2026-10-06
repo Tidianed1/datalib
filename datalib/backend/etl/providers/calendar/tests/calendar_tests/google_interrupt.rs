@@ -10,12 +10,12 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use async_trait::async_trait;
 use datalib_etl::control::DownloadControl;
-use datalib_etl::http::{LatchkeySettings, PLAYBACK_ENV};
-use datalib_etl::interrupt::{dump_tables, every_cut_resumes, How, Rig};
 use datalib_etl::stop::StopFlag;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_calendar::ingest::google::{self, events_url};
 use datalib_etl_calendar::ingest::{db_path_for, RawDb};
+use datalib_etl_web::http::{LatchkeySettings, PLAYBACK_ENV};
+use datalib_etl_web::interrupt::{dump_tables, every_cut_resumes, How, Rig};
 use serde_json::json;
 
 use crate::caldav_interrupt::{copy_store, every};

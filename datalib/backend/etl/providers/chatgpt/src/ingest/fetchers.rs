@@ -1,6 +1,6 @@
 //! What each loop fetches and how a flush of it is stored, one
 //! [`Fetcher`] per kind: a conversation's detail, an attachment's bytes.
-//! Each is one request per record; the loop (`datalib_etl::owed`) owns
+//! Each is one request per record; the loop (`datalib_etl_web::owed`) owns
 //! the stop, the failure budget, the flush and what each outcome means
 //! for the record's sidecar.
 
@@ -10,8 +10,8 @@ use std::time::Duration;
 use anyhow::Result;
 use async_trait::async_trait;
 use datalib_etl::blob_cas::{blake3_hex, CasEdgeRow as _, CasInsert};
-use datalib_etl::http::{latchkey_curl, HttpError, HttpRequest, HttpService};
-use datalib_etl::owed::{BatchError, Fetched, Fetcher, Listed, Outcome};
+use datalib_etl_web::http::{latchkey_curl, HttpError, HttpRequest, HttpService};
+use datalib_etl_web::owed::{BatchError, Fetched, Fetcher, Listed, Outcome};
 use datalib_problems::Reason;
 use serde_json::Value;
 use sqlx::{Sqlite, Transaction};

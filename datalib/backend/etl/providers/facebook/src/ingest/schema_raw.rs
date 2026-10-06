@@ -45,7 +45,7 @@ pub fn media_ddl() -> Vec<String> {
 /// Facebook splits a long file on
 /// (`your_posts__check_ins__photos_and_videos_1.json`, `album/0.json`),
 /// and every chunk belongs in the one table.
-pub use datalib_etl::export_files::table_name as canonical_table;
+pub use datalib_etl_files::export_files::table_name as canonical_table;
 
 pub fn facebook_ns() -> Uuid {
     Uuid::new_v5(&Uuid::NAMESPACE_DNS, b"facebook.datalib")

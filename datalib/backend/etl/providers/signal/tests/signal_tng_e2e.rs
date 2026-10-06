@@ -8,8 +8,8 @@ use std::path::Path;
 
 use anyhow::Result;
 use datalib_etl::control::DownloadControl;
-use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::progress::Progress;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_signal::ingest::{self, FetchOptions};
 use datalib_etl_signal_render::render::{parse_raw_dir, render_all};

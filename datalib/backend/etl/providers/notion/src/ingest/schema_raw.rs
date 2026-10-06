@@ -5,7 +5,7 @@
 //! `page_markdown`, so the block tree is never mirrored.
 //!
 //! What a table holds, and at what version, is `held_version` in its
-//! `_bookkeeping` sidecar (`datalib_etl::owed`): a page at its
+//! `_bookkeeping` sidecar (`datalib_etl_web::owed`): a page at its
 //! `last_edited_time`, its body and its comments listing at the
 //! `last_edited_time` they were read for, a user or a commented block at
 //! no version (read once). No table carries a stamp of its own.
@@ -199,7 +199,7 @@ async fn held_into_the_sidecar(conn: &mut sqlx::SqliteConnection) -> anyhow::Res
     for ddl in [
         PAGE_COMMENTS_DDL.to_string(),
         dr::bookkeeping_ddl_for(PAGE_COMMENTS),
-        datalib_etl::coverage::DDL.to_string(),
+        datalib_etl_web::coverage::DDL.to_string(),
     ] {
         // Audited: this module's own DDL.
         sqlx::query(sqlx::AssertSqlSafe(ddl))
@@ -336,7 +336,7 @@ pub fn full_ddl() -> Vec<String> {
         COMMENTS_DISCUSSION_INDEX_DDL.to_string(),
         COMMENT_ANCHORS_DDL.to_string(),
         USERS_DDL.to_string(),
-        datalib_etl::coverage::DDL.to_string(),
+        datalib_etl_web::coverage::DDL.to_string(),
     ];
     out.extend(NotionAttachmentRow::all_ddl());
     for table in DATA_TABLES {

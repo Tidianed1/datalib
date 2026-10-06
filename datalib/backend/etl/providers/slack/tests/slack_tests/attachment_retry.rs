@@ -6,10 +6,10 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use datalib_etl::blob_cas::blake3_hex;
-use datalib_etl::http::{HttpRequest, HttpResponse, HttpService};
-use datalib_etl::synthesize::write_fixture;
 use datalib_etl_slack::ingest::{db_path_for, FetchOptions, RawDb};
 use datalib_etl_slack::recorded::{record_call, History};
+use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService};
+use datalib_etl_web::synthesize::write_fixture;
 use serde_json::{json, Value};
 
 use crate::support::{fetch_into, record_general, Tree};

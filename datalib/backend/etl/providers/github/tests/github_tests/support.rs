@@ -7,15 +7,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use datalib_etl::event_store::{diff_and_save, make_record};
-use datalib_etl::http::{fixture_key, HttpRequest, HttpService, PLAYBACK_ENV};
 use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::Synthesizer;
 use datalib_etl_forge_ingest_common::Bounds;
 use datalib_etl_github::ingest::{
     block_on_load_all, db_path_for, fetch, FetchOptions, FetchSummary, RawDb, ENTITY_PR,
     ENTITY_SELF,
 };
 use datalib_etl_github::synthesize::GithubSynth;
+use datalib_etl_web::http::{fixture_key, HttpRequest, HttpService, PLAYBACK_ENV};
+use datalib_etl_web::synthesize::Synthesizer;
 use serde_json::{json, Map};
 
 pub const REPO: &str = "enterprise-d/holodeck";

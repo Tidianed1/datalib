@@ -18,10 +18,10 @@ use tracing::{info, warn};
 
 use datalib_etl::control::DownloadControl;
 use datalib_etl::download_problems::RecordProblem;
-use datalib_etl::fingerprint_cache::{CachedTree, Fingerprint, FingerprintCache};
-use datalib_etl::fswalk::StampKind;
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_files::fingerprint_cache::{CachedTree, Fingerprint, FingerprintCache};
+use datalib_etl_files::fswalk::StampKind;
 
 pub use db::RawDb;
 
@@ -55,7 +55,7 @@ pub struct FetchOptions {
     pub root: PathBuf,
     pub target_doltlite_branch: Option<String>,
     /// This host's fingerprint cache. Unversioned and disposable —
-    /// see [`datalib_etl::fingerprint_cache`] for why it is not a table
+    /// see [`datalib_etl_files::fingerprint_cache`] for why it is not a table
     /// in the scan store.
     pub cache: FingerprintCache,
     pub no_stamp: bool,
@@ -123,7 +123,7 @@ async fn forget_deleted(cache: &FingerprintCache, root: &Path, db: &RawDb) -> Re
         // cache row for something that is really there.
         match std::fs::symlink_metadata(&abs) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                gone.push(datalib_etl::fingerprint_cache::abs_key(root, rel));
+                gone.push(datalib_etl_files::fingerprint_cache::abs_key(root, rel));
             }
             // Present, or unreadable for some other reason (a
             // permission change on a parent). Either way, not evidence

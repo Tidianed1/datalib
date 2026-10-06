@@ -4,9 +4,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::progress::Progress;
-use datalib_etl::synthesize::Synthesizer;
 use datalib_etl_linkedin::ingest::photos::load_photo_blobs;
 use datalib_etl_linkedin::ingest::{self, db_path_for, FetchOptions, RawDb};
 use datalib_etl_linkedin::synthesize::LinkedinSynth;
@@ -16,6 +14,8 @@ use datalib_etl_linkedin_render::processor::Source;
 use datalib_etl_linkedin_render::render;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
+use datalib_etl_web::http::PLAYBACK_ENV;
+use datalib_etl_web::synthesize::Synthesizer;
 
 fn build_export(root: &Path) -> Result<()> {
     // Who the export belongs to. The primary address is deliberately not

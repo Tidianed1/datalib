@@ -10,9 +10,9 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
-use datalib_etl::fingerprint_cache::{self, FingerprintCache};
-use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
+use datalib_etl_files::fingerprint_cache::{self, FingerprintCache};
+use datalib_etl_web::http::LatchkeySettings;
 
 use datalib_etl_contacts_config::{ContactsConfig, ContactsMethod};
 

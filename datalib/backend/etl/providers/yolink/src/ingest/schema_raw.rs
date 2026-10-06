@@ -4,9 +4,9 @@ use std::collections::BTreeMap;
 
 use anyhow::Result;
 use datalib_etl::bulk::BulkUpsertable;
-use datalib_etl::coverage;
 use datalib_etl::doltlite_raw::{self as dr, Migration, WirePayload, WirePayloadRow};
 use datalib_etl_macros::WirePayloadRow;
+use datalib_etl_web::coverage;
 use sqlx::query::Query;
 use sqlx::sqlite::SqliteArguments;
 use sqlx::{Sqlite, SqliteConnection};

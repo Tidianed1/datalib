@@ -29,7 +29,7 @@ without its data and a `multiget` did not return stays owed after the
 token has moved on. A listing that stops short leaves what it never
 reached in `dav_unconfirmed`, and nothing is deleted by absence until a
 later run carries the listing to its end. Both tables are
-`datalib_etl::dav::state`.
+`datalib_etl_web::dav::state`.
 
 ## A window (`since` / `until`)
 
@@ -79,10 +79,10 @@ Which credential to use, and how to make it read-only, is in
   and `calendar-query` returned the same at Depth 0, 1 and none, on
   each of 6 calendars. We send what the RFCs define (0, 0 and 1).
 
-The loop is `datalib_etl::dav::sync`, which CardDAV shares: each page
+The loop is `datalib_etl_web::dav::sync`, which CardDAV shares: each page
 of a listing is one transaction (what it names, what came with its
 data, the deletions, the token), then what is listed and not held is
-fetched by `multiget` through `datalib_etl::owed`. A listing that stops
+fetched by `multiget` through `datalib_etl_web::owed`. A listing that stops
 short leaves a `listing:calendar <name>` problem and deletes nothing
 until a later run carries it to the end. An object with no `VEVENT`
 `UID` is held at its etag with a warning on its `dav_resources` row,

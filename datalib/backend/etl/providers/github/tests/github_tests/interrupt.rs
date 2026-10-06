@@ -10,16 +10,16 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use async_trait::async_trait;
 use datalib_etl::control::DownloadControl;
-use datalib_etl::http::{HttpRequest, HttpService, PLAYBACK_ENV};
-use datalib_etl::interrupt::{dump_tables, every_cut_resumes, How, Rig};
-use datalib_etl::retry::{self, RetryGuard};
 use datalib_etl::stop::StopFlag;
 use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::{json_response, write_fixture};
 use datalib_etl_forge_ingest_common::Bounds;
 use datalib_etl_github::ingest::{
     db_path_for, fetch, search_url, FetchOptions, RawDb, BASE, DEFAULT_SCOPES, PER_PAGE,
 };
+use datalib_etl_web::http::{HttpRequest, HttpService, PLAYBACK_ENV};
+use datalib_etl_web::interrupt::{dump_tables, every_cut_resumes, How, Rig};
+use datalib_etl_web::retry::{self, RetryGuard};
+use datalib_etl_web::synthesize::{json_response, write_fixture};
 use serde_json::{json, Value};
 
 use crate::support::*;

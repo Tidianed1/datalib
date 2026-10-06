@@ -10,11 +10,11 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use async_trait::async_trait;
 use datalib_etl::control::DownloadControl;
-use datalib_etl::http::{HttpMethod, LatchkeySettings, PLAYBACK_ENV};
-use datalib_etl::interrupt::{dump_tables, every_cut_resumes, How, Rig};
 use datalib_etl::stop::StopFlag;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_contacts::ingest::{self, api, db_path_for, RawDb};
+use datalib_etl_web::http::{HttpMethod, LatchkeySettings, PLAYBACK_ENV};
+use datalib_etl_web::interrupt::{dump_tables, every_cut_resumes, How, Rig};
 
 use crate::carddav_playback::{
     account_fixtures, card, cards, fixture, multistatus, resource, xml, BOOK, BRIDGE_V1, BRIDGE_V2,

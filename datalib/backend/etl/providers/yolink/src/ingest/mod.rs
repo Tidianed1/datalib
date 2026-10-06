@@ -17,12 +17,12 @@ use tracing::info;
 
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::control::DownloadControl;
-use datalib_etl::coverage::{self, Span};
 use datalib_etl::download_problems::SilentEntry;
-use datalib_etl::http::{latchkey_curl, HttpRequest, HttpService};
 use datalib_etl::progress::{Progress, RunBar};
 use datalib_etl::raw_store::Sealer;
 use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_web::coverage::{self, Span};
+use datalib_etl_web::http::{latchkey_curl, HttpRequest, HttpService};
 use datalib_etl_yolink_config::{YolinkDevice, YolinkSync};
 
 use schema_raw::{device_scope, full_ddl, span_end, YolinkDeviceRow, YolinkReadingRow};

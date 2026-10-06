@@ -7,7 +7,7 @@
 //!
 //! No walk keeps a cursor. What a run fetches is what the window wants
 //! less what the store holds (docs/dev/plans/sync_state.md, the shared
-//! form in `datalib_etl::owed`): a day is held by its row and the date
+//! form in `datalib_etl_web::owed`): a day is held by its row and the date
 //! it is final from, the activity listing by `coverage` spans, a detail
 //! and a file by the listing version they were answered for. Each kind
 //! is one `owed::drain` over a [`Fetcher`] of its own, one record per
@@ -38,15 +38,15 @@ use tracing::{info, warn};
 use datalib_etl::blob_cas::{blake3_hex, BlobCas, CasInsert};
 use datalib_etl::bulk::{bulk_upsert_entity_in_tx, bulk_upsert_in_tx, BulkUpsertable};
 use datalib_etl::control::DownloadControl;
-use datalib_etl::coverage::{self, Span};
 use datalib_etl::doltlite_raw::WirePayload;
 use datalib_etl::download_problems::RunProblem;
-use datalib_etl::owed::{self, BatchError, Fetcher, Listed, Loop, Outcome};
 use datalib_etl::progress::Progress;
 use datalib_etl::raw_store::Sealer;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
 use datalib_etl_garmin_config::{GarminApi, DEFAULT_SINCE_DAYS};
+use datalib_etl_web::coverage::{self, Span};
+use datalib_etl_web::owed::{self, BatchError, Fetcher, Listed, Loop, Outcome};
 
 use api::{Fetched, GarminClient, GarminError};
 pub use db::{db_path_for, RawDb};
@@ -145,7 +145,7 @@ pub fn item_listing_path(
 pub struct FetchOptions {
     /// The store this run writes into, opened and closed by the caller.
     pub db: RawDb,
-    pub latchkey: datalib_etl::http::LatchkeySettings,
+    pub latchkey: datalib_etl_web::http::LatchkeySettings,
     pub api: GarminApi,
     /// The run's local calendar date: the last day every walk reaches,
     /// and the date every row this run fetches is stamped with.

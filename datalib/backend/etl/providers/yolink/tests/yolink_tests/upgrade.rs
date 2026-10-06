@@ -5,9 +5,9 @@
 //! turns the two into coverage spans and drops them.
 
 use chrono::{TimeZone, Utc};
-use datalib_etl::coverage::{self, Span};
 use datalib_etl::doltlite_raw as dr;
 use datalib_etl::doltlite_raw::WirePayloadRow;
+use datalib_etl_web::coverage::{self, Span};
 use datalib_etl_yolink::ingest::schema_raw::{device_scope, span_end, YolinkReadingRow};
 use datalib_etl_yolink::ingest::{db_path_for, RawDb};
 

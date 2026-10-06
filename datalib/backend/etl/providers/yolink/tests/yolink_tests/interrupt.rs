@@ -10,12 +10,12 @@ use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
 use datalib_etl::control::DownloadControl;
-use datalib_etl::http::{HttpResponse, PLAYBACK_ENV};
-use datalib_etl::interrupt::{dump_tables, every_cut_resumes, How, Rig};
 use datalib_etl::progress::Progress;
-use datalib_etl::retry::{self, RetryGuard};
 use datalib_etl::stop::StopFlag;
-use datalib_etl::synthesize::write_fixture;
+use datalib_etl_web::http::{HttpResponse, PLAYBACK_ENV};
+use datalib_etl_web::interrupt::{dump_tables, every_cut_resumes, How, Rig};
+use datalib_etl_web::retry::{self, RetryGuard};
+use datalib_etl_web::synthesize::write_fixture;
 use datalib_etl_yolink::ingest::{
     db_path_for, fetch, requested, window_request, windows_of, FetchOptions, RawDb,
 };

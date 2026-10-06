@@ -10,13 +10,13 @@ use sqlx::sqlite::SqlitePool;
 
 use datalib_etl::doltlite_raw as dr;
 use datalib_etl::download_problems::RecordProblem;
-use datalib_etl::file_checkpoint::{self, INGESTED_FILES_TABLE};
-use datalib_etl::fingerprint_cache::FingerprintCache;
-use datalib_etl::fsscan::{self, Scan, ScanOptions};
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::scope_config;
 use datalib_etl::stop::StopFlag;
+use datalib_etl_files::file_checkpoint::{self, INGESTED_FILES_TABLE};
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
+use datalib_etl_files::fsscan::{self, Scan, ScanOptions};
 use datalib_etl_sqlite_mirror::{MirrorOptions, MirrorStats, KEY_RULE_VERSION};
 
 use super::backups::{self, Backup, LEDGER, LEDGER_DDL};

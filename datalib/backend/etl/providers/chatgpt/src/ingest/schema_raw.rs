@@ -1,7 +1,7 @@
 //! Raw-store schema for the ChatGPT provider.
 //!
 //! What a table holds, and at what version, is `held_version` in its
-//! `_bookkeeping` sidecar (`datalib_etl::owed`): a conversation at the
+//! `_bookkeeping` sidecar (`datalib_etl_web::owed`): a conversation at the
 //! `update_time` the listing named, in whole seconds; an attachment
 //! edge at the version its conversation is held at. No table carries a
 //! stamp of its own.

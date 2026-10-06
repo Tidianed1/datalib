@@ -23,6 +23,7 @@ rust_library(
     ],
     deps = [
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/files:datalib_etl_files",
         "//datalib/backend/etl/providers/facebook_config:datalib_etl_facebook_config",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde",

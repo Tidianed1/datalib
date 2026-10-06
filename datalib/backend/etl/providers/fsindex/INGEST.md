@@ -60,7 +60,7 @@ is set on `dirs` rows alone, by the post-write stamping pass.
 The **rescan cursor** — `(mtime_ns, size, inode, dev, stamp_kind)`
 per path — is deliberately in neither table. It is host state
 (inodes mean nothing on another machine), so it lives in this
-machine's `datalib_etl::fingerprint_cache`, a plain-SQLite file
+machine's `datalib_etl_files::fingerprint_cache`, a plain-SQLite file
 outside version control; `STORAGE_NOTES.md` §3 has the measurements
 behind that.
 

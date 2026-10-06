@@ -8,16 +8,16 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use datalib_etl::http::{HttpRequest, HttpService};
 use datalib_etl::progress::{Progress, ProgressSink};
-use datalib_etl::retry::RetryGuard;
 use datalib_etl::stop::StopFlag;
 use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::{json_response, write_fixture};
 use datalib_etl_forge_ingest_common::Bounds;
 use datalib_etl_github::ingest::{
     db_path_for, search_url, FetchOptions, RawDb, BASE, DEFAULT_SCOPES,
 };
+use datalib_etl_web::http::{HttpRequest, HttpService};
+use datalib_etl_web::retry::RetryGuard;
+use datalib_etl_web::synthesize::{json_response, write_fixture};
 use serde_json::json;
 use tempfile::tempdir;
 
@@ -269,7 +269,7 @@ async fn a_give_up_keeps_what_it_fetched() {
     // One failed request spends the whole budget.
     let quick = Duration::from_millis(1);
     let guard = RetryGuard::new(Duration::from_secs(3600), 1, quick, quick, StopFlag::new());
-    datalib_etl::retry::scope(guard, run(&out, &pb, |o| o))
+    datalib_etl_web::retry::scope(guard, run(&out, &pb, |o| o))
         .await
         .expect("a give-up keeps what the run fetched");
 

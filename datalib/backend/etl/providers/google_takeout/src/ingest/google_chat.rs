@@ -1,7 +1,7 @@
 //! `Google Chat/` walker.
 
-use datalib_etl::fsscan;
 use datalib_etl::prune;
+use datalib_etl_files::fsscan;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
@@ -9,9 +9,9 @@ use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::download_problems::SkippedRecord;
-use datalib_etl::file_checkpoint;
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::RunProblems;
+use datalib_etl_files::file_checkpoint;
 use datalib_problems::{Problem, Reason};
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::Value;

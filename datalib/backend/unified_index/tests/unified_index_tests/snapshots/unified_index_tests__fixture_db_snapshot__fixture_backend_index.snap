@@ -36,7 +36,7 @@ expression: snapshot
       "md_path": "linkedin/render_markdown/00000000-0000-8027-9f1f-73b03617467e/all.md",
       "modified_at": "2369-04-10T09:06:30+00:00",
       "provider": "linkedin",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "source_id": "linkedin",
       "title": "Jean-Luc Picard, William Riker"
     },
@@ -48,7 +48,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-8087-98c3-35796eae6f68/all.md",
       "modified_at": "2369-05-28T15:18:20+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "slack",
       "title": "#ten-forward"
     },
@@ -84,7 +84,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-80d6-b5a5-2617d0679dab/all.md",
       "modified_at": "2369-05-28T15:21:44+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "slack",
       "title": "@William T. Riker, Worf"
     },
@@ -108,7 +108,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-8119-8c96-61dfdcca24d4/all.md",
       "modified_at": "2369-05-28T15:26:40+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "slack",
       "title": "#bridge"
     },
@@ -120,7 +120,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-811d-904c-516d04a43f68/all.md",
       "modified_at": "2369-05-28T15:20:00+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "slack",
       "title": "#bridge"
     },
@@ -132,7 +132,7 @@ expression: snapshot
       "md_path": "tng_contacts/render_markdown/00000000-0000-8140-88d9-42badf1b195b/index.md",
       "modified_at": null,
       "provider": "contacts",
-      "renderer_version": "rust-v1.12",
+      "renderer_version": "rust-v1.13",
       "source_id": "tng_contacts",
       "title": "Borg"
     },
@@ -156,7 +156,7 @@ expression: snapshot
       "md_path": "tng_contacts-diff/render_markdown/00000000-0000-8195-8ee2-d14cb601f004/index.md",
       "modified_at": "2371-01-02T00:00:00+00:00",
       "provider": "contacts",
-      "renderer_version": "rust-v1.12",
+      "renderer_version": "rust-v1.13",
       "source_id": "tng_contacts-diff",
       "title": "Bridge"
     },
@@ -168,7 +168,7 @@ expression: snapshot
       "md_path": "tng_contacts-diff/render_markdown/00000000-0000-819d-aad9-cb628fc3bec0/index.md",
       "modified_at": null,
       "provider": "contacts",
-      "renderer_version": "rust-v1.12",
+      "renderer_version": "rust-v1.13",
       "source_id": "tng_contacts-diff",
       "title": "Maquis"
     },
@@ -204,7 +204,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-81d7-a9c9-0ee77752a4e6/all.md",
       "modified_at": "2369-05-28T15:15:00+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "slack",
       "title": "#engineering"
     },
@@ -216,7 +216,7 @@ expression: snapshot
       "md_path": "tng_contacts/render_markdown/00000000-0000-81e2-8596-1ee8f9640d13/index.md",
       "modified_at": "2371-01-09T00:00:00+00:00",
       "provider": "contacts",
-      "renderer_version": "rust-v1.12",
+      "renderer_version": "rust-v1.13",
       "source_id": "tng_contacts",
       "title": "Bridge"
     },
@@ -240,7 +240,7 @@ expression: snapshot
       "md_path": "slack-diff/render_markdown/00000000-0000-8209-b9a9-5e8e8a2f0239/all.md",
       "modified_at": "2369-05-28T15:25:00+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "slack-diff",
       "title": "#bridge"
     },
@@ -264,7 +264,7 @@ expression: snapshot
       "md_path": "tng_contacts-diff/render_markdown/00000000-0000-825c-a3c4-1fb84e9bfce6/index.md",
       "modified_at": "2371-01-09T00:00:00+00:00",
       "provider": "contacts",
-      "renderer_version": "rust-v1.12",
+      "renderer_version": "rust-v1.13",
       "source_id": "tng_contacts-diff",
       "title": "Bridge"
     },
@@ -300,7 +300,7 @@ expression: snapshot
       "md_path": "tng_contacts/render_markdown/00000000-0000-829a-bb9d-4c1b203d3251/index.md",
       "modified_at": null,
       "provider": "contacts",
-      "renderer_version": "rust-v1.12",
+      "renderer_version": "rust-v1.13",
       "source_id": "tng_contacts",
       "title": "Bridge"
     },
@@ -312,7 +312,7 @@ expression: snapshot
       "md_path": "signal/render_markdown/00000000-0000-89df-ad9b-a9094ecd8e23/2364-04.md",
       "modified_at": "2364-04-11T00:11:00+00:00",
       "provider": "signal",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "signal",
       "title": "Will Riker"
     },
@@ -396,7 +396,7 @@ expression: snapshot
       "md_path": "whatsapp/render_markdown/00000000-0000-85d4-ab68-75d0abe7a50d/2364-04.md",
       "modified_at": "2364-04-11T00:12:00+00:00",
       "provider": "whatsapp",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "whatsapp",
       "title": "William Riker"
     },
@@ -408,7 +408,7 @@ expression: snapshot
       "md_path": "tng_contacts-diff/render_markdown/00000000-0000-8429-b938-7d1e51384182/index.md",
       "modified_at": null,
       "provider": "contacts",
-      "renderer_version": "rust-v1.12",
+      "renderer_version": "rust-v1.13",
       "source_id": "tng_contacts-diff",
       "title": "Maquis"
     },
@@ -456,7 +456,7 @@ expression: snapshot
       "md_path": "linkedin/render_markdown/00000000-0000-84c5-a0e7-167d60e47f98/all.md",
       "modified_at": "2369-04-12T08:20:30+00:00",
       "provider": "linkedin",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "source_id": "linkedin",
       "title": "Comment: Captain, I must respectfully disagree: the odds are 1 in 4.7 trillion, not \"ast…"
     },
@@ -468,7 +468,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-84d6-b1f0-0b22f0528e5c/all.md",
       "modified_at": "2369-05-28T15:25:00+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "slack",
       "title": "#bridge"
     },
@@ -504,7 +504,7 @@ expression: snapshot
       "md_path": "tng_contacts/render_markdown/00000000-0000-85d8-ac4b-9c4472cee5ea/index.md",
       "modified_at": "2371-01-02T00:00:00+00:00",
       "provider": "contacts",
-      "renderer_version": "rust-v1.12",
+      "renderer_version": "rust-v1.13",
       "source_id": "tng_contacts",
       "title": "Bridge"
     },
@@ -528,7 +528,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-8630-8d5e-f4aae259bc1c/all.md",
       "modified_at": "2369-05-28T15:21:40+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "slack",
       "title": "@William T. Riker"
     },
@@ -564,7 +564,7 @@ expression: snapshot
       "md_path": "whatsapp/render_markdown/00000000-0000-84f0-8faa-a404dacb63b6/2364-04.md",
       "modified_at": "2364-04-11T00:16:00+00:00",
       "provider": "whatsapp",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "whatsapp",
       "title": "100000000000108@lid"
     },
@@ -576,7 +576,7 @@ expression: snapshot
       "md_path": "tng_contacts-diff/render_markdown/00000000-0000-86be-a0a0-341fa48bbc80/index.md",
       "modified_at": "2370-02-11T00:00:00+00:00",
       "provider": "contacts",
-      "renderer_version": "rust-v1.12",
+      "renderer_version": "rust-v1.13",
       "source_id": "tng_contacts-diff",
       "title": "Bridge"
     },
@@ -708,7 +708,7 @@ expression: snapshot
       "md_path": "whatsapp/render_markdown/00000000-0000-8a99-9206-1d7e42e1b482/2364-04.md",
       "modified_at": "2364-04-11T00:15:00+00:00",
       "provider": "whatsapp",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "whatsapp",
       "title": "Data"
     },
@@ -744,7 +744,7 @@ expression: snapshot
       "md_path": "slack-diff/render_markdown/00000000-0000-8827-877d-5fdc4dc4394b/all.md",
       "modified_at": "2369-05-28T15:13:20+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "slack-diff",
       "title": "#bridge"
     },
@@ -768,7 +768,7 @@ expression: snapshot
       "md_path": "linkedin/render_markdown/00000000-0000-8878-b482-b77c75689e79/all.md",
       "modified_at": "2369-04-11T15:02:00+00:00",
       "provider": "linkedin",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "source_id": "linkedin",
       "title": "Post: Thrilled to share: the Enterprise has completed its survey of the Mintaka syste…"
     },
@@ -912,7 +912,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-89a0-9bd6-7e928c9b2396/all.md",
       "modified_at": "2369-05-28T15:21:42+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "slack",
       "title": "@Lt. Cmdr. Data"
     },
@@ -1044,7 +1044,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-8ac1-a181-7b8e737cbd85/all.md",
       "modified_at": "2369-05-28T15:21:41+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "slack",
       "title": "@William T. Riker"
     },
@@ -1056,7 +1056,7 @@ expression: snapshot
       "md_path": "tng_contacts/render_markdown/00000000-0000-8acb-9e72-ef58e1a96813/index.md",
       "modified_at": null,
       "provider": "contacts",
-      "renderer_version": "rust-v1.12",
+      "renderer_version": "rust-v1.13",
       "source_id": "tng_contacts",
       "title": "Borg"
     },
@@ -1068,7 +1068,7 @@ expression: snapshot
       "md_path": "tng_contacts/render_markdown/00000000-0000-8b00-b38c-a2a290dad572/index.md",
       "modified_at": "2370-08-22T00:00:00+00:00",
       "provider": "contacts",
-      "renderer_version": "rust-v1.12",
+      "renderer_version": "rust-v1.13",
       "source_id": "tng_contacts",
       "title": "Bridge"
     },
@@ -1080,7 +1080,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-8b0f-9140-61eaa37493ff/all.md",
       "modified_at": "2369-05-28T15:18:20+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "slack",
       "title": "#bridge"
     },
@@ -1128,7 +1128,7 @@ expression: snapshot
       "md_path": "linkedin/render_markdown/00000000-0000-8bbb-8c8b-8ae1dedef5e2/index.md",
       "modified_at": null,
       "provider": "linkedin",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "source_id": "linkedin",
       "title": "Connections"
     },
@@ -1188,7 +1188,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-8bff-b36c-0096661fd9fa/all.md",
       "modified_at": "2369-05-28T15:13:20+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "slack",
       "title": "#bridge"
     },
@@ -1200,7 +1200,7 @@ expression: snapshot
       "md_path": "slack-diff/render_markdown/00000000-0000-8c02-a5c8-c13c049e1e6d/all.md",
       "modified_at": "2369-05-28T15:26:40+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "slack-diff",
       "title": "#bridge"
     },
@@ -1248,7 +1248,7 @@ expression: snapshot
       "md_path": "tng_contacts/render_markdown/00000000-0000-8c51-a4b4-dde335468f6c/index.md",
       "modified_at": null,
       "provider": "contacts",
-      "renderer_version": "rust-v1.12",
+      "renderer_version": "rust-v1.13",
       "source_id": "tng_contacts",
       "title": "Borg"
     },
@@ -1308,7 +1308,7 @@ expression: snapshot
       "md_path": "whatsapp/render_markdown/00000000-0000-8891-ab80-dd17e867538b/2364-04.md",
       "modified_at": "2364-04-11T00:13:00+00:00",
       "provider": "whatsapp",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "whatsapp",
       "title": "Bridge Crew"
     },
@@ -1344,7 +1344,7 @@ expression: snapshot
       "md_path": "linkedin/render_markdown/00000000-0000-8d5b-95c0-1e95e75b6e77/index.md",
       "modified_at": null,
       "provider": "linkedin",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "source_id": "linkedin",
       "title": "Connections"
     },
@@ -1368,7 +1368,7 @@ expression: snapshot
       "md_path": "whatsapp/render_markdown/00000000-0000-8b1c-9241-3a10a9e8b6d0/2364-04.md",
       "modified_at": "2364-04-11T00:17:00+00:00",
       "provider": "whatsapp",
-      "renderer_version": "rust-v1.13",
+      "renderer_version": "rust-v1.14",
       "source_id": "whatsapp",
       "title": "Worf"
     },
@@ -1380,7 +1380,7 @@ expression: snapshot
       "md_path": "tng_contacts/render_markdown/00000000-0000-8d78-9232-e6b0deeebfb7/index.md",
       "modified_at": "2370-09-04T00:00:00+00:00",
       "provider": "contacts",
-      "renderer_version": "rust-v1.12",
+      "renderer_version": "rust-v1.13",
       "source_id": "tng_contacts",
       "title": "Engineering"
     },
@@ -1404,7 +1404,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-8d9c-9316-43944fcd9e60/all.md",
       "modified_at": "2369-05-28T15:21:43+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "slack",
       "title": "@William T. Riker, Worf"
     },
@@ -1464,7 +1464,7 @@ expression: snapshot
       "md_path": "linkedin/render_markdown/00000000-0000-8f36-a408-50d26aa9b0db/index.md",
       "modified_at": null,
       "provider": "linkedin",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "source_id": "linkedin",
       "title": "Connections"
     },
@@ -1488,7 +1488,7 @@ expression: snapshot
       "md_path": "tng_contacts/render_markdown/00000000-0000-8f5b-ab9b-f6b9fbf217b5/index.md",
       "modified_at": null,
       "provider": "contacts",
-      "renderer_version": "rust-v1.12",
+      "renderer_version": "rust-v1.13",
       "source_id": "tng_contacts",
       "title": "Borg"
     },
@@ -1621,7 +1621,7 @@ expression: snapshot
       "message": "schema: grid index"
     },
     {
-      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=142 markdowns_read=142 markdowns_removed=3 rows_inserted=618"
+      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=142 markdowns_read=142 markdowns_removed=3 rows_inserted=622"
     }
   ],
   "grid_rows": [
@@ -6667,6 +6667,36 @@ expression: snapshot
     },
     {
       "account": null,
+      "author": "+17015550106",
+      "byte_size": null,
+      "channel": "Bridge Crew",
+      "content_hash": "0e90babb9e44e393",
+      "conversation_name": "Bridge Crew",
+      "conversation_uuid": "00000000-0000-8891-ab80-dd17e867538b",
+      "created_at": "2364-04-11T00:08:30+00:00",
+      "entire_chat": "/chat/00000000-0000-8d28-840d-889293d72d93",
+      "git_sha": null,
+      "item_count": null,
+      "kind": "WhatsApp Reaction",
+      "markdown_uuid": "00000000-0000-8d28-840d-889293d72d93",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview_len": 1,
+      "project": null,
+      "provider": "whatsapp",
+      "qmd_path": "whatsapp/render_markdown/00000000-0000-8891-ab80-dd17e867538b/2364-04.md",
+      "source_label": "WhatsApp",
+      "source_url": null,
+      "upstream_account": null,
+      "upstream_entity_kind": "reaction",
+      "upstream_id": "bridge-crew@g.us#REACT004#0",
+      "uuid": "0b50e813-f030-864d-8fec-9c62c9aeb6fb"
+    },
+    {
+      "account": null,
       "author": "Me",
       "byte_size": 20,
       "channel": "William Riker",
@@ -6724,6 +6754,66 @@ expression: snapshot
       "upstream_entity_kind": "message",
       "upstream_id": "100#1#12442118940000",
       "uuid": "0b50e814-6560-88ab-8c9d-8c2e0b1a4a6d"
+    },
+    {
+      "account": null,
+      "author": "William Riker",
+      "byte_size": null,
+      "channel": "William Riker",
+      "content_hash": "f09ae2c43c375da0",
+      "conversation_name": "William Riker",
+      "conversation_uuid": "00000000-0000-85d4-ab68-75d0abe7a50d",
+      "created_at": "2364-04-11T00:09:10+00:00",
+      "entire_chat": "/chat/00000000-0000-841f-8f79-b06ed948a94a",
+      "git_sha": null,
+      "item_count": null,
+      "kind": "WhatsApp Reaction",
+      "markdown_uuid": "00000000-0000-841f-8f79-b06ed948a94a",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview_len": 1,
+      "project": null,
+      "provider": "whatsapp",
+      "qmd_path": "whatsapp/render_markdown/00000000-0000-85d4-ab68-75d0abe7a50d/2364-04.md",
+      "source_label": "WhatsApp",
+      "source_url": null,
+      "upstream_account": null,
+      "upstream_entity_kind": "reaction",
+      "upstream_id": "17015550102@s.whatsapp.net#REACT005#0",
+      "uuid": "0b50e814-8c70-8208-8835-8402b623efac"
+    },
+    {
+      "account": null,
+      "author": "Me",
+      "byte_size": null,
+      "channel": "William Riker",
+      "content_hash": "e8f07336d2153266",
+      "conversation_name": "William Riker",
+      "conversation_uuid": "00000000-0000-85d4-ab68-75d0abe7a50d",
+      "created_at": "2364-04-11T00:09:20+00:00",
+      "entire_chat": "/chat/00000000-0000-841f-8f79-b06ed948a94a",
+      "git_sha": null,
+      "item_count": null,
+      "kind": "WhatsApp Reaction",
+      "markdown_uuid": "00000000-0000-841f-8f79-b06ed948a94a",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview_len": 1,
+      "project": null,
+      "provider": "whatsapp",
+      "qmd_path": "whatsapp/render_markdown/00000000-0000-85d4-ab68-75d0abe7a50d/2364-04.md",
+      "source_label": "WhatsApp",
+      "source_url": null,
+      "upstream_account": null,
+      "upstream_entity_kind": "reaction",
+      "upstream_id": "17015550102@s.whatsapp.net#REACT006#1",
+      "uuid": "0b50e814-b380-84a9-8d3e-532592220039"
     },
     {
       "account": null,
@@ -11977,6 +12067,36 @@ expression: snapshot
     },
     {
       "account": "picard@enterprise.starfleet",
+      "author": "U_TROI",
+      "byte_size": null,
+      "channel": "@William T. Riker, Worf",
+      "content_hash": "44ae1d28070917c1",
+      "conversation_name": "@William T. Riker, Worf",
+      "conversation_uuid": "00000000-0000-8d9c-9316-43944fcd9e60",
+      "created_at": "2369-05-28T15:21:43+00:00",
+      "entire_chat": "/chat/00000000-0000-8d9c-9316-43944fcd9e60",
+      "git_sha": null,
+      "item_count": null,
+      "kind": "Slack Reaction",
+      "markdown_uuid": "00000000-0000-8d9c-9316-43944fcd9e60",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": "USS Enterprise NCC-1701-D",
+      "org_uuid": "T_NCC1701D",
+      "preview_len": 2,
+      "project": null,
+      "provider": "slack",
+      "qmd_path": "slack/render_markdown/00000000-0000-8d9c-9316-43944fcd9e60/all.md",
+      "source_label": "Slack",
+      "source_url": null,
+      "upstream_account": "T_NCC1701D",
+      "upstream_entity_kind": "reaction",
+      "upstream_id": "G_AWAYTEAM#12604000903.000903#heart#U_TROI",
+      "uuid": "0b7698ff-1f58-8e45-9a6b-1cb756b8a2d4"
+    },
+    {
+      "account": "picard@enterprise.starfleet",
       "author": "Jean-Luc Picard",
       "byte_size": 33,
       "channel": "@William T. Riker, Worf",
@@ -12471,7 +12591,7 @@ expression: snapshot
     },
     {
       "kind": "Table",
-      "members_sha": "sha256:416c4ac623b0c9d8bc991c911dadbe0f0ae404fbb11b970fb399c58566570c8e",
+      "members_sha": "sha256:1fd5e955c2348b45b02f6dd375c4ba900504c4e416261624b3cf918f649491b0",
       "rows": 163,
       "source": ""
     }
@@ -12479,7 +12599,7 @@ expression: snapshot
   "summary": {
     "documents_count": 134,
     "dolt_log_count": 3,
-    "grid_rows_count": 361,
+    "grid_rows_count": 365,
     "storage_rows_count": 220
   }
 }

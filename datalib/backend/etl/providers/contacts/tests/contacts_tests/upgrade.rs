@@ -4,7 +4,6 @@
 //! owing what the old table named: rung 4 of `schema_raw::LADDER`.
 
 use datalib_etl::bulk::bulk_upsert_in_tx;
-use datalib_etl::dav::state;
 use datalib_etl::doltlite_raw as dr;
 use datalib_etl::download_problems::RecordProblem;
 use datalib_etl::run_problems;
@@ -12,6 +11,7 @@ use datalib_etl::stop::StopFlag;
 use datalib_etl_contacts::ingest::db::{addressbook_pk, ContactRow};
 use datalib_etl_contacts::ingest::schema_raw::full_ddl;
 use datalib_etl_contacts::ingest::{db_path_for, RawDb};
+use datalib_etl_web::dav::state;
 
 const OLD_UNSTORED_DDL: &str = "CREATE TABLE IF NOT EXISTS dav_unstored (
     collection TEXT NOT NULL, href TEXT NOT NULL, detail TEXT NOT NULL,

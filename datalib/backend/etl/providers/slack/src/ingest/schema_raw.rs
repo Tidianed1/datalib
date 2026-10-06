@@ -192,7 +192,7 @@ pub const MESSAGES_BY_THREAD_INDEX_DDL: &str =
 /// keyed like its root message ([`slack_thread_key`]). The row is only
 /// its id: what the thread is held at, the `latest_reply` its replies
 /// were last read whole for, is `held_version` in its sidecar
-/// (`datalib_etl::owed`), and a failed read is an attempt there. Its own
+/// (`datalib_etl_web::owed`), and a failed read is an attempt there. Its own
 /// row, rather than the root message's, so that a history page storing
 /// the root again does not clear a read that failed.
 pub const THREADS: &str = "threads";
@@ -366,7 +366,7 @@ pub fn full_ddl() -> Vec<String> {
         MESSAGES_BY_CHANNEL_TS_INDEX_DDL.to_string(),
         MESSAGES_BY_THREAD_INDEX_DDL.to_string(),
         THREADS_DDL.to_string(),
-        datalib_etl::coverage::DDL.to_string(),
+        datalib_etl_web::coverage::DDL.to_string(),
         ChannelReadStateRow::ddl(),
         BookmarkRow::ddl(),
         BOOKMARKS_BY_CHANNEL_INDEX_DDL.to_string(),

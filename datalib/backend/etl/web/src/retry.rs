@@ -26,7 +26,7 @@ pub struct RetryGuard {
     /// time-without-progress budget is measured from here.
     last_progress: Mutex<Instant>,
     /// Ends a backoff sleep early when the step is asked to stop.
-    stop: crate::stop::StopFlag,
+    stop: datalib_etl::stop::StopFlag,
 }
 
 /// What the guard says to do after a failure.
@@ -60,7 +60,7 @@ impl RetryGuard {
         max_sequential_failures: u64,
         initial_backoff: Duration,
         max_backoff: Duration,
-        stop: crate::stop::StopFlag,
+        stop: datalib_etl::stop::StopFlag,
     ) -> Arc<Self> {
         Arc::new(Self {
             max_time_without_progress,
@@ -73,7 +73,7 @@ impl RetryGuard {
         })
     }
 
-    pub fn from_params(p: &DownloadParams, stop: crate::stop::StopFlag) -> Arc<Self> {
+    pub fn from_params(p: &DownloadParams, stop: datalib_etl::stop::StopFlag) -> Arc<Self> {
         Self::new(
             p.max_time_without_progress(),
             p.max_sequential_failures(),
@@ -83,7 +83,7 @@ impl RetryGuard {
         )
     }
 
-    pub fn stop(&self) -> &crate::stop::StopFlag {
+    pub fn stop(&self) -> &datalib_etl::stop::StopFlag {
         &self.stop
     }
 
@@ -150,7 +150,10 @@ where
 /// caps retries, so the chokepoint loop never spins forever.
 pub fn current_or_default() -> Arc<RetryGuard> {
     GUARD.try_with(|g| g.clone()).unwrap_or_else(|_| {
-        RetryGuard::from_params(&DownloadParams::default(), crate::stop::StopFlag::default())
+        RetryGuard::from_params(
+            &DownloadParams::default(),
+            datalib_etl::stop::StopFlag::default(),
+        )
     })
 }
 
@@ -168,7 +171,7 @@ mod tests {
             3,
             FAST,
             FAST,
-            crate::stop::StopFlag::default(),
+            datalib_etl::stop::StopFlag::default(),
         );
         assert_eq!(g.on_failure(), GuardVerdict::Continue);
         assert_eq!(g.on_failure(), GuardVerdict::Continue);
@@ -182,7 +185,7 @@ mod tests {
             3,
             FAST,
             FAST,
-            crate::stop::StopFlag::default(),
+            datalib_etl::stop::StopFlag::default(),
         );
         g.on_failure();
         g.on_failure();
@@ -201,7 +204,7 @@ mod tests {
             1_000_000,
             FAST,
             FAST,
-            crate::stop::StopFlag::default(),
+            datalib_etl::stop::StopFlag::default(),
         );
         assert_eq!(g.on_failure(), GuardVerdict::Continue);
         std::thread::sleep(Duration::from_millis(20));
@@ -227,7 +230,7 @@ mod tests {
             1,
             FAST,
             FAST,
-            crate::stop::StopFlag::default(),
+            datalib_etl::stop::StopFlag::default(),
         );
         let probe = g.clone();
         scope(g, async {

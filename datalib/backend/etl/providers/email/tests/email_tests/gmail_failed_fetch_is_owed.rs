@@ -16,9 +16,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
-use datalib_etl::http::HttpResponse;
-use datalib_etl::retry::{self, RetryGuard};
 use datalib_etl_email::ingest::gmail_api::{self, FetchOptions, FetchSummary};
+use datalib_etl_web::http::HttpResponse;
+use datalib_etl_web::retry::{self, RetryGuard};
 use serde_json::json;
 
 use crate::support::{

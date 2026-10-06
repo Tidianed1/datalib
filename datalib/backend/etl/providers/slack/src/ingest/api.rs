@@ -8,7 +8,7 @@ use serde_json::Value;
 use tracing::instrument;
 
 use datalib_etl::events;
-use datalib_etl::http::{
+use datalib_etl_web::http::{
     default_retryability, latchkey_curl_classified, parse_retry_after, HttpError, HttpRequest,
     HttpResponse, HttpService, LatchkeySettings, Retryability,
 };

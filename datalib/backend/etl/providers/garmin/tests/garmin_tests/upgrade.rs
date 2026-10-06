@@ -5,8 +5,8 @@
 //! rung moves to the `_bookkeeping` sidecar.
 
 use datalib_etl::doltlite_raw as dr;
-use datalib_etl::owed::{self, Listed};
 use datalib_etl_garmin::ingest::{db_path_for, RawDb};
+use datalib_etl_web::owed::{self, Listed};
 
 const BEFORE_ANY_STAMP: &[&str] = &[
     "CREATE TABLE garmin_daily (id TEXT PRIMARY KEY, payload TEXT NULL, \

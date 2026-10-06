@@ -7,10 +7,10 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use datalib_etl::download_run::DownloadRun;
-use datalib_etl::fingerprint_cache::{self, FingerprintCache};
-use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_calendar_config::{CalendarConfig, CalendarMethod};
+use datalib_etl_files::fingerprint_cache::{self, FingerprintCache};
+use datalib_etl_web::http::LatchkeySettings;
 
 use crate::ingest;
 

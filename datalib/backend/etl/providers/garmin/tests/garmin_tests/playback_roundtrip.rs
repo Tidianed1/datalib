@@ -6,13 +6,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use datalib_etl::control::DownloadControl;
-use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::progress::{Progress, ProgressSink};
 use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::Synthesizer;
 use datalib_etl_garmin::ingest::{db_path_for, fetch, FetchOptions, FetchSummary, RawDb};
 use datalib_etl_garmin::synthesize::GarminSynth;
 use datalib_etl_garmin_config::{GarminApi, DAILY_METRICS};
+use datalib_etl_web::http::PLAYBACK_ENV;
+use datalib_etl_web::synthesize::Synthesizer;
 use sqlx::Row;
 
 fn spec_path() -> PathBuf {

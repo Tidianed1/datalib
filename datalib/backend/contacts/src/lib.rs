@@ -83,9 +83,9 @@ pub fn photo_url(contact_id: &str) -> String {
     format!("/applet/datalib_contacts/photo/{contact_id}")
 }
 
-/// The image types a browser draws in an `<img>` and a person is
-/// likely to hand over; anything else is refused rather than stored.
-pub const PHOTO_CONTENT_TYPES: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
+/// The image types a photo may be: those a browser draws in an `<img>`.
+/// Anything else is refused rather than stored.
+pub const PHOTO_CONTENT_TYPES: &[&str] = datalib_contact_schema::DRAWABLE_PHOTO_TYPES;
 /// Well under the gateway's body limit, and more than a profile photo
 /// needs.
 pub const PHOTO_MAX_BYTES: usize = 4 * 1024 * 1024;

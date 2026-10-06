@@ -10,10 +10,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
-use datalib_etl::http::HttpResponse;
-use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_notion_config::{NotionConfig, NotionSync};
+use datalib_etl_web::http::HttpResponse;
+use datalib_etl_web::http::LatchkeySettings;
 
 use crate::ingest;
 

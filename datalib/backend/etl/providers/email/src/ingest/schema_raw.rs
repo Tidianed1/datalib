@@ -434,7 +434,7 @@ pub fn full_ddl() -> Vec<String> {
     out.extend(EmailMailboxRow::all_ddl());
     out.extend(EmailKeywordRow::all_ddl());
     out.extend(EmlBlobRow::all_ddl());
-    out.push(datalib_etl::file_checkpoint::INGESTED_FILES_DDL.to_string());
+    out.push(datalib_etl_files::file_checkpoint::INGESTED_FILES_DDL.to_string());
     out.extend(super::listed::DDL.iter().map(|ddl| ddl.to_string()));
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));

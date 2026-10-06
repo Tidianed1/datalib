@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use sqlx::Row;
 
-use datalib_etl::fingerprint_cache::FingerprintCache;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_media::ingest::{self, RawDb};
 
 const NOW: &str = "2364-04-13T08:45:00-07:00";
