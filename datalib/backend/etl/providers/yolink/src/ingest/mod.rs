@@ -312,6 +312,9 @@ async fn walk_devices<S: WindowSource>(
     let stop = &opts.control.stop;
     let overlap_ms = opts.sync.overlap_minutes.unwrap_or(DEFAULT_OVERLAP_MINUTES) * 60_000;
     let stride_ms = opts.sync.window_days.unwrap_or(DEFAULT_WINDOW_DAYS) * 86_400_000;
+    if stride_ms <= 0 || overlap_ms < 0 {
+        bail!("yolink: window_days must be at least 1 and overlap_minutes at least 0");
+    }
     let mut s = FetchSummary {
         devices: opts.sync.devices.len(),
         ..Default::default()
@@ -346,9 +349,10 @@ async fn walk_devices<S: WindowSource>(
             overlap_ms,
             start_ms: plan.start_ms,
         };
+        let readings_before = s.readings;
         let walked = walk.run(&plan.windows, &mut s).await?;
         if let Some(sealer) = &opts.sealer {
-            sealer.wrote(walked.readings as u64).await;
+            sealer.wrote((s.readings - readings_before) as u64).await;
         }
         match walked.end {
             WalkEnd::Done | WalkEnd::Stopped => {
@@ -441,10 +445,10 @@ async fn plan_device<'a>(
     tx.commit().await?;
 
     let held = coverage::held(db.pool(), &device_scope(&dev.name)).await?;
-    let windows: Vec<(i64, i64)> = coverage::gaps(&wanted(start_ms, now_ms), &held)
-        .iter()
-        .flat_map(|gap| windows_of(ms_of(&gap.lo), ms_of(&gap.hi), stride_ms))
-        .collect();
+    let mut windows = Vec::new();
+    for gap in coverage::gaps(&wanted(start_ms, now_ms), &held) {
+        windows.extend(windows_of(ms_of(&gap.lo)?, ms_of(&gap.hi)?, stride_ms));
+    }
     Ok(Ok(Plan {
         dev,
         start_ms,
@@ -454,8 +458,9 @@ async fn plan_device<'a>(
 
 /// A span end back to milliseconds. Every end in `coverage` under a
 /// device scope was written by [`span_end`].
-fn ms_of(end: &str) -> i64 {
-    end.parse().unwrap_or(0)
+fn ms_of(end: &str) -> Result<i64> {
+    end.parse()
+        .with_context(|| format!("a coverage span end that is not milliseconds: {end:?}"))
 }
 
 /// How one device's walk ended.
@@ -474,7 +479,6 @@ enum WalkEnd {
 /// One device's walk: how it ended, and what it did not get.
 struct Walked {
     end: WalkEnd,
-    readings: usize,
     /// Each window that failed and stays a gap, with why.
     failed: Vec<(String, (i64, i64))>,
 }
@@ -542,7 +546,6 @@ impl<S: WindowSource> Walk<'_, S> {
         info!(event = "yolink_begin", device = %dev.name, windows = windows.len(), "fetching one device");
         let mut walked = Walked {
             end: WalkEnd::Done,
-            readings: 0,
             failed: Vec::new(),
         };
         let mut first_reading: Option<i64> =
@@ -590,7 +593,6 @@ impl<S: WindowSource> Walk<'_, S> {
                     }
                 }
             }
-            walked.readings = s.readings;
         }
         match (refusals.verdict(first_reading), first_reading) {
             (Some(why), _) => walked.end = WalkEnd::Refused(why),
@@ -1041,7 +1043,7 @@ mod walk_tests {
                 .await
                 .unwrap()
                 .iter()
-                .map(|s| (ms_of(&s.lo), ms_of(&s.hi)))
+                .map(|s| (ms_of(&s.lo).unwrap(), ms_of(&s.hi).unwrap()))
                 .collect()
         }
     }
