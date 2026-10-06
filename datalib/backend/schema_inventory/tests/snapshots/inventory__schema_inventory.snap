@@ -36,11 +36,6 @@ sync_runs
     config
     status
     summary
-sync_scope_config
-    scope
-    config
-    updated_at_utc
-    tz_offset
 sync_scope_state
     scope
     last_seen_at_utc
