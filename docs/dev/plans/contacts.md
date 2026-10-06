@@ -483,8 +483,12 @@ chat carries the provider's own accounts (`NormalizedChat::contacts`),
 merged with the baseline — Slack's profiles first, which tie a Slack
 user to an email; Signal's numbers as handles; email's To and Cc as a
 recipients line under the header, chipped like the author; WhatsApp's
-address book as accounts; a Slack `<@U…>` mention as a chip link. Not
-yet: Signal's ACI, reactions, mentions in other providers, `row_handles`, groups, merge, undo, adopting a card's handles,
+address book as accounts; a reaction carries its reactor's handle
+(Slack, WhatsApp, Messages) and the people baseline counts reactors,
+though the bullet shows no chip until chips.md's step 2 draws it; a
+Slack `<@U…>` mention as a chip link. Not yet: Signal's ACI (#1023),
+mentions in other providers, `row_handles`, groups, merge, undo,
+adopting a card's handles,
 the contact card, chips in the grid, and phases 4–6.
 
 1. **Handles end to end, nothing visible.** The handle crate (pure,

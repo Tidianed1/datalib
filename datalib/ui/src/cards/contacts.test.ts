@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   chipLook,
+  chipMenu,
   copyText,
   hoverCard,
   isAbsent,
@@ -13,6 +14,7 @@ import {
   suggestedName,
   todayPartialDate,
   chipAnchors,
+  searchQueryFor,
 } from "./contacts";
 
 function dom(html: string): HTMLElement {
@@ -116,6 +118,35 @@ describe("chipLook", () => {
     expect(look.text).toBe("Will Riker");
     expect(look.initial).toBe("W");
     expect(look.classes).toContain("handle-stale");
+  });
+});
+
+describe("chipMenu", () => {
+  it("offers the copies, the search, and a link only with a contacts app", () => {
+    const ids = (entries: { id: string }[]) => entries.map((e) => e.id);
+    const unlinked = chipMenu("email:riker@enterprise.org", "Will Riker", NOBODY, true);
+    expect(ids(unlinked)).toEqual(["copy-name", "copy-id", "copy-both", "search", "edit"]);
+    expect(unlinked.map((e) => e.label)).toEqual([
+      "Copy “Will Riker”",
+      "Copy riker@enterprise.org",
+      "Copy “Will Riker <riker@enterprise.org>”",
+      "Everything from Will Riker",
+      "Link to a contact…",
+    ]);
+    expect(unlinked.filter((e) => e.separator).map((e) => e.id)).toEqual(["search", "edit"]);
+    const mine = contact("datalib_contacts", "Will Riker", [[TEL, null]]);
+    expect(chipMenu(TEL, "+1 555", { mine, accounts: [] }, true).at(-1)?.label).toBe(
+      "Edit contact link…",
+    );
+    expect(ids(chipMenu(TEL, "+15550123456", NOBODY, false))).toEqual(["copy-id", "search"]);
+  });
+
+  it("searches by the name the chip shows", () => {
+    expect(searchQueryFor("email:riker@enterprise.org", "Will Riker", NOBODY)).toBe(
+      'author:"Will Riker"',
+    );
+    const mine = contact("datalib_contacts", "Riker", [[TEL, null]]);
+    expect(searchQueryFor(TEL, "+1 555", { mine, accounts: [] })).toBe("author:Riker");
   });
 });
 

@@ -24,7 +24,8 @@ use crate::prune_gate::{Account, PLAYBACK, TODAY};
 
 /// Every table the download fills. The `_bookkeeping` sidecars and
 /// `problems` are left out: a run that was cut off has more attempts
-/// than one that was not.
+/// than one that was not. What the sidecars hold is compared on its
+/// own ([`HELD`]): the next run decides what to fetch from it.
 const TABLES: &[&str] = &[
     "garmin_account",
     "garmin_devices",
@@ -37,6 +38,33 @@ const TABLES: &[&str] = &[
     "garmin_items",
     "coverage",
 ];
+
+/// The tables whose sidecar says what version each row is held at.
+const HELD: &[&str] = &[
+    "garmin_daily",
+    "garmin_activity_details",
+    "garmin_activity_files",
+    "garmin_wellness_files",
+];
+
+async fn dump_held(pool: &sqlx::SqlitePool) -> Result<String> {
+    let mut out = String::new();
+    for table in HELD {
+        out.push_str(&format!("== {table} held\n"));
+        // Audited: `table` is a literal of HELD.
+        let rows: Vec<(String, bool, Option<String>)> =
+            sqlx::query_as(sqlx::AssertSqlSafe(format!(
+                "SELECT id, fetched_at_utc IS NOT NULL, held_version \
+                 FROM {table}_bookkeeping ORDER BY id"
+            )))
+            .fetch_all(pool)
+            .await?;
+        for (id, fetched, held) in rows {
+            out.push_str(&format!("{id} fetched={fetched} @ {held:?}\n"));
+        }
+    }
+    Ok(out)
+}
 
 struct Garmin {
     playback: PathBuf,
@@ -101,9 +129,10 @@ impl Rig for Garmin {
 
     async fn contents(&self, dir: &Path) -> Result<String> {
         let pool = datalib_pin::open_reader(&db_path_for(dir)).await?;
-        let out = dump_tables(&pool, TABLES).await;
+        let tables = dump_tables(&pool, TABLES).await;
+        let held = dump_held(&pool).await;
         pool.close().await;
-        out
+        Ok(tables? + &held?)
     }
 }
 

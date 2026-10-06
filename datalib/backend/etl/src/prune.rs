@@ -95,7 +95,7 @@ pub async fn prune_scope_in_tx(
 
 /// A record upstream no longer has cannot fail to fetch, so its problem
 /// goes with it rather than standing for good.
-async fn forget_problems_in_tx(
+pub(crate) async fn forget_problems_in_tx(
     tx: &mut Transaction<'_, Sqlite>,
     table: &str,
     placeholders: &str,

@@ -203,6 +203,7 @@ fn group_chat() -> NormalizedChat {
     picard.reactions = vec![
         NormalizedReaction {
             reaction_uuid: "s2-react-1".to_string(),
+            reactor_handle: datalib_handle::Handle::email("riker@enterprise.org"),
             reactor_display: "Will Riker".to_string(),
             emoji: "🫡".to_string(),
             date_ms: Some(T0 + 60000),
@@ -210,6 +211,7 @@ fn group_chat() -> NormalizedChat {
         },
         NormalizedReaction {
             reaction_uuid: "s2-react-2".to_string(),
+            reactor_handle: None,
             reactor_display: "Deanna Troi".to_string(),
             emoji: "👍".to_string(),
             date_ms: Some(T0 + 90000),
