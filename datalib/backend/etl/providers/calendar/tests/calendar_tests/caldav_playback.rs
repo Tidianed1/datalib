@@ -596,3 +596,96 @@ async fn a_server_without_sync_collection_fails_the_calendar() {
         "{detail}"
     );
 }
+
+/// An object the listing named without its data and the `multiget` did
+/// not return was noted as "could not store" while the token advanced,
+/// so in token mode no later run asked for it: the listing never named
+/// it again. It is owed until it is held at the etag it was listed at,
+/// so the next run asks for it although its listing says nothing
+/// changed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_object_the_multiget_did_not_return_is_asked_for_again_next_run() {
+    let d = tempfile::tempdir().expect("tempdir");
+    let (one, two, store) = (
+        d.path().join("one"),
+        d.path().join("two"),
+        d.path().join("store"),
+    );
+    std::fs::create_dir_all(&store).unwrap();
+    let bridge = format!("{HOST}{BRIDGE}");
+    for root in [&one, &two] {
+        account_fixtures(root);
+    }
+    let reception_href = format!("{BRIDGE}reception.ics");
+    let listed_without_data = format!(
+        "<response><href>{reception_href}</href><propstat><prop><getetag>\"r1\"</getetag></prop>\
+         <status>HTTP/1.1 200 OK</status></propstat></response>"
+    );
+    let multiget = dav::KIND.body_multiget(std::slice::from_ref(&reception_href));
+    fixture(
+        &one,
+        HttpMethod::Report,
+        &bridge,
+        "0",
+        &dav::body_sync_collection(""),
+        xml(
+            207,
+            &multistatus(&format!(
+                "{}{listed_without_data}<sync-token>data:,100</sync-token>",
+                resource(&format!("{BRIDGE}staff.ics"), "\"s1\"", STAFF),
+            )),
+        ),
+    );
+    fixture(
+        &one,
+        HttpMethod::Report,
+        &bridge,
+        "0",
+        &multiget,
+        xml(207, &multistatus("")),
+    );
+    fixture(
+        &two,
+        HttpMethod::Report,
+        &bridge,
+        "0",
+        &dav::body_sync_collection("data:,100"),
+        xml(207, &multistatus("<sync-token>data:,101</sync-token>")),
+    );
+    fixture(
+        &two,
+        HttpMethod::Report,
+        &bridge,
+        "0",
+        &multiget,
+        xml(
+            207,
+            &multistatus(&resource(&reception_href, "\"r1\"", RECEPTION)),
+        ),
+    );
+
+    let first = run(&one, &store).await;
+    assert_eq!(
+        (first.events_new, first.errors, first.requests),
+        (1, 1, 6),
+        "{first:?}"
+    );
+    assert_eq!(
+        stored_uids(&store).await.as_deref(),
+        Some("tng-staff@enterprise.test")
+    );
+    assert_eq!(
+        problem_keys(&store).await.len(),
+        1,
+        "the object that did not come is a row"
+    );
+
+    let second = run(&two, &store).await;
+    assert_eq!(
+        stored_uids(&store).await.as_deref(),
+        Some("tng-reception@enterprise.test,tng-staff@enterprise.test"),
+        "the object the listing no longer names is asked for again: {second:?}"
+    );
+    assert_eq!((second.events_new, second.errors), (1, 0), "{second:?}");
+    assert_eq!(problem_keys(&store).await, Vec::<String>::new());
+}
