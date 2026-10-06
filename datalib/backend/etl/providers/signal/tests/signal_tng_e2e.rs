@@ -217,9 +217,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
         "outgoing author labelled as Me in:\n{md}"
     );
     assert!(
-        md.contains(
-            "<span class=\"msg-author\" data-handle=\"tel:+17015550101\">Will Riker</span>"
-        ),
+        md.contains("## [Will Riker](tel:+17015550101 \"Will Riker (+17015550101)\") "),
         "Riker's name resolved from recipient, his number as the handle, in:\n{md}"
     );
 

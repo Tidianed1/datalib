@@ -1,13 +1,15 @@
-// Who a handle in a document is. A renderer writes the author's handle
-// on the author span (`data-handle="email:…"`); this asks the index
-// (`unified_index`'s `/people`: each source's account of the person) and
-// the contacts app (`datalib_contacts`: the contact a person made, ranked
-// first) and turns the span into a chip. The contacts app is an app of
-// its own (docs/dev/plans/contacts.md): without it chips still say what
-// the sources know, but offer nothing to link. The rules are pure and
+// Who a handle in a document is. A renderer writes a person as a chip
+// link, `[Name](mailto:…)`, which `chipLinks.js` marks as it renders
+// (`a.chip[data-handle]`); this asks the index (`unified_index`'s
+// `/people`: each source's account of the person) and the contacts app
+// (`datalib_contacts`: the contact a person made, ranked first) and
+// draws the link as a chip. The contacts app is an app of its own
+// (docs/dev/plans/contacts.md): without it chips still say what the
+// sources know, but offer nothing to link. The rules are pure and
 // unit-tested; only `decorateHandles` touches a DOM.
 
 import { iconUrl } from "@/config/icons";
+import { uriFromHandle } from "./chipLinks";
 import { pushToast } from "@/toasts";
 import { UNIFIED_INDEX } from "@/api";
 
@@ -184,41 +186,34 @@ export function copyText(handle: string, label: string): string {
   }
 }
 
-/** Replace every chip in a copied fragment with its copy text, keeping
- *  `data-handle` on a plain span so a paste into the app can chip it
- *  again. Mutates `fragment`; returns whether it held any chip. */
+/** Replace every chip in a copied fragment with the link it was written
+ *  as — `Name <identifier>` as text, the handle's URI as href, the
+ *  description as title — so a paste keeps a working link and a paste
+ *  back into the app chips it again. Mutates `fragment`; returns whether
+ *  it held any chip. */
 export function rewriteChipsForCopy(fragment: DocumentFragment | Element): boolean {
   const chips = Array.from(fragment.querySelectorAll<HTMLElement>(".handle-chip[data-handle]"));
   for (const chip of chips) {
     const handle = chip.dataset.handle ?? "";
-    const span = chip.ownerDocument.createElement("span");
-    span.dataset.handle = handle;
-    span.textContent = copyText(handle, chip.dataset.label ?? "");
-    chip.replaceWith(span);
+    const text = copyText(handle, chip.dataset.label ?? "");
+    const a = chip.ownerDocument.createElement("a");
+    a.dataset.handle = handle;
+    const uri = uriFromHandle(handle);
+    if (uri) a.href = uri;
+    a.title = text;
+    a.textContent = text;
+    chip.replaceWith(a);
   }
   return chips.length > 0;
 }
 
-/** The handle spans a renderer wrote, and none a message body did.
- *  DOMPurify keeps every `data-*`, and a body is HTML a stranger wrote,
- *  so a `data-handle` counts only in a top-level `.msg`'s first `h2` —
- *  its header — on the `.msg-author`, and on the `.msg-recipient`s of a
- *  `.msg-recipients` line that is the header's very next element. The
- *  renderer writes both before the body, which cannot precede them. */
-export function trustedHandleSpans(root: Element): HTMLElement[] {
-  const out: HTMLElement[] = [];
-  for (const msg of root.querySelectorAll<HTMLElement>(".msg[data-section-uuid]")) {
-    if (msg.parentElement?.closest(".msg")) continue;
-    const header = Array.from(msg.children).find((c) => c.tagName === "H2");
-    if (!header) continue;
-    const author = header.querySelector<HTMLElement>(":scope > span.msg-author[data-handle]");
-    if (author) out.push(author);
-    const next = header.nextElementSibling;
-    if (next?.matches("div.msg-recipients")) {
-      out.push(...next.querySelectorAll<HTMLElement>(":scope > span.msg-recipient[data-handle]"));
-    }
-  }
-  return out;
+/** Every chip link under `root`: the links `chipLinks.js` marked because
+ *  their href names a handle. Anywhere in the body counts, a mention as
+ *  much as the header: a chip shows who the handle resolves to, never
+ *  the link text, so a link a sender wrote can only point at a real
+ *  person under their real name (docs/dev/plans/chips.md § Trust). */
+export function chipAnchors(root: Element): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>("a.chip[data-handle]"));
 }
 
 // ── The applet ────────────────────────────────────────────────────────
@@ -313,7 +308,7 @@ export type Decorated = { who: Record<string, Who>; canLink: boolean };
  *  chip; `null` when there is nothing to draw. Safe to call again after
  *  an edit: each span keeps what the source showed in `data-shown-as`. */
 export async function decorateHandles(root: HTMLElement): Promise<Decorated | null> {
-  const spans = trustedHandleSpans(root);
+  const spans = chipAnchors(root);
   if (spans.length === 0) return null;
   for (const s of spans) {
     if (s.dataset.shownAs === undefined) s.dataset.shownAs = s.textContent ?? "";
@@ -336,8 +331,9 @@ export async function decorateHandles(root: HTMLElement): Promise<Decorated | nu
     if (!s.isConnected) continue;
     const handle = s.dataset.handle ?? "";
     const look = chipLook(handle, s.dataset.shownAs ?? "", who[handle], canLink);
-    // The span's own class — an author's or a recipient's — stays; a
-    // redraw replaces only what the chip added.
+    // The link's own class stays; a redraw replaces only what the chip
+    // added. The title was the static hover for other viewers; here the
+    // hover card says more, and says it live.
     s.dataset.baseClass ??= s.className;
     s.className = [s.dataset.baseClass, ...look.classes].join(" ");
     s.removeAttribute("title");
@@ -370,8 +366,8 @@ function selectionWithin(root: HTMLElement): Range | null {
 }
 
 /** A copy from the document: chips become `Name <identifier>` in the
- *  plain text and keep their `data-handle` in the HTML. A selection with
- *  no chip in it is left to the browser. */
+ *  plain text and a link with the handle's URI in the HTML. A selection
+ *  with no chip in it is left to the browser. */
 export function copyWithHandles(ev: ClipboardEvent, root: HTMLElement): void {
   const range = selectionWithin(root);
   if (!range || !ev.clipboardData) return;
