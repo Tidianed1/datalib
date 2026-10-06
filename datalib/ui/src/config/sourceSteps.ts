@@ -25,6 +25,7 @@
 
 import { parseTOML, getStaticTOMLValue } from "toml-eslint-parser";
 
+import { NAME_IT_HELP } from "./accountNaming";
 import { formatBytes, parseByteSize } from "./byteSize";
 import { catalogForStep } from "./catalog";
 import type { CatalogEntry, Field, FieldPhase, Preset } from "./catalog";
@@ -431,9 +432,7 @@ export function accountFieldFor(entry: CatalogEntry): Field {
     latchkey: true,
     target: "latchkey_settings.account",
     label: `${entry.label} account`,
-    help:
-      `Which stored ${entry.label} login to use, or a name for a new one. Leave it empty ` +
-      "if latchkey holds only one.",
+    help: NAME_IT_HELP,
   };
 }
 

@@ -3,6 +3,8 @@
 // docs/dev/config_model.md (what the form writes) and
 // docs/dev/wizard_file_pickers.md (a path field offers a native picker).
 
+import { NAME_IT_HELP } from "./accountNaming";
+
 /// A form field, mapped onto a dotted path into a step's `params` tree
 /// (`api.channels` → `[steps.params.api] channels`).
 export type FieldPhase = "download" | "render";
@@ -333,9 +335,7 @@ export const CATALOG: CatalogEntry[] = [
         latchkey: true,
         target: "latchkey_settings.account",
         label: "Claude account",
-        help:
-          "Which stored claude.ai login to mirror. Leave it empty if latchkey holds only " +
-          "one — naming the wrong one mirrors someone else's conversations.",
+        help: NAME_IT_HELP,
       },
       {
         kind: "date",
@@ -401,9 +401,7 @@ export const CATALOG: CatalogEntry[] = [
         latchkey: true,
         target: "latchkey_settings.account",
         label: "ChatGPT account",
-        help:
-          "Which stored chatgpt.com login to mirror. Leave it empty if latchkey holds only " +
-          "one — naming the wrong one mirrors someone else's conversations.",
+        help: NAME_IT_HELP,
       },
       {
         kind: "date",
