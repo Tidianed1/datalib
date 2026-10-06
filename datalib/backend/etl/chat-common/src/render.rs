@@ -1062,6 +1062,7 @@ mod tests {
                     attachments: vec![],
                     reactions: vec![NormalizedReaction {
                         reaction_uuid: "44444444-4444-4444-4444-444444444444".to_string(),
+                        reactor_handle: None,
                         reactor_display: "Will Riker".to_string(),
                         emoji: "🫡".to_string(),
                         date_ms: Some(12442118410000),
@@ -1453,6 +1454,7 @@ mod tests {
             target_native_id: "gone-upstream".to_string(),
             reactions: vec![NormalizedReaction {
                 reaction_uuid: "55555555-5555-5555-5555-555555555555".to_string(),
+                reactor_handle: None,
                 reactor_display: "Will Riker".to_string(),
                 emoji: "\u{1fae1}".to_string(),
                 // Ten seconds after the message, which only the long
