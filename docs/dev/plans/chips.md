@@ -1,10 +1,12 @@
 # Chips: a link the app can resolve, drawn as the thing it names
 
-*Decided 2026-10-06; nothing here is built. The facts about the tree
-were read that day and are cited by path; check one before relying
-on it. The first slice of chips for people landed in #958 and is
-described in [`contacts.md`](contacts.md) — this plan replaces its
-§"Chips" and generalizes it to every kind of entity.*
+*Decided 2026-10-06. Step 1 of §"Order of work" is built (#1022): a
+person in a document is a chip link, drawn and copied as this plan
+says; steps 2 to 5 are not. The facts about the tree were read that
+day and are cited by path; check one before relying on it. The first
+slice of chips for people landed in #958 and is described in
+[`contacts.md`](contacts.md) — this plan replaces its §"Chips" and
+generalizes it to every kind of entity.*
 
 A **chip** is how datalib shows an entity inline: a person, a source
 group, a step, later a channel or a document. It has a name, a mark
@@ -210,8 +212,11 @@ into datalib is a link the plugin chips again.
 
 ## Clicks
 
-One pure function, `chipMenu(entity, resolved, canEdit): MenuEntry[]`
-(the `MenuEntry` of `ui/src/grid/menu.ts`), feeds every surface.
+One pure function, `chipMenu(handle, shownAs, who, canLink)` in
+`ui/src/cards/contacts.ts`, feeds every surface. Its entries carry an
+*id* and a label, never a handler, the way an `actions` cell does
+(`cards.md` § "typed cells"): the document view and a grid cell draw
+the same entries and bind each id their own way.
 
 - **Click**: the hover card, and for a person the link/create popover
   (`HandlePopover.ce.vue`) where a contacts app is configured, as
@@ -223,14 +228,15 @@ One pure function, `chipMenu(entity, resolved, canEdit): MenuEntry[]`
   log. In a grid cell it stops propagation, so it does not also open
   the row.
 - **Right-click** opens the menu: copy name; copy identifier; copy as
-  `Name <identifier>`; show everything about this (the search or
-  filter); open the card; and for a person, link to a contact or
-  unlink, mark the handle as no longer working. In `DocCard.ce.vue`
-  this is a first branch in `onPaneContextMenu`'s cascade, ahead of
-  selection and message. In a SlickGrid cell it goes through the
-  slot-bank menu of `grid/menu.ts`, which already builds entries per
-  click; the entries for a chip under the pointer come before the
-  row's.
+  `Name <identifier>`; everything from this person (the search); and,
+  with a contacts app, link to a contact or edit the link, which opens
+  the popover where unlinking and "no longer works" already live. In
+  the document the chat body answers the frame's `contextmenu` itself
+  when a chip is under the pointer (`ChipMenu.ce.vue`, drawn over the
+  frame like the hover card) and the document's own menu never sees
+  the click. In a SlickGrid cell it goes through the slot-bank menu of
+  `grid/menu.ts`, which already builds entries per click; the entries
+  for a chip under the pointer come before the row's.
 
 The document body is drawn in a frame whose policy runs no script
 (`docFrame.ts`), as today; the viewer's own code reaches in to
