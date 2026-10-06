@@ -51,8 +51,8 @@ impl DataProcessor for ClaudeIngest {
         &self.id
     }
 
-    /// Seals after each conversation and the blobs it names, and prunes
-    /// only what the listing walk said is gone. So between checkpoints the
+    /// Seals after each flush of conversations or files, and prunes only
+    /// what the listing walk said is gone. So between checkpoints the
     /// store is the previous snapshot plus whatever this run has fetched --
     /// a superset, never a gap. A reset is its own committed step, not a
     /// truncate inside a run.
