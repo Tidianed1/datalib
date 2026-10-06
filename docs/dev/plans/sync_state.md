@@ -1,6 +1,6 @@
 # Sync state: what is owed is what upstream listed, minus what we hold
 
-**Status: decided 2026-10-05; steps 0 to 4 of §7 are built, and the four providers share one owed query and one fetch loop (§10).** This is the design and
+**Status: decided 2026-10-05; steps 0 to 5 of §7 are built: every network source is on one owed query and one fetch loop (§10), and the reference description is `data_architecture_ingestion.md` § "What is left to fetch". Step 6 is open.** This is the design and
 the order of work. It came out of the audit in
 [`audits/2026-10-05_loose_ends.md`](../audits/2026-10-05_loose_ends.md)
 and a read of the four downloads with the most resume state (Slack,
@@ -263,12 +263,15 @@ Closes E2–E9.
 **Step 4 — Notion.** Closes N1–N4, N6, N7.
 
 **Step 5 — the rest of the network sources** (ChatGPT, Claude, GitHub
-and GitLab, DAV, AirVisual, YoLink), then delete `scope_config`, lint
-check 8 and the AGENTS.md section.
+and GitLab, DAV, YoLink), then delete lint check 8 and the AGENTS.md
+section. Built. AirVisual reads a mounted share, so it is a local
+source and moved to step 6. `scope_config` could not go: email's mbox
+path and `lightroom` still use it, and both are local.
 
 **Step 6 — local sources** move to one whole pass per run, after timing
-the large inputs. `file_checkpoint` and the three copies of the
-overlapping-snapshot protocol go.
+the large inputs. `file_checkpoint`, the three copies of the
+overlapping-snapshot protocol and `scope_config` go; AirVisual is one
+of them.
 
 ## 8. The interruption test
 

@@ -91,7 +91,16 @@ test.describe("toolbar", () => {
     const wide = (await box.boundingBox())!;
     expect(wide.width).toBe(440);
     expect(1280 - (wide.x + wide.width)).toBeLessThan(16);
-    const truncated = () => name.evaluate((el) => el.scrollWidth > el.clientWidth);
+    // Whether the name is cut short: its text's width against its box's,
+    // both fractional. Not `scrollWidth > clientWidth`: those round
+    // differently, and a name that happens to measure n.5px reads as
+    // clipped when nothing is.
+    const truncated = () =>
+      name.evaluate((el) => {
+        const text = document.createRange();
+        text.selectNodeContents(el);
+        return text.getBoundingClientRect().width > el.getBoundingClientRect().width + 0.5;
+      });
 
     // Density 0, then 0.5 (four steps more spacious).
     for (const larger of [0, 4]) {
@@ -110,7 +119,7 @@ test.describe("toolbar", () => {
         expect(b.x).toBeGreaterThanOrEqual(l.x + l.width);
         // At 700px the search box has room to give; at 420px it is at
         // its floor and the name gives way.
-        expect(await truncated()).toBe(width === 420);
+        await expect.poll(truncated).toBe(width === 420);
       }
     }
   });

@@ -85,7 +85,7 @@ impl DataProcessor for ContactsIngest {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let db = ingest::RawDb::open(&ingest::db_path_for(&self.raw_path)).await?;
         let pool = db.pool().clone();
-        ctx.run_store(pool, None, |_| async {
+        ctx.run_store(pool, None, |sealer| async {
             Ok(match &self.mode {
                 DownloadMode::Server {
                     server_url,
@@ -98,6 +98,7 @@ impl DataProcessor for ContactsIngest {
                         latchkey: self.latchkey.clone(),
                         progress: ctx.progress.clone(),
                         control: ctx.control.clone(),
+                        sealer: Some(sealer),
                     })
                     .await?;
                     format!(

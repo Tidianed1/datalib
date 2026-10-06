@@ -100,6 +100,10 @@ pub enum HttpService {
     /// curl TLS fingerprint, confirmed against a live workspace.
     Notion,
     Slack,
+    /// YoLink's signed-URL CSV downloads (`us.yosmart.com/download/…`):
+    /// no credential, the URL itself is signed, so every request goes
+    /// out plain.
+    Yolink,
     /// Fixture-synthesis tests only.
     #[strum(serialize = "test_provider")]
     Test,

@@ -75,6 +75,9 @@ impl DavProps for CalendarProps {
 }
 
 impl ObjectProps for CalendarProps {
+    fn etag(&self) -> Option<&str> {
+        self.etag.as_deref()
+    }
     fn data(&self) -> Option<&str> {
         self.calendar_data.as_deref()
     }
