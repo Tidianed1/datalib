@@ -99,7 +99,7 @@ I recommend raising shields, Captain.
 
 === slack_api/render_markdown/00000000-0000-86e8-a93e-c2df52701153/all.md ===
 ---
-title: "@William T. Riker, Worf: I must object to beaming down unarmed."
+title: "@William T. Riker, Worf: @Jean-Luc Picard, I must object to beaming down unarmed."
 provider: slack
 source_label: "Slack"
 chat_uuid: 00000000-0000-86e8-a93e-c2df52701153
@@ -111,13 +111,13 @@ external_id: "G_AWAYTEAM#12604000903.000903"
 item_count: 1
 ---
 
-<h1 class="page-title" data-page-title-uuid="00000000-0000-86e8-a93e-c2df52701153">@William T. Riker, Worf: I must object to beaming down unarmed. <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000903000903?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<h1 class="page-title" data-page-title-uuid="00000000-0000-86e8-a93e-c2df52701153">@William T. Riker, Worf: @Jean-Luc Picard, I must object to beaming down unarmed. <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000903000903?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
 <div id="m-0b7698ff-1f58-83f0-858a-e33c7da8df4a" data-section-uuid="0b7698ff-1f58-83f0-858a-e33c7da8df4a" class="msg msg--slack">
 
 ## [Worf](slack://user?team=T_NCC1701D&id=U_WORF "Worf (slack:T_NCC1701D/U_WORF)") <time class="msg-ts" datetime="2369-05-28T15:21:43+00:00" title="2369-05-28 15:21:43 UTC">Wed May 28th, 2369 at 15:21</time> <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000903000903?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a>
 
-I must object to beaming down unarmed.
+[@Jean-Luc Picard](slack://user?team=T_NCC1701D&id=U_PICARD "@Jean-Luc Picard (slack:T_NCC1701D/U_PICARD)"), I must object to beaming down unarmed.
 
 </div>
 

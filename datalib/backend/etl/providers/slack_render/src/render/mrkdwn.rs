@@ -5,6 +5,8 @@ use std::collections::BTreeMap;
 
 use datalib_etl_render::html::{code_span_parts, escape_md_inline, escape_md_syntax, md_link_dest};
 use datalib_etl_render::inputs::Lookup;
+use datalib_etl_render::message::chip_link;
+use datalib_handle::Handle;
 use once_cell::sync::Lazy;
 use regex::{Captures, Regex};
 
@@ -49,6 +51,9 @@ pub fn emojize_shortcodes(text: &str) -> String {
 pub struct Labels<'a> {
     pub users: Lookup<'a, BTreeMap<String, String>>,
     pub channels: Lookup<'a, BTreeMap<String, String>>,
+    /// The workspace the text is from: a user mention's handle is
+    /// scoped to it.
+    pub team_id: &'a str,
 }
 
 /// Mentions and emoji only, as plain text — what a thread title needs,
@@ -97,6 +102,21 @@ fn user_label(caps: &Captures<'_>, labels: Labels<'_>, name: fn(&str) -> String)
     }
 }
 
+/// A `<@U…>` in a body: a chip link naming the user (`chip_link`), so
+/// the viewer draws who they are; `@Name` as plain text where the id
+/// makes no handle. The name is what the message showed, as
+/// [`user_label`] reads it.
+fn user_mention(caps: &Captures<'_>, labels: Labels<'_>) -> String {
+    let shown = format!(
+        "@{}",
+        emojize_shortcodes(&user_label(caps, labels, str::to_string))
+    );
+    match Handle::slack(labels.team_id, &caps[1]) {
+        Some(handle) => chip_link(&shown, &handle),
+        None => escape_md_inline(&shown),
+    }
+}
+
 fn channel_label(caps: &Captures<'_>, labels: Labels<'_>, name: fn(&str) -> String) -> String {
     let cid = &caps[1];
     match caps.get(2).map(|m| m.as_str()).filter(|l| !l.is_empty()) {
@@ -132,9 +152,7 @@ pub fn to_commonmark(text: &str, labels: Labels<'_>) -> String {
     let mut out = escape_typed_markdown(text);
 
     out = USER_REF
-        .replace_all(&out, |caps: &Captures<'_>| {
-            hold(format!("@{}", user_label(caps, labels, md_name)))
-        })
+        .replace_all(&out, |caps: &Captures<'_>| hold(user_mention(caps, labels)))
         .into_owned();
 
     out = CHANNEL_REF
@@ -310,6 +328,7 @@ mod tests {
         Labels {
             users: INPUTS.lookup("users", &USERS),
             channels: INPUTS.lookup("channels", &CHANNELS),
+            team_id: "T01",
         }
     }
 
@@ -317,6 +336,7 @@ mod tests {
         Labels {
             users: INPUTS.lookup("users", &NONE),
             channels: INPUTS.lookup("channels", &NONE),
+            team_id: "T01",
         }
     }
 
@@ -327,7 +347,8 @@ mod tests {
         assert_eq!(to_commonmark("~old~ news", lbl), "~~old~~ news");
         assert_eq!(
             to_commonmark("hi <@U_PICARD>!", lbl),
-            "hi @Jean-Luc Picard!"
+            "hi [@Jean-Luc Picard](slack://user?team=T01&id=U_PICARD \
+             \"@Jean-Luc Picard (slack:T01/U_PICARD)\")!"
         );
         assert_eq!(
             to_commonmark("<https://slack.com|Slack>", lbl),
@@ -443,15 +464,51 @@ mod tests {
         let lbl = Labels {
             users: INPUTS.lookup("users", &ODD),
             channels: INPUTS.lookup("channels", &ODD),
+            team_id: "T01",
         };
         assert_eq!(
             to_commonmark("hi <@U_Q> and <@U_X|`b`&lt;i&gt;>", lbl),
-            "hi @\\[Q\\](https://e.test) \\* and @\\`b\\`&lt;i&gt;"
+            "hi [@\\[Q\\](https://e.test) \\*](slack://user?team=T01&id=U_Q \
+             \"@[Q](https://e.test) * (slack:T01/U_Q)\") \
+             and [@\\`b\\`&lt;i&gt;](slack://user?team=T01&id=U_X \
+             \"@`b`<i> (slack:T01/U_X)\")",
+            "a name in markdown is text in the link, and the title is the name as shown"
         );
         assert_eq!(
             resolve_mentions("hi <@U_Q> and <@U_X|a&amp;b>", lbl),
             "hi @[Q](https://e.test) * and @a&b",
             "a thread title is plain text; Title escapes it"
+        );
+    }
+
+    /// A mention is the one link a Slack body carries that the viewer
+    /// resolves: a chip with the user's handle. The thread title, plain
+    /// text, keeps `@Name`.
+    #[test]
+    fn a_mention_is_a_chip_link_and_a_title_stays_plain() {
+        let lbl = labels();
+        assert_eq!(
+            to_commonmark("<@U_DATA|Data>, report", lbl),
+            "[@Data](slack://user?team=T01&id=U_DATA \"@Data (slack:T01/U_DATA)\"), report"
+        );
+        assert_eq!(
+            to_commonmark("<@U_NOBODY> there?", lbl),
+            "[@U_NOBODY](slack://user?team=T01&id=U_NOBODY \"@U_NOBODY (slack:T01/U_NOBODY)\") there?",
+            "an id with no profile is still the person"
+        );
+        assert_eq!(
+            resolve_mentions("<@U_DATA>, report", lbl),
+            "@Lt. Cmdr. Data, report"
+        );
+        let no_team = Labels {
+            users: INPUTS.lookup("users", &USERS),
+            channels: INPUTS.lookup("channels", &CHANNELS),
+            team_id: "",
+        };
+        assert_eq!(
+            to_commonmark("<@U_DATA> there?", no_team),
+            "@Lt. Cmdr. Data there?",
+            "no workspace, no handle: plain text"
         );
     }
 
