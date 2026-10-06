@@ -269,10 +269,15 @@ Everything is in `datalib/ui/src/cards/`:
   else the best-ranked account, else what the source showed),
   `hoverCard`, `chipMenu` (copy the name, the identifier or both; find
   everything from the person; link or edit), `copyText` and the copy
-  rewrite. `decorateHandles` is the one function that touches a DOM:
-  it collects the chips under a body, asks `/people` and the contacts
-  app once each, and draws. `chipCell` draws the same chip in a grid
-  cell.
+  rewrite. `people` is who each handle is, for the whole app: an
+  instance of `resolver.ts`, the one resolver every document and grid
+  asks. A chip asks as it is drawn, one drawing pass is one request to
+  `/people` and the contacts app's `/resolve`, answers are kept, and
+  an edit (create, link, unlink, no longer works) forgets the handles
+  it touched, so every open document and grid draws them again.
+  `decorateHandles` is the one function that touches a document's DOM:
+  it collects the chips under a body, asks `people`, and draws.
+  `chipCell` draws the same chip in a grid cell.
 - `ChatBody.ce.vue` runs the decorate pass over a document's frame and
   owns the hover card (`HandleHoverCard.ce.vue`), the popover
   (`HandlePopover.ce.vue`: link to a contact, create one, unlink, mark
@@ -281,9 +286,9 @@ Everything is in `datalib/ui/src/cards/`:
 - The grid's Author column is a chip too: `grid_rows.author_handle`
   (the `author_handle:` filter) comes with each message's row and each
   reaction's, and
-  `GridCard.ce.vue` resolves the visible page's handles the same way a
-  document does. The applet names the mark for a handle's kind in
-  `columns.rs::handle_mark`.
+  `GridCard.ce.vue` draws each Author cell from `people` and redraws
+  them when an answer changes. The applet names the mark for a handle's
+  kind in `columns.rs::handle_mark`.
 
 A chip ranks what it hears: your contact first, then the accounts as
 `/people` ranked them, then the text the source showed.
@@ -314,8 +319,11 @@ A chip ranks what it hears: your contact first, then the accounts as
   three sources, one number spelled three ways as one handle, WhatsApp's
   address book, Signal's number and ACI together, a Slack mention as a
   chip link, two cards' photos as the URLs the index serves.
-- UI: `contacts.test.ts` and `tests/chip_links.test.ts`; the render
-  preview golden shows unresolved chips.
+- UI: `contacts.test.ts`, `resolver.test.ts` and
+  `tests/chip_links.test.ts`; the render preview golden shows
+  unresolved chips. `tests/e2e/contacts.spec.ts` runs on a root with the
+  contacts app: it links Riker's Slack and email handles to one contact
+  from two documents and checks the documents and an open grid follow.
 
 ## Not built
 

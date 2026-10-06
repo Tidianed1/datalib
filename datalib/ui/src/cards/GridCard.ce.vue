@@ -37,15 +37,15 @@ import { copyText, typedColumns, groupTitle } from "./typedColumns";
 import type { Identity } from "@/api";
 import { handleFromUri } from "./chipLinks";
 import {
+  NOBODY,
+  canLinkHandles,
   chipCell,
   chipLook,
   chipMenu,
   copyText as copyHandleText,
   handleValue,
-  peopleFor,
-  resolveHandles,
+  people,
   type ChipMenuEntry,
-  type Who,
 } from "./contacts";
 import {
   SEARCH,
@@ -211,47 +211,12 @@ function refreshQmdState() {
   else void askQmdState([]);
 }
 
-// Who the Author chips are (docs/dev/plans/chips.md § "In a grid"): the
-// applet sends each row's handle and the name the source showed. A cell
-// that draws a handle the grid has not asked about queues it, and the
-// queue goes to the contacts app and the index in one request once the
-// grid has finished drawing; the cells that answered are drawn again.
-// Asking from the drawing, not from a results load, is what catches a
-// cell drawn later — a scroll, a page landing, the Author column shown
-// after the load that hid it.
-const who = new Map<string, Who>();
-const whoAsked = new Set<string>();
-const whoWanted = new Set<string>();
-let whoFlush: ReturnType<typeof setTimeout> | null = null;
-let canLink = false;
-const NOBODY: Who = { mine: null, accounts: [] };
+// Who the Author chips are comes from `people`, the one resolver every
+// document and grid asks (docs/dev/plans/chips.md § "One resolver"): a
+// cell that draws a handle asks as it draws, and when an answer changes —
+// it lands, or a link made anywhere forgets it — the cells are drawn again.
 const AUTHOR_COLUMN = "author_ref";
-
-function wantWho(handle: string) {
-  if (whoAsked.has(handle)) return;
-  whoWanted.add(handle);
-  whoFlush ??= setTimeout(() => {
-    whoFlush = null;
-    const handles = [...whoWanted];
-    whoWanted.clear();
-    void askWho(handles);
-  }, 0);
-}
-
-async function askWho(handles: string[]) {
-  for (const h of handles) whoAsked.add(h);
-  try {
-    const [mine, people] = await Promise.all([resolveHandles(handles), peopleFor(handles)]);
-    canLink = mine !== null;
-    for (const h of handles) who.set(h, { mine: mine?.[h] ?? null, accounts: people[h] ?? [] });
-    refreshAuthorCells();
-  } catch (e) {
-    // The cells keep the source's name; the next scroll over them asks
-    // again. The toast dedupes itself.
-    for (const h of handles) whoAsked.delete(h);
-    pushToast(`Contacts: ${(e as Error).message}`);
-  }
-}
+const stopPeople = people.subscribe(() => refreshAuthorCells());
 
 function refreshAuthorCells() {
   const grid = vueGrid?.slickGrid;
@@ -1187,6 +1152,7 @@ onMounted(() => {
   );
 });
 onBeforeUnmount(() => unsubscribeLive?.());
+onBeforeUnmount(stopPeople);
 
 function docSource(md: string, anchor: string | null): string {
   const args = [md, anchor].map((a) => JSON.stringify(a)).join(", ");
@@ -1211,15 +1177,12 @@ const accountFormatter: Formatter<Row> = (_r, _c, value) => {
 };
 
 /// The Author cell: a chip where the author has a handle, drawn from
-/// what `askWho` has learned so far; otherwise the name as shown, with
+/// what `people` has answered so far; otherwise the name as shown, with
 /// an account's uuid read as the account's name.
 const authorFormatter: Formatter<Row> = (_r, _c, _v, _col, row) => {
   const ref = row.author_ref;
   const handle = ref ? handleFromUri(ref.id) : null;
-  if (handle && ref) {
-    wantWho(handle);
-    return chipCell(handle, ref.label, who.get(handle), canLink);
-  }
+  if (handle && ref) return chipCell(handle, ref.label, people.lookup(handle), canLinkHandles());
   const v = row.author ?? "";
   const label = accountLabel(v);
   return { text: label, toolTip: v && label !== v ? v : "" };
@@ -1358,7 +1321,7 @@ watch(
     const typed = typedColumns<Row>(specs, {
       overrides: columnOverrides,
       groupable: true,
-      chips: { who: (h) => who.get(h), canLink: () => canLink },
+      chips: { who: (h) => people.lookup(h), canLink: canLinkHandles },
     });
     const at = typed.findIndex((c) => c.id === "project") + 1;
     const own = qmd() ? extraColumns : [];
@@ -1474,7 +1437,7 @@ function menuScope(args: MenuFromCellCallbackArgs): MenuScope {
     ? (() => {
         const handle = chipEl.dataset.handle ?? "";
         const shownAs = chipEl.dataset.shownAs ?? "";
-        const w = who.get(handle) ?? NOBODY;
+        const w = people.get(handle) ?? NOBODY;
         // No popover in a grid cell yet, so the link entry is not offered
         // here; the document view has it.
         return {
