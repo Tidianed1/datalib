@@ -12,3 +12,4 @@ mod interrupt;
 mod live;
 mod playback_roundtrip;
 mod run_problems;
+mod upgrade;
