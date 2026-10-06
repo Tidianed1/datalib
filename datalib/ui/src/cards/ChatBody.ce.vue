@@ -29,9 +29,18 @@ import {
   type Decorated,
   type HoverCard,
   type Who,
+  chipMenu,
+  copyText,
+  handleValue,
+  searchQueryFor,
+  type ChipMenuEntry,
+  type ChipMenuId,
 } from "./contacts";
+import ChipMenu from "./ChipMenu.ce.vue";
 import HandleHoverCard from "./HandleHoverCard.ce.vue";
 import HandlePopover from "./HandlePopover.ce.vue";
+import { copyToClipboard } from "@/clipboard";
+import { pushToast } from "@/toasts";
 import { renderDocument } from "./renderDocument";
 import { isBrowserClick, linkFromClick, type ClickedLink } from "./chatLink";
 import { DOC_FRAME_SRCDOC, asElement, forwardAppKeys, mirrorDensity } from "./docFrame";
@@ -105,6 +114,8 @@ const emit = defineEmits<{
   /** A right-click in a framed body, with the frame's window (whose
    *  selection it is) and where the frame sits in this one. */
   (e: "frame-contextmenu", ev: MouseEvent, view: { win: Window; dx: number; dy: number }): void;
+  /** A chip asked for everything from its person: the search to open. */
+  (e: "open-search", q: string): void;
 }>();
 
 const sanitized = computed(() =>
@@ -194,28 +205,114 @@ function onChipOut(ev: MouseEvent) {
   hovered.value = null;
 }
 
+function chipAt(ev: MouseEvent): HTMLElement | null {
+  return asElement(ev.target)?.closest<HTMLElement>("a.chip[data-handle]") ?? null;
+}
+
+function whoIs(chip: HTMLElement): Who {
+  return decorated.value?.who[chip.dataset.handle ?? ""] ?? NOBODY;
+}
+
+/// The link/create popover for `chip`, at a point in this window.
+function openPopover(chip: HTMLElement, x: number, y: number) {
+  clearTimeout(hoverTimer);
+  hovered.value = null;
+  chipTarget.value = {
+    handle: chip.dataset.handle ?? "",
+    shownAs: chip.dataset.shownAs ?? "",
+    resolved: whoIs(chip).mine,
+    x,
+    y,
+  };
+}
+
 function onHandleChipClick(ev: MouseEvent) {
-  const chip = asElement(ev.target)?.closest<HTMLElement>("a.chip[data-handle]");
+  const chip = chipAt(ev);
   // A chip is a link; a plain click on it is for the chip, not for the
   // mail client its href would open. A modifier click stays the
   // browser's, as on any link.
   if (!chip || isBrowserClick(ev)) return;
   ev.preventDefault();
+  // The second click of a double-click is the double-click's.
+  if (ev.detail > 1) return;
   // Without a contacts app there is nothing to change; the hover card is
   // all a chip has to say.
   if (!decorated.value?.canLink) return;
   ev.stopPropagation();
+  const at = frameOrigin();
+  openPopover(chip, at.x + ev.clientX, at.y + ev.clientY);
+}
+
+/// Double-click opens the person: the contact card once there is one
+/// (docs/dev/plans/contacts.md, phase 4); until then, everything from
+/// them, as a search.
+function onChipDblClick(ev: MouseEvent) {
+  const chip = chipAt(ev);
+  if (!chip || isBrowserClick(ev)) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  chipTarget.value = null;
+  hovered.value = null;
+  emit(
+    "open-search",
+    searchQueryFor(chip.dataset.handle ?? "", chip.dataset.shownAs ?? "", whoIs(chip)),
+  );
+}
+
+type ChipMenuAt = { chip: HTMLElement; entries: ChipMenuEntry[]; x: number; y: number };
+const chipMenuAt = ref<ChipMenuAt | null>(null);
+
+/// Right-click on a chip is the chip's menu, not the document's.
+function onChipContextMenu(ev: MouseEvent): boolean {
+  const chip = chipAt(ev);
+  if (!chip) return false;
+  ev.preventDefault();
   clearTimeout(hoverTimer);
   hovered.value = null;
-  const handle = chip.dataset.handle ?? "";
   const at = frameOrigin();
-  chipTarget.value = {
-    handle,
-    shownAs: chip.dataset.shownAs ?? "",
-    resolved: decorated.value.who[handle]?.mine ?? null,
+  chipMenuAt.value = {
+    chip,
+    entries: chipMenu(
+      chip.dataset.handle ?? "",
+      chip.dataset.shownAs ?? "",
+      whoIs(chip),
+      decorated.value?.canLink ?? false,
+    ),
     x: at.x + ev.clientX,
     y: at.y + ev.clientY,
   };
+  return true;
+}
+
+async function onChipMenuPick(id: ChipMenuId) {
+  const menu = chipMenuAt.value;
+  chipMenuAt.value = null;
+  if (!menu) return;
+  const { chip } = menu;
+  const handle = chip.dataset.handle ?? "";
+  const shownAs = chip.dataset.shownAs ?? "";
+  const name = chip.dataset.label ?? shownAs;
+  const copy = async (text: string) => {
+    if (await copyToClipboard(text)) pushToast(`Copied ${text}`, "info");
+    else pushToast("The clipboard refused the copy");
+  };
+  switch (id) {
+    case "copy-name":
+      await copy(name);
+      break;
+    case "copy-id":
+      await copy(handleValue(handle));
+      break;
+    case "copy-both":
+      await copy(copyText(handle, name));
+      break;
+    case "search":
+      emit("open-search", searchQueryFor(handle, shownAs, whoIs(chip)));
+      break;
+    case "edit":
+      openPopover(chip, menu.x, menu.y);
+      break;
+  }
 }
 
 function onRemoteChipClick(ev: MouseEvent) {
@@ -414,6 +511,7 @@ function onFrameLoad() {
     onFrameLinkClick(ev);
   });
   on("auxclick", onFrameLinkClick);
+  on("dblclick", onChipDblClick);
   on("mouseover", (ev) => {
     onBodyMouseOver(ev);
     onChipOver(ev);
@@ -424,6 +522,7 @@ function onFrameLoad() {
   });
   on("copy", (ev) => copyWithHandles(ev, doc.body));
   on("contextmenu", (ev) => {
+    if (onChipContextMenu(ev)) return;
     const r = frame.getBoundingClientRect();
     emit("frame-contextmenu", ev, { win, dx: r.left, dy: r.top });
   });
@@ -482,6 +581,14 @@ onMounted(paint);
     @load="onFrameLoad"
   ></iframe>
   <HandleHoverCard v-if="hovered" v-bind="hovered" />
+  <ChipMenu
+    v-if="chipMenuAt"
+    :entries="chipMenuAt.entries"
+    :x="chipMenuAt.x"
+    :y="chipMenuAt.y"
+    @pick="onChipMenuPick"
+    @close="chipMenuAt = null"
+  />
   <HandlePopover
     v-if="chipTarget"
     :key="chipTarget.handle"

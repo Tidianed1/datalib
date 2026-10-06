@@ -37,6 +37,8 @@ pub fn bookkeeping_ddl_for(table: &str) -> String {
     // No `DEFAULT` on any column here; writers bind every value
     // explicitly. The stamps are UTC; `tz_offset` is the offset the
     // writer's clock was in when it made the latest of them.
+    // `held_version` is the version of the record this row's content
+    // satisfies, against what upstream lists (`crate::owed`).
     format!(
         "CREATE TABLE IF NOT EXISTS {table}_bookkeeping (
             id TEXT PRIMARY KEY,
@@ -45,7 +47,8 @@ pub fn bookkeeping_ddl_for(table: &str) -> String {
             last_attempt_at_utc TEXT NULL,
             last_error TEXT NULL,
             volatile_payload TEXT NULL,
-            tz_offset TEXT NULL
+            tz_offset TEXT NULL,
+            held_version TEXT NULL
         )"
     )
 }

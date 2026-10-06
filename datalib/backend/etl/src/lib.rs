@@ -34,6 +34,7 @@ pub mod indicatif_progress;
 pub mod interrupt;
 pub mod latchkey;
 pub mod layout;
+pub mod owed;
 pub mod periodize;
 pub mod pin;
 pub mod processor;
