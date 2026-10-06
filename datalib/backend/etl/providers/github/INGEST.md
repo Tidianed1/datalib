@@ -44,6 +44,14 @@ stored, and what to fetch is worked out from them each run:
   the PR's key (`<owner>/<repo>#<n>`) and the `updated_at` the search
   gave. A PR listed again keeps the newest stamp any search gave it. A
   row goes only when GitHub says the PR is gone.
+
+  The search's `updated_at` is trusted to move whenever anything under
+  the PR does. Measured against a live account: across 14 PRs with
+  issue comments, reviews and review comments, no comment, review or
+  review comment (by its `created_at`, `updated_at` or `submitted_at`)
+  was newer than the `updated_at` the search gave, and in 30 more the
+  search's stamp equalled `GET /pulls/{n}`'s. A deleted child cannot
+  be measured that way.
 - **Looked at.** A search covers a span of `updated_at` in `coverage`
   (scope `search:<scope>`), written in the transaction that stores its
   results. The first search of a scope has no floor and covers from the
