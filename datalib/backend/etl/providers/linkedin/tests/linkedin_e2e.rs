@@ -603,6 +603,19 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         std::env::remove_var(PLAYBACK_ENV);
         assert_eq!(problems(&db3).await, [], "they fetched, so the row is gone");
 
+        // ── a photo is fetched once ────────────────────────────────
+        // The export read again, with every fetch bound to miss: a
+        // connection whose photo the store holds asks for nothing, so
+        // nothing misses and the photo stays.
+        std::env::set_var(PLAYBACK_ENV, &empty_pb);
+        let again = ingest::fetch(with_photos(&db)).await;
+        std::env::remove_var(PLAYBACK_ENV);
+        again?;
+        assert_eq!(problems(&db).await, [], "no connection was asked for again");
+        assert!(load_photo_blobs(&db)
+            .await?
+            .contains_key("https://www.linkedin.com/in/jlp"));
+
         Ok::<_, anyhow::Error>(())
     })?;
 
@@ -737,6 +750,70 @@ async fn a_walk_error_deletes_no_article() -> Result<()> {
     );
     let keys: Vec<String> = problems(&db).await.into_iter().map(|r| r.0).collect();
     assert_eq!(keys, ["listing:files"]);
+    db.close().await;
+    Ok(())
+}
+
+/// A CSV that is nothing (0 bytes, or the Notes preamble and no header)
+/// read as one listing no rows and emptied its table. A CSV the export
+/// left out keeps its table: the export form offers a subset. Only a
+/// well-formed CSV with a header and no rows empties it.
+#[tokio::test(flavor = "multi_thread")]
+async fn only_a_well_formed_csv_empties_its_table() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let export = tmp.path().join("export");
+    fs::create_dir_all(&export)?;
+    build_export(&export)?;
+    let db = RawDb::open(&db_path_for(tmp.path())).await?;
+    let fetch = || {
+        ingest::fetch(FetchOptions {
+            db: db.clone(),
+            input_path: export.clone(),
+            fetch_photos: false,
+            photo_max_consecutive_failures: 50,
+            progress: Progress::noop(),
+            control: Default::default(),
+        })
+    };
+    fetch().await?;
+    assert_eq!(rows(&db, "connections").await.len(), 2);
+    assert_eq!(rows(&db, "messages").await.len(), 3);
+    assert_eq!(rows(&db, "email_addresses").await.len(), 2);
+
+    fs::write(export.join("Connections.csv"), b"")?;
+    fs::write(
+        export.join("Email Addresses.csv"),
+        "Notes:\n\"Some preamble text about email visibility.\"\n",
+    )?;
+    fs::remove_file(export.join("messages.csv"))?;
+    let s = fetch().await?;
+    assert_eq!(
+        rows(&db, "connections").await.len(),
+        2,
+        "a 0-byte Connections.csv is not an empty network"
+    );
+    assert_eq!(rows(&db, "email_addresses").await.len(), 2);
+    assert_eq!(
+        rows(&db, "messages").await.len(),
+        3,
+        "left out, not emptied"
+    );
+    assert_eq!(s.parse_errors, 2, "{s:?}");
+    let keys: Vec<String> = problems(&db).await.into_iter().map(|r| r.0).collect();
+    assert_eq!(
+        keys,
+        [
+            "listing:csv Connections.csv",
+            "listing:csv Email Addresses.csv"
+        ]
+    );
+
+    fs::write(
+        export.join("Connections.csv"),
+        "First Name,Last Name,URL,Email Address,Company,Position,Connected On\n",
+    )?;
+    fetch().await?;
+    assert!(rows(&db, "connections").await.is_empty());
     db.close().await;
     Ok(())
 }

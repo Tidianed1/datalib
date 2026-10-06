@@ -1143,3 +1143,62 @@ async fn column_defaults_are_not_mirrored_and_the_rows_still_land() -> Result<()
     pool.close().await;
     Ok(())
 }
+
+// Nothing to mirror
+
+/// The tables a mirror holds of its source, sorted: not the store's own.
+async fn mirrored_tables(pool: &SqlitePool) -> Result<Vec<String>> {
+    let names: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            .fetch_all(pool)
+            .await?;
+    Ok(names
+        .into_iter()
+        .filter(|n| {
+            !dr::SHARED_TABLES.contains(&n.as_str())
+                && !n.starts_with("dolt")
+                && !n.starts_with("sqlite_")
+        })
+        .collect())
+}
+
+/// What a run against `f.catalog` leaves of the mirror, and whether the
+/// run failed; nothing is committed.
+async fn mirror_after_run(f: &Fixture) -> Result<(Vec<String>, bool)> {
+    let pool = mirror::open_mirror(&f.mirror).await?;
+    let ran = mirror::run(&pool, &f.options(), &Progress::noop()).await;
+    let tables = mirrored_tables(&pool).await?;
+    pool.close().await;
+    Ok((tables, ran.is_err()))
+}
+
+/// A 0-byte file opens as an empty database, so the run dropped every
+/// mirrored table and refilled none: a source truncated, or replaced by
+/// a placeholder, emptied the mirror.
+#[tokio::test]
+async fn a_zero_byte_source_drops_nothing() -> Result<()> {
+    let f = Fixture::new();
+    f.ingest().await?;
+    std::fs::write(&f.catalog, b"")?;
+    let (tables, failed) = mirror_after_run(&f).await?;
+    assert_eq!(tables, CATALOG_TABLES, "the mirror still holds the catalog");
+    assert!(failed, "a source with nothing in it fails the run");
+    Ok(())
+}
+
+/// A database with no tables left in it is the same nothing.
+#[tokio::test]
+async fn a_source_with_no_tables_drops_nothing() -> Result<()> {
+    let f = Fixture::new();
+    f.ingest().await?;
+    let drops: Vec<String> = CATALOG_TABLES
+        .iter()
+        .map(|t| format!("DROP TABLE \"{t}\""))
+        .collect();
+    f.edit_catalog(&drops.iter().map(String::as_str).collect::<Vec<_>>())
+        .await?;
+    let (tables, failed) = mirror_after_run(&f).await?;
+    assert_eq!(tables, CATALOG_TABLES, "the mirror still holds the catalog");
+    assert!(failed, "a source with nothing in it fails the run");
+    Ok(())
+}

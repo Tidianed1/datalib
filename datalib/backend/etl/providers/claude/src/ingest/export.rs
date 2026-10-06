@@ -620,4 +620,62 @@ mod tests {
         assert_eq!(left, 0, "a clean export clears it");
         db.close().await;
     }
+
+    /// A `conversations.json` none of whose entries has a uuid is not an
+    /// export that deleted every conversation: it is one in a shape this
+    /// reader does not know, and it pruned the whole table.
+    #[tokio::test]
+    async fn an_export_with_no_uuid_anywhere_deletes_nothing() {
+        let ex = tempfile::tempdir().unwrap();
+        let raw = tempfile::tempdir().unwrap();
+        write(
+            ex.path(),
+            "conversations.json",
+            &json!([conv("c1", "First"), conv("c2", "Second")]),
+        );
+        write(
+            ex.path(),
+            "projects/bridge.json",
+            &json!({"uuid": "p1", "name": "Bridge Ops",
+                    "docs": [{"uuid": "d1", "file_name": "notes.md"}]}),
+        );
+        let db = open_raw(raw.path()).await;
+        ingest(opts(&db, ex.path())).await.unwrap();
+
+        let unkeyed = |v: Value| {
+            let mut v = v;
+            v.as_object_mut().unwrap().remove("uuid");
+            v
+        };
+        write(
+            ex.path(),
+            "conversations.json",
+            &json!([unkeyed(conv("c1", "First")), unkeyed(conv("c3", "Third"))]),
+        );
+        write(
+            ex.path(),
+            "projects/bridge.json",
+            &unkeyed(json!({"name": "Bridge Ops", "docs": []})),
+        );
+        let s = ingest(opts(&db, ex.path())).await.unwrap();
+        assert_eq!(dump(db.pool(), "conversations").await.len(), 2);
+        assert_eq!(dump(db.pool(), "projects").await.len(), 1);
+        assert_eq!(dump(db.pool(), "project_docs").await.len(), 1);
+        assert_eq!(s.pruned, 0);
+        let keys: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems ORDER BY 1")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(
+            keys,
+            ["phase:conversations.json", "phase:export", "phase:projects"]
+        );
+
+        // A well-formed export that lists nothing does empty the table.
+        write(ex.path(), "conversations.json", &json!([]));
+        std::fs::remove_dir_all(ex.path().join("projects")).unwrap();
+        ingest(opts(&db, ex.path())).await.unwrap();
+        assert!(dump(db.pool(), "conversations").await.is_empty());
+        db.close().await;
+    }
 }
