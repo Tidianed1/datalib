@@ -398,7 +398,11 @@ therefore what it can see:
 | `calendar` (Google) | `events.list` `cancelled` items; a whole listing on a first sync, after a `410`, and every run for a window; the account's calendar list | events a whole listing does not name. Nothing when that listing held an event with no `id`, which could be any stored one. A calendar the list no longer names, with its events |
 | `media` | the scan; a file evicted to the cloud or over `max_bytes` is present (`Scan::present_unread`) | path rows of files the scan did not find. Nothing after a walk that reported errors |
 | `fsindex`, `pdf` | truncate-and-refill | structurally |
-| `claude` (`export`) | the snapshot is the enumeration | structurally |
+| `claude` (`export`) | `users.json`, `conversations.json` and `projects/`, each read whole | rows a present file no longer lists. A missing `users.json` or `projects/` deletes nothing, nor does a file whose entries are there but none has a uuid (a `phase:<file>` problem) |
+| `signal` | the newest snapshot, when every frame decodes | recipients, chats, messages and attachment edges it no longer holds. A frame that would not decode, a missing snapshot folder or an unset passphrase deletes nothing |
+| `linkedin` | each CSV, read whole | rows its table no longer lists. A CSV left out of the export, one that will not read, or one with no header row (0 bytes, or only the Notes preamble) deletes nothing; articles prune only after a clean walk |
+| `lightroom`, `apple_photos`, `whatsapp` (msgstore) | the database file, dropped and refilled | structurally. A source with no table to mirror (0 bytes, no tables, filters matching none) drops nothing: a `phase:source` problem, or for lightroom a backup problem or a failed step |
+| `apple_messages` | — | nothing: append-only, since `chat.db` evicts |
 | `yolink` | — | nothing; append-only telemetry |
 | `notion`, `beeper` | — | not wired (rework; poorly supported) |
 
