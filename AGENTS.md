@@ -722,8 +722,12 @@ find yourself writing `strftime("%Y-%m-%dT%H:%M:%SZ")`, stop —
 
 ## Auth (web API)
 
-Every web source signs in through latchkey, and a downloader only ever
-runs `latchkey curl`: [`docs/dev/latchkey.md`](docs/dev/latchkey.md).
+Every web source that needs a credential signs in through latchkey,
+and its requests go out as `latchkey curl`:
+[`docs/dev/latchkey.md`](docs/dev/latchkey.md). A URL that carries its
+own authority skips latchkey and goes out as plain `curl` through the
+same HTTP layer (`HttpRequest::plain`): YoLink's signed CSV downloads,
+Notion's pre-signed file links, LinkedIn's public photos.
 Cloudflare-fronted hosts go through the bundled `curl-impersonate`
 ([`docs/dev/curl_impersonate.md`](docs/dev/curl_impersonate.md)); if
 Cloudflare still 403s, the IP or user agent may be flagged — wait it
