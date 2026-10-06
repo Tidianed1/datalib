@@ -270,6 +270,17 @@ async fn upsert_conversations(
         });
     }
     bulk_upsert_in_tx(tx, &rows, now).await?;
+    // Held at the `updated_at` the export carries, so an API walk over
+    // an export-seeded store fetches only what moved since.
+    for r in &rows {
+        datalib_etl_web::owed::hold(
+            tx,
+            super::schema_raw::CONVERSATIONS,
+            &r.id_and_payload.id,
+            r.updated_at.as_deref(),
+        )
+        .await?;
+    }
     Ok(rows.len())
 }
 

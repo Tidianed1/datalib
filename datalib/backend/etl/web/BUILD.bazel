@@ -22,6 +22,7 @@ rust_library(
         "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/source_common:datalib_source_common",
+        "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:chrono",
         "@datalib_crates//:futures",

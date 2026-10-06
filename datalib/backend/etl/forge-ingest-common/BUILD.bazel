@@ -19,6 +19,7 @@ rust_library(
         "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
+        "@datalib_crates//:chrono",
         "@datalib_crates//:once_cell",
         "@datalib_crates//:regex",
         "@datalib_crates//:serde",
@@ -35,4 +36,7 @@ rust_test(
     size = "small",
     crate = ":datalib_etl_forge_ingest_common",
     edition = "2021",
+    deps = [
+        "@datalib_crates//:tempfile",
+    ],
 )

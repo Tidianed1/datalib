@@ -73,6 +73,9 @@ impl DavProps for ContactProps {
 }
 
 impl ObjectProps for ContactProps {
+    fn etag(&self) -> Option<&str> {
+        self.etag.as_deref()
+    }
     fn data(&self) -> Option<&str> {
         self.vcard.as_deref()
     }
