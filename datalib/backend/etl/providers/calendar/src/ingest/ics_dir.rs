@@ -382,6 +382,55 @@ mod tests {
         e.db.close().await;
     }
 
+    /// An `.ics` rewritten to nothing (0 bytes, text that is not a
+    /// calendar, a copy cut off before `END:VCALENDAR`, events none of
+    /// which has a UID) read as a calendar with no events, and every event
+    /// was deleted. Only a whole `VCALENDAR` with no events empties it.
+    #[tokio::test]
+    async fn a_file_that_is_recognizably_nothing_deletes_nothing() {
+        let e = Env::new().await;
+        let path = e.input.path().join("Bridge.ics");
+        let whole = ics("red-alert");
+        std::fs::write(&path, &whole).unwrap();
+        e.fetch().await;
+        assert_eq!(e.uids().await, vec!["red-alert"]);
+
+        let cut_off = whole[..whole.find("END:VCALENDAR").unwrap()].to_string();
+        let no_uid = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\n\
+             DTSTART:23640101T090000Z\r\nSUMMARY:drill\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+            .to_string();
+        for (what, body) in [
+            ("an empty file", String::new()),
+            ("text that is not a calendar", "Red alert.\n".to_string()),
+            ("a copy cut off before its end", cut_off),
+            ("events none of which has a UID", no_uid),
+        ] {
+            std::fs::write(&path, &body).unwrap();
+            let s = e.fetch().await;
+            assert_eq!(s.events_deleted, 0, "{what} deleted events");
+            assert_eq!(e.uids().await, vec!["red-alert"], "{what}");
+            assert_eq!(
+                e.problems().await,
+                [(
+                    "listing:ics Bridge.ics".to_string(),
+                    "fetch_failed".to_string()
+                )],
+                "{what}"
+            );
+        }
+
+        std::fs::write(
+            &path,
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nX-WR-CALNAME:Bridge\r\nEND:VCALENDAR\r\n",
+        )
+        .unwrap();
+        let emptied = e.fetch().await;
+        assert_eq!(emptied.events_deleted, 1);
+        assert!(e.uids().await.is_empty());
+        assert!(e.problems().await.is_empty());
+        e.db.close().await;
+    }
+
     #[test]
     fn a_calendar_is_keyed_by_its_path_under_the_root() {
         let root = Path::new("/takeout/Calendar");

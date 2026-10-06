@@ -568,6 +568,44 @@ mod tests {
         db.close().await;
     }
 
+    /// A `.vcf` rewritten to nothing (0 bytes, text that holds no vCard, a
+    /// copy cut off inside a card) read as an address book with fewer
+    /// cards, and every card it lost was deleted. vCard has no envelope
+    /// that could say "no cards", so a file holding none never empties its
+    /// book; deleting the file does.
+    #[tokio::test]
+    async fn a_file_that_is_recognizably_nothing_deletes_nothing() {
+        let input = tempfile::tempdir().unwrap();
+        let path = input.path().join("Borg.vcf");
+        std::fs::write(&path, BORG).unwrap();
+        let store = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&store.path().join("c.doltlite_db"))
+            .await
+            .unwrap();
+        let cache = test_cache().await;
+        let opts = || options(&db, input.path(), cache.clone());
+        fetch(opts()).await.unwrap();
+        assert_eq!(uids(&db).await, vec!["hugh", "locutus"]);
+
+        let cut_off = &BORG[..BORG.rfind("END:VCARD").unwrap()];
+        for (what, body) in [
+            ("an empty file", ""),
+            ("text that holds no vCard", "We are the Borg.\n"),
+            ("a copy cut off inside a card", cut_off),
+        ] {
+            std::fs::write(&path, body).unwrap();
+            let s = fetch(opts()).await.unwrap();
+            assert_eq!(s.contacts_deleted, 0, "{what} deleted contacts");
+            assert_eq!(uids(&db).await, vec!["hugh", "locutus"], "{what}");
+            let problems: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems")
+                .fetch_all(db.pool())
+                .await
+                .unwrap();
+            assert_eq!(problems, vec!["listing:vcf Borg.vcf"], "{what}");
+        }
+        db.close().await;
+    }
+
     // A card with neither UID nor name keeps file-position identity so
     // distinct nameless cards don't collapse into a single row.
     #[tokio::test]
