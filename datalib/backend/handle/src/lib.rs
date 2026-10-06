@@ -5,9 +5,11 @@
 //! `tel:+12025550123`, `slack:T01/U02`. Where a native id *is* an email
 //! address or a phone number it becomes one of those, not a per-app kind,
 //! so one link covers every app that reaches a person by that number.
-//! Renders write handles into the markdown (`data-handle`) and the
-//! contacts app links them to contacts; nothing here knows what a contact
-//! is. `docs/dev/plans/contacts.md` has the design.
+//! Renders write handles into the markdown as chip links, `[Name](uri)`
+//! with the handle as a URI ([`Handle::to_uri`]), and the contacts app
+//! links them to contacts; nothing here knows what a contact is.
+//! `docs/dev/plans/contacts.md` and `docs/dev/plans/chips.md` have the
+//! design.
 //!
 //! A handle is stored: in render stores, in the index, and in the links a
 //! person made in the contacts app. So a change to what a constructor
@@ -200,6 +202,67 @@ impl Handle {
 
     pub fn value(&self) -> &str {
         self.0.split_once(':').map_or("", |(_, v)| v)
+    }
+
+    /// The handle as a URI another app can follow: `mailto:` and `tel:`
+    /// as the standards spell them, a Slack user as Slack's own deep
+    /// link. This is the href of a chip link; [`Handle::from_uri`] reads
+    /// it back, and `ui/src/cards/chipLinks.js` mirrors both.
+    pub fn to_uri(&self) -> String {
+        match self.kind() {
+            HandleKind::Email => format!("mailto:{}", self.value()),
+            HandleKind::Tel => format!("tel:{}", self.value()),
+            HandleKind::Slack => {
+                let (team, user) = self.value().split_once('/').unwrap_or((self.value(), ""));
+                format!("slack://user?team={team}&id={user}")
+            }
+        }
+    }
+
+    /// The handle a URI names, or `None` for one that names no handle
+    /// this build knows: `mailto:` (its query dropped), `tel:`,
+    /// `slack://user?team=…&id=…` with the parameters in either order,
+    /// and `datalib:handle/<kind>/<value>`, the spelling for a kind that
+    /// has no standard scheme of its own.
+    pub fn from_uri(uri: &str) -> Option<Self> {
+        let uri = uri.trim();
+        if strip_prefix_ignore_case(uri, "mailto:").is_some() {
+            return Self::email(uri);
+        }
+        if strip_prefix_ignore_case(uri, "tel:").is_some() {
+            return Self::tel(uri);
+        }
+        if let Some(rest) = strip_prefix_ignore_case(uri, "datalib:handle/") {
+            let (kind, value) = rest.split_once('/')?;
+            return Self::rebuild(&format!("{kind}:{value}"));
+        }
+        let query = strip_prefix_ignore_case(uri, "slack://user?")?;
+        let (mut team, mut user) = (None, None);
+        for pair in query.split('&') {
+            match pair.split_once('=') {
+                Some(("team", t)) => team = Some(t),
+                Some(("id", u)) => user = Some(u),
+                _ => {}
+            }
+        }
+        Self::slack(team?, user?)
+    }
+
+    /// The handle beside the name a source showed, as a person writes
+    /// one: `Will Riker <riker@enterprise.org>`, `Will Riker
+    /// (+15550123456)`, `Data (slack:T01/U02)`. The identifier alone when
+    /// the name is empty or is the identifier. A chip link's title and
+    /// its copied text; `copyText` in `ui/src/cards/contacts.ts` mirrors it.
+    pub fn describe(&self, shown: &str) -> String {
+        let shown = shown.trim();
+        if shown.is_empty() || shown == self.value() || shown == self.as_str() {
+            return self.value().to_string();
+        }
+        match self.kind() {
+            HandleKind::Email => format!("{shown} <{}>", self.value()),
+            HandleKind::Tel => format!("{shown} ({})", self.value()),
+            HandleKind::Slack => format!("{shown} ({})", self.as_str()),
+        }
     }
 
     fn of(kind: HandleKind, value: &str) -> Self {
@@ -480,5 +543,63 @@ mod tests {
         assert_eq!(json, "\"tel:+15550123456\"");
         assert_eq!(serde_json::from_str::<Handle>(&json).unwrap(), h);
         assert!(serde_json::from_str::<Handle>("\"tel:+1 555\"").is_err());
+    }
+
+    /// The URI is what a chip link's href carries, so every kind has to
+    /// come back from its own URI; the TS mirror in `chipLinks.js` is
+    /// tested over the same cases.
+    #[test]
+    fn every_kind_round_trips_through_its_uri() {
+        for (h, uri) in [
+            (
+                Handle::email("riker@enterprise.org").unwrap(),
+                "mailto:riker@enterprise.org",
+            ),
+            (Handle::tel("+15550123456").unwrap(), "tel:+15550123456"),
+            (
+                Handle::slack("T01", "U02").unwrap(),
+                "slack://user?team=T01&id=U02",
+            ),
+        ] {
+            assert_eq!(h.to_uri(), uri);
+            assert_eq!(Handle::from_uri(uri), Some(h));
+        }
+        assert_eq!(
+            Handle::from_uri("mailto:Riker@Enterprise.org?subject=hi"),
+            Handle::email("riker@enterprise.org")
+        );
+        assert_eq!(
+            Handle::from_uri("slack://user?id=U02&team=T01"),
+            Handle::slack("T01", "U02")
+        );
+        assert_eq!(Handle::from_uri("https://enterprise.org/riker"), None);
+        assert_eq!(Handle::from_uri("slack://channel?team=T01&id=C03"), None);
+        assert_eq!(Handle::from_uri("datalib:group/slack"), None);
+        // The spelling for a kind with no scheme of its own; every kind
+        // this build has one, so a known kind reads back and an unknown
+        // one is nothing.
+        assert_eq!(
+            Handle::from_uri("datalib:handle/tel/+15550123456"),
+            Handle::tel("+15550123456")
+        );
+        assert_eq!(Handle::from_uri("datalib:handle/fax/+15550123456"), None);
+    }
+
+    #[test]
+    fn describe_puts_the_identifier_beside_the_name_once() {
+        let email = Handle::email("riker@enterprise.org").unwrap();
+        assert_eq!(
+            email.describe("Will Riker"),
+            "Will Riker <riker@enterprise.org>"
+        );
+        assert_eq!(
+            email.describe("riker@enterprise.org"),
+            "riker@enterprise.org"
+        );
+        assert_eq!(email.describe("  "), "riker@enterprise.org");
+        let tel = Handle::tel("+15550123456").unwrap();
+        assert_eq!(tel.describe("Will Riker"), "Will Riker (+15550123456)");
+        let slack = Handle::slack("T01", "U02").unwrap();
+        assert_eq!(slack.describe("Data"), "Data (slack:T01/U02)");
     }
 }

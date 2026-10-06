@@ -102,7 +102,7 @@ Three more rules follow from that:
 
 The Connection section has one account box per source, and it behaves
 the way the service names accounts (`ServiceInfo.account_naming`, read
-off latchkey's `type`):
+off latchkey's `type` and whether the service has a browser login):
 
 - **The service names it** (Slack, Gmail, Garmin, …): the box says so
   and offers the accounts latchkey holds. "Sign in with browser" passes
@@ -112,9 +112,11 @@ off latchkey's `type`):
   for a pasted key, which latchkey stores under the name it is given,
   and the sign-in tab says the login will replace it. The pure decision
   is `datalib/ui/src/config/accountNaming.ts`.
-- **You name it** (Claude, ChatGPT): the box takes any name, a new one
-  included, and every way of signing in stores under it. Empty means
-  the default account.
+- **You name it** (Claude, ChatGPT, and every service with no browser
+  login, such as `fastmail-dav`, `notion` and `gitlab`, where a pasted
+  key is the only way in): the box takes any name, a new one included,
+  and every way of signing in stores under it. Empty means the default
+  account. Its help line is `NAME_IT_HELP` in the same file.
 
 ## It speaks HTTP and nothing else
 

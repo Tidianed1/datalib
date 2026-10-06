@@ -27,21 +27,31 @@ Slack's "Today at 11:02": this file is written once and read for years,
 so a word meaning "the day this was rendered" would be wrong by the
 next morning.
 
-**The author span carries the author's handle** where the provider has
-one — `<span class="msg-author" data-handle="email:riker@enterprise.org">`
-— from `NormalizedChatItem::author_handle` (`datalib_handle`). The text
-stays what the source showed; the UI asks the contacts app, if one is
-configured, whom the handle belongs to and draws a chip
-(`ui/src/cards/contacts.ts`). The attribute is load-bearing, like
+**An author with a handle is a chip link**, where the provider has
+one (`NormalizedChatItem::author_handle`, `datalib_handle`):
+
+```markdown
+## [Will Riker](mailto:riker@enterprise.org "Will Riker <riker@enterprise.org>") <time class="msg-ts" …>…</time>
+```
+
+The text stays what the source showed; the href is the handle as a URI
+(`Handle::to_uri`: `mailto:`, `tel:`, Slack's `slack://user?team=…&id=…`);
+the title is the hover any other markdown viewer shows. The UI's
+markdown-it marks a link it can resolve as a chip
+(`ui/src/cards/chipLinks.js`), asks the contacts app, if one is
+configured, and the index whom the handle belongs to, and draws a chip
+in place of the link (`ui/src/cards/contacts.ts`) with its own hover
+card instead of the title. The href is load-bearing, like
 `data-section-uuid`: it is how a contact linked after this file was
-written still finds the author. The UI trusts it only on the header
-line, since a message body can carry any attribute it likes.
+written still finds the author. An author with no handle is a plain
+`<span class="msg-author">`. The design, and why a chip may appear
+anywhere in a body, is `docs/dev/plans/chips.md`.
 
 An item with `recipients` (an email's To and Cc) gets one more line
-straight under the header — `<div class="msg-recipients">To <span
-class="msg-recipient" data-handle="…">…</span>; Cc …</div>` — and the UI
-trusts a `data-handle` there only because it is the header's very next
-element.
+straight under the header, a paragraph rather than an HTML block
+because markdown is not parsed inside a block:
+`<span class="msg-recipients">To [Will Riker](mailto:… "…"), <span
+class="msg-recipient">Deanna Troi</span>; Cc …</span>`.
 
 Each document also carries a `DatalibContact` per author handle in it
 (`src/people.rs`): the names the provider showed the handle under, less

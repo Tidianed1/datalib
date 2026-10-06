@@ -1,0 +1,269 @@
+# Chips: a link the app can resolve, drawn as the thing it names
+
+*Decided 2026-10-06; nothing here is built. The facts about the tree
+were read that day and are cited by path; check one before relying
+on it. The first slice of chips for people landed in #958 and is
+described in [`contacts.md`](contacts.md) — this plan replaces its
+§"Chips" and generalizes it to every kind of entity.*
+
+A **chip** is how datalib shows an entity inline: a person, a source
+group, a step, later a channel or a document. It has a name, a mark
+or a photo, and behind it a stable identifier the app can resolve to
+the entity's current state. The same chip is drawn in a rendered
+document and in a grid cell, offers the same hover card, the same
+right-click menu and the same double-click, and copies the same way.
+
+The one rule everything below follows:
+
+> **A chip is a link whose href the app knows how to resolve.**
+
+In a markdown file it is `[Name](href)`, which every markdown viewer
+shows as a link with a name. In datalib the viewer recognizes the href,
+asks the resolver for that kind of entity who or what it is now, and
+draws a chip. Copied out, it is a link again. Nothing about the chip's
+appearance is written into the file: the file carries the identifier
+and the name the source showed, and the look is decided when it is
+drawn.
+
+## Words
+
+| word | means |
+|---|---|
+| **entity** | something datalib can name and resolve: a person (by handle), a group, a step. More kinds later. |
+| **entity URI** | the href that names one. A standard scheme where one exists, `datalib:` where none does — see [The href](#the-href). |
+| **handle** | a person's identifier in one namespace, normalized (`datalib_handle`): `email:…`, `tel:…`, `slack:T/U`. One kind of entity. |
+| **resolver** | the endpoint the viewer asks about one kind of entity, in a batch: the contacts applet and the index's `/people` for handles, `datalib-http` for groups and steps. |
+| **producer** | whoever writes a chip down: a render crate writing markdown, or a server sending a grid row. |
+
+## The href
+
+Standard scheme where one exists, `datalib:` otherwise:
+
+| entity | href | today's identifier |
+|---|---|---|
+| a person by email | `mailto:picard@enterprise.starfleet` | handle `email:picard@enterprise.starfleet` |
+| a person by phone | `tel:+12025550101` | handle `tel:+12025550101` |
+| a Slack user | `slack://user?team=T01&id=U02` (Slack's documented deep link) | handle `slack:T01/U02` |
+| a person by a kind with no scheme of its own | `datalib:handle/<kind>/<value>`, e.g. `datalib:handle/signal_aci/<uuid>` | the handle `<kind>:<value>` |
+| a group | `datalib:group/slack` | the group id, a directory under the root |
+| a step | `datalib:step/slack/ingest` | the step id `<group>/<function>` |
+
+`datalib_handle` gains `Handle::to_uri()` and `Handle::from_uri()`,
+tested as a round trip over every kind, and `ui/src/cards/chipLinks.js`
+mirrors both in TypeScript over the same cases. A new kind of handle
+with a standard scheme adds a row to this table and a parser on each
+side; one without is spelled `datalib:handle/<kind>/<value>`, which
+`from_uri` already reads through `Handle::rebuild`. A new kind of entity
+adds a row, a parser and a resolver.
+
+Why not one `datalib:` scheme for everything (`datalib:email:…`): a
+person's link would then be dead in every other app, and a rich paste
+into Mail or a GitHub comment would carry a link nobody can click.
+Why not the bare handle as the href (`email:…`): `tel:` is a real
+scheme and `email:` is not, so the two kinds would behave differently
+outside datalib, and each would need admitting through the sanitizer.
+The table above costs a small parser per kind and is otherwise free.
+
+## In a document
+
+The author span and the recipients line that `chat-common` writes
+today
+([`chat-common/README.md`](../../../datalib/backend/etl/chat-common/README.md)
+§"The message header") become links:
+
+```markdown
+## [Jean-Luc Picard](mailto:picard@enterprise.starfleet "Jean-Luc Picard <picard@enterprise.starfleet>") <time class="msg-ts" datetime="…" title="…">Tue Feb 11th, 2025 at 11:33</time>
+<div class="msg-recipients"><span class="msg-recipients-role">To</span> [Will Riker](mailto:riker@enterprise.starfleet "Will Riker <riker@enterprise.starfleet>"); …</div>
+```
+
+- **The `##` stays.** qmd cuts chunks at an `h2`; the heading is there
+  for it, not for the eye (the README says why).
+- **The name is what the source showed**, escaped as every other field
+  is. The chip shows the resolved name instead and keeps the source's
+  in `data-shown-as` for the hover card's "shown here as".
+- **The hover is baked into the link too.** The link's title is the
+  static hover every markdown viewer can show: the name the source
+  showed and the identifier, in the same form the copy uses
+  (`Jean-Luc Picard <picard@enterprise.starfleet>`,
+  `Name (+12025550101)`, `slack/ingest` for a step). In datalib the
+  decorate pass removes the title and draws the live hover card in its
+  place, since that card knows what the file cannot: the contact you
+  linked, and what every source calls them.
+- **A chip may appear anywhere a renderer has a handle**: a Slack
+  mention mid-sentence, a reaction's author, "Worf joined the channel",
+  a step named in a run's notes. The header is no longer special; it
+  is the first place a renderer writes one. Each provider that has
+  handles for mentions or reactions writes them as links in its own
+  PR.
+- **Plain text stays plain.** A `Plain` body goes through
+  `escape_md_block`, so a typed `[x](mailto:y)` is literal. Only
+  `Markdown` bodies — an assistant's reply, an email — can carry links,
+  and a link there is a link the sender wrote.
+- `LAYOUT_VERSION` bumps once; every chat provider re-renders.
+
+**Drawing.** The viewer's own markdown-it (`ui/src/cards/renderDocument.ts`)
+gets a plugin (`chipLinks.js`): a `link_open` token whose href parses
+as a handle gets `class="chip" data-handle="<handle>"`; when groups and
+steps arrive, a `data-entity="<href>"` beside it for the kinds that are
+not people. A link `linkify` made from a
+bare address is skipped — its token carries `markup: "linkify"` — so a
+signature's address stays an address. `sanitize.ts` admits the `slack:`
+and `datalib:` schemes; `mailto:` and `tel:` are in DOMPurify's default
+list. Then `decorateChips` does what `decorateHandles` does today
+(`ui/src/cards/contacts.ts`): collects the chips under the body,
+groups them by kind, asks each kind's resolver once, and draws.
+
+**What a chip draws.** The lead, then the name, then the kind's mark
+when the lead is not a photo:
+
+| state | lead | name | mark |
+|---|---|---|---|
+| resolved, with a photo | the photo | the entity's name | — |
+| resolved, no photo | the initial in a disc | the entity's name | — |
+| unresolved person | — | the best name a source gave, else the shown text | the handle kind's mark, and a quiet "+" when a contacts app is there to link it with |
+| resolved but stale | as resolved, dimmed and italic | | |
+| group, step | the source's or the phase's mark | the group's name, the step's label | — |
+
+The rules stay pure (`chipLook`, unit-tested); only the decorate pass
+touches a DOM. The look is the one in `documentBody.css` today, moved
+to a shared `chip.css` so the grid draws the same thing.
+
+**Icons come from the resolver.** `DatalibContact` gains
+`photo: string | null`, a URL the app serves: the contacts applet's
+`/photo/<contact_id>` for your contact, the index's asset route for a
+source's avatar out of the blob CAS. A group's or a step's mark is the
+`icon` token its row already carries (`Identity.icon`, mapped by
+`ui/src/config/icons.ts`). The markdown never names an icon: the look
+of a person changes when you link them, and the file was written once.
+
+A chip no resolver answers for is drawn from the markdown alone, in
+the unresolved look. That needs no server, so the checked-in render
+preview (`ui/tests/goldens/render_preview.html`) shows chips for the
+first time — the unresolved ones.
+
+### Trust
+
+#958 trusted a `data-handle` only on the header line, because a body
+is HTML a stranger wrote and could place one anywhere. This plan lets
+a chip appear anywhere, and is safe for a different reason: **a chip
+shows who the href resolves to, never the link text.** A body that
+writes `[Picard](mailto:phisher@x)` gets a chip for the phisher under
+the name the sources know them by, with "shown here as Picard" on
+hover; an unknown address shows as itself. Forging can only point at a
+real entity under its real name, which is what any link already does.
+`trustedHandleSpans` and its forgery test go; a new test pins that a
+chip's label is the resolved name whatever the link said.
+
+People counts are unaffected: `chat-common/src/people.rs` counts
+structured authors and recipients, not links, so a signature's address
+changes nothing in `/people`.
+
+## In a grid
+
+The `identity` cell type (`{id, label, icon, detail}`,
+[`cards.md`](../cards.md) §"typed cells") is a chip in all but name.
+It becomes one: **`Identity.id` is the entity URI**, and the identity
+formatter in `ui/src/cards/typedColumns.ts` draws through the same
+`chipLook` as a document.
+
+- The Manage rows (`http/src/manage/mod.rs`) send `datalib:group/<id>`
+  and `datalib:step/<group>/<function>` where they send bare ids
+  today. The first grid PR checks what reads `Identity.id` in the UI
+  before changing it; a row key that happens to equal the id is a row
+  key, not an identity.
+- The search grid's Author column changes from `text` to `identity`.
+  `grid_rows` gains `author_handle`, following the checklist in
+  [`grid_rows.md`](../grid_rows.md) §"Adding a column"; the applet
+  sends `{id: "mailto:…", label: <the author as shown>, icon: "email"}`.
+- **The producer sends the id and the label it knows; the viewer
+  overlays the entity layer.** For the visible page of rows, the grid
+  asks each kind's resolver once — the way `askAboutVisibleRows` in
+  `GridCard.ce.vue` already asks per-document questions — and redraws
+  the cells that resolved. Linking a handle in a popover redraws every
+  open grid and document, since the viewer knows which cells carry it.
+  This bends cards.md's "the producer resolves, the viewer presents":
+  the producer still resolves what only it can (the source's name for
+  the author, the group's configured name), and the layer that moves
+  while the row does not — your contacts — is joined where it is live.
+  The alternative, the `unified_index` applet reading the contacts
+  store itself, would lag the document beside it until a re-query, and
+  could never serve Manage, whose producer is `datalib-http`, which by
+  design links neither `etl` nor `contacts`. cards.md says so once this
+  lands.
+- `ui/src/grid/copyRows.ts` copies an identity cell the way a document
+  copies a chip (below).
+
+## Copy
+
+A copy keeps the name and the identifier, in both clipboard flavours,
+so a paste loses neither (`copyWithHandles` in `contacts.ts` today,
+generalized):
+
+| flavour | a person | a group or step |
+|---|---|---|
+| `text/plain` | `Jean-Luc Picard <picard@enterprise.starfleet>`; `Name (+12025550101)`; `Name (slack:T01/U02)` | `Slack (datalib:group/slack)` |
+| `text/html` | `<a href="mailto:…" title="Jean-Luc Picard <picard@…>" data-entity="mailto:…">Jean-Luc Picard</a>` | `<a href="datalib:group/slack" title="slack" …>Slack</a>` |
+
+The lead and the mark are decoration (`user-select: none`) and are not
+copied. A paste into Mail or Slack keeps a working link; a paste back
+into datalib is a link the plugin chips again.
+
+## Clicks
+
+One pure function, `chipMenu(entity, resolved, canEdit): MenuEntry[]`
+(the `MenuEntry` of `ui/src/grid/menu.ts`), feeds every surface.
+
+- **Click**: the hover card, and for a person the link/create popover
+  (`HandlePopover.ce.vue`) where a contacts app is configured, as
+  today. The handler ignores `ev.detail > 1` so a double-click does not
+  also open it.
+- **Double-click opens the entity's own card**: a person's contact
+  card once [`contacts.md`](contacts.md) phase 4 lands, and until then
+  a search filtered to the handle; a group's row on Sources; a step's
+  log. In a grid cell it stops propagation, so it does not also open
+  the row.
+- **Right-click** opens the menu: copy name; copy identifier; copy as
+  `Name <identifier>`; show everything about this (the search or
+  filter); open the card; and for a person, link to a contact or
+  unlink, mark the handle as no longer working. In `DocCard.ce.vue`
+  this is a first branch in `onPaneContextMenu`'s cascade, ahead of
+  selection and message. In a SlickGrid cell it goes through the
+  slot-bank menu of `grid/menu.ts`, which already builds entries per
+  click; the entries for a chip under the pointer come before the
+  row's.
+
+The document body is drawn in a frame whose policy runs no script
+(`docFrame.ts`), as today; the viewer's own code reaches in to
+decorate and to listen, and the hover card, popover and menu are drawn
+out here over the frame, as `ChatBody.ce.vue` does now.
+
+## Order of work
+
+1. **The link and the plugin.** `Handle::to_uri`/`from_uri` and the TS
+   mirror; `chat-common` writes the author and recipients as links;
+   `LAYOUT_VERSION`; the markdown-it plugin; the sanitizer's two
+   schemes; `chip.css`; `decorateChips` replacing `decorateHandles`;
+   the trust test replaced; copy emitting `<a href>`; goldens and
+   snapshots updated, the render preview now showing unresolved chips.
+   The chat-common README's header section and the sanitizer's
+   vocabulary test change in the same PR.
+2. **Chips in bodies.** Reactions: `NormalizedReaction` gains
+   `reactor_handle` (the contacts work fills it for Slack, WhatsApp,
+   Signal and Beeper), and chat-common emits the reactor as a link; no
+   provider writes a span or a link of its own. Slack `<@U…>` mentions
+   are the Slack render's own mrkdwn conversion
+   (`slack_render/src/render/mrkdwn.rs`), so they become
+   `[@Name](slack://user?team=T&id=U)` in a Slack PR after step 1
+   gives it `Handle::to_uri`. System events as each provider gets a
+   handle for them.
+3. **Clicks in the viewer.** `chipMenu`; right-click in `DocCard`;
+   double-click; the click handler's `detail` guard.
+4. **The grid.** `Identity.id` as a URI on Manage; `author_handle` and
+   the identity Author column; the identity formatter through
+   `chipLook`; visible-page resolution; menu and double-click in a
+   cell; `copyRows`. cards.md's typed-cells section updated.
+5. **Photos.** `photo` on `DatalibContact`; the contacts applet's photo
+   route; the index's asset route for source avatars.
+
+Steps 1 and 3 are where the pattern is set; 2, 4 and 5 are its
+extension to the other places the same entities show.

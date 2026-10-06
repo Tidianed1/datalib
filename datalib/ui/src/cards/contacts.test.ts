@@ -1,4 +1,4 @@
-// The chip rules: which spans count, what a chip and its hover card say,
+// The chip rules: which links count, what a chip and its hover card say,
 // what a copy carries, and the name a new contact is offered.
 
 import { describe, expect, it } from "vitest";
@@ -12,7 +12,7 @@ import {
   rewriteChipsForCopy,
   suggestedName,
   todayPartialDate,
-  trustedHandleSpans,
+  chipAnchors,
 } from "./contacts";
 
 function dom(html: string): HTMLElement {
@@ -21,50 +21,24 @@ function dom(html: string): HTMLElement {
   return div;
 }
 
-const header = (handle: string, name: string) =>
-  `<h2><span class="msg-author" data-handle="${handle}">${name}</span> <time class="msg-ts">x</time></h2>`;
+const chip = (handle: string, name: string) =>
+  `<a class="chip" href="x" data-handle="${handle}">${name}</a>`;
 
-describe("trustedHandleSpans", () => {
-  it("takes the header's author span", () => {
+describe("chipAnchors", () => {
+  /** A chip may sit anywhere: the header, the To line, a mention in the
+   *  body. What makes it one is the mark `chipLinks.js` put on a link
+   *  whose href names a handle, and nothing else. */
+  it("takes every marked chip link, wherever it is, and no other link", () => {
     const root = dom(
-      `<div id="m-1" data-section-uuid="1" class="msg">${header("email:riker@enterprise.org", "Will Riker")}<p>Number One.</p></div>`,
+      `<div id="m-1" data-section-uuid="1" class="msg"><h2>${chip("email:riker@enterprise.org", "Will Riker")} <time class="msg-ts">x</time></h2>` +
+        `<p><span class="msg-recipients">To ${chip("email:troi@enterprise.org", "Deanna")}</span></p>` +
+        `<p>Ask ${chip("slack:T1/U2", "@data")}, or <a href="mailto:bare@enterprise.org">this</a>, ` +
+        `or <span data-handle="email:forged@enterprise.org">me</span>.</p></div>`,
     );
-    const spans = trustedHandleSpans(root);
-    expect(spans.map((s) => s.dataset.handle)).toEqual(["email:riker@enterprise.org"]);
-  });
-
-  /** A message body is HTML its sender wrote; a `data-handle` in it must
-   *  never become a chip naming one of the reader's contacts. */
-  it("ignores a data-handle a message body wrote", () => {
-    const forged = header("email:picard@enterprise.org", "Captain Picard");
-    const root = dom(
-      `<div id="m-1" data-section-uuid="1" class="msg">${header("email:q@continuum.org", "Q")}` +
-        `<p>${forged}</p>${forged}` +
-        `<div id="m-2" data-section-uuid="2" class="msg">${forged}</div></div>` +
-        // A header with no author: the body's span is not the header's.
-        `<div id="m-3" data-section-uuid="3" class="msg"><h2><time>x</time></h2>${forged}</div>`,
-    );
-    expect(trustedHandleSpans(root).map((s) => s.dataset.handle)).toEqual([
-      "email:q@continuum.org",
-    ]);
-  });
-
-  /** The To line is the header's next element; one a body writes later,
-   *  or one that does not follow the header, names nobody. */
-  it("takes the recipients line right under the header, and no other", () => {
-    const line = (handle: string) =>
-      `<div class="msg-recipients"><span class="msg-recipients-role">To</span> ` +
-      `<span class="msg-recipient" data-handle="${handle}">Someone</span></div>`;
-    const root = dom(
-      `<div id="m-1" data-section-uuid="1" class="msg">${header("email:q@continuum.org", "Q")}` +
-        `${line("email:riker@enterprise.org")}<p>hi</p>${line("email:forged@enterprise.org")}</div>` +
-        `<div id="m-2" data-section-uuid="2" class="msg">${header("email:q@continuum.org", "Q")}` +
-        `<p>between</p>${line("email:forged2@enterprise.org")}</div>`,
-    );
-    expect(trustedHandleSpans(root).map((s) => s.dataset.handle)).toEqual([
-      "email:q@continuum.org",
+    expect(chipAnchors(root).map((a) => a.dataset.handle)).toEqual([
       "email:riker@enterprise.org",
-      "email:q@continuum.org",
+      "email:troi@enterprise.org",
+      "slack:T1/U2",
     ]);
   });
 });
@@ -108,6 +82,24 @@ describe("chipLook", () => {
     expect(look.icon).toBe("email");
     expect(look.classes).toContain("handle-linkable");
     expect(chipLook(TEL, "+15550123456", NOBODY, true).text).toBe("+15550123456");
+  });
+
+  /** A link a sender wrote can name anyone it likes; the chip says who
+   *  the handle really is. This is what lets a chip sit anywhere in a
+   *  body (docs/dev/plans/chips.md § Trust). */
+  it("shows the resolved name, never the link's text", () => {
+    const who = {
+      mine: null,
+      accounts: [contact("slack", "Q", [["email:q@continuum.org", null]])],
+    };
+    expect(chipLook("email:q@continuum.org", "Captain Picard", who, true).text).toBe("Q");
+    const mine = contact("datalib_contacts", "Q", [["email:q@continuum.org", null]]);
+    expect(
+      chipLook("email:q@continuum.org", "Captain Picard", { mine, accounts: [] }, true).text,
+    ).toBe("Q");
+    expect(
+      hoverCard("email:q@continuum.org", "Captain Picard", { mine, accounts: [] }, true).lines,
+    ).toContain("Shown here as “Captain Picard”");
   });
 
   it("names an unlinked handle after the best source's account, linkable only with the app", () => {
@@ -172,15 +164,16 @@ describe("copy", () => {
 
   /** A copied chip once came out as "WWill Riker": the initial disc's
    *  letter and the name, with the address gone. */
-  it("replaces each chip in a selection, disc and all, keeping data-handle", () => {
+  it("replaces each chip in a selection, disc and all, with the link it was written as", () => {
     const root = dom(
-      `<p>From <span class="msg-author handle-chip handle-resolved" data-handle="email:riker@enterprise.org" data-label="Will Riker"><span class="handle-initial">W</span>Will Riker</span>, hello</p>`,
+      `<p>From <a class="chip handle-chip handle-resolved" href="mailto:riker@enterprise.org" data-handle="email:riker@enterprise.org" data-label="Will Riker"><span class="handle-initial">W</span>Will Riker</a>, hello</p>`,
     );
     expect(rewriteChipsForCopy(root)).toBe(true);
     expect(root.textContent).toBe("From Will Riker <riker@enterprise.org>, hello");
-    expect(root.querySelector("[data-handle]")?.getAttribute("data-handle")).toBe(
-      "email:riker@enterprise.org",
-    );
+    const a = root.querySelector("a");
+    expect(a?.getAttribute("href")).toBe("mailto:riker@enterprise.org");
+    expect(a?.getAttribute("title")).toBe("Will Riker <riker@enterprise.org>");
+    expect(a?.getAttribute("data-handle")).toBe("email:riker@enterprise.org");
     expect(rewriteChipsForCopy(dom("<p>no chips</p>"))).toBe(false);
   });
 });

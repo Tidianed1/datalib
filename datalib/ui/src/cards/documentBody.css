@@ -236,7 +236,7 @@
    would leave a stack of them on screen. The negative margins let the
    pinned bar cover the card's full width rather than letting content
    slide through the padding beside it. */
-.chat-body > .msg.msg--long > h2:has(> .msg-author) {
+.chat-body > .msg.msg--long > h2:has(> .msg-author, > a.chip) {
   position: sticky;
   top: 0;
   z-index: 1;
@@ -244,7 +244,7 @@
   margin: -0.5rem -0.75rem 0.15rem;
   padding: 0.3rem 0.75rem 0.25rem;
 }
-.chat-body > .msg.msg--long.selected > h2:has(> .msg-author) {
+.chat-body > .msg.msg--long.selected > h2:has(> .msg-author, > a.chip) {
   background: var(--datalib-hover, #f0f0f0);
 }
 /* Only while it is actually pinned: an edge and a shadow, so the line
@@ -415,7 +415,7 @@
    Slack's one-line "Name  time", not as a document section, hence the
    reset below. `:has()` keeps it off an h2 that came from the message
    *body* (someone pasting markdown with their own headings). */
-.chat-body .msg h2:has(> .msg-author) {
+.chat-body .msg h2:has(> .msg-author, > a.chip) {
   font-size: 1em;
   font-weight: 400;
   line-height: 1.3;
@@ -427,15 +427,28 @@
   flex-wrap: wrap;
   gap: 0.4rem;
 }
-.chat-body .msg-author {
+.chat-body .msg-author,
+.chat-body .msg h2 > a.chip {
   font-weight: 600;
 }
+/* A chip is a link the app resolves (docs/dev/plans/chips.md): drawn as
+   the person, not as a link. */
+.chat-body a.chip {
+  color: inherit;
+  text-decoration: none;
+}
+/* The recipients line is a paragraph of its own under the header. */
+.chat-body p:has(> .msg-recipients:only-child) {
+  margin: 0;
+}
 .chat-body .msg-recipients {
+  display: block;
   font-size: 0.8rem;
   color: var(--datalib-muted, #94a3b8);
   margin: 0 0 0.3rem;
 }
-.chat-body .msg-recipients .msg-recipient {
+.chat-body .msg-recipients .msg-recipient,
+.chat-body .msg-recipients a.chip {
   color: var(--datalib-fg, inherit);
 }
 /* A handle the contacts app can name: a chip. One it cannot yet: the
@@ -509,7 +522,7 @@
 /* Inside a group every step has the same author and near-identical
    time, so the header is there for its anchor and its copy button, not
    to be read. */
-.chat-body details.tool-group .msg h2:has(> .msg-author) {
+.chat-body details.tool-group .msg h2:has(> .msg-author, > a.chip) {
   font-size: 0.8em;
   opacity: 0.7;
 }

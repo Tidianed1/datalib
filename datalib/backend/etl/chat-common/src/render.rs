@@ -22,7 +22,7 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// `datalib_step`'s render step checks that every version stored on
 /// disk is one its processors declare, so this must not be mixed into
 /// the stored value.
-pub const LAYOUT_VERSION: u32 = 8;
+pub const LAYOUT_VERSION: u32 = 9;
 
 /// What every chat-common provider declares through
 /// `RenderProcessor::render_params`, merged with its own knobs: the
@@ -47,7 +47,7 @@ use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::periodize::Period;
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::message::{timestamp_html, MessageHeader};
+use datalib_etl_render::message::{chip_link, timestamp_html, MessageHeader};
 use datalib_etl_render::section::{join, msg_div_open_with, Section};
 use datalib_etl_render::title::Title;
 use datalib_schema::grid_rows::GridRow;
@@ -57,7 +57,7 @@ use datalib_schema::providers::Provider;
 use crate::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
 use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::html::{
-    escape_attr, escape_md_block, escape_md_inline, escape_text, md_code_span, md_link_dest,
+    escape_attr, escape_md_block, escape_md_inline, md_code_span, md_link_dest,
 };
 
 /// What a provider's [`NormalizedChatItem::text`] is: what a person
@@ -541,7 +541,7 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
             if let Some(line) = recipients_line(&item.recipients) {
                 s.push('\n');
                 s.push_str(&line);
-                s.push('\n');
+                s.push_str("\n\n");
             }
         }
     }
@@ -608,10 +608,11 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
     Section::keyed(&item.message_uuid, s)
 }
 
-/// Who an item was addressed to, one line straight under its header:
-/// `To <span data-handle="email:…">Will Riker</span>, …; Cc …`. The UI
-/// trusts a `data-handle` here only because nothing a sender wrote can
-/// come between the header and this line.
+/// Who an item was addressed to, one paragraph straight under its
+/// header: `To [Will Riker](mailto:…), …; Cc …`, each recipient with a
+/// handle a chip link and each without a plain span. It is a paragraph
+/// with inline HTML, not an HTML block, because markdown is not parsed
+/// inside a block and the links have to be.
 fn recipients_line(recipients: &[crate::types::Recipient]) -> Option<String> {
     use crate::types::RecipientRole;
     let mut groups: Vec<String> = Vec::new();
@@ -619,14 +620,12 @@ fn recipients_line(recipients: &[crate::types::Recipient]) -> Option<String> {
         let names: Vec<String> = recipients
             .iter()
             .filter(|r| r.role == role)
-            .map(|r| {
-                let handle = r.handle.as_ref().map_or(String::new(), |h| {
-                    format!(" data-handle=\"{}\"", escape_attr(h.as_str()))
-                });
-                format!(
-                    "<span class=\"msg-recipient\"{handle}>{}</span>",
-                    escape_text(&r.display)
-                )
+            .map(|r| match &r.handle {
+                Some(h) => chip_link(&r.display, h),
+                None => format!(
+                    "<span class=\"msg-recipient\">{}</span>",
+                    escape_md_inline(&r.display)
+                ),
             })
             .collect();
         if !names.is_empty() {
@@ -637,8 +636,12 @@ fn recipients_line(recipients: &[crate::types::Recipient]) -> Option<String> {
             ));
         }
     }
-    (!groups.is_empty())
-        .then(|| format!("<div class=\"msg-recipients\">{}</div>", groups.join("; ")))
+    (!groups.is_empty()).then(|| {
+        format!(
+            "<span class=\"msg-recipients\">{}</span>",
+            groups.join("; ")
+        )
+    })
 }
 
 fn render_attachment(s: &mut String, att: &crate::types::NormalizedAttachment) {
@@ -1974,17 +1977,18 @@ mod tests {
         .unwrap();
         assert_eq!(
             line,
-            "<div class=\"msg-recipients\"><span class=\"msg-recipients-role\">To</span> \
-             <span class=\"msg-recipient\" data-handle=\"email:riker@enterprise.org\">Will Riker</span>, \
+            "<span class=\"msg-recipients\"><span class=\"msg-recipients-role\">To</span> \
+             [Will Riker](mailto:riker@enterprise.org \"Will Riker <riker@enterprise.org>\"), \
              <span class=\"msg-recipient\">Deanna Troi</span>; \
              <span class=\"msg-recipients-role\">Cc</span> \
-             <span class=\"msg-recipient\" data-handle=\"email:q@continuum.org\">&lt;Q&gt;</span></div>"
+             [&lt;Q&gt;](mailto:q@continuum.org \"<Q> <q@continuum.org>\")</span>"
         );
         assert_eq!(recipients_line(&[]), None);
     }
 
-    /// The recipients line is an HTML block; a blank line in a name
-    /// ended it, and markdown read the rest of the name (#992).
+    /// A blank line in a name once ended the recipients line and
+    /// markdown read the rest of the name (#992); the line is a
+    /// paragraph now, which a blank line would end just the same.
     #[test]
     fn a_recipient_with_a_blank_line_in_the_name_stays_in_the_line() {
         use crate::types::{Recipient, RecipientRole};
