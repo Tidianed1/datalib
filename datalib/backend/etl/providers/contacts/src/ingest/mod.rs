@@ -1,5 +1,5 @@
 //! CardDAV downloader entry point: discovery, then each address book
-//! kept in step through `datalib_etl::dav::sync`, which lists, stores
+//! kept in step through `datalib_etl_web::dav::sync`, which lists, stores
 //! and prunes; this crate says how a card becomes a row.
 
 pub mod api;
@@ -12,17 +12,17 @@ pub use db::{db_path_for, RawDb};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use datalib_etl::control::DownloadControl;
-use datalib_etl::dav::sync::{self, CollectionSync, ObjectStore};
 use datalib_etl::download_problems;
-use datalib_etl::http::LatchkeySettings;
 use datalib_etl::progress::Progress;
 use datalib_etl::raw_store::Sealer;
 use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_web::dav::sync::{self, CollectionSync, ObjectStore};
+use datalib_etl_web::http::LatchkeySettings;
 use sqlx::{Sqlite, Transaction};
 use tracing::info;
 
 use api::ContactProps;
-use datalib_etl::dav::absolutize;
+use datalib_etl_web::dav::absolutize;
 use db::{addressbook_pk, ContactRow};
 
 /// Options for one `fetch` run. Mirrors the FetchOptions shape every
@@ -294,7 +294,7 @@ async fn discover(
     summary: &mut FetchSummary,
     latchkey: &LatchkeySettings,
 ) -> Result<(String, String)> {
-    let principal_url = datalib_etl::dav::find_principal(
+    let principal_url = datalib_etl_web::dav::find_principal(
         api::HTTP_SERVICE,
         server_url,
         "carddav",

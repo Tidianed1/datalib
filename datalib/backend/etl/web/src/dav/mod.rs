@@ -420,7 +420,7 @@ pub fn parse_multistatus<P: DavProps>(body: &str) -> Result<Multistatus<P>, quic
             }
             Event::Eof => break,
             event => {
-                if let Some(t) = crate::xml::text_of(&event, false) {
+                if let Some(t) = datalib_etl::xml::text_of(&event, false) {
                     text.push_str(&t);
                 }
             }

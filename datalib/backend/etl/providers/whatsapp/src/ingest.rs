@@ -21,11 +21,11 @@ use std::str::FromStr;
 use datalib_etl::blob_cas::{BlobCas, CasInsert};
 use datalib_etl::doltlite_raw;
 use datalib_etl::download_problems::RecordProblem;
-use datalib_etl::fingerprint_cache::FingerprintCache;
-use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
+use datalib_etl_files::fsscan;
 use datalib_etl_sqlite_mirror::{mirror, MirrorOptions, MirrorStats};
 use datalib_whatsapp_backup::decrypt_file;
 

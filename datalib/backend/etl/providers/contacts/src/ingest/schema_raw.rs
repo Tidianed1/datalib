@@ -345,7 +345,7 @@ pub const LADDER: &[Migration] = &[
         version: 4,
         name: "dav_resources lists what each address book holds",
         apply: |conn| {
-            Box::pin(datalib_etl::dav::state::adopt(
+            Box::pin(datalib_etl_web::dav::state::adopt(
                 conn,
                 "contacts",
                 "addressbook_id",
@@ -431,11 +431,11 @@ pub fn full_ddl() -> Vec<String> {
         // file whose `(size, mtime)` hasn't moved since last run. The
         // CardDAV server path uses etags/sync-tokens instead and never
         // touches this table. See [`vcf_dir`].
-        datalib_etl::file_checkpoint::INGESTED_FILES_DDL.to_string(),
+        datalib_etl_files::file_checkpoint::INGESTED_FILES_DDL.to_string(),
     ];
     out.extend(GroupMemberRow::all_ddl());
     out.extend(ContactCategoryRow::all_ddl());
-    out.extend(datalib_etl::dav::state::ddl());
+    out.extend(datalib_etl_web::dav::state::ddl());
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));
     }

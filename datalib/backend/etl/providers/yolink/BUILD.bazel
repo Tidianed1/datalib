@@ -25,6 +25,7 @@ rust_library(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/web:datalib_etl_web",
         "//datalib/backend/etl/providers/yolink_config:datalib_etl_yolink_config",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
@@ -115,6 +116,7 @@ rust_test(
         ":datalib_etl_yolink",
         "//datalib/backend/etl/providers/yolink_config:datalib_etl_yolink_config",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/web:datalib_etl_web",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:chrono",
         "@datalib_crates//:sqlx",

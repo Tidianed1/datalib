@@ -4,9 +4,9 @@
 //! `schema_raw::LADDER`.
 
 use datalib_etl::doltlite_raw::{self as dr, WirePayloadRow};
-use datalib_etl::owed;
 use datalib_etl_slack::ingest::schema_raw::{slack_message_key, MessageRow, THREADS};
 use datalib_etl_slack::ingest::{db_path_for, RawDb};
+use datalib_etl_web::owed;
 
 const STAMPS_DDL: &str = "CREATE TABLE IF NOT EXISTS replies_pages (
     id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, thread_ts TEXT NOT NULL, latest_reply TEXT NULL

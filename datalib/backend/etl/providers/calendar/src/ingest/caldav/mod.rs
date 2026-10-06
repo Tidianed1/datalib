@@ -1,5 +1,5 @@
 //! CalDAV download (RFC 4791): discover the account's calendars, then
-//! keep each one in step through `datalib_etl::dav::sync`, which lists,
+//! keep each one in step through `datalib_etl_web::dav::sync`, which lists,
 //! stores and prunes, one resource per event series; this crate says
 //! how an object becomes a row. Fastmail, iCloud, Nextcloud and Google's
 //! CalDAV all answer `sync-collection`.
@@ -9,11 +9,11 @@ pub mod dav;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use datalib_etl::control::DownloadControl;
-use datalib_etl::dav::sync::{self, CollectionSync, ObjectStore};
-use datalib_etl::http::LatchkeySettings;
 use datalib_etl::progress::Progress;
 use datalib_etl::raw_store::Sealer;
 use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_web::dav::sync::{self, CollectionSync, ObjectStore};
+use datalib_etl_web::http::LatchkeySettings;
 use sqlx::{Sqlite, Transaction};
 use tracing::info;
 
@@ -218,7 +218,7 @@ async fn discover(
     lk: &LatchkeySettings,
     summary: &mut FetchSummary,
 ) -> Result<Discovered> {
-    let principal_url = datalib_etl::dav::find_principal(
+    let principal_url = datalib_etl_web::dav::find_principal(
         dav::HTTP_SERVICE,
         server_url,
         "caldav",

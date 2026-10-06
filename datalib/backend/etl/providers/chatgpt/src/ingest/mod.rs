@@ -2,7 +2,7 @@
 //! `/backend-api/conversations` lists them newest-updated-first and
 //! held at the `update_time` it names; each one's attachments are edges
 //! its row lists, owed until their bytes land. Both are fetched through
-//! `datalib_etl::owed`, which owns the stop, the failure budget, the
+//! `datalib_etl_web::owed`, which owns the stop, the failure budget, the
 //! flush and what each outcome means for a record. Nothing is marked
 //! done: holding the content at the listed version is done
 //! (docs/dev/plans/sync_state.md).
@@ -23,10 +23,10 @@ use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw::{self as dr, WirePayload};
 use datalib_etl::download_problems::DownloadProblem;
 use datalib_etl::download_run::DownloadRun;
-use datalib_etl::http::LatchkeySettings;
-use datalib_etl::owed::{self, Fetcher, Listed, Loop};
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
+use datalib_etl_web::http::LatchkeySettings;
+use datalib_etl_web::owed::{self, Fetcher, Listed, Loop};
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -143,7 +143,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 }
 
 async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
-    let _ = datalib_etl::latchkey::ensure_curl_router();
+    let _ = datalib_etl_web::latchkey::ensure_curl_router();
     let db = opts.db.clone();
     let run_config = json!({
         "max_pages": opts.max_pages,

@@ -6,7 +6,7 @@
 //! as changed. It is the one listing that has to be stored: a delta's
 //! answer cannot be asked for again once the token has moved. What is
 //! held for a message is `held_version` on its
-//! `listed_messages_bookkeeping` row, which `datalib_etl::owed` writes
+//! `listed_messages_bookkeeping` row, which `datalib_etl_web::owed` writes
 //! in the transaction that writes the email; what is owed is the
 //! difference, asked of the store each time and never stored.
 //! `listed_whole` names the scopes (a mailbox, a label, or the account)
@@ -18,7 +18,7 @@ use std::collections::BTreeSet;
 use anyhow::{Context, Result};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw as dr;
-use datalib_etl::owed::{self, Listed};
+use datalib_etl_web::owed::{self, Listed};
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::json;
 use sqlx::{Sqlite, SqliteConnection, SqlitePool, Transaction};

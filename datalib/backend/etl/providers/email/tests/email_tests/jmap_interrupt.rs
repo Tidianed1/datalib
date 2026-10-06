@@ -12,11 +12,11 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use async_trait::async_trait;
 use datalib_etl::control::DownloadControl;
-use datalib_etl::http::PLAYBACK_ENV;
-use datalib_etl::interrupt::{dump_tables, every_cut_resumes, How, Rig};
 use datalib_etl::stop::StopFlag;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_email::ingest::{db_path_for, fetch, FetchOptions, RawDb};
+use datalib_etl_web::http::PLAYBACK_ENV;
+use datalib_etl_web::interrupt::{dump_tables, every_cut_resumes, How, Rig};
 
 use crate::jmap_tape::{Account, Email, Tape, HOST};
 

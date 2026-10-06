@@ -162,7 +162,7 @@ fn credential_hint(e: ChatGPTError) -> anyhow::Error {
     if !setup_problem {
         return anyhow!("fetch /me: {s}");
     }
-    let lk = datalib_etl::latchkey::latchkey_cli_hint();
+    let lk = datalib_etl_web::latchkey::latchkey_cli_hint();
     anyhow!(
         "chatgpt.com credentials are not set up: {s}\n\
          Sign in through latchkey, which captures the access token itself:\n  \

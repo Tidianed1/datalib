@@ -1,5 +1,5 @@
 //! Garmin Connect API transport: every request goes through
-//! [`datalib_etl::http::latchkey_curl`]. latchkey's Garmin plugin holds
+//! [`datalib_etl_web::http::latchkey_curl`]. latchkey's Garmin plugin holds
 //! the credential and mints the hourly bearer from it.
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -9,7 +9,7 @@ use anyhow::{anyhow, bail, Result};
 use serde_json::Value;
 
 use datalib_etl::events;
-use datalib_etl::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
+use datalib_etl_web::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
 
 pub const TIMEOUT: Duration = Duration::from_secs(120);
 

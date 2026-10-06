@@ -320,7 +320,7 @@ impl RawDb {
             .await
             .context("begin delete addressbook tx")?;
         let contacts = Self::delete_addressbook(&mut tx, addressbook_id).await?;
-        datalib_etl::file_checkpoint::forget_file(&mut tx, checkpoint_scope, rel).await?;
+        datalib_etl_files::file_checkpoint::forget_file(&mut tx, checkpoint_scope, rel).await?;
         tx.commit().await.context("commit delete addressbook tx")?;
         Ok(contacts)
     }
@@ -352,7 +352,7 @@ impl RawDb {
         let mut contacts = 0;
         for id in gone {
             contacts += Self::delete_addressbook(&mut tx, id).await?;
-            datalib_etl::dav::state::forget_collection(&mut tx, id).await?;
+            datalib_etl_web::dav::state::forget_collection(&mut tx, id).await?;
         }
         tx.commit().await.context("commit delete addressbooks tx")?;
         Ok(contacts)

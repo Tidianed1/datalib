@@ -12,12 +12,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use datalib_etl::fingerprint_cache::FingerprintCache;
-use datalib_etl::fsscan;
-use datalib_etl::fswalk;
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
+use datalib_etl_files::fsscan;
+use datalib_etl_files::fswalk;
 
 pub use db::{db_path_for, RawDb, WriteBatch};
 use kind::{Container, MediaClass};
@@ -43,7 +43,7 @@ pub struct FetchOptions {
     pub root: PathBuf,
     pub ignore: Vec<String>,
     /// This host's shared fingerprint cache. Host state, so it lives
-    /// outside the scan store — see [`datalib_etl::fingerprint_cache`].
+    /// outside the scan store — see [`datalib_etl_files::fingerprint_cache`].
     pub cache: FingerprintCache,
     pub max_bytes: Option<u64>,
     pub payload_max_bytes: Option<u64>,

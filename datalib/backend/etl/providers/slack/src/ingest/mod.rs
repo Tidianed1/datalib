@@ -19,15 +19,15 @@ use tracing::{info, info_span, instrument, warn, Instrument};
 use api::{call_slack, SlackCall, SlackError};
 use async_trait::async_trait;
 use datalib_etl::bulk::BulkUpsertable;
-use datalib_etl::coverage::{self, Span};
 use datalib_etl::download_problems::{DownloadProblem, RunProblem};
 use datalib_etl::events;
-use datalib_etl::http::LatchkeySettings;
-use datalib_etl::owed::{self, BatchError, Fetched, Fetcher, Listed, Outcome};
 use datalib_etl::progress::RunBar;
 use datalib_etl::raw_store::Sealer;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
+use datalib_etl_web::coverage::{self, Span};
+use datalib_etl_web::http::LatchkeySettings;
+use datalib_etl_web::owed::{self, BatchError, Fetched, Fetcher, Listed, Outcome};
 pub use db::{
     block_on_load_all, db_path_for, Enumerated, FetchTarget, LoadedMessage, LoadedRaw,
     MessageInput, OwedFile, RawDb, Thread, UserDirectoryEntry,
@@ -1152,7 +1152,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 }
 
 async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
-    let _ = datalib_etl::latchkey::ensure_curl_router();
+    let _ = datalib_etl_web::latchkey::ensure_curl_router();
     let db = opts.db.clone();
 
     let since_dt =

@@ -24,7 +24,7 @@ use std::sync::Arc;
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 
-use crate::stop::StopFlag;
+use datalib_etl::stop::StopFlag;
 
 /// How a run is cut off at its chosen request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -305,7 +305,7 @@ mod tests {
         type Store = sqlx::SqlitePool;
 
         async fn open(&self, dir: &Path) -> Result<Self::Store> {
-            crate::doltlite_raw::open(
+            datalib_etl::doltlite_raw::open(
                 &dir.join("s.doltlite_db"),
                 &[
                     "CREATE TABLE IF NOT EXISTS items (id TEXT PRIMARY KEY)",
@@ -354,7 +354,7 @@ mod tests {
         }
 
         async fn seal(&self, pool: Self::Store) -> Result<()> {
-            crate::doltlite_raw::commit_run(&pool, "test").await?;
+            datalib_etl::doltlite_raw::commit_run(&pool, "test").await?;
             pool.close().await;
             Ok(())
         }

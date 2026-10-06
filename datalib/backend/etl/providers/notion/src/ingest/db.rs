@@ -1,7 +1,7 @@
 //! Doltlite-backed raw store for the Notion provider: what each table
 //! lists for the loop that fills the next, and how a flush of fetched
 //! records is written. Every write a fetcher makes is in the
-//! transaction `datalib_etl::owed` hands it, which then records what is
+//! transaction `datalib_etl_web::owed` hands it, which then records what is
 //! held; nothing here stamps a record done on its own.
 
 use std::collections::{HashMap, HashSet};
@@ -12,7 +12,7 @@ use sqlx::{Row, Sqlite, Transaction};
 
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::doltlite_raw::{self as dr};
-use datalib_etl::owed::{self, Listed};
+use datalib_etl_web::owed::{self, Listed};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 

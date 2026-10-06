@@ -4,7 +4,7 @@
 //! singletons are named for the endpoint they came from. What a row is
 //! held *for* — the date a day is final from, the listing version a
 //! detail or a file was answered for — is `held_version` in the table's
-//! `_bookkeeping` sidecar (`datalib_etl::owed`), never a column here.
+//! `_bookkeeping` sidecar (`datalib_etl_web::owed`), never a column here.
 
 use anyhow::Result;
 use sqlx::SqliteConnection;
@@ -248,7 +248,7 @@ pub fn full_ddl() -> Vec<String> {
         ActivityRow::ddl(),
         ACTIVITIES_BY_START_INDEX_DDL.to_string(),
         ActivityDetailRow::ddl(),
-        datalib_etl::coverage::DDL.to_string(),
+        datalib_etl_web::coverage::DDL.to_string(),
     ];
     out.extend(DailyRow::all_ddl());
     out.extend(ItemRow::all_ddl());

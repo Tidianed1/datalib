@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use chrono::{NaiveDateTime, TimeZone};
 use sqlx::sqlite::SqlitePool;
 
-use datalib_etl::fsscan::{self, ScannedFile};
+use datalib_etl_files::fsscan::{self, ScannedFile};
 
 use super::unpack::{is_catalog, is_zip};
 

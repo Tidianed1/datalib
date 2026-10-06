@@ -3,12 +3,12 @@
 //! Notion rows). Each test here was written against the old code and
 //! watched failing before the mechanism it names was replaced.
 
-use datalib_etl::interrupt::{self, How};
-use datalib_etl::retry::{self, RetryGuard};
 use datalib_etl::stop::StopFlag;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_notion::ingest::official::BASE;
 use datalib_etl_notion::ingest::{fetch, FetchOptions, RawDb};
+use datalib_etl_web::interrupt::{self, How};
+use datalib_etl_web::retry::{self, RetryGuard};
 use serde_json::json;
 use tempfile::tempdir;
 
@@ -45,7 +45,7 @@ async fn a_failed_comments_listing_survives_the_page_being_written_again() {
         fast,
         stop.clone(),
     );
-    std::env::set_var(datalib_etl::http::PLAYBACK_ENV, &tape);
+    std::env::set_var(datalib_etl_web::http::PLAYBACK_ENV, &tape);
     let db = RawDb::open(&store).await.unwrap();
     let ran = interrupt::run(
         Some(2),

@@ -5,7 +5,7 @@
 //! land. A project's listing entry is its metadata, held at its
 //! `updated_at`; its knowledge docs are a listing of their own, held at
 //! the same stamp and due again after a day. Every fetch goes through
-//! `datalib_etl::owed`, which owns the stop, the failure budget, the
+//! `datalib_etl_web::owed`, which owns the stop, the failure budget, the
 //! flush and what each outcome means for a record. Nothing is marked
 //! done: holding the content at the listed version is done
 //! (docs/dev/plans/sync_state.md).
@@ -30,11 +30,11 @@ use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw::{self as dr, WirePayload};
 use datalib_etl::download_problems::{DownloadProblem, RunProblem};
 use datalib_etl::download_run::DownloadRun;
-use datalib_etl::http::LatchkeySettings;
-use datalib_etl::owed::{self, Fetcher, Held, Listed, Loop};
 use datalib_etl::progress::RunBar;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
+use datalib_etl_web::http::LatchkeySettings;
+use datalib_etl_web::owed::{self, Fetcher, Held, Listed, Loop};
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -199,7 +199,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 }
 
 async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
-    let _ = datalib_etl::latchkey::ensure_curl_router();
+    let _ = datalib_etl_web::latchkey::ensure_curl_router();
     let db = opts.db.clone();
     let run_config = json!({
         "overlap": opts.overlap,
@@ -1084,7 +1084,7 @@ pub fn credential_hint(e: ClaudeError) -> anyhow::Error {
     if !setup_problem {
         return anyhow::anyhow!("list orgs: {s}");
     }
-    let lk = datalib_etl::latchkey::latchkey_cli_hint();
+    let lk = datalib_etl_web::latchkey::latchkey_cli_hint();
     anyhow::anyhow!(
         "claude.ai credentials are not set up: {s}\n\
          The credential is the `sessionKey` cookie. Copy the one your\n\

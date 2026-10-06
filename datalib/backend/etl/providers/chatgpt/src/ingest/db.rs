@@ -1,7 +1,7 @@
 //! Doltlite-backed raw store for the ChatGPT provider: what the store
 //! lists for the attachment loop, and how a fetched conversation or a
 //! blob is written in the transaction the loop hands over. The loop
-//! (`datalib_etl::owed`) records what is held; nothing here stamps a
+//! (`datalib_etl_web::owed`) records what is held; nothing here stamps a
 //! record done on its own.
 
 use std::collections::HashSet;
@@ -14,7 +14,7 @@ use sqlx::{Row, Sqlite, Transaction};
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::bulk::bulk_upsert_entity_in_tx;
 use datalib_etl::doltlite_raw::WirePayload;
-use datalib_etl::owed::Listed;
+use datalib_etl_web::owed::Listed;
 
 use super::schema_raw::{
     full_ddl, ConversationAttachmentRow, ConversationRow, ATTACHMENTS, LADDER,
@@ -304,7 +304,7 @@ pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datalib_etl::owed;
+    use datalib_etl_web::owed;
     use serde_json::json;
 
     #[tokio::test]

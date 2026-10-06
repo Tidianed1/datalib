@@ -1417,11 +1417,9 @@ async fn apply_table_plan(
 /// The tables a resume cursor can live in, store-wide. Per-row cursors
 /// (a sidecar's `last_ts_ms`, an address book's `ctag`) go with the
 /// table that holds them; these three outlive any one table.
-const CURSOR_TABLES: &[&str] = &[
-    "sync_scope_state",
-    "sync_scope_config",
-    crate::file_checkpoint::INGESTED_FILES_TABLE,
-];
+/// `ingested_files` is `datalib_etl_files`' file checkpoint, which tests
+/// that its table is named here.
+pub const CURSOR_TABLES: &[&str] = &["sync_scope_state", "sync_scope_config", "ingested_files"];
 
 /// A cursor is only valid under the schema that set it. A recreated
 /// table is empty, and so is one that just appeared, and a cursor that
@@ -2598,10 +2596,7 @@ mod tests {
     /// be counted as the source's records on the History card.
     #[test]
     fn history_counts_no_shared_table_as_records() {
-        for t in SHARED_TABLES
-            .iter()
-            .chain([&crate::file_checkpoint::INGESTED_FILES_TABLE])
-        {
+        for t in SHARED_TABLES.iter().chain(CURSOR_TABLES) {
             assert!(!datalib_history::holds_records(t), "{t}");
         }
         let sidecar = parse_create_table_name(&bookkeeping_ddl_for("widgets")).unwrap();
@@ -3595,7 +3590,15 @@ mod tests {
     /// cursor, the scope's config record, and a file checkpoint.
     async fn store_with_cursors(p: &Path, ddl: &[&str]) {
         let pool = open(p, ddl).await.unwrap();
-        crate::file_checkpoint::ensure_schema(&pool).await.unwrap();
+        // The file checkpoint's table, which `datalib_etl_files` creates;
+        // only its name and a row in it matter here.
+        sqlx::query(
+            "CREATE TABLE ingested_files (scope TEXT, rel_path TEXT, blake3 TEXT, \
+             size_bytes INTEGER, last_finished_at_utc TEXT, PRIMARY KEY (scope, rel_path))",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query("INSERT INTO widgets (id, name) VALUES ('w1', 'gadget')")
             .execute(&pool)
             .await
