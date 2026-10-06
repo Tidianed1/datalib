@@ -14,15 +14,15 @@ use datalib_etl_calendar::ingest::google::{
 use datalib_etl_calendar::ingest::{db_path_for, FetchSummary, RawDb, Window};
 use serde_json::{json, Value};
 
-const PRIMARY: &str = "picard@enterprise.test";
-const AWAY: &str = "c_awayteam@group.calendar.google.com";
+pub(crate) const PRIMARY: &str = "picard@enterprise.test";
+pub(crate) const AWAY: &str = "c_awayteam@group.calendar.google.com";
 
-fn fixture(root: &Path, url: &str, resp: HttpResponse) {
+pub(crate) fn fixture(root: &Path, url: &str, resp: HttpResponse) {
     let req = HttpRequest::get(google::HTTP_SERVICE, url).header("Accept", "application/json");
     write_fixture(root, &req, &resp).expect("write fixture");
 }
 
-fn page(items: Value, next_page: Option<&str>, next_sync: Option<&str>) -> HttpResponse {
+pub(crate) fn page(items: Value, next_page: Option<&str>, next_sync: Option<&str>) -> HttpResponse {
     let mut v = json!({"kind": "calendar#events", "items": items});
     if let Some(p) = next_page {
         v["nextPageToken"] = json!(p);
@@ -33,7 +33,7 @@ fn page(items: Value, next_page: Option<&str>, next_sync: Option<&str>) -> HttpR
     json_response(&v)
 }
 
-fn calendar_list(root: &Path) {
+pub(crate) fn calendar_list(root: &Path) {
     fixture(
         root,
         &calendar_list_url(None),

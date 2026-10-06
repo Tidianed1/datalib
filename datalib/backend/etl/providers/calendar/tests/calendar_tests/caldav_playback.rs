@@ -13,15 +13,15 @@ use datalib_etl::synthesize::write_fixture;
 use datalib_etl_calendar::ingest::caldav::{self, dav};
 use datalib_etl_calendar::ingest::{db_path_for, FetchSummary, RawDb};
 
-const HOST: &str = "https://caldav.enterprise.test";
-const PRINCIPAL: &str = "/dav/principals/user/picard@enterprise.test/";
-const HOME: &str = "/dav/calendars/user/picard@enterprise.test/";
-const BRIDGE: &str = "/dav/calendars/user/picard@enterprise.test/2c1f4e0a-bridge/";
+pub(crate) const HOST: &str = "https://caldav.enterprise.test";
+pub(crate) const PRINCIPAL: &str = "/dav/principals/user/picard@enterprise.test/";
+pub(crate) const HOME: &str = "/dav/calendars/user/picard@enterprise.test/";
+pub(crate) const BRIDGE: &str = "/dav/calendars/user/picard@enterprise.test/2c1f4e0a-bridge/";
 
-const STAFF: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Fastmail/2020.5/EN\r\nBEGIN:VEVENT\r\nUID:tng-staff@enterprise.test\r\nSUMMARY:Senior staff briefing\r\nDTSTART;TZID=America/Los_Angeles:20260105T090000\r\nDTEND;TZID=America/Los_Angeles:20260105T100000\r\nRRULE:FREQ=WEEKLY;BYDAY=MO,TH\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
-const RECEPTION: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Fastmail/2020.5/EN\r\nBEGIN:VEVENT\r\nUID:tng-reception@enterprise.test\r\nSUMMARY:Reception for the Klingon delegation\r\nDTSTART;TZID=America/Los_Angeles:20260918T190000\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+pub(crate) const STAFF: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Fastmail/2020.5/EN\r\nBEGIN:VEVENT\r\nUID:tng-staff@enterprise.test\r\nSUMMARY:Senior staff briefing\r\nDTSTART;TZID=America/Los_Angeles:20260105T090000\r\nDTEND;TZID=America/Los_Angeles:20260105T100000\r\nRRULE:FREQ=WEEKLY;BYDAY=MO,TH\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+pub(crate) const RECEPTION: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Fastmail/2020.5/EN\r\nBEGIN:VEVENT\r\nUID:tng-reception@enterprise.test\r\nSUMMARY:Reception for the Klingon delegation\r\nDTSTART;TZID=America/Los_Angeles:20260918T190000\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
 
-fn xml(status: u16, body: &str) -> HttpResponse {
+pub(crate) fn xml(status: u16, body: &str) -> HttpResponse {
     let mut headers = BTreeMap::new();
     headers.insert(
         "content-type".into(),
@@ -35,7 +35,7 @@ fn xml(status: u16, body: &str) -> HttpResponse {
     }
 }
 
-fn fixture(
+pub(crate) fn fixture(
     root: &Path,
     method: HttpMethod,
     url: &str,
@@ -47,7 +47,7 @@ fn fixture(
     write_fixture(root, &req, &resp).expect("write fixture");
 }
 
-fn resource(href: &str, etag: &str, ics: &str) -> String {
+pub(crate) fn resource(href: &str, etag: &str, ics: &str) -> String {
     format!(
         "<response><href>{href}</href><propstat><prop><getetag><![CDATA[{etag}]]></getetag>\
          <C:calendar-data><![CDATA[{ics}]]></C:calendar-data></prop>\
@@ -55,14 +55,14 @@ fn resource(href: &str, etag: &str, ics: &str) -> String {
     )
 }
 
-fn multistatus(inner: &str) -> String {
+pub(crate) fn multistatus(inner: &str) -> String {
     format!(
         r#"<?xml version="1.0" encoding="utf-8"?><multistatus xmlns="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav" xmlns:A="http://apple.com/ns/ical/">{inner}</multistatus>"#
     )
 }
 
 /// Discovery and the calendar listing, shared by both runs.
-fn account_fixtures(root: &Path) {
+pub(crate) fn account_fixtures(root: &Path) {
     let find_principal = dav::BODY_CURRENT_USER_PRINCIPAL;
     fixture(
         root,

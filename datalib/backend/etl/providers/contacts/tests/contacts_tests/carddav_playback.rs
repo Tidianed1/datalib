@@ -13,16 +13,16 @@ use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl::synthesize::write_fixture;
 use datalib_etl_contacts::ingest::{self, api, db_path_for, RawDb};
 
-const HOST: &str = "https://carddav.enterprise.test";
-const PRINCIPAL: &str = "/dav/principals/user/picard@enterprise.test/";
-const HOME: &str = "/dav/addressbooks/user/picard@enterprise.test/";
-const BOOK: &str = "/dav/addressbooks/user/picard@enterprise.test/Default/";
+pub(crate) const HOST: &str = "https://carddav.enterprise.test";
+pub(crate) const PRINCIPAL: &str = "/dav/principals/user/picard@enterprise.test/";
+pub(crate) const HOME: &str = "/dav/addressbooks/user/picard@enterprise.test/";
+pub(crate) const BOOK: &str = "/dav/addressbooks/user/picard@enterprise.test/Default/";
 
-const BRIDGE_V1: &str = include_str!("../fixtures/carddav_tng/Bridge.vcf");
-const BRIDGE_V2: &str = include_str!("../fixtures/carddav_tng_v2/Bridge.vcf");
+pub(crate) const BRIDGE_V1: &str = include_str!("../fixtures/carddav_tng/Bridge.vcf");
+pub(crate) const BRIDGE_V2: &str = include_str!("../fixtures/carddav_tng_v2/Bridge.vcf");
 
 /// `(UID, the card as served)` for each card of a `.vcf`.
-fn cards(vcf: &str) -> Vec<(String, String)> {
+pub(crate) fn cards(vcf: &str) -> Vec<(String, String)> {
     vcf.split_inclusive("END:VCARD\r\n")
         .map(|card| {
             let uid = api::vcard_uid(card).expect("every Bridge card has a UID");
@@ -31,11 +31,11 @@ fn cards(vcf: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-fn card<'a>(cards: &'a [(String, String)], uid: &str) -> &'a str {
+pub(crate) fn card<'a>(cards: &'a [(String, String)], uid: &str) -> &'a str {
     &cards.iter().find(|(u, _)| u == uid).expect(uid).1
 }
 
-fn xml(status: u16, body: &str) -> HttpResponse {
+pub(crate) fn xml(status: u16, body: &str) -> HttpResponse {
     let mut headers = BTreeMap::new();
     headers.insert(
         "content-type".into(),
@@ -49,7 +49,7 @@ fn xml(status: u16, body: &str) -> HttpResponse {
     }
 }
 
-fn fixture(
+pub(crate) fn fixture(
     root: &Path,
     method: HttpMethod,
     url: &str,
@@ -68,7 +68,7 @@ fn fixture(
     write_fixture(root, &req, &resp).expect("write fixture");
 }
 
-fn resource(uid: &str, etag: &str, vcard: &str) -> String {
+pub(crate) fn resource(uid: &str, etag: &str, vcard: &str) -> String {
     format!(
         "<response><href>{BOOK}{uid}.vcf</href><propstat><prop><getetag>{etag}</getetag>\
          <card:address-data><![CDATA[{vcard}]]></card:address-data></prop>\
@@ -76,14 +76,14 @@ fn resource(uid: &str, etag: &str, vcard: &str) -> String {
     )
 }
 
-fn multistatus(inner: &str) -> String {
+pub(crate) fn multistatus(inner: &str) -> String {
     format!(
         r#"<?xml version="1.0" encoding="utf-8"?><multistatus xmlns="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav" xmlns:cs="http://calendarserver.org/ns/">{inner}</multistatus>"#
     )
 }
 
 /// Discovery and the addressbook listing, shared by both runs.
-fn account_fixtures(root: &Path) {
+pub(crate) fn account_fixtures(root: &Path) {
     let find_principal = dav::BODY_CURRENT_USER_PRINCIPAL;
     fixture(
         root,
