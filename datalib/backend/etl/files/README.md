@@ -88,7 +88,7 @@ the Manage row. Key rows against `scan.given_resolved`, not the configured
 path: the scan's paths are resolved, and stripping an unresolved prefix
 fails whenever a symlink is in the way.
 
-A source keyed by *content* (mbox, SMS backups, Takeout Voice) cannot map
+A source keyed by *content* (SMS backups, Takeout Voice) cannot map
 a path to rows, and its files overlap: two exports hold one message. When
 `changes.may_have_dropped_records()` (a file removed or rewritten, after a
 clean walk) it reads every file, and a run that read every file without a

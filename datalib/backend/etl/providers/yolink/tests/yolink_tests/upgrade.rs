@@ -112,6 +112,7 @@ async fn a_store_with_the_cursor_opens_with_what_it_walked_as_coverage() {
                 day(7),
                 day(14) + FIVE_MIN
             ),
+            "CREATE TABLE IF NOT EXISTS sync_scope_config (scope TEXT PRIMARY KEY, config TEXT NOT NULL, updated_at_utc TEXT NOT NULL, tz_offset TEXT NULL)".to_string(),
             "INSERT INTO sync_scope_config (scope, config, updated_at_utc, tz_offset) VALUES \
              ('yolink:download', '{\"device_starts\":{\"cargo-bay-2\":\"2369-04-08\"}}', \
              '2369-04-20T12:00:00Z', '+00:00')"
@@ -176,16 +177,13 @@ async fn a_store_with_the_cursor_opens_with_what_it_walked_as_coverage() {
         windows_problems, 0,
         "a failed window's row went with its table"
     );
-    let scope_config: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM sync_scope_config WHERE scope = 'yolink:download'",
+    let retired: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'sync_scope_config'",
     )
     .fetch_one(pool)
     .await
     .unwrap();
-    assert_eq!(
-        scope_config, 0,
-        "the record of the config went with the cursor"
-    );
+    assert_eq!(retired, 0, "the record of the config went with its table");
     db.close().await;
 
     let again = RawDb::open(&path).await.unwrap();
