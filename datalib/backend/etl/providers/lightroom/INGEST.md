@@ -79,6 +79,34 @@ The test fixture is minted by `//tests/fixtures:make_lightroom_catalog.py`
 in a genrule rather than by Rust, so the input stays independent of the
 engine under test.
 
+### A source with nothing in it is refused
+
+SQLite opens a 0-byte file as an empty database, so a catalog truncated
+or replaced by a placeholder reads as one with no tables, and the drop
+above would empty the mirror. The engine refuses any source that leaves
+it no table to mirror — no tables at all, or filters that match none —
+before it drops anything (`NothingToMirror`). Run through
+`mirror::run_or_report` inside a download's problem collector, that is
+a `phase:source` row and the run seals with the mirror as it was;
+through `mirror::run`, it fails the run. A file that is not SQLite at
+all fails at the `ATTACH` the same way.
+
+### A source that evicts: `append_only`
+
+Some sources keep only a window: Messages with "Keep messages" set to
+30 days deletes older messages from `chat.db`. Dropping and refilling
+would delete them from HEAD too, when keeping them is the reason to
+mirror the file. With `MirrorOptions::append_only` the engine instead
+upserts each table: `INSERT OR REPLACE` by its key, so an edit is a
+`modified` and a row the source dropped stays; a keyless table adds
+only the rows it does not already hold whole, so an edited keyless row
+is kept in both versions. No table is dropped, a column the source
+gained is added (nullable, since the rows already kept have no value
+for it), and one it dropped stays, holding NULL in new rows. A table
+whose key would change fails the run before anything is written: the
+rows kept are keyed by the old key, and nothing can re-key them. Only
+`apple_messages` sets it.
+
 ## What gets mirrored
 
 Tables and their rows. Deliberately not mirrored:

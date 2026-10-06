@@ -149,11 +149,12 @@ to its message.
 ## When part of a backup will not read
 
 msgstore is the backup: if it will not decrypt or mirror, the step
-fails. The two things beside it cost only themselves, as `problems`
-rows, and every run tries them again:
+fails. The things beside it cost only themselves, as `problems` rows,
+and every run tries them again:
 
 | what failed | its row | what is kept |
 | --- | --- | --- |
+| msgstore decrypts to a database with no table in it | `phase:source` | every mirrored table, which a refill from nothing would have emptied (the engine's refusal: [lightroom/INGEST.md](../lightroom/INGEST.md#a-source-with-nothing-in-it-is-refused)) |
 | `wa.db` will not decrypt or read | `phase:wa.db contacts` | the stored `wa_db_contacts` |
 | part of `Media/` will not list | `listing:media` | the whole registry: the drop-and-refill is held back, since a file the walk could not see is not gone |
 | a media file's bytes will not read | `record:wa_media_files:<relative_path>` | its registry row, so the message names the file and says it is not fetched |
