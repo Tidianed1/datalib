@@ -84,7 +84,7 @@ pub struct ScanOptions {
     /// Where to say which file is being hashed and how much is left.
     /// Only ever a message, never a bar: a step has one bar, and the
     /// caller's rows are not bytes (`dag/README.md` § "One bar per step").
-    pub progress: crate::progress::Progress,
+    pub progress: datalib_etl::progress::Progress,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -311,7 +311,7 @@ impl Scan {
     }
 
     /// [`Self::could_not_see`] as a value that outlives the scan, for
-    /// [`RunProblems::records_tried_all_but`](crate::run_problems::RunProblems::records_tried_all_but):
+    /// [`RunProblems::records_tried_all_but`](datalib_etl::run_problems::RunProblems::records_tried_all_but):
     /// the paths this walk has no verdict on.
     pub fn unseen(&self) -> impl Fn(&str) -> bool + Send + Sync + 'static {
         let blind: Vec<Option<String>> = self
@@ -341,20 +341,20 @@ impl Scan {
     }
 
     /// The run problem a walk with errors leaves, for
-    /// [`crate::download_problems::report_run`]: the files it reports gone
+    /// [`datalib_etl::download_problems::report_run`]: the files it reports gone
     /// keep their records until a walk completes. Empty for a clean walk,
     /// so reporting it also clears the last run's row.
-    pub fn walk_problems(&self) -> Vec<crate::download_problems::RunProblem> {
+    pub fn walk_problems(&self) -> Vec<datalib_etl::download_problems::RunProblem> {
         self.walk_problems_as("files")
     }
 
     /// [`Self::walk_problems`] under a name of the caller's, for a source
     /// that scans more than one tree: `report_run` keeps one row per name.
-    pub fn walk_problems_as(&self, name: &str) -> Vec<crate::download_problems::RunProblem> {
+    pub fn walk_problems_as(&self, name: &str) -> Vec<datalib_etl::download_problems::RunProblem> {
         let Some(first) = self.errors.first() else {
             return Vec::new();
         };
-        vec![crate::download_problems::RunProblem::listing(
+        vec![datalib_etl::download_problems::RunProblem::listing(
             name,
             // The path first, and short: the sample is cut at 80 characters.
             format!(
@@ -375,8 +375,8 @@ impl Scan {
     /// The run problem of a store keyed by content that read every file to
     /// learn what the input still holds, and could not read `unread` of
     /// them: nothing was deleted this run.
-    pub fn deletions_held_back(unread: usize) -> crate::download_problems::RunProblem {
-        crate::download_problems::RunProblem::listing(
+    pub fn deletions_held_back(unread: usize) -> datalib_etl::download_problems::RunProblem {
+        datalib_etl::download_problems::RunProblem::listing(
             "removed_records",
             format!(
                 "files were removed or rewritten, but {unread} of the files could not be \
@@ -604,7 +604,7 @@ const MESSAGE_EVERY: std::time::Duration = std::time::Duration::from_millis(500)
 /// Says, through `Progress::set_message` and the log, what the hashing
 /// pass is on. Silent when there is nothing to hash.
 struct HashProgress<'a> {
-    progress: &'a crate::progress::Progress,
+    progress: &'a datalib_etl::progress::Progress,
     files_total: usize,
     bytes_total: u64,
     files_done: usize,
@@ -613,7 +613,11 @@ struct HashProgress<'a> {
 }
 
 impl<'a> HashProgress<'a> {
-    fn new(progress: &'a crate::progress::Progress, files_total: usize, bytes_total: u64) -> Self {
+    fn new(
+        progress: &'a datalib_etl::progress::Progress,
+        files_total: usize,
+        bytes_total: u64,
+    ) -> Self {
         if files_total > 0 {
             tracing::info!(
                 files = files_total,

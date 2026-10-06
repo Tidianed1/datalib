@@ -10,11 +10,11 @@ use anyhow::{Context, Result};
 use super::hash::{hash_file, hash_symlink_target, hash_tree, Blake3, TreeChild};
 use super::metrics::WalkerCounters;
 use super::options::{self, EffectiveOptions, FsindexYaml, OptionsCascade, BREADCRUMB_FILENAME};
-use datalib_etl::fingerprint_cache::{CachedTree, EntryKind, Fingerprint};
-use datalib_etl::fswalk::{self, StampCursor, StampKind};
+use datalib_etl_files::fingerprint_cache::{CachedTree, EntryKind, Fingerprint};
+use datalib_etl_files::fswalk::{self, StampCursor, StampKind};
 
 use super::schema_raw::{DirRow, FileKind, FileRow};
-use datalib_etl::fswalk::{FreshStat, StampDecision};
+use datalib_etl_files::fswalk::{FreshStat, StampDecision};
 
 /// Soft upper bound on the size of one streamed batch. The walker
 /// flushes the batch via the callback when it reaches this many rows.
@@ -65,7 +65,7 @@ pub struct WalkerSummary {
 pub struct Walker<'a> {
     root: &'a Path,
     /// What this host recorded for these paths last time. Host-local
-    /// and unversioned — see [`datalib_etl::fingerprint_cache`].
+    /// and unversioned — see [`datalib_etl_files::fingerprint_cache`].
     prev: &'a CachedTree,
     default_stamp_kind: StampKind,
 }
@@ -553,7 +553,7 @@ fn rel_id(root: &Path, path: &Path) -> String {
 }
 
 fn fp_abs(root: &Path, rel: &str) -> String {
-    datalib_etl::fingerprint_cache::abs_key(root, rel)
+    datalib_etl_files::fingerprint_cache::abs_key(root, rel)
 }
 
 fn fp_cursor(stamp_kind: StampKind, size: i64, fresh: &FreshStat) -> StampCursor {

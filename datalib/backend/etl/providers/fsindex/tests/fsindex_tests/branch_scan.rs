@@ -3,8 +3,8 @@
 use std::path::Path;
 
 use datalib_etl::control::DownloadControl;
-use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::progress::Progress;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_fsindex::ingest::{self, FetchOptions, RawDb};
 use sqlx::Row;
 

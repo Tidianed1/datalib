@@ -173,7 +173,7 @@ impl RawDb {
             .await
             .context("begin delete calendar tx")?;
         let events = Self::delete_calendar(&mut tx, calendar_id).await?;
-        datalib_etl::file_checkpoint::forget_file(&mut tx, checkpoint_scope, rel).await?;
+        datalib_etl_files::file_checkpoint::forget_file(&mut tx, checkpoint_scope, rel).await?;
         tx.commit().await.context("commit delete calendar tx")?;
         Ok(events)
     }

@@ -431,7 +431,7 @@ pub fn full_ddl() -> Vec<String> {
         // file whose `(size, mtime)` hasn't moved since last run. The
         // CardDAV server path uses etags/sync-tokens instead and never
         // touches this table. See [`vcf_dir`].
-        datalib_etl::file_checkpoint::INGESTED_FILES_DDL.to_string(),
+        datalib_etl_files::file_checkpoint::INGESTED_FILES_DDL.to_string(),
     ];
     out.extend(GroupMemberRow::all_ddl());
     out.extend(ContactCategoryRow::all_ddl());

@@ -111,7 +111,7 @@ pub fn message_tables() -> Vec<&'static str> {
 
 /// The raw table for an export file. The trailing `_<digits>` it drops
 /// is the per-member id LinkedIn suffixes some filenames with.
-pub use datalib_etl::export_files::table_name as canonical_table;
+pub use datalib_etl_files::export_files::table_name as canonical_table;
 
 pub fn linkedin_ns() -> Uuid {
     Uuid::new_v5(&Uuid::NAMESPACE_DNS, b"linkedin.datalib")

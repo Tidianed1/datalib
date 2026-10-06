@@ -3,7 +3,7 @@
 //! it. The same path the orchestrator takes when a `type: email` source has
 //! no `sync:` block and `input_path` points at an `.mbox`.
 
-use datalib_etl::fingerprint_cache::FingerprintCache;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 

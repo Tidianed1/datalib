@@ -7,11 +7,11 @@ use anyhow::{Context, Result};
 use tracing::warn;
 
 use datalib_etl::control::DownloadControl;
-use datalib_etl::file_checkpoint;
-use datalib_etl::fingerprint_cache::FingerprintCache;
-use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_files::file_checkpoint;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
+use datalib_etl_files::fsscan;
 
 use super::api::{split_vcards, vcard_fn, vcard_n_family_given, vcard_rev, vcard_uid};
 use super::db::{addressbook_pk, RawDb};

@@ -363,7 +363,7 @@ use it. A partial export of a normally-complete source is the same trap.
 Most file-backed sources do not need it: a folder of `.vcf`, `.ics`,
 `.mbox` or SMS backup files, and every Takeout feed, lose what their
 input lost on an ordinary sync
-([`etl/README.md`](/datalib/backend/etl/README.md#answering-did-it-change-for-a-file-backed-source)).
+([`etl/files/README.md`](/datalib/backend/etl/files/README.md#answering-did-it-change-for-a-file-backed-source)).
 The Signal and LinkedIn exports still need it.
 
 A Takeout feed read from one file (Maps reviews and saved places,
