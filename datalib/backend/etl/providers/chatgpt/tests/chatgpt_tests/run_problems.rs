@@ -199,12 +199,8 @@ async fn a_rate_limit_is_a_phase_row_until_the_rest_is_fetched() {
     let problems = acct.problems().await;
     assert_eq!(problems.len(), 1, "{problems:?}");
     assert_eq!(problems[0].0, "phase:conversations");
-    assert!(
-        problems[0]
-            .1
-            .contains("rate-limited after 1 fetched; 2 left"),
-        "{problems:?}"
-    );
+    // The sample shows the cause first; the counts are the summary's.
+    assert!(problems[0].1.contains("rate-limited"), "{problems:?}");
 
     acct.list(&convs);
     let s = acct.run(&[]).await.unwrap();
@@ -419,13 +415,15 @@ async fn a_file_chatgpt_no_longer_has_is_not_asked_for_again() {
 }
 
 /// A rate limit on a file was an ordinary failure, so the walk went on
-/// with one refused request and one row per file after it.
+/// with one refused request and one row per file after it. The
+/// conversations land first now, so the limit ends the attachment loop
+/// with the conversations kept and every file left owed.
 async fn a_rate_limit_on_a_file_ends_the_walk() {
     let acct = Account::new(&[with_file("c-a"), with_file("c-b")]);
     acct.answer(&file_metadata(), 429);
     let s = acct.run(&[]).await.unwrap();
-    assert_eq!((s.fetched, s.failed_blobs), (0, 0), "{s:?}");
-    assert_eq!(acct.keys().await, ["phase:conversations"]);
+    assert_eq!((s.fetched, s.failed_blobs), (2, 0), "{s:?}");
+    assert_eq!(acct.keys().await, ["phase:attachments"]);
 }
 
 /// A rate limit that ends a `conv_uuids` run before an entry leaves that

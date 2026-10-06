@@ -37,7 +37,6 @@ rust_library(
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
-        "@datalib_crates//:tempfile",
         "@datalib_crates//:thiserror",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
@@ -76,6 +75,7 @@ rust_test(
         "INSTA_WORKSPACE_ROOT": ".",
         "RUST_TEST_THREADS": "1",
     },
+    proc_macro_deps = ["@datalib_crates//:async-trait"],
     deps = [
         "//datalib/backend/etl/providers/chatgpt_render:datalib_etl_chatgpt_render",
         "//datalib/backend/etl/render:datalib_etl_render",
@@ -100,6 +100,7 @@ rust_test(
     env = {
         "CHATGPT_FIXTURE_DIR": "datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
     },
+    deps = ["@datalib_crates//:tempfile"],
 )
 
 # `bazel run //...:foo.update` siblings that re-run the insta-using
