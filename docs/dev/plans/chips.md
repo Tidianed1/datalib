@@ -1,10 +1,12 @@
 # Chips: a link the app can resolve, drawn as the thing it names
 
-*Decided 2026-10-06; nothing here is built. The facts about the tree
-were read that day and are cited by path; check one before relying
-on it. The first slice of chips for people landed in #958 and is
-described in [`contacts.md`](contacts.md) — this plan replaces its
-§"Chips" and generalizes it to every kind of entity.*
+*Decided 2026-10-06. Step 1 of §"Order of work" is built (#1022): a
+person in a document is a chip link, drawn and copied as this plan
+says; steps 2 to 5 are not. The facts about the tree were read that
+day and are cited by path; check one before relying on it. The first
+slice of chips for people landed in #958 and is described in
+[`contacts.md`](contacts.md) — this plan replaces its §"Chips" and
+generalizes it to every kind of entity.*
 
 A **chip** is how datalib shows an entity inline: a person, a source
 group, a step, later a channel or a document. It has a name, a mark
