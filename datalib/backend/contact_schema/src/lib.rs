@@ -3,7 +3,8 @@
 //! contacts app. Many describe the same person; `source_id` tells them
 //! apart. This crate is only the shape, so anything can take it: the
 //! render crates fill it from raw rows, contact-common renders it, the
-//! contacts app answers in it. `docs/dev/plans/contacts.md` has the design.
+//! contacts app answers in it. `docs/dev/contacts.md` says who produces
+//! one and who reads it.
 
 use datalib_handle::{Handle, HandleKind};
 use serde::{Deserialize, Serialize};

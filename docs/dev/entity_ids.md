@@ -153,6 +153,16 @@ Two kinds of row are about a source's data without being it:
   are distinct from the source's by construction and nothing has to be
   re-keyed. `upstream_id` is the source's: it points at the real thing.
 
+### The one id a person mints
+
+A contact in the contacts app is keyed by `contact_id`, a random v4.
+It is the one exception to the rule: a contact is made by a person's
+act, not by a record, so there is no upstream data to derive it from,
+and nothing rebuilds it — the store is the only copy
+([`contacts.md`](contacts.md) §"The contacts app"). What a contact
+holds is keyed by handles, which are the upstream's own identifiers,
+never by a `grid_rows.uuid`, which moves when a recipe changes.
+
 ### Why not opaque random ids
 
 A v4 per row makes collisions impossible and is the obvious answer. It

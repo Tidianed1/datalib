@@ -1,16 +1,10 @@
 # Chips: a link the app can resolve, drawn as the thing it names
 
-*Decided 2026-10-06; for people, built the same day. A person is a chip
-link wherever a renderer has their handle: an author and a recipient
-(#1022), a reactor, a Slack mention (#1027), a Signal recipient known
-only by ACI (#1023). The document view's right-click and double-click
-are #1026; the grid's Author cell is #1028; photos are #1029 and #1030.
-What is not built is groups and steps as chips (§"In a grid", the
+*Decided 2026-10-06. For people it is built, and what the tree does
+is [`../contacts.md`](../contacts.md), whose §"Not built" says what is
+left. Not built here: groups and steps as chips (§"In a grid", the
 Manage rows) and system events. The facts about the tree were read on
-2026-10-06 and are cited by path; check one before relying on it. The
-first slice of chips for people landed in #958 and is described in
-[`contacts.md`](contacts.md) — this plan replaces its §"Chips" and
-generalizes it to every kind of entity.*
+2026-10-06 and are cited by path; check one before relying on it.*
 
 A **chip** is how datalib shows an entity inline: a person, a source
 group, a step, later a channel or a document. It has a name, a mark
