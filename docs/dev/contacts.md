@@ -15,9 +15,10 @@ each one of which works without the one above it:
    the contacts app, the one store under a data root that nothing can
    rebuild. Its answer ranks above every source's.
 
-The design and what is still to build: [`plans/contacts.md`](plans/contacts.md)
-(the contacts app, phases 4 to 6) and [`plans/chips.md`](plans/chips.md)
-(a chip is a link the app resolves). This page says what the tree does.
+What is still to build: [`plans/contacts.md`](plans/contacts.md)
+(managing contacts, `row_handles`, contacts in search) and
+[`plans/chips.md`](plans/chips.md) (chips for groups, steps and system
+events). This page says what the tree does.
 
 ## Words
 
@@ -223,10 +224,15 @@ Two rules the tables encode: **a handle belongs to exactly one
 contact** (linking one someone else holds is refused, never taken
 over; a shared address belongs to a group contact), and **keys are
 handles, never `grid_rows.uuid`**, which moves when a recipe changes.
-`stopped_working_by` is a partial date (`2019`, `2019-06`,
-`2019-06-14`), as precise as the person knows: an old number still
-names its owner in every message from when it worked, so the link
-stays and the chip marks it as old.
+`stopped_working_by` is a date *by* which the handle had stopped
+working: an old number still names its owner in every message from
+when it worked, so the link stays and the chip marks it as old. "By",
+not "on": marking a handle fills in today, which is always true when
+nothing better is known, and the person narrows it if they remember. It
+is a partial date (`2019`, `2019-06`, `2019-06-14`), a date a person
+remembers rather than an instant anything measured, so it is not an
+`_at_utc` stamp. A number *reassigned* to someone else is not covered:
+the key is the handle alone, so a handle has one owner for all time.
 
 The routes, each behind the gateway's secret
 ([`applets.md`](applets.md)), answering a refusal the store explains

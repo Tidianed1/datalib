@@ -57,16 +57,11 @@ because markdown is not parsed inside a block:
 class="msg-recipient">Deanna Troi</span>; Cc …</span>`.
 
 Each document also carries a `DatalibContact` per handle in it
-(`src/people.rs`): for an author, the names the provider showed it
-under, less the handle's own `<address>`, how many items it wrote and
-the last one's stamp; for a recipient or a reactor, the name shown and
-no items, having written nothing there. A provider needs no code for
-this. A provider that knows more about a person — a Slack profile, a
-WhatsApp address-book entry, a Signal recipient's number and ACI —
-gives it in `NormalizedChat::contacts`, and its account replaces the
-baseline for the same handle, keeping the baseline's count and every
-name it saw (`document_contacts`). The index sums them per source to say
-who a handle is.
+(`src/people.rs`): authors with what they wrote, recipients and
+reactors with nothing, merged with any account the provider gives in
+`NormalizedChat::contacts`. A provider needs no code for the baseline.
+What the accounts are and who reads them is `docs/dev/contacts.md`
+§"Accounts".
 
 ## Asides: runs of tool steps fold into one `<details>`
 
