@@ -2,16 +2,19 @@
 
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_macros::RawStoreHandle;
+use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-use datalib_etl::bulk::{bulk_upsert_entity_in_tx, bulk_upsert_in_tx};
+use datalib_etl::bulk::{
+    bulk_upsert_entity_in_tx, bulk_upsert_in_tx, push_placeholder_list, SQL_CHUNK,
+};
 use datalib_etl::doltlite_raw as dr;
 
-use super::schema_raw::{full_ddl, DirRow, FileRow, ScanMetaRow, DATA_TABLES};
+use super::schema_raw::{full_ddl, DirRow, FileRow, ScanMetaRow};
 
 #[derive(Clone, Debug, RawStoreHandle)]
 pub struct RawDb {
@@ -47,21 +50,63 @@ impl RawDb {
         self.close_all().await;
     }
 
-    /// Truncate the entity tables so the next walk re-writes from
-    /// scratch (the truncate-and-rebuild model). Whole-table
-    /// bookkeeping (`sync_runs`) is left alone.
-    pub async fn reset(&self) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin truncate tx")?;
-        for table in DATA_TABLES.iter().copied().chain(["scan_meta_bookkeeping"]) {
-            // Audited: `table` iterates a `&'static str` const array of our own
-            // table names; no runtime data reaches the statement.
-            sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {table}")))
-                .execute(&mut *tx)
-                .await
-                .with_context(|| format!("truncate {table}"))?;
+    /// Empty `scan_meta`, which each scan writes whole.
+    pub async fn clear_scan_meta(&self) -> Result<()> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("begin scan_meta clear tx")?;
+        for sql in ["DELETE FROM scan_meta", "DELETE FROM scan_meta_bookkeeping"] {
+            sqlx::query(sql).execute(&mut *tx).await.context(sql)?;
         }
-        tx.commit().await.context("commit truncate tx")?;
+        tx.commit().await.context("commit scan_meta clear tx")?;
         Ok(())
+    }
+
+    /// Delete the `files` and `dirs` rows not in `seen`, except an entry in
+    /// `held` and everything beneath it. Returns how many went.
+    pub async fn prune_unseen(&self, seen: &HashSet<String>, held: &[&str]) -> Result<u64> {
+        let kept = |id: &str| {
+            seen.contains(id)
+                || held.iter().any(|h| {
+                    h.is_empty()
+                        || id == *h
+                        || id
+                            .strip_prefix(*h)
+                            .is_some_and(|rest| rest.starts_with('/'))
+                })
+        };
+        let mut removed = 0;
+        let mut tx = self.pool.begin().await.context("begin prune tx")?;
+        for table in ["files", "dirs"] {
+            // Audited: `table` iterates two of our own table names; ids are
+            // bound below.
+            let ids: Vec<String> =
+                sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT id FROM {table}")))
+                    .fetch_all(&mut *tx)
+                    .await
+                    .with_context(|| format!("list {table} ids"))?;
+            let gone: Vec<String> = ids.into_iter().filter(|id| !kept(id)).collect();
+            for chunk in gone.chunks(SQL_CHUNK) {
+                let mut sql = format!("DELETE FROM {table} WHERE id IN (");
+                push_placeholder_list(&mut sql, chunk.len());
+                sql.push(')');
+                // Audited: `table` is one of two names above; the IN-list is
+                // a `?,?,?` run sized from the chunk and every id is bound.
+                let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+                for id in chunk {
+                    q = q.bind(id);
+                }
+                removed += q
+                    .execute(&mut *tx)
+                    .await
+                    .with_context(|| format!("prune {table}"))?
+                    .rows_affected();
+            }
+        }
+        tx.commit().await.context("commit prune tx")?;
+        Ok(removed)
     }
 
     /// Switch the open connection's active branch, creating it if it
@@ -136,7 +181,7 @@ impl RawDb {
     }
 
     /// The one version-control commit per scan. Seals the whole
-    /// truncate-and-rebuild working set into a single `dolt_log` entry,
+    /// scan's working set into a single `dolt_log` entry,
     /// so `dolt diff HEAD^ HEAD` is exactly "what this scan changed,"
     /// and — crucially — nothing is left dirty for the next
     /// [`RawDb::open`] to discard. Returns the wall time.
@@ -189,8 +234,8 @@ impl RawDb {
 
     /// Summarize what the most recent commit changed in `files` and
     /// `dirs` relative to its parent commit, read from doltlite's
-    /// `dolt_diff_<table>` system tables. A row the truncate-and-rebuild
-    /// re-inserted identically is no change, so only genuinely changed
+    /// `dolt_diff_<table>` system tables. A row the scan rewrote
+    /// identically is no change, so only genuinely changed
     /// entries surface as added/modified/removed.
     pub async fn diff_counts_since_parent(&self) -> Option<DiffCounts> {
         let rows = sqlx::query(

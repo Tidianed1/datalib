@@ -142,6 +142,9 @@ async fn a_folder_that_would_not_list_keeps_its_rows() {
     env.scan(false).await;
     let dirs = env.ids("dirs").await;
 
+    // A new file moves the folder's mtime, so the scan must list it
+    // rather than take its children from the cache.
+    env.write("holodeck/program_worf.txt", "Klingon calisthenics");
     let holodeck = env.root.join("holodeck");
     set_mode(&holodeck, 0o000);
     if fs::read_dir(&holodeck).is_ok() {
@@ -157,11 +160,19 @@ async fn a_folder_that_would_not_list_keeps_its_rows() {
         "the folder's files stay; the one that went from a folder that listed goes"
     );
     assert_eq!(env.ids("dirs").await, dirs);
+    let entries: i64 = sqlx::query_scalar("SELECT entries FROM dirs WHERE id = 'holodeck'")
+        .fetch_one(env.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(entries, 2, "the folder's own row is the last scan's");
     assert_eq!(env.problem_keys().await, ["record:dirs:holodeck"]);
 
     fs::remove_file(env.root.join("holodeck/program_data.txt")).unwrap();
     env.scan(false).await;
-    assert_eq!(env.ids("files").await, ["holodeck/program_picard.txt"]);
+    assert_eq!(
+        env.ids("files").await,
+        ["holodeck/program_picard.txt", "holodeck/program_worf.txt"]
+    );
     assert_eq!(env.problem_keys().await, Vec::<String>::new());
 }
 
