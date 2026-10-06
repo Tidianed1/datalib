@@ -48,7 +48,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-8087-98c3-35796eae6f68/all.md",
       "modified_at": "2369-05-28T15:18:20+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "slack",
       "title": "#ten-forward"
     },
@@ -84,7 +84,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-80d6-b5a5-2617d0679dab/all.md",
       "modified_at": "2369-05-28T15:21:44+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "slack",
       "title": "@William T. Riker, Worf"
     },
@@ -108,7 +108,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-8119-8c96-61dfdcca24d4/all.md",
       "modified_at": "2369-05-28T15:26:40+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "slack",
       "title": "#bridge"
     },
@@ -120,7 +120,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-811d-904c-516d04a43f68/all.md",
       "modified_at": "2369-05-28T15:20:00+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "slack",
       "title": "#bridge"
     },
@@ -204,7 +204,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-81d7-a9c9-0ee77752a4e6/all.md",
       "modified_at": "2369-05-28T15:15:00+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "slack",
       "title": "#engineering"
     },
@@ -240,7 +240,7 @@ expression: snapshot
       "md_path": "slack-diff/render_markdown/00000000-0000-8209-b9a9-5e8e8a2f0239/all.md",
       "modified_at": "2369-05-28T15:25:00+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "slack-diff",
       "title": "#bridge"
     },
@@ -310,9 +310,9 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "00000000-0000-82dc-a9fc-4932293e2699",
       "md_path": "signal/render_markdown/00000000-0000-89df-ad9b-a9094ecd8e23/2364-04.md",
-      "modified_at": "2364-04-11T00:09:00+00:00",
+      "modified_at": "2364-04-11T00:11:00+00:00",
       "provider": "signal",
-      "renderer_version": "rust-v1.9",
+      "renderer_version": "rust-v1.10",
       "source_id": "signal",
       "title": "Will Riker"
     },
@@ -468,7 +468,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-84d6-b1f0-0b22f0528e5c/all.md",
       "modified_at": "2369-05-28T15:25:00+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "slack",
       "title": "#bridge"
     },
@@ -528,7 +528,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-8630-8d5e-f4aae259bc1c/all.md",
       "modified_at": "2369-05-28T15:21:40+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "slack",
       "title": "@William T. Riker"
     },
@@ -744,7 +744,7 @@ expression: snapshot
       "md_path": "slack-diff/render_markdown/00000000-0000-8827-877d-5fdc4dc4394b/all.md",
       "modified_at": "2369-05-28T15:13:20+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "slack-diff",
       "title": "#bridge"
     },
@@ -912,7 +912,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-89a0-9bd6-7e928c9b2396/all.md",
       "modified_at": "2369-05-28T15:21:42+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "slack",
       "title": "@Lt. Cmdr. Data"
     },
@@ -1044,7 +1044,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-8ac1-a181-7b8e737cbd85/all.md",
       "modified_at": "2369-05-28T15:21:41+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "slack",
       "title": "@William T. Riker"
     },
@@ -1080,7 +1080,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-8b0f-9140-61eaa37493ff/all.md",
       "modified_at": "2369-05-28T15:18:20+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "slack",
       "title": "#bridge"
     },
@@ -1188,7 +1188,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-8bff-b36c-0096661fd9fa/all.md",
       "modified_at": "2369-05-28T15:13:20+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "slack",
       "title": "#bridge"
     },
@@ -1200,7 +1200,7 @@ expression: snapshot
       "md_path": "slack-diff/render_markdown/00000000-0000-8c02-a5c8-c13c049e1e6d/all.md",
       "modified_at": "2369-05-28T15:26:40+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "slack-diff",
       "title": "#bridge"
     },
@@ -1404,7 +1404,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/00000000-0000-8d9c-9316-43944fcd9e60/all.md",
       "modified_at": "2369-05-28T15:21:43+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "source_id": "slack",
       "title": "@William T. Riker, Worf"
     },
@@ -1621,7 +1621,7 @@ expression: snapshot
       "message": "schema: grid index"
     },
     {
-      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=142 markdowns_read=142 markdowns_removed=3 rows_inserted=609"
+      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=142 markdowns_read=142 markdowns_removed=3 rows_inserted=611"
     }
   ],
   "grid_rows": [
@@ -2288,15 +2288,15 @@ expression: snapshot
     {
       "account": null,
       "author": null,
-      "byte_size": 302,
+      "byte_size": 376,
       "channel": "Will Riker",
-      "content_hash": "ff094b25e35144ba",
+      "content_hash": "76eec7af9cde2322",
       "conversation_name": "Will Riker",
       "conversation_uuid": "00000000-0000-89df-ad9b-a9094ecd8e23",
       "created_at": "2364-04-11T00:00:00+00:00",
       "entire_chat": "/chat/00000000-0000-82dc-a9fc-4932293e2699",
       "git_sha": null,
-      "item_count": 10,
+      "item_count": 12,
       "kind": "Signal Chat",
       "markdown_uuid": "00000000-0000-82dc-a9fc-4932293e2699",
       "message_index": null,
@@ -4838,9 +4838,9 @@ expression: snapshot
     {
       "account": "picard@enterprise.starfleet",
       "author": null,
-      "byte_size": 38,
+      "byte_size": 147,
       "channel": "@William T. Riker, Worf",
-      "content_hash": "840dbeed34312913",
+      "content_hash": "6367d36a7e59193c",
       "conversation_name": "@William T. Riker, Worf",
       "conversation_uuid": "00000000-0000-8d9c-9316-43944fcd9e60",
       "created_at": "2369-05-28T15:21:43+00:00",
@@ -4854,7 +4854,7 @@ expression: snapshot
       "notion_page_uuid": null,
       "org_name": "USS Enterprise NCC-1701-D",
       "org_uuid": "T_NCC1701D",
-      "preview_len": 38,
+      "preview_len": 58,
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/00000000-0000-8d9c-9316-43944fcd9e60/all.md",
@@ -6754,6 +6754,66 @@ expression: snapshot
       "upstream_entity_kind": "message",
       "upstream_id": "bridge-crew@g.us#TNG0011#0",
       "uuid": "0b50e815-4fc0-80f2-af4f-05e409dee22b"
+    },
+    {
+      "account": null,
+      "author": "Q",
+      "byte_size": 38,
+      "channel": "Will Riker",
+      "content_hash": "0a8471661565eb67",
+      "conversation_name": "Will Riker",
+      "conversation_uuid": "00000000-0000-89df-ad9b-a9094ecd8e23",
+      "created_at": "2364-04-11T00:10:00+00:00",
+      "entire_chat": "/chat/00000000-0000-82dc-a9fc-4932293e2699",
+      "git_sha": null,
+      "item_count": 1,
+      "kind": "Signal Message",
+      "markdown_uuid": "00000000-0000-82dc-a9fc-4932293e2699",
+      "message_index": 10,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview_len": 38,
+      "project": null,
+      "provider": "signal",
+      "qmd_path": "signal/render_markdown/00000000-0000-89df-ad9b-a9094ecd8e23/2364-04.md",
+      "source_label": "Signal",
+      "source_url": null,
+      "upstream_account": null,
+      "upstream_entity_kind": "message",
+      "upstream_id": "100#8#12442119000000",
+      "uuid": "0b50e815-4fc0-8175-80bb-76d072e91753"
+    },
+    {
+      "account": null,
+      "author": "Guinan",
+      "byte_size": 36,
+      "channel": "Will Riker",
+      "content_hash": "f76174e37fb9c61d",
+      "conversation_name": "Will Riker",
+      "conversation_uuid": "00000000-0000-89df-ad9b-a9094ecd8e23",
+      "created_at": "2364-04-11T00:11:00+00:00",
+      "entire_chat": "/chat/00000000-0000-82dc-a9fc-4932293e2699",
+      "git_sha": null,
+      "item_count": 1,
+      "kind": "Signal Message",
+      "markdown_uuid": "00000000-0000-82dc-a9fc-4932293e2699",
+      "message_index": 11,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview_len": 36,
+      "project": null,
+      "provider": "signal",
+      "qmd_path": "signal/render_markdown/00000000-0000-89df-ad9b-a9094ecd8e23/2364-04.md",
+      "source_label": "Signal",
+      "source_url": null,
+      "upstream_account": null,
+      "upstream_entity_kind": "message",
+      "upstream_id": "100#9#12442119060000",
+      "uuid": "0b50e816-3a20-8689-94b3-fe05c4cf222b"
     },
     {
       "account": null,
@@ -11888,9 +11948,9 @@ expression: snapshot
     {
       "account": "picard@enterprise.starfleet",
       "author": "Worf",
-      "byte_size": 38,
+      "byte_size": 147,
       "channel": "@William T. Riker, Worf",
-      "content_hash": "840dbeed34312913",
+      "content_hash": "6367d36a7e59193c",
       "conversation_name": "@William T. Riker, Worf",
       "conversation_uuid": "00000000-0000-8d9c-9316-43944fcd9e60",
       "created_at": "2369-05-28T15:21:43+00:00",
@@ -11904,7 +11964,7 @@ expression: snapshot
       "notion_page_uuid": null,
       "org_name": "USS Enterprise NCC-1701-D",
       "org_uuid": "T_NCC1701D",
-      "preview_len": 38,
+      "preview_len": 58,
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/00000000-0000-8d9c-9316-43944fcd9e60/all.md",
@@ -12411,7 +12471,7 @@ expression: snapshot
     },
     {
       "kind": "Table",
-      "members_sha": "sha256:61ac84b44316010327275dee152de2d97290767d92144e15c2ebc17abcbd16ca",
+      "members_sha": "sha256:5bde415008f3b34e214f4dfe7fe13225b1cdd48e7cd5e6eaf1a053665b512175",
       "rows": 156,
       "source": ""
     }
@@ -12419,7 +12479,7 @@ expression: snapshot
   "summary": {
     "documents_count": 134,
     "dolt_log_count": 3,
-    "grid_rows_count": 359,
+    "grid_rows_count": 361,
     "storage_rows_count": 213
   }
 }

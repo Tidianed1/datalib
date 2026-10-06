@@ -8,7 +8,7 @@
 // exactly; the Rust tests and `chip_links.test.ts` run the same cases.
 
 /** The handle kinds this build knows; `datalib_handle::HandleKind`. */
-const KINDS = new Set(["email", "tel", "slack"]);
+const KINDS = new Set(["email", "tel", "slack", "signal_aci"]);
 
 /** The handle (`email:…`, `tel:…`, `slack:T/U`) a URI names, or null
  *  when it names none this build knows.
@@ -35,7 +35,17 @@ export function handleFromUri(href) {
     const slash = rest.indexOf("/");
     if (slash <= 0) return null;
     const kind = rest.slice(0, slash);
-    return KINDS.has(kind) ? handleFromUri(uriFromHandle(`${kind}:${rest.slice(slash + 1)}`) ?? "") : null;
+    const value = rest.slice(slash + 1);
+    if (kind === "signal_aci") {
+      // A Signal account id: a UUID, spelled lowercase with dashes
+      // (`Handle::signal_aci`).
+      const hex = value.replace(/-/g, "").toLowerCase();
+      if (!/^[0-9a-f]{32}$/.test(hex)) return null;
+      const dashed = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+      return `signal_aci:${dashed}`;
+    }
+    // A kind with a scheme of its own reads back through that scheme.
+    return KINDS.has(kind) ? handleFromUri(uriFromHandle(`${kind}:${value}`) ?? "") : null;
   }
   if (uri.toLowerCase().startsWith("slack://user?")) {
     const params = new URLSearchParams(uri.slice("slack://user?".length));
@@ -60,6 +70,7 @@ export function uriFromHandle(handle) {
     const [team, user] = value.split("/");
     return `slack://user?team=${team}&id=${user}`;
   }
+  if (kind === "signal_aci") return `datalib:handle/signal_aci/${value}`;
   return null;
 }
 

@@ -43,18 +43,25 @@ export type Who = { mine: DatalibContact | null; accounts: DatalibContact[] };
 
 // ── Pure rules ─────────────────────────────────────────────────────────
 
-export type HandleKind = "email" | "tel" | "slack";
+export type HandleKind = "email" | "tel" | "slack" | "signal_aci";
 
 export function handleKind(handle: string): HandleKind | null {
   const kind = handle.slice(0, handle.indexOf(":"));
-  return kind === "email" || kind === "tel" || kind === "slack" ? kind : null;
+  return kind === "email" || kind === "tel" || kind === "slack" || kind === "signal_aci"
+    ? kind
+    : null;
 }
 
 export function handleValue(handle: string): string {
   return handle.slice(handle.indexOf(":") + 1);
 }
 
-const KIND_ICON: Record<HandleKind, string> = { email: "email", tel: "sms", slack: "slack" };
+const KIND_ICON: Record<HandleKind, string> = {
+  email: "email",
+  tel: "sms",
+  slack: "slack",
+  signal_aci: "signal",
+};
 
 export function handleIcon(handle: string): string | null {
   const kind = handleKind(handle);
