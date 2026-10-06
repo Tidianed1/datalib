@@ -1569,12 +1569,15 @@ wa_media_files
     mime_type
 
 == yolink/raw ==
+coverage
+    scope
+    lo
+    hi
 yolink_devices
     id
     family_device_id
     kind
     start_ms
-    last_ts_ms
 yolink_devices_bookkeeping
     id
     fetched_at_utc
@@ -1592,20 +1595,6 @@ yolink_readings
     metric
     value
 yolink_readings_bookkeeping
-    id
-    fetched_at_utc
-    attempt_count
-    last_attempt_at_utc
-    last_error
-    volatile_payload
-    tz_offset
-    held_version
-yolink_windows
-    id
-    device_name
-    start_ms
-    end_ms
-yolink_windows_bookkeeping
     id
     fetched_at_utc
     attempt_count
