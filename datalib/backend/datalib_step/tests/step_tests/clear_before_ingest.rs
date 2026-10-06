@@ -1,5 +1,6 @@
-//! A snapshot source's wipe, against the real binary: what a reader sees
-//! when the input it was about to be rewritten from is not there.
+//! A config still carrying the retired `always_clear_before_ingest`,
+//! against the real binary: what a reader sees when the input the store
+//! would be rewritten from is not there.
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -54,9 +55,10 @@ async fn messages_on_main(root: &Path) -> i64 {
     n
 }
 
-/// The wipe was sealed to `main` before the input was read, so a backup
-/// folder that had gone (an unmounted drive, a moved folder) left every
-/// reader an empty mirror, and render deleted every document.
+/// The key used to wipe the store and seal that to `main` before the
+/// input was read, so a backup folder that had gone (an unmounted drive,
+/// a moved folder) left every reader an empty mirror, and render deleted
+/// every document. It now has no effect, and the config still loads.
 #[tokio::test]
 async fn an_input_that_is_not_there_wipes_nothing_a_reader_sees() {
     let d = tempfile::tempdir().unwrap();

@@ -13,6 +13,8 @@ pub async fn run(
     ask: ProbeAsk,
     progress: OnProgress<'_>,
 ) -> Result<serde_json::Value> {
+    let mut params = params.clone();
+    crate::methods::drop_inert_params(&mut params);
     match source_type {
         SourceType::Email => {
             let config: datalib_etl_email_config::EmailConfig =
