@@ -29,7 +29,10 @@ use datalib_schema::providers::Provider;
 /// v11: the author span carries the author's handle as `data-handle`.
 /// v12: a `+1` number without ten digits after the 1 has no handle.
 /// v13: each chat carries its authors' address-book entries as contacts.
-pub const RENDER_VERSION: u32 = 13;
+/// v14: a reaction follows the author's rule (the account's own names
+///      nobody; an empty sender is the chat's person), and a reactor gets
+///      their address-book account.
+pub const RENDER_VERSION: u32 = 14;
 
 const SOURCE_LABEL: &str = "WhatsApp";
 
