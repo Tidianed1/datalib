@@ -207,7 +207,11 @@ file runs.
 Warnings: a group with nothing filed under it; a `name` on a grouped
 step (the label comes from the group and the function); an applet
 filed under an undeclared group; a `keyword_index` that `qmd_aggregator`
-does not read, in a config that has one.
+does not read, in a config that has one; a built-in step's
+`common.always_clear_before_ingest`, which no longer does anything
+(`datalib-step` drops it before parsing). The Manage screen's System
+row counts the config's warnings and names them on hover; a
+double-click opens the config.
 
 ## What the runner forwards and what `datalib-step` refuses
 

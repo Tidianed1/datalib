@@ -340,31 +340,26 @@ One thing `removed` does *not* mean: it counts rows **our downloader
 deleted**, not rows the provider stopped serving. Those coincide only
 for a provider that deletes on absence.
 
-### Snapshot inputs: `always_clear_before_ingest`
+### Local inputs: what a complete input licenses
 
-A source whose input is a *complete* snapshot — a Takeout export, a
-phone backup — gets deletion detection for free by not being clever: set `common.always_clear_before_ingest = true`
-and the download empties the source's entity tables and cursors before
-each ingest, then rewrites them from what the input holds now. Anything
-the input dropped is simply not written back. The old rows stay in
-history, so `dolt_diff` still says what went.
+A local source reads files on disk, and something missing from them was
+either deleted or never in this input. The provider decides which, per
+**unit of completeness** it names: the whole input for a snapshot (a
+lightroom catalog, a Signal backup, an Apple Photos library), each part
+of an export (a Takeout product, a LinkedIn CSV, a Facebook table, a
+`.vcf` or `.ics` file), a whole folder of overlapping files after a
+clean read of all of them (mbox, SMS backups), or nothing for a cache
+that evicts (beeper, Claude Code and Codex sessions, Apple Messages).
 
-Mechanically it is the config-driven form of `datalib-dag --reset`:
-[`ingest.rs`](/datalib/backend/datalib_step/src/ingest.rs) calls the
-same `reset_store` before the provider runs. The blob CAS keeps its
-bytes.
-
-The condition is the whole rule: **absence in the input has to mean
-deletion.** For an input that is itself an evicting cache it means "not
-cached here," and the wipe destroys real history — which is why
-[`beeper`](/datalib/backend/etl/providers/beeper/INGEST.md) must not
-use it. A partial export of a normally-complete source is the same trap.
-
-Most file-backed sources do not need it: a folder of `.vcf`, `.ics`,
-`.mbox` or SMS backup files, and every Takeout feed, lose what their
-input lost on an ordinary sync
-([`etl/files/README.md`](/datalib/backend/etl/files/README.md#answering-did-it-change-for-a-file-backed-source)).
-The Signal and LinkedIn exports still need it.
+Each run, a unit present and read cleanly is replaced: what it no
+longer holds is deleted, in the transaction and the seal that rewrite
+it. A unit absent from the input deletes nothing, because "not
+exported" and "emptied" look alike. A unit present but unreadable, or
+recognizably nothing (0 bytes, a corrupt header, a layout the reader
+does not know), deletes nothing and is a `problems` row; only a
+well-formed input that lists nothing empties its unit. The old rows
+stay in history, so `dolt_diff` still says what went. The person is
+never asked: there is no setting for it.
 
 A Takeout feed read from one file (Maps reviews and saved places,
 YouTube, Gemini) treats that file as its whole table: re-read, it
@@ -403,7 +398,7 @@ therefore what it can see:
 | `calendar` (Google) | `events.list` `cancelled` items; a whole listing on a first sync, after a `410`, and every run for a window; the account's calendar list | events a whole listing does not name. Nothing when that listing held an event with no `id`, which could be any stored one. A calendar the list no longer names, with its events |
 | `media` | the scan; a file evicted to the cloud or over `max_bytes` is present (`Scan::present_unread`) | path rows of files the scan did not find. Nothing after a walk that reported errors |
 | `fsindex`, `pdf` | truncate-and-refill | structurally |
-| `claude` (`export`), and every source carrying [`always_clear_before_ingest`](#snapshot-inputs-always_clear_before_ingest) | the snapshot is the enumeration | structurally |
+| `claude` (`export`) | the snapshot is the enumeration | structurally |
 | `yolink` | — | nothing; append-only telemetry |
 | `notion`, `beeper` | — | not wired (rework; poorly supported) |
 
