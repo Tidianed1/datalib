@@ -1,9 +1,10 @@
 # Contacts: one person (or household, or list) across every source
 
-*Proposal (2026-10-01), partly built: a first slice of phases 1 and 2
-(see "Order of work") landed with the PR that added this banner. The
-facts about the tree it starts from were read on 2026-10-01 and are
-cited by path; check them before relying on one.*
+*Proposal (2026-10-01), partly built: phases 1 to 3 and the provider
+tail are in (see "Order of work"); what the tree does now is
+[`../contacts.md`](../contacts.md). The facts about the tree this
+starts from were read on 2026-10-01 and are cited by path; check them
+before relying on one.*
 
 The same person shows up in a mirror under many identifiers: an email
 address, a phone number in WhatsApp and Signal and Messages, a Slack

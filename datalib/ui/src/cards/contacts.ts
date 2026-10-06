@@ -4,7 +4,7 @@
 // `/people`: each source's account of the person) and the contacts app
 // (`datalib_contacts`: the contact a person made, ranked first) and
 // draws the link as a chip. The contacts app is an app of its own
-// (docs/dev/plans/contacts.md): without it chips still say what the
+// (docs/dev/contacts.md): without it chips still say what the
 // sources know, but offer nothing to link. The rules are pure and
 // unit-tested; only `decorateHandles` touches a DOM.
 

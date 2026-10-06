@@ -8,8 +8,9 @@
 //! Renders write handles into the markdown as chip links, `[Name](uri)`
 //! with the handle as a URI ([`Handle::to_uri`]), and the contacts app
 //! links them to contacts; nothing here knows what a contact is.
-//! `docs/dev/plans/contacts.md` and `docs/dev/plans/chips.md` have the
-//! design.
+//! `docs/dev/contacts.md` says how it all fits, and what a new kind
+//! touches; `docs/dev/plans/contacts.md` and `docs/dev/plans/chips.md`
+//! have the design.
 //!
 //! A handle is stored: in render stores, in the index, and in the links a
 //! person made in the contacts app. So a change to what a constructor
