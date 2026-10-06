@@ -1045,6 +1045,29 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ],
             "every source that knows people put them in the index",
         )
+        # WhatsApp's account of a person is the phone's address book:
+        # every name its entries give, then the name they gave
+        # themselves, keyed by the number — reached through a linked id
+        # (Data writes as `…@lid`, mapped to his number) as well as the
+        # number itself. Geordi has only a `wa_name`, and it still counts.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT h.handle || '|' || json_extract(c.contact_json, '$.names') "
+                "FROM source_contact_handles h JOIN source_contacts c "
+                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
+                "JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
+                "WHERE m.source_id = 'whatsapp' AND h.handle IN "
+                "('tel:+17015550102', 'tel:+17015550103', 'tel:+17015550104') "
+                "GROUP BY 1 ORDER BY 1;",
+            ),
+            [
+                'tel:+17015550102|["William Riker","Will Riker (Starfleet)","Number One"]',
+                'tel:+17015550103|["Data"]',
+                'tel:+17015550104|["Geordi La Forge"]',
+            ],
+            "WhatsApp's address book, as each chat's contacts",
+        )
         self.assertEqual(
             self._diff_shape(CONTACTS_DIFF_GROUP),
             {
