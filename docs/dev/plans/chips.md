@@ -68,8 +68,8 @@ today
 §"The message header") become links:
 
 ```markdown
-## [Jean-Luc Picard](mailto:picard@enterprise.starfleet) <time class="msg-ts" datetime="…" title="…">Tue Feb 11th, 2025 at 11:33</time>
-<div class="msg-recipients"><span class="msg-recipients-role">To</span> [Will Riker](mailto:riker@enterprise.starfleet); <span class="msg-recipients-role">Cc</span> [Q](mailto:q@continuum.org)</div>
+## [Jean-Luc Picard](mailto:picard@enterprise.starfleet "Jean-Luc Picard <picard@enterprise.starfleet>") <time class="msg-ts" datetime="…" title="…">Tue Feb 11th, 2025 at 11:33</time>
+<div class="msg-recipients"><span class="msg-recipients-role">To</span> [Will Riker](mailto:riker@enterprise.starfleet "Will Riker <riker@enterprise.starfleet>"); …</div>
 ```
 
 - **The `##` stays.** qmd cuts chunks at an `h2`; the heading is there
@@ -77,6 +77,14 @@ today
 - **The name is what the source showed**, escaped as every other field
   is. The chip shows the resolved name instead and keeps the source's
   in `data-shown-as` for the hover card's "shown here as".
+- **The hover is baked into the link too.** The link's title is the
+  static hover every markdown viewer can show: the name the source
+  showed and the identifier, in the same form the copy uses
+  (`Jean-Luc Picard <picard@enterprise.starfleet>`,
+  `Name (+12025550101)`, `slack/ingest` for a step). In datalib the
+  decorate pass removes the title and draws the live hover card in its
+  place, since that card knows what the file cannot: the contact you
+  linked, and what every source calls them.
 - **A chip may appear anywhere a renderer has a handle**: a Slack
   mention mid-sentence, a reaction's author, "Worf joined the channel",
   a step named in a run's notes. The header is no longer special; it
@@ -188,7 +196,7 @@ generalized):
 | flavour | a person | a group or step |
 |---|---|---|
 | `text/plain` | `Jean-Luc Picard <picard@enterprise.starfleet>`; `Name (+12025550101)`; `Name (slack:T01/U02)` | `Slack (datalib:group/slack)` |
-| `text/html` | `<a href="mailto:…" data-entity="mailto:…">Jean-Luc Picard</a>` | `<a href="datalib:group/slack" …>Slack</a>` |
+| `text/html` | `<a href="mailto:…" title="Jean-Luc Picard <picard@…>" data-entity="mailto:…">Jean-Luc Picard</a>` | `<a href="datalib:group/slack" title="slack" …>Slack</a>` |
 
 The lead and the mark are decoration (`user-select: none`) and are not
 copied. A paste into Mail or Slack keeps a working link; a paste back
