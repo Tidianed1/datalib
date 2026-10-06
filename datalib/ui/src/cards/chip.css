@@ -34,6 +34,14 @@
   background: var(--datalib-accent, #4f46e5);
   color: #fff;
 }
+.handle-photo {
+  /* Decoration, like the disc: a copy carries the name and identifier. */
+  user-select: none;
+  width: 1.3em;
+  height: 1.3em;
+  border-radius: 50%;
+  object-fit: cover;
+}
 .handle-mark {
   width: 0.9em;
   height: 0.9em;

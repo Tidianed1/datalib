@@ -132,10 +132,15 @@ The rules stay pure (`chipLook`, unit-tested); only the decorate pass
 touches a DOM. The look is the one in `documentBody.css` today, moved
 to a shared `chip.css` so the grid draws the same thing.
 
-**Icons come from the resolver.** `DatalibContact` gains
-`photo: string | null`, a URL the app serves: the contacts applet's
-`/photo/<contact_id>` for your contact, the index's asset route for a
-source's avatar out of the blob CAS. A group's or a step's mark is the
+**Icons come from the resolver.** `DatalibContact` keeps its
+`photo: Option<Photo>` (an inline image or a remote URL, as the source
+had it) and gains `photo_url: Option<String>` beside it: a URL the app
+serves, app-relative, which the chip and the hover card lead with. The
+contacts applet's `/photo/<contact_id>` for your contact; the index's
+asset route for a source's inline photo out of the blob CAS. A remote
+`Photo::Url` never becomes a `photo_url`: the app makes no request to a
+remote host without the person's say (`sanitize.ts`), so a Slack avatar
+stays out until something fetches it into the CAS. A group's or a step's mark is the
 `icon` token its row already carries (`Identity.icon`, mapped by
 `ui/src/config/icons.ts`). The markdown never names an icon: the look
 of a person changes when you link them, and the file was written once.
@@ -274,8 +279,11 @@ out here over the frame, as `ChatBody.ce.vue` does now.
    the identity Author column; the identity formatter through
    `chipLook`; visible-page resolution; menu and double-click in a
    cell; `copyRows`. cards.md's typed-cells section updated.
-5. **Photos.** `photo` on `DatalibContact`; the contacts applet's photo
-   route; the index's asset route for source avatars.
+5. **Photos.** `photo_url` on `DatalibContact`; the contacts applet's
+   photo route; the index's asset route for source avatars. The UI half
+   (the chip and the hover card lead with `photo_url` when it is there)
+   is built; the store, the routes and the field are with the contacts
+   work.
 
 Steps 1 and 3 are where the pattern is set; 2, 4 and 5 are its
 extension to the other places the same entities show.
