@@ -1,16 +1,16 @@
 //! Doltlite-backed raw store for the `calendar` provider.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use anyhow::{Context, Result};
 use datalib_etl::bulk::{bulk_upsert_in_tx, BulkUpsertable};
-use sqlx::Row;
+use sqlx::{Row, Sqlite, Transaction};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
-use super::schema_raw::{full_ddl, AccountRow, CalendarRow, GoogleEventRow, IcsObjectRow};
+use super::schema_raw::{full_ddl, AccountRow, CalendarRow, GoogleEventRow, IcsObjectRow, LADDER};
 
-datalib_etl::raw_db!(pub RawDb: EntityStore, full_ddl());
+datalib_etl::raw_db!(pub RawDb: EntityStore, full_ddl(), LADDER);
 
 /// The account row, for render.
 #[derive(Debug, Clone, Default)]
@@ -74,8 +74,8 @@ impl RawDb {
         self.upsert(rows, "calendars").await
     }
 
-    /// The position the last completed sync of this calendar left; `None`
-    /// when it has never finished one, so the next is a full listing.
+    /// The token the last listing page of this calendar left; `None`
+    /// lists it whole.
     pub async fn sync_token(&self, calendar_id: &str) -> Result<Option<String>> {
         let row = sqlx::query("SELECT sync_token FROM calendars WHERE id = ?")
             .bind(calendar_id)
@@ -87,13 +87,16 @@ impl RawDb {
             .filter(|t| !t.is_empty()))
     }
 
-    /// Called only once every change the token covers is stored, so an
-    /// interrupted sync resumes from the previous one.
-    pub async fn set_sync_token(&self, calendar_id: &str, token: Option<&str>) -> Result<()> {
+    /// In the transaction that stores what the token covers.
+    pub async fn set_sync_token(
+        tx: &mut Transaction<'_, Sqlite>,
+        calendar_id: &str,
+        token: Option<&str>,
+    ) -> Result<()> {
         sqlx::query("UPDATE calendars SET sync_token = ? WHERE id = ?")
             .bind(token)
             .bind(calendar_id)
-            .execute(self.pool())
+            .execute(&mut **tx)
             .await
             .context("update sync_token")?;
         Ok(())
@@ -105,19 +108,13 @@ impl RawDb {
         self.upsert(rows, "ics_objects").await
     }
 
-    /// Every stored object of a calendar, by CalDAV href, with its uid.
-    pub async fn ics_hrefs(&self, calendar_id: &str) -> Result<HashMap<String, String>> {
-        let rows = sqlx::query(
-            "SELECT href, uid FROM ics_objects WHERE calendar_id = ? AND href IS NOT NULL",
-        )
-        .bind(calendar_id)
-        .fetch_all(self.pool())
-        .await
-        .context("select ics hrefs")?;
-        Ok(rows
-            .into_iter()
-            .filter_map(|r| Some((r.try_get("href").ok()?, r.try_get("uid").ok()?)))
-            .collect())
+    pub async fn upsert_ics_objects_in_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        rows: &[&IcsObjectRow],
+    ) -> Result<()> {
+        let owned: Vec<IcsObjectRow> = rows.iter().map(|r| (*r).clone()).collect();
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
+        bulk_upsert_in_tx(tx, &owned, &now).await
     }
 
     pub async fn ics_uids(&self, calendar_id: &str) -> Result<HashSet<String>> {
@@ -137,7 +134,27 @@ impl RawDb {
             .iter()
             .map(|u| super::schema_raw::event_pk(calendar_id, u))
             .collect();
-        self.delete_ids("ics_objects", &ids).await
+        let mut tx = self.pool().begin().await.context("begin delete tx")?;
+        Self::delete_ids_in_tx(&mut tx, "ics_objects", &ids).await?;
+        tx.commit().await.context("commit delete tx")
+    }
+
+    /// Drop the object at a CalDAV `href`, with its sidecar row. Returns
+    /// how many went. Idempotent.
+    pub async fn delete_ics_href(
+        tx: &mut Transaction<'_, Sqlite>,
+        calendar_id: &str,
+        href: &str,
+    ) -> Result<u64> {
+        let ids: Vec<String> =
+            sqlx::query_scalar("SELECT id FROM ics_objects WHERE calendar_id = ? AND href = ?")
+                .bind(calendar_id)
+                .bind(href)
+                .fetch_all(&mut **tx)
+                .await
+                .context("select ics object for delete")?;
+        Self::delete_ids_in_tx(tx, "ics_objects", &ids).await?;
+        Ok(ids.len() as u64)
     }
 
     /// Drop the calendar an `.ics` file was, with its events and sidecar
@@ -186,8 +203,12 @@ impl RawDb {
 
     // ── google_events ───────────────────────────────────────────────
 
-    pub async fn upsert_google_events(&self, rows: &[GoogleEventRow]) -> Result<()> {
-        self.upsert(rows, "google_events").await
+    pub async fn upsert_google_events_in_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        rows: &[GoogleEventRow],
+    ) -> Result<()> {
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
+        bulk_upsert_in_tx(tx, rows, &now).await
     }
 
     pub async fn google_event_ids(&self, calendar_id: &str) -> Result<HashSet<String>> {
@@ -202,7 +223,7 @@ impl RawDb {
 
     /// The stored occurrences of these series.
     pub async fn google_occurrences_of(
-        &self,
+        tx: &mut Transaction<'_, Sqlite>,
         calendar_id: &str,
         series_ids: &[String],
     ) -> Result<Vec<String>> {
@@ -214,7 +235,7 @@ impl RawDb {
             )
             .bind(calendar_id)
             .bind(series)
-            .fetch_all(self.pool())
+            .fetch_all(&mut **tx)
             .await
             .context("select google occurrences")?;
             out.extend(ids);
@@ -223,7 +244,7 @@ impl RawDb {
     }
 
     pub async fn delete_google_events(
-        &self,
+        tx: &mut Transaction<'_, Sqlite>,
         calendar_id: &str,
         event_ids: &[String],
     ) -> Result<()> {
@@ -231,32 +252,31 @@ impl RawDb {
             .iter()
             .map(|e| super::schema_raw::event_pk(calendar_id, e))
             .collect();
-        self.delete_ids("google_events", &ids).await
+        Self::delete_ids_in_tx(tx, "google_events", &ids).await
     }
 
-    async fn delete_ids(&self, table: &'static str, ids: &[String]) -> Result<()> {
-        if ids.is_empty() {
-            return Ok(());
-        }
-        let mut tx = self.pool().begin().await.context("begin delete tx")?;
+    async fn delete_ids_in_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        table: &'static str,
+        ids: &[String],
+    ) -> Result<()> {
         for id in ids {
             // Audited: `table` is a `&'static str` at every callsite.
             sqlx::query(sqlx::AssertSqlSafe(format!(
                 "DELETE FROM {table} WHERE id = ?"
             )))
             .bind(id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .with_context(|| format!("delete {table} {id}"))?;
             sqlx::query(sqlx::AssertSqlSafe(format!(
                 "DELETE FROM {table}_bookkeeping WHERE id = ?"
             )))
             .bind(id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .with_context(|| format!("delete {table}_bookkeeping {id}"))?;
         }
-        tx.commit().await.context("commit delete tx")?;
         Ok(())
     }
 
@@ -381,7 +401,11 @@ mod tests {
         db.upsert_calendars(std::slice::from_ref(&cal))
             .await
             .unwrap();
-        db.set_sync_token("bridge", Some("tok-1")).await.unwrap();
+        let mut tx = db.pool().begin().await.unwrap();
+        RawDb::set_sync_token(&mut tx, "bridge", Some("tok-1"))
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
         db.upsert_calendars(&[cal]).await.unwrap();
         assert_eq!(
             db.sync_token("bridge").await.unwrap().as_deref(),
@@ -396,17 +420,20 @@ mod tests {
             "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n",
         );
         db.upsert_ics_objects(&[row]).await.unwrap();
+        let mut tx = db.pool().begin().await.unwrap();
         assert_eq!(
-            db.ics_hrefs("bridge")
+            RawDb::delete_ics_href(&mut tx, "bridge", "/c/staff.ics")
                 .await
-                .unwrap()
-                .get("/c/staff.ics")
-                .map(String::as_str),
-            Some("staff")
+                .unwrap(),
+            1
         );
-        db.delete_ics_uids("bridge", &["staff".into()])
-            .await
-            .unwrap();
+        assert_eq!(
+            RawDb::delete_ics_href(&mut tx, "bridge", "/c/staff.ics")
+                .await
+                .unwrap(),
+            0
+        );
+        tx.commit().await.unwrap();
         db.delete_ics_uids("bridge", &["staff".into()])
             .await
             .unwrap();

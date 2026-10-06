@@ -4,7 +4,7 @@
 //! encoding (Fastmail wraps every value in CDATA), so the walker matches
 //! elements by local name and hands each provider the properties it asked
 //! for through [`DavProps`]. Keeping one collection in step is [`sync`],
-//! and what its listings mean for the store is [`state`].
+//! and what it lists is [`state`].
 
 pub mod state;
 pub mod sync;

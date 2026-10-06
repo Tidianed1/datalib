@@ -61,6 +61,7 @@ async fn run_in(playback: &Path, store: &Path, window: Option<Window>) -> FetchS
         latchkey: LatchkeySettings::default(),
         progress: Default::default(),
         control: Default::default(),
+        sealer: None,
     })
     .await;
     if summary.is_ok() {
@@ -299,6 +300,7 @@ async fn a_stopped_run_leaves_the_last_listing_rows() {
         latchkey: LatchkeySettings::default(),
         progress: Default::default(),
         control,
+        sealer: None,
     })
     .await
     .expect("a stopped run");

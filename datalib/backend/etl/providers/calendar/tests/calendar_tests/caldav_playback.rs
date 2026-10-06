@@ -146,6 +146,7 @@ async fn run_with(
         latchkey: LatchkeySettings::default(),
         progress: Default::default(),
         control,
+        sealer: None,
     })
     .await;
     if summary.is_ok() {

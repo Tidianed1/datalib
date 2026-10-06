@@ -175,6 +175,7 @@ async fn run_named(
         addressbooks: addressbooks.iter().map(|s| s.to_string()).collect(),
         progress: Default::default(),
         control,
+        sealer: None,
     })
     .await;
     if summary.is_ok() {
@@ -416,9 +417,11 @@ async fn an_expired_token_lists_the_book_whole_again() {
 
 /// A card with no UID cannot be stored, and an address book whose sync
 /// fails is not synced; each was only a `warn!`, so nothing reached the
-/// Manage row. Each is a `problems` row now. The card's row stays through
-/// a failed run and a clean incremental one that does not mention it —
-/// it is still not stored — and goes once the card is listed with a UID.
+/// Manage row. Each is a `problems` row now: the card is held at its
+/// etag with a warning on its listing row. The warning stays through a
+/// failed run and a clean incremental one that does not mention it — it
+/// is still not stored — and goes once the card is listed at a new etag
+/// with a UID, which the mirror then holds for that href.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn what_a_sync_could_not_store_is_a_problem_row_until_it_is_stored() {
     let d = tempfile::tempdir().expect("tempdir");
@@ -477,7 +480,13 @@ async fn what_a_sync_could_not_store_is_a_problem_row_until_it_is_stored() {
         ),
     );
 
-    let unstored = format!("record:contacts:{BOOK}tng-data.vcf");
+    let unstored = format!(
+        "dav_resources:{}",
+        datalib_etl::dav::state::resource_id(
+            &datalib_etl_contacts::ingest::db::addressbook_pk("carddav.enterprise.test", BOOK),
+            &format!("{BOOK}tng-data.vcf")
+        )
+    );
     let first = run(&one, &store).await;
     assert_eq!((first.contacts_new, first.errors), (1, 1), "{first:?}");
     assert_eq!(problem_keys(&store).await, vec![unstored.clone()]);
@@ -485,7 +494,7 @@ async fn what_a_sync_could_not_store_is_a_problem_row_until_it_is_stored() {
     assert_eq!(second.errors, 1, "{second:?}");
     assert_eq!(
         problem_keys(&store).await,
-        vec!["listing:addressbook Bridge".to_string(), unstored.clone()]
+        vec![unstored.clone(), "listing:addressbook Bridge".to_string()]
     );
     // A run that stopped before the address book has not synced it again.
     let before = problem_keys(&store).await;
