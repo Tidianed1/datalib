@@ -45,7 +45,8 @@ use datalib_schema::providers::Provider;
 ///     again.
 /// v9: the author span carries the author's handle as `data-handle`.
 /// v10: each thread carries its authors' Slack profiles (title, email).
-pub const RENDER_VERSION: u32 = 10;
+/// v11: a `<@U…>` mention in a body is a chip link to the user.
+pub const RENDER_VERSION: u32 = 11;
 
 #[derive(Debug, Default)]
 pub struct RenderSummary {
@@ -158,6 +159,7 @@ fn build_chats(
         let labels = Labels {
             users: bucket.inputs.lookup("users", user_labels),
             channels: bucket.inputs.lookup("channels", channel_labels),
+            team_id: bucket.messages.first().map_or("", |m| m.team_id.as_str()),
         };
         let channels = bucket.inputs.lookup("channels", &parsed.channels);
         let root: &Message = bucket

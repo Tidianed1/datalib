@@ -1068,6 +1068,15 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ],
             "WhatsApp's address book, as each chat's contacts",
         )
+        # A Slack mention is a chip link: the viewer resolves the href to
+        # the person, and any other markdown viewer shows a link whose
+        # title says who it names (docs/dev/plans/chips.md).
+        self.assertIn(
+            "[@Jean-Luc Picard](slack://user?team=T_NCC1701D&id=U_PICARD "
+            '"@Jean-Luc Picard (slack:T_NCC1701D/U_PICARD)"), I must object',
+            self._markdown("slack", "beaming down unarmed"),
+            "a <@U…> mention in a Slack body renders as a chip link",
+        )
         self.assertEqual(
             self._diff_shape(CONTACTS_DIFF_GROUP),
             {
