@@ -22,7 +22,12 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// `datalib_step`'s render step checks that every version stored on
 /// disk is one its processors declare, so this must not be mixed into
 /// the stored value.
-pub const LAYOUT_VERSION: u32 = 9;
+///
+/// It also covers what `render_markdown` writes beside the markdown:
+/// v10 moved only the `source_contacts` rows (`people.rs` counts
+/// reactors), and every document had to be rendered again for an
+/// existing root to hold them.
+pub const LAYOUT_VERSION: u32 = 10;
 
 /// What every chat-common provider declares through
 /// `RenderProcessor::render_params`, merged with its own knobs: the
