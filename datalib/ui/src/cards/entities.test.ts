@@ -9,6 +9,7 @@ import {
   entityCopyText,
   entityLook,
   entityMenu,
+  entityTitle,
   type EntityView,
 } from "./entities";
 
@@ -58,7 +59,8 @@ describe("entityLook", () => {
 describe("a group or step chip's hover, copy, menu and card", () => {
   it("says what it is and where it stands", () => {
     const v = view("Work Slack · Ingest", "step:ingest", "failed", "token expired");
-    expect(entityLook(INGEST, "", v, null).title).toBe(
+    const look = entityLook(INGEST, "", v, null);
+    expect(entityTitle(INGEST, look, v)).toBe(
       "Work Slack · Ingest (slack/ingest)\nSlack\nFailed: token expired",
     );
   });

@@ -52,7 +52,7 @@ export function entityLook(
   const text = view?.label || shown || entity?.id || uri;
   const status = view?.status;
   const what = entity?.kind === "step" ? "step" : "source";
-  return {
+  const look = {
     text,
     ariaLabel: status ? `${text}, ${what}, ${status.label}` : `${text}, ${what}`,
     classes: [
@@ -63,14 +63,19 @@ export function entityLook(
     initial: null,
     icon: view?.icon ?? fallbackIcon,
     photo: null,
-    title: entityTitle(uri, text, view),
+    title: "",
   };
+  return { ...look, title: entityTitle(uri, look, view) };
 }
 
 /** The hover: what it is, and where it stands. */
-function entityTitle(uri: string, text: string, view: EntityView | undefined): string {
+export function entityTitle(
+  uri: string,
+  look: Pick<ChipLook, "text">,
+  view: EntityView | undefined,
+): string {
   const id = entityFromUri(uri)?.id ?? uri;
-  const lines = [`${text} (${id})`];
+  const lines = [`${look.text} (${id})`];
   if (view?.detail) lines.push(view.detail);
   if (view?.status) {
     lines.push(

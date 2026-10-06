@@ -40,8 +40,8 @@ above it:
 What is still to build: [`plans/contacts.md`](plans/contacts.md)
 (managing contacts, `row_handles`, contacts in search, numbers without
 a country code). [`plans/chips.md`](plans/chips.md) covers chips for
-things that are not people (a group is one in the grid's Source
-column already). This page says what the tree does.
+things that are not people: groups and steps are built, system events
+are not. This page says what the tree does.
 
 ## Words
 

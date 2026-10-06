@@ -5,6 +5,7 @@
 import LogCard from "../LogCard.ce.vue";
 import RunLogPanel from "@/components/RunLogPanel.ce.vue";
 import tableGridCss from "../tableGrid.css?inline";
+import chipCss from "../chip.css?inline";
 // The grid's theme has to be in the same root as the grid; head
 // styles stop at the shadow boundary.
 import slickCss from "@slickgrid-universal/common/dist/styles/css/slickgrid-theme-default.css?inline";
@@ -15,5 +16,9 @@ import type { LogViewOpts } from "../cardSources";
 export { logSource, type LogViewOpts } from "../cardSources";
 
 export function logView(opts: LogViewOpts = {}): CardRender {
-  return vueCard(LogCard, { opts }, { styleSources: [slickCss, tableGridCss, RunLogPanel] });
+  return vueCard(
+    LogCard,
+    { opts },
+    { styleSources: [slickCss, tableGridCss, chipCss, RunLogPanel] },
+  );
 }

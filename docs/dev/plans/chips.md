@@ -2,9 +2,10 @@
 
 *Decided 2026-10-06. For people it is built, and what the tree does
 is [`../contacts.md`](../contacts.md), whose §"Not built" says what is
-left. A group is a chip in the search and problems grids' Source
-column (§"In a grid"). Not built here: group and step chips in
-documents and in the run log, and system events. The facts about the tree were read on
+left. Groups and steps are chips in the search and problems grids'
+Source column (§"In a grid"), in a source's storage report (its group
+in the heading, each store's step in a column) and in the run log's
+Group and Step columns. Not built here: system events. The facts about the tree were read on
 2026-10-06 and are cited by path; check one before relying on it.*
 
 A **chip** is how datalib shows an entity inline: a person, a source

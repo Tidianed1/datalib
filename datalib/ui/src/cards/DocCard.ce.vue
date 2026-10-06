@@ -667,6 +667,7 @@ watch(
           @frame-link="onFrameLink"
           @frame-contextmenu="onPaneContextMenu"
           @open-search="onOpenSearch"
+          @open-card="props.ctx.host.openCards($event)"
         />
       </div>
     </template>
