@@ -16,6 +16,7 @@ use datalib_etl::retry::{self, RetryGuard};
 use datalib_etl::stop::StopFlag;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl::synthesize::{json_response, write_fixture};
+use datalib_etl_forge_ingest_common::Bounds;
 use datalib_etl_github::ingest::{
     db_path_for, fetch, search_url, FetchOptions, RawDb, BASE, DEFAULT_SCOPES, PER_PAGE,
 };
@@ -33,6 +34,8 @@ const TABLES: &[&str] = &[
     "issue_comments",
     "pr_reviews",
     "pr_review_comments",
+    "listed_change_requests",
+    "coverage",
 ];
 
 async fn dump_held(pool: &sqlx::SqlitePool) -> Result<String> {
@@ -186,8 +189,12 @@ fn tape(dir: &Path, edition: Edition) -> PathBuf {
         .map(|p| item(p.num, p.at))
         .collect();
     for scope in DEFAULT_SCOPES {
-        serve(&t, &search_url(scope, None), search_page(&all));
-        serve(&t, &search_url(scope, Some(SINCE)), search_page(&moved));
+        serve(
+            &t,
+            &search_url(scope, &Bounds::default()),
+            search_page(&all),
+        );
+        serve(&t, &search_url(scope, &resumed()), search_page(&moved));
     }
     t
 }

@@ -7,6 +7,7 @@ use std::path::Path;
 
 use datalib_etl::http::{HttpRequest, HttpService};
 use datalib_etl::synthesize::{json_response, write_fixture};
+use datalib_etl_forge_ingest_common::Bounds;
 use datalib_etl_github::ingest::{search_url, FetchOptions, BASE};
 use serde_json::{json, Value};
 use tempfile::tempdir;
@@ -54,7 +55,7 @@ async fn a_search_cut_off_at_githubs_cap_lists_the_rest_next_run() {
     // miniature.
     serve_search(
         &pb,
-        &search_url(SCOPE, None),
+        &search_url(SCOPE, &Bounds::default()),
         3,
         &[item(3, t3), item(2, t2)],
     );
@@ -64,12 +65,27 @@ async fn a_search_cut_off_at_githubs_cap_lists_the_rest_next_run() {
     };
     run(&out, &pb, one_scope).await.unwrap();
     assert_eq!(stored_prs(&out), [2, 3]);
+    assert_eq!(
+        problems(&out).await,
+        [row("listing:search author:@me", "error")],
+        "a search that answered fewer than it has says so"
+    );
+    assert_eq!(
+        coverage(&out).await,
+        [(
+            "search:author:@me".to_string(),
+            "2369-04-15T00:00:00Z".to_string()
+        )]
+    );
 
     // What is below the oldest result is still to list, and the search
     // for it is bounded above by that result.
-    let below = format!(
-        "{BASE}/search/issues?q=is%3Apr%20author%3A%40me%20updated%3A%3C%3D2369-04-12\
-         &per_page=100&sort=updated&order=desc"
+    let below = search_url(
+        SCOPE,
+        &Bounds {
+            lo: None,
+            hi: Some(t2.to_string()),
+        },
     );
     serve_search(&pb, &below, 2, &[item(2, t2), item(1, t1)]);
     run(&out, &pb, one_scope).await.unwrap();

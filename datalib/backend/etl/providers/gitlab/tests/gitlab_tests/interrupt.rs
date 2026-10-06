@@ -15,6 +15,7 @@ use datalib_etl::interrupt::{dump_tables, every_cut_resumes, How, Rig};
 use datalib_etl::retry::{self, RetryGuard};
 use datalib_etl::stop::StopFlag;
 use datalib_etl::store_handle::RawStoreHandle;
+use datalib_etl_forge_ingest_common::Bounds;
 use datalib_etl_gitlab::ingest::{
     db_path_for, fetch, search_url, FetchOptions, RawDb, DEFAULT_SCOPES,
 };
@@ -26,7 +27,13 @@ use crate::support::*;
 /// `problems` are left out: a run that was cut off has more attempts
 /// than one that was not. What the MR sidecar holds is compared on its
 /// own: the next run decides what to fetch from it.
-const TABLES: &[&str] = &["self_identity", "merge_requests", "discussions"];
+const TABLES: &[&str] = &[
+    "self_identity",
+    "merge_requests",
+    "discussions",
+    "listed_change_requests",
+    "coverage",
+];
 
 async fn dump_held(pool: &sqlx::SqlitePool) -> Result<String> {
     let rows: Vec<(String, bool, Option<String>)> = sqlx::query_as(
@@ -46,9 +53,9 @@ const T1: &str = "2369-04-10T00:00:00.000Z";
 const T2: &str = "2369-04-12T00:00:00.000Z";
 const T4: &str = "2369-04-15T10:00:00.000Z";
 const T5: &str = "2369-04-15T11:00:00.000Z";
-/// What the TNG clock's runs stamp a cursor with, as the listing takes
-/// it.
-const SINCE: &str = "2369-04-15T00:00:00Z";
+/// The top of what a run at the TNG clock covers, as the listing takes
+/// it: where the next run's listing starts.
+const SINCE: &str = "2369-04-15T00:00:00.000Z";
 
 /// The project before and after upstream moved: MR 1 was edited and
 /// discussed again, and MR 3 appeared.
@@ -93,9 +100,17 @@ fn tape(dir: &Path, edition: Edition) -> PathBuf {
         .filter(|(_, at, ..)| *at > SINCE)
         .map(|(iid, at, ..)| item(*iid, at))
         .collect();
+    let resumed = Bounds {
+        lo: Some(SINCE.to_string()),
+        hi: None,
+    };
     for scope in DEFAULT_SCOPES {
-        serve(&t, &search_url(scope, USER_ID, None), json!(all));
-        serve(&t, &search_url(scope, USER_ID, Some(SINCE)), json!(moved));
+        serve(
+            &t,
+            &search_url(scope, USER_ID, &Bounds::default()),
+            json!(all),
+        );
+        serve(&t, &search_url(scope, USER_ID, &resumed), json!(moved));
     }
     t
 }

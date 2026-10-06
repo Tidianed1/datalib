@@ -1,7 +1,7 @@
 //! Part of a sync that fails is a `problems` row, not a failed step: the
 //! rest of the run goes on, the row goes once the same thing is tried
-//! again and works, and a run that was stopped records nothing and moves
-//! no cursor.
+//! again and works, and a run that was stopped records nothing; what it
+//! listed is owed to the next run.
 
 use std::fs;
 use std::path::Path;
@@ -14,6 +14,7 @@ use datalib_etl::retry::RetryGuard;
 use datalib_etl::stop::StopFlag;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl::synthesize::{json_response, write_fixture};
+use datalib_etl_forge_ingest_common::Bounds;
 use datalib_etl_github::ingest::{
     db_path_for, search_url, FetchOptions, RawDb, BASE, DEFAULT_SCOPES,
 };
@@ -25,7 +26,8 @@ use crate::support::*;
 /// A PR whose own record will not fetch is an error row on it, and the
 /// other PR is mirrored all the same. The next run asks for it again
 /// although its search, resumed past it, no longer names it — and the
-/// row goes. The cursors are the run's pinned clock, not the wall's.
+/// row goes. What a search covered reaches the run's pinned clock, not
+/// the wall's.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_pr_that_would_not_fetch_is_a_problem_until_it_does() {
     let d = tempdir().unwrap();
@@ -41,35 +43,39 @@ async fn a_pr_that_would_not_fetch_is_a_problem_until_it_does() {
         problems(&out).await,
         [row(&format!("pull_requests:{REPO}#2"), "error")]
     );
-    let pinned = "2369-04-15T00:00:00.000000+00:00".to_string();
+    let pinned = "2369-04-15T00:00:00Z".to_string();
     assert_eq!(
-        cursors(&out).await,
+        coverage(&out).await,
         DEFAULT_SCOPES
             .iter()
-            .map(|s| (s.to_string(), pinned.clone()))
+            .map(|s| (format!("search:{s}"), pinned.clone()))
             .collect::<Vec<_>>(),
     );
 
     let pb = tape(&d.path().join("two"), &[1, 2]);
     // The searches this run sends are the resumed ones, which list
-    // nothing: only the retry can bring PR 2 in.
+    // nothing: only the listing the first run stored can bring PR 2 in.
     for scope in DEFAULT_SCOPES {
-        tape_of(&pb, &search_url(scope, Some(SINCE)));
+        tape_of(&pb, &search_url(scope, &resumed()));
     }
     run(&out, &pb, |o| o).await.unwrap();
     assert_eq!(stored_prs(&out), [1, 2]);
     assert_eq!(problems(&out).await, [], "the PR fetched this time");
 }
 
-/// A scope whose search fails is a `listing:` row naming it; its cursor
-/// stays where it was so the next run searches the same span again, and
-/// the row goes when that search works.
+/// A scope whose search fails is a `listing:` row naming it; it covers
+/// nothing, so the next run searches the same span again, and the row
+/// goes when that search works.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_search_that_fails_is_a_problem_until_it_lists() {
     let d = tempdir().unwrap();
     let out = d.path().join("out");
     let pb = tape(&d.path().join("one"), &[1]);
-    fs::remove_file(tape_of(&pb, &search_url("mentions:@me", None))).unwrap();
+    fs::remove_file(tape_of(
+        &pb,
+        &search_url("mentions:@me", &Bounds::default()),
+    ))
+    .unwrap();
 
     run(&out, &pb, |o| o).await.unwrap();
     assert_eq!(stored_prs(&out), [1], "the other scopes listed it");
@@ -77,8 +83,8 @@ async fn a_search_that_fails_is_a_problem_until_it_lists() {
         problems(&out).await,
         [row("listing:search mentions:@me", "error")]
     );
-    let searched: Vec<String> = cursors(&out).await.into_iter().map(|(s, _)| s).collect();
-    assert_eq!(searched, ["author:@me", "commenter:@me"]);
+    let searched: Vec<String> = coverage(&out).await.into_iter().map(|(s, _)| s).collect();
+    assert_eq!(searched, ["search:author:@me", "search:commenter:@me"]);
 
     let pb = tape(&d.path().join("two"), &[1]);
     run(&out, &pb, |o| FetchOptions {
@@ -101,17 +107,20 @@ impl ProgressSink for StopBeforeFetching {
 }
 
 /// A run stopped between its searches and its fetches has listed PRs it
-/// never fetched. Moving the cursors would put them behind every later
-/// search, and replacing the listing rows would clear what it never
-/// re-checked: it does neither.
+/// never fetched. What it listed is stored, so the next run fetches it
+/// without any search naming it again; replacing the listing rows would
+/// clear what the stopped run never re-checked, so it does not.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_stopped_run_moves_no_cursor_and_clears_nothing() {
+async fn a_stopped_run_keeps_what_it_listed_and_clears_nothing() {
     let d = tempdir().unwrap();
     let out = d.path().join("out");
     let pb = tape(&d.path().join("one"), &[1]);
-    fs::remove_file(tape_of(&pb, &search_url("mentions:@me", None))).unwrap();
+    fs::remove_file(tape_of(
+        &pb,
+        &search_url("mentions:@me", &Bounds::default()),
+    ))
+    .unwrap();
     run(&out, &pb, |o| o).await.unwrap();
-    let before = cursors(&out).await;
     assert_eq!(
         problems(&out).await,
         [row("listing:search mentions:@me", "error")]
@@ -129,18 +138,32 @@ async fn a_stopped_run_moves_no_cursor_and_clears_nothing() {
     .await
     .unwrap();
     assert_eq!(stored_prs(&out), [1], "the stop came before any fetch");
-    assert_eq!(cursors(&out).await, before);
+    assert_eq!(
+        listed(&out).await.len(),
+        2,
+        "what the stopped run listed is stored"
+    );
     assert_eq!(
         problems(&out).await,
         [row("listing:search mentions:@me", "error")],
         "a stopped run did not re-check the listing"
     );
+
+    // The next run's searches list nothing new; PR 2 is fetched from
+    // the listing the stopped run left.
+    let pb = tape(&d.path().join("three"), &[1, 2]);
+    for scope in DEFAULT_SCOPES {
+        tape_of(&pb, &search_url(scope, &resumed()));
+    }
+    run(&out, &pb, |o| o).await.unwrap();
+    assert_eq!(stored_prs(&out), [1, 2]);
+    assert_eq!(problems(&out).await, []);
 }
 
 /// `max_prs` fetches part of what the searches listed. The rest is owed
-/// — a warning on each — and later runs fetch it first, so a run of
-/// capped syncs gets through everything, though no later search lists
-/// it again.
+/// — no row says so: the listing holds it and the store does not — and
+/// later runs fetch it first, so a run of capped syncs gets through
+/// everything, though no later search lists it again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn capped_runs_fetch_everything_in_turn() {
     let d = tempdir().unwrap();
@@ -150,21 +173,21 @@ async fn capped_runs_fetch_everything_in_turn() {
         max_prs: Some(1),
         ..o
     };
-    let owed = |n: u32| row(&format!("pull_requests:{REPO}#{n}"), "warning");
 
     run(&out, &pb, capped).await.unwrap();
     assert_eq!(stored_prs(&out), [1]);
+    assert_eq!(listed(&out).await.len(), 3);
     run(&out, &pb, capped).await.unwrap();
     assert_eq!(stored_prs(&out), [1, 2]);
-    assert_eq!(problems(&out).await, [owed(3)]);
+    assert_eq!(problems(&out).await, []);
     run(&out, &pb, capped).await.unwrap();
     assert_eq!(stored_prs(&out), [1, 2, 3]);
     assert_eq!(problems(&out).await, []);
 }
 
 /// A PR GitHub answers 404 for — its repository deleted, or out of this
-/// credential's reach — is gone, not failing: its failure and its row
-/// go, and no later run asks for it again.
+/// credential's reach — is gone, not failing: it leaves the listing,
+/// its failure and its row go, and no later run asks for it again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_pr_that_is_gone_stops_being_retried() {
     let d = tempdir().unwrap();
@@ -199,6 +222,11 @@ async fn a_pr_that_is_gone_stops_being_retried() {
         [],
         "nothing is left to retry"
     );
+    assert_eq!(
+        listed(&out).await,
+        [(format!("{REPO}#1"), None)],
+        "the listing no longer names it"
+    );
 }
 
 /// The PR's detail page answers 503: retryable, so it spends the retry
@@ -219,10 +247,10 @@ fn unavailable(pb: &Path, num: u32) {
 
 /// When the shared retry loop gives up, the requests stop there — the
 /// PRs after it are not each tried and failed — but the run keeps what
-/// it fetched: a `phase:` row says it stopped short, the cursors stay,
-/// and the next run fetches the rest and clears the row. A run that gave
-/// up did not reach everything, so an earlier run's row stands until a
-/// run gets through.
+/// it fetched: a `phase:` row says it stopped short, what the searches
+/// listed stays owed, and the next run fetches the rest and clears the
+/// row. A run that gave up did not reach everything, so an earlier
+/// run's row stands until a run gets through.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_give_up_keeps_what_it_fetched() {
     let d = tempdir().unwrap();
@@ -253,17 +281,20 @@ async fn a_give_up_keeps_what_it_fetched() {
             row("phase:fetch", "error")
         ]
     );
-    assert_eq!(cursors(&out).await, []);
+    assert_eq!(listed(&out).await.len(), 4, "the searches had finished");
 
     let pb = tape(&d.path().join("two"), &[1, 2, 3, 4]);
+    for scope in DEFAULT_SCOPES {
+        tape_of(&pb, &search_url(scope, &resumed()));
+    }
     run(&out, &pb, |o| o).await.unwrap();
     assert_eq!(stored_prs(&out), [1, 2, 3, 4]);
     assert_eq!(problems(&out).await, []);
 }
 
-/// A PR that fails every run is tried every run, but does not count
-/// against `max_prs`: the rest still get through, one capped run at a
-/// time.
+/// A PR that fails every run is tried again, but the ones never tried
+/// go before it, so under `max_prs` the rest still get through, one
+/// capped run at a time.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_pr_that_always_fails_does_not_starve_the_cap() {
     let d = tempdir().unwrap();

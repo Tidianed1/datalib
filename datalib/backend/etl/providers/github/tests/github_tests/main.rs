@@ -13,6 +13,7 @@ mod playback_roundtrip;
 mod run_problems;
 mod support;
 mod sync_state;
+mod upgrade;
 
 /// The fixture's pinned clock, as the pipeline's `--now` sets it.
 pub fn tng_now() -> datalib_time::IsoOffsetTimestamp {

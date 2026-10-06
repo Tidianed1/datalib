@@ -10,6 +10,7 @@ use datalib_etl::event_store::{diff_and_save, make_record};
 use datalib_etl::http::{fixture_key, HttpRequest, HttpService, PLAYBACK_ENV};
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl::synthesize::Synthesizer;
+use datalib_etl_forge_ingest_common::Bounds;
 use datalib_etl_github::ingest::{
     block_on_load_all, db_path_for, fetch, FetchOptions, FetchSummary, RawDb, ENTITY_PR,
     ENTITY_SELF,
@@ -18,8 +19,16 @@ use datalib_etl_github::synthesize::GithubSynth;
 use serde_json::{json, Map};
 
 pub const REPO: &str = "enterprise-d/holodeck";
-/// What the TNG clock's runs stamp a cursor with, as search takes it.
+/// The top of what a run at the TNG clock covers, as search takes it:
+/// where the next run's search starts.
 pub const SINCE: &str = "2369-04-15";
+
+pub fn resumed() -> Bounds {
+    Bounds {
+        lo: Some(SINCE.to_string()),
+        hi: None,
+    }
+}
 
 /// A playback tree for an account on PRs `prs` of [`REPO`], none with
 /// comments, captured at the TNG clock — so it also answers the searches
@@ -95,12 +104,20 @@ pub async fn problems(out: &Path) -> Vec<(String, String)> {
     .await
 }
 
-pub async fn cursors(out: &Path) -> Vec<(String, String)> {
-    query(
-        out,
-        "SELECT scope, last_seen_at_utc FROM sync_scope_state ORDER BY scope",
-    )
-    .await
+/// `(scope, hi)` of every span the searches have covered.
+pub async fn coverage(out: &Path) -> Vec<(String, String)> {
+    query(out, "SELECT scope, hi FROM coverage ORDER BY scope").await
+}
+
+/// `(id, updated_at)` of every PR the searches have listed.
+pub async fn listed(out: &Path) -> Vec<(String, Option<String>)> {
+    let db = RawDb::open(&db_path_for(out)).await.unwrap();
+    let rows = sqlx::query_as("SELECT id, updated_at FROM listed_change_requests ORDER BY id")
+        .fetch_all(db.pool())
+        .await
+        .unwrap();
+    db.close().await;
+    rows
 }
 
 pub fn stored_prs(out: &Path) -> Vec<u32> {
