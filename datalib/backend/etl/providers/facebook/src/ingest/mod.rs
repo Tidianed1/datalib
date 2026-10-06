@@ -20,6 +20,8 @@ use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_files::export_files::ExportFiles;
+use datalib_etl_files::file_checkpoint;
+use datalib_etl_files::fsscan::ScannedFile;
 use datalib_etl_macros::RawStoreHandle;
 use datalib_problems::Reason;
 use serde::Serialize;
@@ -27,7 +29,7 @@ use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use uuid::Uuid;
 
-use schema_raw::{canonical_table, facebook_ns, media_ddl, MediaBlobRow};
+use schema_raw::{canonical_table, facebook_ns, store_ddl, MediaBlobRow};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -56,9 +58,9 @@ pub struct RawDb {
 
 impl RawDb {
     /// Open the store to write it. The record tables are created as the
-    /// walk meets their files, so only the media edge table is DDL here.
+    /// walk meets their files, so only the fixed tables are DDL here.
     pub async fn open(db_path: &Path) -> Result<Self> {
-        let ddl = media_ddl();
+        let ddl = store_ddl();
         let ddl: Vec<&str> = ddl.iter().map(String::as_str).collect();
         let pool = dr::open(db_path, &ddl).await?;
         let cas = BlobCas::open(&cas_path_for(db_path)).await?;
@@ -162,13 +164,19 @@ async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
     // chunk that would not read leaves the whole table unpruned: its rows
     // are not in this run's set, and absence from it means nothing.
     let mut unread_tables: HashSet<String> = HashSet::new();
+    // Every chunk file this run read, by table, to stamp as what the table
+    // was last read from.
+    let mut chunks: BTreeMap<String, Vec<ScannedFile>> = BTreeMap::new();
+    let mut present: HashSet<String> = HashSet::new();
 
     for path in export.with_extension("json") {
         let rel = relative(&opts.input_path, path);
         let table = canonical_table(&rel);
-        match read_records(path) {
-            Ok(records) => {
+        present.insert(rel.clone());
+        match read_records(path, &rel) {
+            Ok((records, file)) => {
                 summary.files += 1;
+                chunks.entry(table.clone()).or_default().push(file);
                 let rows = by_table.entry(table.clone()).or_default();
                 for record in records {
                     let id = row_id(&table, &record);
@@ -191,11 +199,40 @@ async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
         }
     }
 
+    // A table is split into chunks (`album/0.json`, `album/1.json`), and an
+    // export unpacked only in part can hold some of them: absence from this
+    // run's set then means nothing. A table prunes only when every chunk it
+    // was last read from is here.
+    let mut short_tables: HashSet<String> = HashSet::new();
+    for table in by_table.keys() {
+        let scope = chunk_scope(table);
+        for rel in file_checkpoint::load_cursor(db.pool(), &scope)
+            .await?
+            .keys()
+        {
+            if !present.contains(rel) {
+                problems.push(RunProblem::listing(
+                    &format!("file {rel}"),
+                    "a part of a table the export holds the rest of is missing, so \
+                     nothing of the table was deleted; reset the source if the export \
+                     really has fewer parts now"
+                        .to_string(),
+                ));
+                short_tables.insert(table.clone());
+            }
+        }
+    }
+
     let mut tx = db.pool().begin().await.context("begin facebook tx")?;
     for (table, rows) in &by_table {
-        let prune = export.errors.is_empty() && !unread_tables.contains(table);
+        let prune = export.errors.is_empty()
+            && !unread_tables.contains(table)
+            && !short_tables.contains(table);
         upsert_and_prune(&mut tx, table, rows, prune).await?;
         summary.rows += rows.len();
+        for file in chunks.get(table).into_iter().flatten() {
+            file_checkpoint::record_file(&mut tx, &chunk_scope(table), file).await?;
+        }
     }
     tx.commit().await.context("commit facebook tx")?;
 
@@ -279,6 +316,11 @@ async fn upsert_and_prune(
             .with_context(|| format!("insert into {table}"))?;
     }
     Ok(())
+}
+
+/// The `ingested_files` scope naming the chunk files a table was read from.
+fn chunk_scope(table: &str) -> String {
+    format!("facebook/{table}")
 }
 
 /// Every `uri` in every record, read off disk into the CAS once. A `uri`
@@ -404,13 +446,20 @@ fn looks_like_export_path(s: &str) -> bool {
 /// Parse one export file into its records: an array is one record per
 /// element, an object wrapping a single array (`{"comments_v2": […]}`)
 /// likewise, and anything else — an album, the profile — is one record.
-/// Every string is passed through [`mojibake::fix`] on the way in.
-fn read_records(path: &Path) -> Result<Vec<Value>> {
-    let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+/// Every string is passed through [`mojibake::fix`] on the way in. The
+/// file comes back as what to stamp once its rows are stored.
+fn read_records(path: &Path, rel: &str) -> Result<(Vec<Value>, ScannedFile)> {
+    let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
     let mut v: Value =
-        serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
+        serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))?;
     mojibake::fix(&mut v);
-    Ok(split_records(v))
+    let file = ScannedFile {
+        path: path.to_path_buf(),
+        rel: rel.to_string(),
+        size: bytes.len() as i64,
+        blake3: *blake3::hash(&bytes).as_bytes(),
+    };
+    Ok((split_records(v), file))
 }
 
 fn split_records(v: Value) -> Vec<Value> {

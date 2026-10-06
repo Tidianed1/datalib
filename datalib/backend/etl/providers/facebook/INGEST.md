@@ -93,8 +93,8 @@ The whole run is one snapshot in one transaction: every row is upserted,
 then every row of each table the export no longer holds is deleted. A
 commit landing at any point therefore sees last run's table or this
 run's, never an emptied one — the rule in `docs/dev/plans/one_mode.md`.
-There is no cursor for a reset to clear. What holds the deletions back
-is under "When part of a run fails" below.
+What holds the deletions back is under "When part of a run fails"
+below.
 
 After the rows are committed, every `uri` in every record is read off
 disk once and stored in the sibling `blobs.sqlite`, with one
@@ -121,6 +121,15 @@ that the next run which reads the thing clears:
   Its table is upserted but not pruned this run: chunks of one table
   (`album/0.json`, `album/1.json`) share it, and the rows of the chunk
   that failed are missing from this run's set without having gone.
+- **A chunk missing from a table the export has the rest of** — an
+  export unpacked only in part — is a `listing:file <path>` row, and the
+  table is upserted but not pruned. Each run records in `ingested_files`
+  (scope `facebook/<table>`) the chunk files it read a table from, and a
+  table prunes only while every one of them is there. A table none of
+  whose files is in the export was left out of it, and keeps its rows.
+  An export that really has fewer parts of a table than the last one
+  looks the same as a partial unpack; resetting the source clears the
+  record.
 - **A directory the walk could not list** (or an entry it could not
   stat) is a `listing:files` row, and no table is pruned that run.
 - **An export path with nothing at it** fails the run: there is nothing
