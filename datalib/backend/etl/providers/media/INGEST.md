@@ -416,26 +416,26 @@ the working set, which lives in the file and persists without a
 the commit at the end of the step is a history marker, not what makes
 the work durable. The expensive per-item work — container
 parse, payload hash, metadata read — is keyed on content and lives in
-`media_items`, which is never deleted, so an interrupted run's parses
-survive too.
+`media_items`, which only a scan that reached its end prunes, so an
+interrupted run's parses survive too.
 
-## Orphaned items
+## Items no path names
 
 `media_files`, `media_playlists` and `media_playlist_entries` are
 reconciled every scan (see above), so a deleted file disappears on its
-own. `media_items`, `media_audio` and `media_visual` are **not** — they
-are keyed on content, which has no notion of "no longer present", and
-dropping them would lose when the item was first seen
-(`media_items_bookkeeping.fetched_at_utc`) and force a re-parse of every
-item whose path merely moved.
+own. `media_items`, `media_audio` and `media_visual` are keyed on
+content, so they are not reconciled by path: that would lose when the
+item was first seen (`media_items_bookkeeping.fetched_at_utc`) and
+force a re-parse of every item whose path merely moved.
 
-So deleting the last copy of an item leaves an unreferenced
-`media_items` row, deliberately: the row is cheap and it preserves the
-record that the item was once here. Reaping them is a
-`DELETE … WHERE blake3 NOT IN (SELECT blake3 FROM media_files)` whenever
-we want it; the rows stay in earlier commits, but HEAD stops recording
-that the item was once here. Pinned by
-`a_deleted_file_disappears_from_the_path_table_but_the_item_remains` in
+Instead, once the path tables are reconciled after a walk with no
+errors, an item no `media_files` row names goes, with its class rows
+and bookkeeping (`RawDb::delete_unnamed_items`, counted as
+`items_removed`). A file moved within the tree is named at its new path
+by then and keeps its item; one removed and later put back is parsed
+again. A file the scan found and did not read keeps its path row, so
+its item stays. The rows stay in earlier commits. Pinned by
+`an_item_no_path_names_goes_and_a_moved_one_stays` in
 `tests/media_e2e.rs`.
 
 ## Known gaps

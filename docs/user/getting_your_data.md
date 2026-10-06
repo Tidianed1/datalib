@@ -103,8 +103,7 @@ pick — Signal, Google Chat and the rest Beeper bridges.
 
 On macOS the directory is `~/Library/Application Support/BeeperTexts`;
 no credentials. Lightly used — expect rough edges. It never notices a
-deletion, and `always_clear_before_ingest` is the wrong fix here (the
-provider's `INGEST.md` says why).
+deletion (the provider's `INGEST.md` says why).
 
 ## CalDAV
 
@@ -572,9 +571,8 @@ data**, request the full archive, and unzip it when the email arrives
 unzip ~/Downloads/Complete_LinkedInDataExport_*.zip -d ~/backups/LinkedInDataExport
 ```
 
-Point `export.path` at that directory. Each export is complete, so
-`all_sources.toml` sets `always_clear_before_ingest = true` to let a
-newer export drop what LinkedIn stopped including.
+Point `export.path` at that directory, and unzip each newer export over
+it or in its place.
 
 ## Local files
 

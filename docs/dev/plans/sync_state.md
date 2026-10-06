@@ -268,10 +268,11 @@ section. Built. AirVisual reads a mounted share, so it is a local
 source and moved to step 6. `scope_config` could not go: email's mbox
 path and `lightroom` still use it, and both are local.
 
-**Step 6 — local sources** move to one whole pass per run, after timing
-the large inputs. `file_checkpoint`, the three copies of the
-overlapping-snapshot protocol and `scope_config` go; AirVisual is one
-of them.
+**Step 6 — local sources.** Decided 2026-10-06 and written up in §11:
+completeness is a unit the provider names, and a unit is replaced in
+the seal that rewrites it. `always_clear_before_ingest` goes. The skip
+for an unchanged file stays as an optimization that never decides a
+deletion, because the large inputs cannot be timed from here.
 
 ## 8. The interruption test
 
@@ -485,4 +486,60 @@ error. The interruption tests held through both passes.
 Two things stay outside the loop by nature: a walk over a range
 (`coverage`), and a producer's own state (a delta token, a listing
 mark, which scopes were listed whole).
+
+
+## 11. Local sources: what a complete input licenses
+
+A local source reads files on disk: an export, a backup, a folder, a
+database file. When something is missing from its input, either it was
+deleted, or this input never had it. The provider knows which, per
+**unit of completeness**, so the person is not asked:
+
+| kind | unit | sources |
+|---|---|---|
+| one snapshot | the whole input | lightroom catalog, Apple Photos, WhatsApp msgstore, the Signal snapshot |
+| parts of an export | each product, file or table | Takeout per product (per file for a single-file feed), LinkedIn per CSV, Facebook per table, the claude export per file, each `.vcf` or `.ics` |
+| an overlapping collection | the whole folder, after a clean read of all of it | mbox folder, SMS backup folder |
+| a cache that evicts | none: never delete | beeper, claude_code, codex, airvisual, Apple Messages |
+
+Each run, each unit is one of three things:
+
+- **Present and read cleanly**: the store's rows for the unit become
+  what the input holds, and what it no longer holds is deleted, in the
+  transaction and the seal that rewrite it.
+- **Absent**: nothing is deleted. A unit not in the input looks the
+  same whether it was never exported or was emptied.
+- **Present but unreadable, or recognizably nothing** (a 0-byte file, a
+  corrupt header, a layout the reader does not know): nothing is
+  deleted, and it is a problem row. Only a well-formed input that lists
+  nothing deletes everything in its unit.
+
+This is the network rule turned around: there, a listing that is whole
+for a scope is what licenses a deletion inside it (email's
+`listed_whole`, DAV's `dav_unconfirmed`); here, a unit read whole is.
+
+**`always_clear_before_ingest` goes.** It wiped and sealed the store
+before the input was read, so a missing folder or an unset passphrase
+left readers an empty mirror and render deleted every document
+(`datalib_step/tests/step_tests/clear_before_ingest.rs`). It also
+cleared state that should outlive a run (LinkedIn's fetched photos,
+Signal's decrypted attachments), and for LinkedIn, whose export form
+offers a subset, it deleted every table the export left out. A config
+that still names it loads, and the System row on the Manage screen
+carries the warning, as it now carries every config warning.
+
+**Apple Messages becomes append-only.** With "Keep messages" set to 30
+days, `chat.db` evicts, and keeping what the phone drops is the reason
+to mirror it.
+
+**Bugs the survey found**, each to be fixed with a test that fails
+first: an SMS backup empty or corrupt at its start reads as a clean
+empty archive; a `.vcf` or `.ics` that parses to nothing deletes its
+book or calendar, as a 0-byte `.mbox` prunes what only it held; the
+SQLite mirror drops every table when its source has none; a crash
+between the stamp and the prune loses the prune (SMS, Takeout Voice and
+Chat); fsindex deletes a subtree that failed to list; pdf drops the
+row of a file it skipped as too large; mbox orphans an account whose id
+changed; the claude export prunes every conversation when none of its
+entries has a uuid; Facebook prunes a table missing one of its chunks.
 

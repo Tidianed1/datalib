@@ -225,15 +225,23 @@ with nothing listed to go on with.
   still succeeds, so what it fetched is kept; the next run fetches what
   is still owed. With nothing mirrored at all, the run fails instead.
 
-**mbox.** A file that will not open, or whose read fails part-way, is a
+**mbox.** A file that will not open, whose read fails part-way, or
+that holds no message at all (0 bytes, or not one `From ` line) is a
 `listing:mbox <file>` row. It is not stamped, so the next run reads it
-again. Messages that will not parse are one `file:email/mbox:<file>`
+again. An mbox has no envelope that could say "no messages", so an
+empty file is never read as an emptied mailbox; deleting the file is
+what drops the messages only it held. Messages that will not parse are one `file:email/mbox:<file>`
 row on their file, which stands until the file is read again. While
 either kind of problem is present, the run deletes no message.
 Rewritten files are then left unstamped, so the next run reads every
 file again and prunes once all of them read cleanly. On a run that
 reads every message, an `only_extract_labels` entry that no message
 carries becomes a `config:` row.
+
+A changed `account_id` (configured, or made from the input's name)
+re-reads every file, so each email is filed under the new account; once
+every file has read cleanly, what is left under the old account (its
+emails, threads and name-keyed labels, then its row) is deleted.
 
 ## Rate limits
 

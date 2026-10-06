@@ -32,7 +32,7 @@ datalib_etl::raw_db!(pub RawDb: EntityStore, full_ddl());
 
 impl RawDb {
     /// What this source already ingested. Must run **before**
-    /// [`Self::reset`].
+    /// [`Self::reset_paths`].
     ///
     /// Only the caller's half: which path held which content. The stat
     /// cursor is host state and lives in the shared
@@ -84,6 +84,29 @@ impl RawDb {
         }
         tx.commit().await.context("commit truncate tx")?;
         Ok(())
+    }
+
+    /// Delete the documents no `pdf_paths` row names, with their
+    /// bookkeeping. Returns how many went.
+    pub async fn delete_unnamed_documents(&self) -> Result<u64> {
+        let mut tx = self
+            .pool()
+            .begin()
+            .await
+            .context("begin document prune tx")?;
+        let mut removed = 0;
+        for sql in [
+            "DELETE FROM pdf_documents_bookkeeping WHERE id NOT IN (SELECT blake3 FROM pdf_paths)",
+            "DELETE FROM pdf_documents WHERE blake3 NOT IN (SELECT blake3 FROM pdf_paths)",
+        ] {
+            removed = sqlx::query(sql)
+                .execute(&mut *tx)
+                .await
+                .context("prune unnamed documents")?
+                .rows_affected();
+        }
+        tx.commit().await.context("commit document prune tx")?;
+        Ok(removed)
     }
 
     /// Record where this scan ran, so the render step does not have to

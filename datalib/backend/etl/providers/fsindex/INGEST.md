@@ -54,8 +54,10 @@ already explain. `datalib-dirtree-diff` does exactly that
 The two tables stay consistent by construction rather than by
 foreign key: the walker emits a directory's row only after every
 child's, in the same batch stream, and a directory's tree-hash is
-computed from the very child rows it just emitted. `identity_uuid`
-is set on `dirs` rows alone, by the post-write stamping pass.
+computed from the very child rows it just emitted, except where the
+walk could not read an entry and its last rows stand (below).
+`identity_uuid` is set on `dirs` rows alone, by the post-write
+stamping pass.
 
 The **rescan cursor** — `(mtime_ns, size, inode, dev, stamp_kind)`
 per path — is deliberately in neither table. It is host state
@@ -80,23 +82,31 @@ expressive for this schema. Schema additions become
 `ALTER TABLE ADD COLUMN`, which is fine for a schema this small
 and stable.
 
-### Truncate-and-rebuild on every scan
+### Every scan rewrites the tree, and prunes what it did not write
 
-Every scan starts by emptying `files`, `dirs` and `scan_meta` (and
-`scan_meta_bookkeeping`), then walks the tree fresh. Two reasons this
-works:
+Every scan upserts a row for each entry it walks, then deletes the
+`files` and `dirs` rows it did not write, in one transaction after the
+walk (`RawDb::prune_unseen`). `scan_meta` is emptied first and written
+whole. Two reasons this works:
 
 1. **Deletions fall out naturally.** A file present at scan-A and
-   gone at scan-B simply doesn't get re-inserted, so it disappears
-   from the table. No separate reconciliation pass
-   ("DELETE FROM files WHERE id NOT IN (this scan's ids)") to
-   maintain and forget to call.
-2. **The rewrite is free.** Re-inserting the same row for an
-   unchanged file is no change
+   gone at scan-B is not written by scan-B, so the prune takes its
+   row.
+2. **The rewrite is free.** Rewriting the same row for an unchanged
+   file is no change
    ([doltlite.md § Diffs](/docs/dev/doltlite.md#diffs)), so the diff
    between two scans is exactly what changed on disk.
 
-The fast-rescan cache is not in the store, so the truncate does not
+**An entry the walk found and could not read keeps its rows.** A
+folder that will not list, a child that will not `stat`, a file that
+will not hash or a link that will not read is a `record:` problem
+row, and its row and every row beneath it stay as the last scan wrote
+them (`WalkerError::holds`). Without that, a folder that failed to
+list would read as a folder emptied. The folder's own row stays too;
+the rolled-up `size`, `entries` and tree-hash of the folders above it
+are this scan's, computed without it.
+
+The fast-rescan cache is not in the store, so the prune does not
 touch it: the scan loads this host's prior fingerprints for the root —
 cursor and digest together — into memory, and `fswalk::decide` compares
 each entry against them, skipping the `read(2)` + `blake3` on

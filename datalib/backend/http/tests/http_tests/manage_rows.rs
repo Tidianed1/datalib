@@ -674,6 +674,39 @@ async fn a_dropped_entry_keeps_its_row_and_says_why() {
     assert_eq!(slack["seeds"], serde_json::json!(["slack/ingest"]));
 }
 
+/// A config warning drops nothing, so no entry's row showed it, and it
+/// reached only `datalib-dag --check`. The System row carries the count,
+/// and every warning's words on hover, with nothing on any other row.
+#[tokio::test]
+async fn config_warnings_reach_the_system_row() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = CONFIG.replace(
+        "function = \"ingest\"\n",
+        "function = \"ingest\"\n[steps.params]\napi = {}\n\
+         [steps.params.common]\nalways_clear_before_ingest = true\n",
+    ) + "\n[[groups]]\nid = \"lonely\"\n";
+    write_root(tmp.path(), &config, None).await;
+
+    let got = get_rows(tmp.path()).await;
+    assert_eq!(got["ok"], true, "{got}");
+    let rows = by_key(&got);
+    let chips = rows["system"]["problems"].as_array().unwrap();
+    assert_eq!(chips.len(), 1, "{}", rows["system"]);
+    assert_eq!(chips[0]["kind"], "warning");
+    assert_eq!(chips[0]["text"], "2");
+    let title = chips[0]["title"].as_str().unwrap();
+    assert!(title.contains("always_clear_before_ingest"), "{title}");
+    assert!(title.contains("has no effect"), "{title}");
+    assert!(title.contains("delete this line"), "{title}");
+    assert!(title.contains("\"lonely\" has no steps"), "{title}");
+    // A warning is not a dropped entry: the step still loads, and its
+    // own row carries no count it did not earn.
+    let ingest = &rows["slack/ingest"];
+    assert_eq!(ingest["dropped"], serde_json::Value::Null, "{ingest}");
+    assert_eq!(ingest["problems"], serde_json::json!([]));
+    assert_eq!(rows["system/runs"]["problems"], serde_json::json!([]));
+}
+
 /// A file that is not TOML has no rows to show and says so, rather
 /// than 500ing or returning an empty table that reads as "no sources".
 #[tokio::test]

@@ -2,7 +2,7 @@
 //! step's store holds, from the `problems{severity=…}` metrics the step
 //! reported at the end of its last run. A red and a yellow number when
 //! there are any; nothing when there are none, or when the step has
-//! never counted.
+//! never counted. The System row's count is the config's own warnings.
 
 use std::collections::HashMap;
 
@@ -72,6 +72,30 @@ pub fn chips(counts: Option<&ProblemCounts>) -> Vec<Chip> {
         });
     }
     out
+}
+
+/// The System row's chip: the config's warnings, each in words on
+/// hover. A warning drops nothing, so no entry's row says it; this is
+/// where the app shows what `datalib-dag --check` would print.
+pub fn config_warning_chips(diagnostics: &[datalib_dag::Diagnostic]) -> Vec<Chip> {
+    let warnings: Vec<String> = diagnostics
+        .iter()
+        .filter(|d| d.severity == datalib_dag::Severity::Warning)
+        .map(datalib_dag::Diagnostic::describe)
+        .collect();
+    if warnings.is_empty() {
+        return Vec::new();
+    }
+    let n = warnings.len();
+    let s = if n == 1 { "" } else { "s" };
+    vec![Chip {
+        kind: ChipKind::Warning,
+        text: n.to_string(),
+        title: format!(
+            "{n} config warning{s} \u{2014} double-click to open the config:\n{}",
+            warnings.join("\n")
+        ),
+    }]
 }
 
 #[cfg(test)]

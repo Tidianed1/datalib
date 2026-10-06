@@ -96,7 +96,9 @@ async fn ingest_all(
 
     if let Some(users) = users.as_ref() {
         summary.users = upsert_users(&mut tx, users, &now).await?;
-        summary.pruned += prune_to(&mut tx, "users", &ids_of(users, "uuid")).await?;
+        if names_its_entries(found, "users.json", users) {
+            summary.pruned += prune_to(&mut tx, "users", &ids_of(users, "uuid")).await?;
+        }
     } else {
         // Not fatal: every export conversation already names its own
         // `account`, so the only thing a missing users.json costs is
@@ -112,15 +114,20 @@ async fn ingest_all(
         let (n_projects, n_docs) = upsert_projects(&mut tx, projects, &now).await?;
         summary.projects = n_projects;
         summary.project_docs = n_docs;
-        let project_ids = ids_of(projects, "uuid");
-        summary.pruned += prune_to(&mut tx, "projects", &project_ids).await?;
-        summary.pruned += prune_to(&mut tx, "project_docs", &project_doc_ids(projects)).await?;
+        if names_its_entries(found, "projects", projects) {
+            let project_ids = ids_of(projects, "uuid");
+            summary.pruned += prune_to(&mut tx, "projects", &project_ids).await?;
+            summary.pruned += prune_to(&mut tx, "project_docs", &project_doc_ids(projects)).await?;
+        }
     }
 
     summary.conversations = upsert_conversations(&mut tx, &conversations, &now).await?;
     summary.without_uuid = conversations.len() - summary.conversations
         + projects.as_ref().map_or(0, |p| p.len() - summary.projects);
-    summary.pruned += prune_to(&mut tx, "conversations", &ids_of(&conversations, "uuid")).await?;
+    if names_its_entries(found, "conversations.json", &conversations) {
+        summary.pruned +=
+            prune_to(&mut tx, "conversations", &ids_of(&conversations, "uuid")).await?;
+    }
     opts.progress.set_message(&format!(
         "{} conversations, {} projects, {} knowledge docs",
         summary.conversations, summary.projects, summary.project_docs,
@@ -188,6 +195,25 @@ fn read_project_files(dir: &Path) -> Result<Option<Vec<Value>>> {
         out.push(v);
     }
     Ok(Some(out))
+}
+
+/// Whether `items`, one part of the export read whole, may prune its
+/// table. Entries none of which has a uuid are not an export that emptied
+/// the table but one in a shape this reader does not know, so they delete
+/// nothing and are a problem; an empty list is a part that holds nothing.
+fn names_its_entries(found: &RunProblems, part: &str, items: &[Value]) -> bool {
+    if items.is_empty() || items.iter().any(|v| str_field(v, "uuid").is_some()) {
+        return true;
+    }
+    found.phase(
+        part,
+        format!(
+            "none of its {} entries has a uuid, a shape this reader does not know, \
+             so nothing stored was deleted",
+            items.len()
+        ),
+    );
+    false
 }
 
 fn ids_of(items: &[Value], key: &str) -> HashSet<String> {
@@ -618,6 +644,64 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(left, 0, "a clean export clears it");
+        db.close().await;
+    }
+
+    /// A `conversations.json` none of whose entries has a uuid is not an
+    /// export that deleted every conversation: it is one in a shape this
+    /// reader does not know, and it pruned the whole table.
+    #[tokio::test]
+    async fn an_export_with_no_uuid_anywhere_deletes_nothing() {
+        let ex = tempfile::tempdir().unwrap();
+        let raw = tempfile::tempdir().unwrap();
+        write(
+            ex.path(),
+            "conversations.json",
+            &json!([conv("c1", "First"), conv("c2", "Second")]),
+        );
+        write(
+            ex.path(),
+            "projects/bridge.json",
+            &json!({"uuid": "p1", "name": "Bridge Ops",
+                    "docs": [{"uuid": "d1", "file_name": "notes.md"}]}),
+        );
+        let db = open_raw(raw.path()).await;
+        ingest(opts(&db, ex.path())).await.unwrap();
+
+        let unkeyed = |v: Value| {
+            let mut v = v;
+            v.as_object_mut().unwrap().remove("uuid");
+            v
+        };
+        write(
+            ex.path(),
+            "conversations.json",
+            &json!([unkeyed(conv("c1", "First")), unkeyed(conv("c3", "Third"))]),
+        );
+        write(
+            ex.path(),
+            "projects/bridge.json",
+            &unkeyed(json!({"name": "Bridge Ops", "docs": []})),
+        );
+        let s = ingest(opts(&db, ex.path())).await.unwrap();
+        assert_eq!(dump(db.pool(), "conversations").await.len(), 2);
+        assert_eq!(dump(db.pool(), "projects").await.len(), 1);
+        assert_eq!(dump(db.pool(), "project_docs").await.len(), 1);
+        assert_eq!(s.pruned, 0);
+        let keys: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems ORDER BY 1")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(
+            keys,
+            ["phase:conversations.json", "phase:export", "phase:projects"]
+        );
+
+        // A well-formed export that lists nothing does empty the table.
+        write(ex.path(), "conversations.json", &json!([]));
+        std::fs::remove_dir_all(ex.path().join("projects")).unwrap();
+        ingest(opts(&db, ex.path())).await.unwrap();
+        assert!(dump(db.pool(), "conversations").await.is_empty());
         db.close().await;
     }
 }

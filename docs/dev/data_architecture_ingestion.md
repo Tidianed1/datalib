@@ -340,31 +340,26 @@ One thing `removed` does *not* mean: it counts rows **our downloader
 deleted**, not rows the provider stopped serving. Those coincide only
 for a provider that deletes on absence.
 
-### Snapshot inputs: `always_clear_before_ingest`
+### Local inputs: what a complete input licenses
 
-A source whose input is a *complete* snapshot — a Takeout export, a
-phone backup — gets deletion detection for free by not being clever: set `common.always_clear_before_ingest = true`
-and the download empties the source's entity tables and cursors before
-each ingest, then rewrites them from what the input holds now. Anything
-the input dropped is simply not written back. The old rows stay in
-history, so `dolt_diff` still says what went.
+A local source reads files on disk, and something missing from them was
+either deleted or never in this input. The provider decides which, per
+**unit of completeness** it names: the whole input for a snapshot (a
+lightroom catalog, a Signal backup, an Apple Photos library), each part
+of an export (a Takeout product, a LinkedIn CSV, a Facebook table, a
+`.vcf` or `.ics` file), a whole folder of overlapping files after a
+clean read of all of them (mbox, SMS backups), or nothing for a cache
+that evicts (beeper, Claude Code and Codex sessions, Apple Messages).
 
-Mechanically it is the config-driven form of `datalib-dag --reset`:
-[`ingest.rs`](/datalib/backend/datalib_step/src/ingest.rs) calls the
-same `reset_store` before the provider runs. The blob CAS keeps its
-bytes.
-
-The condition is the whole rule: **absence in the input has to mean
-deletion.** For an input that is itself an evicting cache it means "not
-cached here," and the wipe destroys real history — which is why
-[`beeper`](/datalib/backend/etl/providers/beeper/INGEST.md) must not
-use it. A partial export of a normally-complete source is the same trap.
-
-Most file-backed sources do not need it: a folder of `.vcf`, `.ics`,
-`.mbox` or SMS backup files, and every Takeout feed, lose what their
-input lost on an ordinary sync
-([`etl/files/README.md`](/datalib/backend/etl/files/README.md#answering-did-it-change-for-a-file-backed-source)).
-The Signal and LinkedIn exports still need it.
+Each run, a unit present and read cleanly is replaced: what it no
+longer holds is deleted, in the transaction and the seal that rewrite
+it. A unit absent from the input deletes nothing, because "not
+exported" and "emptied" look alike. A unit present but unreadable, or
+recognizably nothing (0 bytes, a corrupt header, a layout the reader
+does not know), deletes nothing and is a `problems` row; only a
+well-formed input that lists nothing empties its unit. The old rows
+stay in history, so `dolt_diff` still says what went. The person is
+never asked: there is no setting for it.
 
 A Takeout feed read from one file (Maps reviews and saved places,
 YouTube, Gemini) treats that file as its whole table: re-read, it
@@ -392,18 +387,24 @@ therefore what it can see:
 | `email` (JMAP) | `Email/changes` / `Mailbox/changes` tombstones | emails, mailboxes, and the label joins |
 | `email` (Gmail) | `history.list` deletions; a whole-account walk whenever the account is not listed whole | emails, via the same cascade |
 | `contacts` (CardDAV), `calendar` (CalDAV) | RFC 6578 sync-collection `404`/`410`; a whole listing on a first sync or after the server calls the token invalid, and every run for a windowed calendar; the home listing of address books or calendars, whole by nature | contacts or events a whole listing does not name, once it reaches its end: a listing the server cut short (a 507 it would not page past, or 50 pages) deletes nothing until a later run carries it to the end (`dav_unconfirmed`); an address book or calendar the home listing no longer names, with everything stored for it; `datalib_etl_web::dav` |
-| `contacts` (`.vcf` folder), `calendar` (`.ics` folder) | the folder's scan, and each re-read file | a gone file's address book or calendar; cards or events a re-read file dropped. Nothing is deleted when the walk reported an error |
-| `google_takeout` Chat, Maps photos | the export's scan, and each re-read `messages.json` | a gone file's user, group, messages or photo; messages a re-read file dropped. A missing `Google Chat/` or photos folder deletes nothing |
-| `google_takeout` Maps reviews and saved places, YouTube, Gemini | each re-read file, which is the feed's whole table | records the file no longer lists, and a Gemini activity's attachment edges. A missing file deletes nothing, and so does one in a layout the reader does not know (no list, or entries none of which it could read): that fails the feed as a `phase:` problem |
-| `email` (mbox), `sms_backup_restore`, `google_takeout` Voice | a read of every file, whenever one was removed or rewritten | records no file holds any more. Nothing is deleted when the walk or any file's read failed, or when Takeout's `Voice/` is missing |
+| `contacts` (`.vcf` folder), `calendar` (`.ics` folder) | the folder's scan, and each re-read file | a gone file's address book or calendar; cards or events a re-read file dropped. Nothing is deleted when the walk reported an error. A file that is nothing deletes nothing and is a `listing:` problem: a `.vcf` with no card or cut off inside one, an `.ics` with no `VCALENDAR`, cut off before `END:VCALENDAR`, or whose events all lack a `UID`. Only a whole `VCALENDAR` with no events empties its calendar; a book is emptied by deleting its file |
+| `google_takeout` Chat, Maps photos | the export's scan, and each re-read `messages.json` | a gone file's user, group, messages or photo; messages a re-read file dropped. A missing `Google Chat/` or photos folder deletes nothing, nor does a `messages.json` listing entries none of which has a `message_id`. Deletions land in the transaction that stamps the files |
+| `google_takeout` Maps reviews and saved places, YouTube, Gemini | each re-read file, which is the feed's whole table | records the file no longer lists, and a Gemini activity's attachment edges. A missing file deletes nothing, and so does one in a layout the reader does not know (no list, or entries none of which it could read): that fails the feed as a `phase:` problem. A Gemini log really emptied upstream cannot prune: no empty layout has been seen to tell it from one the reader does not know |
+| `email` (mbox), `sms_backup_restore`, `google_takeout` Voice | a read of every file, whenever one was removed or rewritten | records no file holds any more, in the transaction that stamps the files. Nothing is deleted when the walk or any file's read failed (an mbox with no message, an SMS backup with no XML element or cut off before its root closes, a Voice thread with no message, a call with no time, a `Bills.html` with no table each count as a failed read), or when Takeout's `Voice/` is missing. A changed mbox `account_id` re-reads every file and then deletes what is left under the old account |
 | `slack` | the trailing `refresh_window_days` re-walk, and each `conversations.replies` thread | top-level messages inside the walked range, each with its thread's replies; replies on a re-fetched thread |
 | `github` / `gitlab` | every PR's / MR's whole child list, per fetch | deleted comments, reviews, discussions |
 | `claude` (`api`) | `/chat_conversations`, one org at a time | that org's conversations |
 | `chatgpt` | `/conversations`, when the walk reached `total` | conversations |
 | `calendar` (Google) | `events.list` `cancelled` items; a whole listing on a first sync, after a `410`, and every run for a window; the account's calendar list | events a whole listing does not name. Nothing when that listing held an event with no `id`, which could be any stored one. A calendar the list no longer names, with its events |
-| `media` | the scan; a file evicted to the cloud or over `max_bytes` is present (`Scan::present_unread`) | path rows of files the scan did not find. Nothing after a walk that reported errors |
-| `fsindex`, `pdf` | truncate-and-refill | structurally |
-| `claude` (`export`), and every source carrying [`always_clear_before_ingest`](#snapshot-inputs-always_clear_before_ingest) | the snapshot is the enumeration | structurally |
+| `media` | the scan; a file evicted to the cloud or over `max_bytes` is present (`Scan::present_unread`) | path rows of files the scan did not find; then the items no path names, with their audio and visual rows. Nothing after a walk that reported errors |
+| `fsindex` | every run's walk | rows the walk did not write. An entry it found and could not read (a folder that will not list, a file that will not hash) keeps its rows and its subtree's |
+| `pdf` | the scan; a file over `max_bytes` is present | path rows of files the scan did not find, then documents no path names. Nothing after a walk that reported errors |
+| `facebook` | each table's chunk files, read whole | rows a table no longer holds, only when every chunk file it was last read from is there and read, with the deleted records' media edges and edges to a `uri` a record of that table stopped naming. A missing chunk (a partial unpack), a file that will not parse, or a walk error deletes nothing in that table, edges included; a table none of whose files is present was left out |
+| `claude` (`export`) | `users.json`, `conversations.json` and `projects/`, each read whole | rows a present file no longer lists. A missing `users.json` or `projects/` deletes nothing, nor does a file whose entries are there but none has a uuid (a `phase:<file>` problem) |
+| `signal` | the newest snapshot, when every frame decodes | recipients, chats, messages and attachment edges it no longer holds. A frame that would not decode, a missing snapshot folder or an unset passphrase deletes nothing |
+| `linkedin` | each CSV, read whole | rows its table no longer lists, and, when `Connections.csv` read cleanly, the `contact_photos` edges of connections it no longer lists. A CSV left out of the export, one that will not read, or one with no header row (0 bytes, or only the Notes preamble) deletes nothing, photo edges included; articles prune only after a clean walk |
+| `lightroom`, `apple_photos`, `whatsapp` (msgstore) | the database file, dropped and refilled | structurally. A source with no table to mirror (0 bytes, no tables, filters matching none) drops nothing: a `phase:source` problem, or for lightroom a backup problem or a failed step |
+| `apple_messages` | — | nothing: append-only, since `chat.db` evicts |
 | `yolink` | — | nothing; append-only telemetry |
 | `notion`, `beeper` | — | not wired (rework; poorly supported) |
 
@@ -438,7 +439,7 @@ section) and "we noticed and the grid still shows it" (that one) look
 identical from the UI.
 
 Every provider that records deltas can also detect a deletion, and
-`media` / `fsindex` / `pdf` detect structurally while recording none;
+`media` / `fsindex` / `pdf` detect by set difference while recording none;
 the one mismatch is that the structural detectors write no `sync_runs`
 row.
 

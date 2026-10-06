@@ -165,7 +165,9 @@ async fn read_backup(
         ..MirrorOptions::new(tmp.path())
     };
     let mut summary = IngestSummary {
-        mirror: mirror::run(db.pool(), &options, progress).await?,
+        mirror: mirror::run_or_report(db.pool(), &options, progress, &found)
+            .await?
+            .unwrap_or_default(),
         media_files: 0,
         contacts: None,
     };
