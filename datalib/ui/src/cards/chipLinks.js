@@ -1,0 +1,87 @@
+// A chip is a link the app can resolve (docs/dev/plans/chips.md). The
+// renderers write `[Name](mailto:… "Name <addr>")`; this marks such a
+// link as it is rendered, so the decorate pass can find it and ask who
+// it is. Plain JavaScript, like chatSections.js, so the render preview
+// can run the same plugin over the same markdown without a bundler.
+//
+// The URI forms mirror `datalib_handle::Handle::to_uri` / `from_uri`
+// exactly; the Rust tests and `chip_links.test.ts` run the same cases.
+
+/** The handle kinds this build knows; `datalib_handle::HandleKind`. */
+const KINDS = new Set(["email", "tel", "slack"]);
+
+/** The handle (`email:…`, `tel:…`, `slack:T/U`) a URI names, or null
+ *  when it names none this build knows.
+ *  @param {string} href
+ *  @returns {string | null} */
+export function handleFromUri(href) {
+  const uri = href.trim();
+  const scheme = uri.slice(0, uri.indexOf(":")).toLowerCase();
+  if (scheme === "mailto") {
+    const addr = uri
+      .slice("mailto:".length)
+      .split("?")[0]
+      .trim()
+      .toLowerCase();
+    return /^[^\s<>,@]+@[^\s<>,@]*\.[^\s<>,@]*$/.test(addr) ? `email:${addr}` : null;
+  }
+  if (scheme === "tel") {
+    const number = uri.slice("tel:".length).split(";")[0].replace(/[\s().-]/g, "");
+    return /^\+\d{7,15}$/.test(number) ? `tel:${number}` : null;
+  }
+  if (uri.toLowerCase().startsWith("datalib:handle/")) {
+    // The spelling for a kind with no standard scheme of its own.
+    const rest = uri.slice("datalib:handle/".length);
+    const slash = rest.indexOf("/");
+    if (slash <= 0) return null;
+    const kind = rest.slice(0, slash);
+    return KINDS.has(kind) ? handleFromUri(uriFromHandle(`${kind}:${rest.slice(slash + 1)}`) ?? "") : null;
+  }
+  if (uri.toLowerCase().startsWith("slack://user?")) {
+    const params = new URLSearchParams(uri.slice("slack://user?".length));
+    const team = params.get("team") ?? "";
+    const user = params.get("id") ?? "";
+    const ok = (s) => /^[A-Za-z0-9_]+$/.test(s);
+    return ok(team) && ok(user) ? `slack:${team}/${user}` : null;
+  }
+  return null;
+}
+
+/** The URI a handle is written as in a chip link's href.
+ *  @param {string} handle
+ *  @returns {string | null} */
+export function uriFromHandle(handle) {
+  const at = handle.indexOf(":");
+  const kind = handle.slice(0, at);
+  const value = handle.slice(at + 1);
+  if (kind === "email") return `mailto:${value}`;
+  if (kind === "tel") return `tel:${value}`;
+  if (kind === "slack") {
+    const [team, user] = value.split("/");
+    return `slack://user?team=${team}&id=${user}`;
+  }
+  return null;
+}
+
+/** The markdown-it plugin: an explicit link whose href names a handle
+ *  gets `class="chip"` and `data-handle`. A link linkify made from a bare
+ *  address in running text is left alone — its token says so — so a
+ *  signature's address stays an address.
+ *  @param {import("markdown-it").MarkdownIt} md */
+export function chipLinks(md) {
+  const fallback =
+    md.renderer.rules.link_open ||
+    ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
+  md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
+    const token = tokens[idx];
+    const href = token.attrGet("href");
+    if (token.markup !== "linkify" && typeof href === "string") {
+      const handle = handleFromUri(href);
+      if (handle) {
+        token.attrJoin("class", "chip");
+        token.attrSet("data-handle", handle);
+      }
+    }
+    return fallback(tokens, idx, options, env, self);
+  };
+}

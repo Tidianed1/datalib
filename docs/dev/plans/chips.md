@@ -44,13 +44,17 @@ Standard scheme where one exists, `datalib:` otherwise:
 | a person by email | `mailto:picard@enterprise.starfleet` | handle `email:picard@enterprise.starfleet` |
 | a person by phone | `tel:+12025550101` | handle `tel:+12025550101` |
 | a Slack user | `slack://user?team=T01&id=U02` (Slack's documented deep link) | handle `slack:T01/U02` |
+| a person by a kind with no scheme of its own | `datalib:handle/<kind>/<value>`, e.g. `datalib:handle/signal_aci/<uuid>` | the handle `<kind>:<value>` |
 | a group | `datalib:group/slack` | the group id, a directory under the root |
 | a step | `datalib:step/slack/ingest` | the step id `<group>/<function>` |
 
 `datalib_handle` gains `Handle::to_uri()` and `Handle::from_uri()`,
-tested as a round trip over every kind, and `contacts.ts` mirrors the
-parse in TypeScript over the same cases. A new kind of entity adds a
-row to this table, a parser on each side, and a resolver.
+tested as a round trip over every kind, and `ui/src/cards/chipLinks.js`
+mirrors both in TypeScript over the same cases. A new kind of handle
+with a standard scheme adds a row to this table and a parser on each
+side; one without is spelled `datalib:handle/<kind>/<value>`, which
+`from_uri` already reads through `Handle::rebuild`. A new kind of entity
+adds a row, a parser and a resolver.
 
 Why not one `datalib:` scheme for everything (`datalib:email:…`): a
 person's link would then be dead in every other app, and a rich paste
@@ -98,8 +102,10 @@ today
 - `LAYOUT_VERSION` bumps once; every chat provider re-renders.
 
 **Drawing.** The viewer's own markdown-it (`ui/src/cards/renderDocument.ts`)
-gets a plugin: a `link_open` token whose href parses as an entity URI
-gets `class="chip" data-entity="<href>"`. A link `linkify` made from a
+gets a plugin (`chipLinks.js`): a `link_open` token whose href parses
+as a handle gets `class="chip" data-handle="<handle>"`; when groups and
+steps arrive, a `data-entity="<href>"` beside it for the kinds that are
+not people. A link `linkify` made from a
 bare address is skipped — its token carries `markup: "linkify"` — so a
 signature's address stays an address. `sanitize.ts` admits the `slack:`
 and `datalib:` schemes; `mailto:` and `tel:` are in DOMPurify's default

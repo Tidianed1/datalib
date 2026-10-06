@@ -195,11 +195,15 @@ function onChipOut(ev: MouseEvent) {
 }
 
 function onHandleChipClick(ev: MouseEvent) {
-  const chip = asElement(ev.target)?.closest<HTMLElement>(".handle-chip[data-handle]");
+  const chip = asElement(ev.target)?.closest<HTMLElement>("a.chip[data-handle]");
+  // A chip is a link; a plain click on it is for the chip, not for the
+  // mail client its href would open. A modifier click stays the
+  // browser's, as on any link.
+  if (!chip || isBrowserClick(ev)) return;
+  ev.preventDefault();
   // Without a contacts app there is nothing to change; the hover card is
   // all a chip has to say.
-  if (!chip || !decorated.value?.canLink) return;
-  ev.preventDefault();
+  if (!decorated.value?.canLink) return;
   ev.stopPropagation();
   clearTimeout(hoverTimer);
   hovered.value = null;
