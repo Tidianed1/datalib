@@ -24,9 +24,7 @@ import { decorateRemoteMedia, type RemoteContext, type RemoteRef } from "./remot
 import {
   copyWithHandles,
   decorateHandles,
-  hoverCard,
   type DatalibContact,
-  type HoverCard,
   type Who,
   chipMenu,
   copyText,
@@ -39,7 +37,6 @@ import {
   type ChipMenuId,
 } from "./contacts";
 import ChipMenu from "./ChipMenu.ce.vue";
-import HandleHoverCard from "./HandleHoverCard.ce.vue";
 import HandlePopover from "./HandlePopover.ce.vue";
 import { copyToClipboard } from "@/clipboard";
 import { pushToast } from "@/toasts";
@@ -170,49 +167,11 @@ const stopPeople = people.subscribe((handles) => {
 });
 onBeforeUnmount(stopPeople);
 
-/// Where the frame's viewport sits in this window: the hover card and
-/// the popover are drawn out here, over the frame, from points inside it.
+/// Where the frame's viewport sits in this window: the popover and the
+/// chip menu are drawn out here, over the frame, from points inside it.
 function frameOrigin(): { x: number; y: number } {
   const r = frameEl.value?.getBoundingClientRect();
   return { x: r?.left ?? 0, y: r?.top ?? 0 };
-}
-
-const HOVER_DELAY_MS = 350;
-const hovered = ref<{ card: HoverCard; x: number; y: number } | null>(null);
-let hoverChip: HTMLElement | null = null;
-let hoverTimer: ReturnType<typeof setTimeout> | undefined;
-
-function onChipOver(ev: MouseEvent) {
-  const chip = asElement(ev.target)?.closest<HTMLElement>(".handle-chip[data-handle]");
-  if (!chip || chip === hoverChip) return;
-  hoverChip = chip;
-  clearTimeout(hoverTimer);
-  hoverTimer = setTimeout(() => {
-    if (chipTarget.value) return;
-    const handle = chip.dataset.handle ?? "";
-    const rect = chip.getBoundingClientRect();
-    const at = frameOrigin();
-    hovered.value = {
-      card: hoverCard(
-        handle,
-        chip.dataset.shownAs ?? "",
-        people.get(handle) ?? NOBODY,
-        canLinkHandles(),
-      ),
-      x: at.x + rect.left,
-      y: at.y + rect.bottom,
-    };
-  }, HOVER_DELAY_MS);
-}
-
-function onChipOut(ev: MouseEvent) {
-  const chip = asElement(ev.target)?.closest<HTMLElement>(".handle-chip[data-handle]");
-  if (!chip) return;
-  const to = asElement(ev.relatedTarget);
-  if (to && chip.contains(to)) return;
-  clearTimeout(hoverTimer);
-  hoverChip = null;
-  hovered.value = null;
 }
 
 function chipAt(ev: MouseEvent): HTMLElement | null {
@@ -225,8 +184,6 @@ function whoIs(chip: HTMLElement): Who {
 
 /// The link/create popover for `chip`, at a point in this window.
 function openPopover(chip: HTMLElement, x: number, y: number) {
-  clearTimeout(hoverTimer);
-  hovered.value = null;
   chipTarget.value = {
     handle: chip.dataset.handle ?? "",
     shownAs: chip.dataset.shownAs ?? "",
@@ -245,7 +202,7 @@ function onHandleChipClick(ev: MouseEvent) {
   ev.preventDefault();
   // The second click of a double-click is the double-click's.
   if (ev.detail > 1) return;
-  // Without a contacts app there is nothing to change; the hover card is
+  // Without a contacts app there is nothing to change; the tooltip is
   // all a chip has to say.
   if (!canLinkHandles()) return;
   ev.stopPropagation();
@@ -262,7 +219,6 @@ function onChipDblClick(ev: MouseEvent) {
   ev.preventDefault();
   ev.stopPropagation();
   chipTarget.value = null;
-  hovered.value = null;
   emit(
     "open-search",
     searchQueryFor(chip.dataset.handle ?? "", chip.dataset.shownAs ?? "", whoIs(chip)),
@@ -277,8 +233,6 @@ function onChipContextMenu(ev: MouseEvent): boolean {
   const chip = chipAt(ev);
   if (!chip) return false;
   ev.preventDefault();
-  clearTimeout(hoverTimer);
-  hovered.value = null;
   const at = frameOrigin();
   chipMenuAt.value = {
     chip,
@@ -522,14 +476,8 @@ function onFrameLoad() {
   });
   on("auxclick", onFrameLinkClick);
   on("dblclick", onChipDblClick);
-  on("mouseover", (ev) => {
-    onBodyMouseOver(ev);
-    onChipOver(ev);
-  });
-  on("mouseout", (ev) => {
-    onBodyMouseOut(ev);
-    onChipOut(ev);
-  });
+  on("mouseover", onBodyMouseOver);
+  on("mouseout", onBodyMouseOut);
   on("copy", (ev) => copyWithHandles(ev, doc.body));
   on("contextmenu", (ev) => {
     if (onChipContextMenu(ev)) return;
@@ -590,7 +538,6 @@ onMounted(paint);
     :srcdoc="DOC_FRAME_SRCDOC"
     @load="onFrameLoad"
   ></iframe>
-  <HandleHoverCard v-if="hovered" v-bind="hovered" />
   <ChipMenu
     v-if="chipMenuAt"
     :entries="chipMenuAt.entries"

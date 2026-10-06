@@ -42,8 +42,8 @@ the title is the hover any other markdown viewer shows. The UI's
 markdown-it marks a link it can resolve as a chip
 (`ui/src/cards/chipLinks.js`), asks the contacts app, if one is
 configured, and the index whom the handle belongs to, and draws a chip
-in place of the link (`ui/src/cards/contacts.ts`) with its own hover
-card instead of the title. The href is load-bearing, like
+in place of the link (`ui/src/cards/contacts.ts`), whose own title
+says what every source knows of the person. The href is load-bearing, like
 `data-section-uuid`: it is how a contact linked after this file was
 written still finds the author. An author with no handle is a plain
 `<span class="msg-author">`. How a handle becomes a person is
