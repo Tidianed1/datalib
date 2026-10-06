@@ -35,7 +35,9 @@ one (`NormalizedChatItem::author_handle`, `datalib_handle`):
 ```
 
 The text stays what the source showed; the href is the handle as a URI
-(`Handle::to_uri`: `mailto:`, `tel:`, Slack's `slack://user?team=…&id=…`);
+(`Handle::to_uri`: `mailto:`, `tel:`, Slack's `slack://user?team=…&id=…`,
+and `datalib:handle/<kind>/<value>` for a kind with no scheme of its
+own, a Signal account id);
 the title is the hover any other markdown viewer shows. The UI's
 markdown-it marks a link it can resolve as a chip
 (`ui/src/cards/chipLinks.js`), asks the contacts app, if one is
@@ -54,11 +56,17 @@ because markdown is not parsed inside a block:
 `<span class="msg-recipients">To [Will Riker](mailto:… "…"), <span
 class="msg-recipient">Deanna Troi</span>; Cc …</span>`.
 
-Each document also carries a `DatalibContact` per author handle in it
-(`src/people.rs`): the names the provider showed the handle under, less
-the handle's own `<address>`, how many items it wrote and the last one's
-stamp. A provider needs no code for this; the index sums them per source
-to say who a handle is.
+Each document also carries a `DatalibContact` per handle in it
+(`src/people.rs`): for an author, the names the provider showed it
+under, less the handle's own `<address>`, how many items it wrote and
+the last one's stamp; for a recipient or a reactor, the name shown and
+no items, having written nothing there. A provider needs no code for
+this. A provider that knows more about a person — a Slack profile, a
+WhatsApp address-book entry, a Signal recipient's number and ACI —
+gives it in `NormalizedChat::contacts`, and its account replaces the
+baseline for the same handle, keeping the baseline's count and every
+name it saw (`document_contacts`). The index sums them per source to say
+who a handle is.
 
 ## Asides: runs of tool steps fold into one `<details>`
 

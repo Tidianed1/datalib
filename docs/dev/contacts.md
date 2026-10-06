@@ -102,7 +102,7 @@ What each source has today:
 | email | the From address | To and Cc as recipients |
 | Slack | `slack:<team>/<user>` | a `<@U…>` mention in a body; each reaction's user; the profile's email, in the account |
 | WhatsApp | the sender's number, a linked id (`…@lid`) through `jid_map` | each reaction's sender |
-| Signal | the number, else the account id (ACI); a recipient known by PNI alone has none | number and ACI together, in the account |
+| Signal | the number, else the account id (ACI); a recipient known by PNI alone has none | number and ACI together, in the account; one known by ACI alone reads as the dashed ACI. The ACI is read by its one path in the stored frame, and one that will not read is a problem on the recipient (`aci`, `CoercionFailed`), not a silent loss |
 | Messages | the number or Apple ID address | each tapback's |
 | Google Chat and Voice, SMS backup | the address or number | |
 | address books, LinkedIn, Facebook | a card's numbers and addresses, in the account | |
@@ -116,11 +116,12 @@ chat-common writes an author with a handle as a chip link in the
 message header, and recipients as a line straight under it; the shape,
 and why the href is load-bearing, is
 [`chat-common/README.md`](../../datalib/backend/etl/chat-common/README.md)
-§"The message header". Slack writes a `<@U…>` mention as a chip link
-in the body (`slack_render/src/render/mrkdwn.rs`, through
-`datalib_etl_render::message::chip_link`, the one function that shapes
-one). A reaction's `reactor_handle` is on the normalized item and not
-yet drawn.
+§"The message header". A reactor with a handle is a chip link too, in a
+message's reaction list and in the list of reactions to messages not
+in the mirror (`render.rs::reactor`). Slack writes a `<@U…>` mention as
+a chip link in the body (`slack_render/src/render/mrkdwn.rs`), and as
+plain `@Name` inside code, which shows what it holds. Every chip link
+is shaped by one function, `datalib_etl_render::message::chip_link`.
 
 A chip anywhere in a body is safe for one reason: **it shows who the
 href resolves to, never the link text**. A sender who writes
@@ -181,11 +182,15 @@ written beside the rendered page as `blobs/<uuid>.<ext>` and never
 stored as a row) or a URL nothing fetched (`Photo::Url`, a Slack
 avatar). `photo_url` is what a chip draws: a path on the app's own
 origin, never another host's, since the app fetches nothing remote
-unasked. contact-common fills it with
+unasked, and only for an image a browser draws: png, jpeg, gif or
+webp (`contact_schema::is_drawable_photo`, the one list, which the
+contacts app's photo rule shares). contact-common fills it with
 `/applet/unified_index/asset/<markdown_uuid>/blobs/<file>`, which the
-index's asset route serves; the contacts app fills it with
+index's asset route serves; a photo of another type keeps its file
+beside the page and gets no URL. The contacts app fills it with
 `/applet/datalib_contacts/photo/<contact_id>` for a photo a person put
-on their contact. `None` draws the person's initial.
+on their contact. `None` draws the person's initial, and so does an
+image the browser fails to load.
 
 ## The contacts app
 
@@ -237,7 +242,7 @@ the store's words:
 | `POST /link`, `POST /unlink` | one handle to or from a contact |
 | `POST /stopped_working` | `{handle, by}`; `by: null` means it works again |
 | `POST /rename` | |
-| `GET`, `PUT`, `DELETE /photo/{id}` | the photo as bytes; put one (the body, with its `Content-Type`: png, jpeg, gif or webp, at most 4 MB); drop it |
+| `GET`, `PUT`, `DELETE /photo/{id}` | the photo as bytes; put one (the body, with its `Content-Type`: png, jpeg, gif or webp, at most 4 MB; the route reads up to the gateway's 8 MB so the store's rule is the one that answers); drop it |
 
 The config entry is `[[applets]] id = "datalib_contacts"` with
 `command = "datalib-applet datalib_contacts"`; the gateway passes the
@@ -268,7 +273,8 @@ Everything is in `datalib/ui/src/cards/`:
   a handle as no longer working) and the right-click menu
   (`ChipMenu.ce.vue`). `chip.css` is the one look.
 - The grid's Author column is a chip too: `grid_rows.author_handle`
-  (the `author_handle:` filter) comes with each row, and
+  (the `author_handle:` filter) comes with each message's row and each
+  reaction's, and
   `GridCard.ce.vue` resolves the visible page's handles the same way a
   document does. The applet names the mark for a handle's kind in
   `columns.rs::handle_mark`.
@@ -308,7 +314,7 @@ A chip ranks what it hears: your contact first, then the accounts as
 ## Not built
 
 The contact card, merge, groups and members, undo, the triage grid of
-unresolved handles, `row_handles`, the `contact:` search filter, and
-chips for reactions and mentions outside Slack:
+unresolved handles, `row_handles`, the `contact:` search filter,
+mentions outside Slack, and a handle for a Beeper (Matrix) user:
 [`plans/contacts.md`](plans/contacts.md) §"Order of work" and
 [`plans/chips.md`](plans/chips.md) §"Order of work".

@@ -207,8 +207,10 @@ impl Handle {
 
     /// The handle as a URI another app can follow: `mailto:` and `tel:`
     /// as the standards spell them, a Slack user as Slack's own deep
-    /// link. This is the href of a chip link; [`Handle::from_uri`] reads
-    /// it back, and `ui/src/cards/chipLinks.js` mirrors both.
+    /// link, and a kind with no scheme of its own (a Signal account id)
+    /// as `datalib:handle/<kind>/<value>`. This is the href of a chip
+    /// link; [`Handle::from_uri`] reads it back, and
+    /// `ui/src/cards/chipLinks.js` mirrors both.
     pub fn to_uri(&self) -> String {
         match self.kind() {
             HandleKind::Email => format!("mailto:{}", self.value()),
