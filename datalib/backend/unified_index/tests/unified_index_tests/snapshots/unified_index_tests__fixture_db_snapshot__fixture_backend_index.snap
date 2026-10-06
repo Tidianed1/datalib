@@ -310,9 +310,9 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "00000000-0000-82dc-a9fc-4932293e2699",
       "md_path": "signal/render_markdown/00000000-0000-89df-ad9b-a9094ecd8e23/2364-04.md",
-      "modified_at": "2364-04-11T00:09:00+00:00",
+      "modified_at": "2364-04-11T00:11:00+00:00",
       "provider": "signal",
-      "renderer_version": "rust-v1.9",
+      "renderer_version": "rust-v1.10",
       "source_id": "signal",
       "title": "Will Riker"
     },
@@ -1621,7 +1621,7 @@ expression: snapshot
       "message": "schema: grid index"
     },
     {
-      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=142 markdowns_read=142 markdowns_removed=3 rows_inserted=609"
+      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=142 markdowns_read=142 markdowns_removed=3 rows_inserted=611"
     }
   ],
   "grid_rows": [
@@ -2288,15 +2288,15 @@ expression: snapshot
     {
       "account": null,
       "author": null,
-      "byte_size": 302,
+      "byte_size": 376,
       "channel": "Will Riker",
-      "content_hash": "ff094b25e35144ba",
+      "content_hash": "76eec7af9cde2322",
       "conversation_name": "Will Riker",
       "conversation_uuid": "00000000-0000-89df-ad9b-a9094ecd8e23",
       "created_at": "2364-04-11T00:00:00+00:00",
       "entire_chat": "/chat/00000000-0000-82dc-a9fc-4932293e2699",
       "git_sha": null,
-      "item_count": 10,
+      "item_count": 12,
       "kind": "Signal Chat",
       "markdown_uuid": "00000000-0000-82dc-a9fc-4932293e2699",
       "message_index": null,
@@ -6754,6 +6754,66 @@ expression: snapshot
       "upstream_entity_kind": "message",
       "upstream_id": "bridge-crew@g.us#TNG0011#0",
       "uuid": "0b50e815-4fc0-80f2-af4f-05e409dee22b"
+    },
+    {
+      "account": null,
+      "author": "Q",
+      "byte_size": 38,
+      "channel": "Will Riker",
+      "content_hash": "0a8471661565eb67",
+      "conversation_name": "Will Riker",
+      "conversation_uuid": "00000000-0000-89df-ad9b-a9094ecd8e23",
+      "created_at": "2364-04-11T00:10:00+00:00",
+      "entire_chat": "/chat/00000000-0000-82dc-a9fc-4932293e2699",
+      "git_sha": null,
+      "item_count": 1,
+      "kind": "Signal Message",
+      "markdown_uuid": "00000000-0000-82dc-a9fc-4932293e2699",
+      "message_index": 10,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview_len": 38,
+      "project": null,
+      "provider": "signal",
+      "qmd_path": "signal/render_markdown/00000000-0000-89df-ad9b-a9094ecd8e23/2364-04.md",
+      "source_label": "Signal",
+      "source_url": null,
+      "upstream_account": null,
+      "upstream_entity_kind": "message",
+      "upstream_id": "100#8#12442119000000",
+      "uuid": "0b50e815-4fc0-8175-80bb-76d072e91753"
+    },
+    {
+      "account": null,
+      "author": "Guinan",
+      "byte_size": 36,
+      "channel": "Will Riker",
+      "content_hash": "f76174e37fb9c61d",
+      "conversation_name": "Will Riker",
+      "conversation_uuid": "00000000-0000-89df-ad9b-a9094ecd8e23",
+      "created_at": "2364-04-11T00:11:00+00:00",
+      "entire_chat": "/chat/00000000-0000-82dc-a9fc-4932293e2699",
+      "git_sha": null,
+      "item_count": 1,
+      "kind": "Signal Message",
+      "markdown_uuid": "00000000-0000-82dc-a9fc-4932293e2699",
+      "message_index": 11,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview_len": 36,
+      "project": null,
+      "provider": "signal",
+      "qmd_path": "signal/render_markdown/00000000-0000-89df-ad9b-a9094ecd8e23/2364-04.md",
+      "source_label": "Signal",
+      "source_url": null,
+      "upstream_account": null,
+      "upstream_entity_kind": "message",
+      "upstream_id": "100#9#12442119060000",
+      "uuid": "0b50e816-3a20-8689-94b3-fe05c4cf222b"
     },
     {
       "account": null,
@@ -12411,7 +12471,7 @@ expression: snapshot
     },
     {
       "kind": "Table",
-      "members_sha": "sha256:61ac84b44316010327275dee152de2d97290767d92144e15c2ebc17abcbd16ca",
+      "members_sha": "sha256:5bde415008f3b34e214f4dfe7fe13225b1cdd48e7cd5e6eaf1a053665b512175",
       "rows": 156,
       "source": ""
     }
@@ -12419,7 +12479,7 @@ expression: snapshot
   "summary": {
     "documents_count": 134,
     "dolt_log_count": 3,
-    "grid_rows_count": 359,
+    "grid_rows_count": 361,
     "storage_rows_count": 213
   }
 }
