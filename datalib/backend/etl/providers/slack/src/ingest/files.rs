@@ -89,7 +89,7 @@ impl Fetcher<File> for FileFetcher<'_> {
         batch: &[Fetched<File>],
     ) -> Result<()> {
         let files = batch.iter().filter_map(|f| match &f.outcome {
-            Outcome::Got(file) | Outcome::Unusable(file, _) => Some(file),
+            Outcome::Got(file) | Outcome::Unusable(file, ..) => Some(file),
             _ => None,
         });
         let inserts: Vec<CasInsert<'_>> = files
@@ -106,7 +106,7 @@ impl Fetcher<File> for FileFetcher<'_> {
         self.db.cas().put_many(&inserts).await?;
         for f in batch {
             match &f.outcome {
-                Outcome::Got(file) | Outcome::Unusable(file, _) => {
+                Outcome::Got(file) | Outcome::Unusable(file, ..) => {
                     sqlx::query("UPDATE slack_attachments SET blake3 = ? WHERE id = ?")
                         .bind(&file.blake3)
                         .bind(&f.listed.key)

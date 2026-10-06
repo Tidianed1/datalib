@@ -157,9 +157,10 @@ pub enum Outcome<T> {
     Got(T),
     /// Fetched, and part of it cannot be used (a file that will not
     /// decode, a body cut short): `store` writes what there is, the
-    /// record is held at its version, and the loss is a warning on it.
-    /// It is not asked for again until the listing moves.
-    Unusable(T, String),
+    /// record is held at its version, and the loss is a warning on it
+    /// with the reason it names. It is not asked for again until the
+    /// listing moves.
+    Unusable(T, datalib_problems::Reason, String),
     /// Upstream no longer has it: `store` removes it, and nothing holds
     /// it any more.
     Gone,
@@ -383,7 +384,7 @@ fn weigh<T: Send, F: Fetcher<T>>(f: &F, answered: &[Fetched<T>]) -> usize {
     answered
         .iter()
         .map(|a| match &a.outcome {
-            Outcome::Got(content) | Outcome::Unusable(content, _) => f.weight(content),
+            Outcome::Got(content) | Outcome::Unusable(content, ..) => f.weight(content),
             _ => 0,
         })
         .sum()
@@ -409,9 +410,10 @@ async fn write<T: Send, F: Fetcher<T>>(
                 hold(&mut tx, l.table, key, version).await?;
                 done.got += 1;
             }
-            Outcome::Unusable(_, said) => {
+            Outcome::Unusable(_, reason, said) => {
                 hold(&mut tx, l.table, key, version).await?;
-                crate::doltlite_raw::record_object_error(&mut tx, l.table, key, said).await?;
+                crate::doltlite_raw::record_object_unusable(&mut tx, l.table, key, *reason, said)
+                    .await?;
                 done.got += 1;
             }
             Outcome::Gone => {
@@ -578,7 +580,9 @@ mod tests {
                 .filter_map(|listed| {
                     let outcome = match answers.get(&listed.key).cloned() {
                         None => Outcome::Got(format!("log of {}", listed.key)),
-                        Some(Answer::Unusable(body, why)) => Outcome::Unusable(body, why),
+                        Some(Answer::Unusable(body, why)) => {
+                            Outcome::Unusable(body, Reason::DeliberateLoss, why)
+                        }
                         Some(Answer::Gone) => Outcome::Gone,
                         Some(Answer::Failed(why)) => Outcome::Failed(why),
                         Some(Answer::Skipped(why)) => Outcome::Skipped(Reason::OverSizeLimit, why),
@@ -596,7 +600,7 @@ mod tests {
         ) -> Result<()> {
             for f in batch {
                 match &f.outcome {
-                    Outcome::Got(body) | Outcome::Unusable(body, _) => {
+                    Outcome::Got(body) | Outcome::Unusable(body, ..) => {
                         sqlx::query("INSERT INTO things (id, body) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET body = excluded.body")
                             .bind(&f.listed.key)
                             .bind(body)

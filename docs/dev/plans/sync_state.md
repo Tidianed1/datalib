@@ -1,6 +1,6 @@
 # Sync state: what is owed is what upstream listed, minus what we hold
 
-**Status: decided 2026-10-05; steps 0 to 3 of §7 are built, and the three providers share one owed query and one fetch loop (§10).** This is the design and
+**Status: decided 2026-10-05; steps 0 to 4 of §7 are built, and the four providers share one owed query and one fetch loop (§10).** This is the design and
 the order of work. It came out of the audit in
 [`audits/2026-10-05_loose_ends.md`](../audits/2026-10-05_loose_ends.md)
 and a read of the four downloads with the most resume state (Slack,

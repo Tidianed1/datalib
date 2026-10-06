@@ -665,7 +665,7 @@ Current consumers, and what each does when the knob widens:
 | email (Gmail) | — | The same, per admitted label, or `*` for the whole account |
 | email (mbox) | `only_extract_labels` | Re-read every file |
 | garmin | — | Keeps no cursor and no record. An earlier `since` leaves days with no row and start dates with no `coverage` span, and the next run fetches exactly those |
-| notion | `refresh_window_days` | Re-examine the widened window |
+| notion | — | Keeps no record. The search walk stops where its `coverage` span begins, lowered by `refresh_window_days`; a widened window lists more, and a page is owed only if its stamp moved |
 | yolink | `devices[].start` | Re-walk that device from the new start |
 
 The longest write-up of the reasoning, including what is deliberately
@@ -732,7 +732,7 @@ Distinctions every provider should try to follow.
 - **Part of a walk that failed deletes nothing.** A walk or listing with errors cannot tell "gone" from "not seen": hold back the prune for what it could not read, and say so (`fsscan::Scan::deletions_held_back`).
 - **A store that will not take a write fails the step.** Swallowing it (`warn!`, `.ok()`, `unwrap_or_default()`) commits a run that says it wrote what it did not.
 - **Fail the step only when the run can do nothing useful.** A workspace-wide 401 / 403 from the auth provider before anything was fetched, or a listing with nothing stored from an earlier run to fall back on, should return `Err` from `fetch(...)`, which fails the step. The final commit does not happen ([`RawStoreSession::run`](/datalib/backend/etl/src/raw_store.rs) closes the store uncommitted): what the run sealed at its last checkpoint, a point it called consistent, stands, and the rest is discarded at the next `open`. Sealing at the error instead would make durable a state nothing vouched for, such as a conversation stamped current before its attachments were stored, which the next run would skip.
-- **A give-up keeps what the run fetched.** When the shared retry loop gives up, a rate limit holds, or N back-to-back per-item failures trip a budget, stop asking, record one `phase:` row, call `.cut_short()`, hold the cursor, and return `Ok`, so the commit at the end of the run keeps what landed and the next run resumes. Returning `Err` instead discards everything since the last seal — for a provider that never seals mid-run (GitHub, GitLab, Notion), the whole run. A test's helper must commit only when `fetch` returns `Ok`, as the processor does, or it cannot see the loss.
+- **A give-up keeps what the run fetched.** When the shared retry loop gives up, a rate limit holds, or N back-to-back per-item failures trip a budget, stop asking, record one `phase:` row, call `.cut_short()`, hold the cursor, and return `Ok`, so the commit at the end of the run keeps what landed and the next run resumes. Returning `Err` instead discards everything since the last seal — for a provider that never seals mid-run (GitHub, GitLab), the whole run. A test's helper must commit only when `fetch` returns `Ok`, as the processor does, or it cannot see the loss.
 
 The yolink provider's `CONSECUTIVE_FAILURE_BUDGET = 30` is a template for a failure budget.
 

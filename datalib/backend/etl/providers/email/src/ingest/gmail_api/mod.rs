@@ -725,7 +725,7 @@ impl Fetcher<Stored> for MessagesGet<'_> {
         let mut edges = Vec::new();
         for f in batch {
             match &f.outcome {
-                Outcome::Got(s) | Outcome::Unusable(s, _) => {
+                Outcome::Got(s) | Outcome::Unusable(s, ..) => {
                     got.push(s.row.clone());
                     edges.push(s);
                 }
