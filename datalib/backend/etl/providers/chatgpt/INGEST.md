@@ -141,8 +141,9 @@ goes on with what it has:
 
 - **A conversation that will not fetch** is owed, with its
   `conversations:<id>` row; render shows it on that conversation. The
-  row clears when it lands. One the detail answers `404` for is gone
-  and is deleted.
+  row clears when it lands. A `404` on the detail of a conversation
+  the listing names is such a failure: what the mirror holds stays, and
+  only a complete listing that leaves it out deletes it.
 - **A listing page that fails** after the first keeps the pages before
   it. The walk is then incomplete, so nothing is pruned, and the run
   records `listing:conversations`. Every run lists again, so the next

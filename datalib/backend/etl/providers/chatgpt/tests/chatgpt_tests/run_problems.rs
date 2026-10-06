@@ -174,6 +174,7 @@ async fn part_of_a_sync_that_fails_is_a_problem_row() {
     a_later_page_that_is_not_a_listing_prunes_nothing().await;
     a_named_conversation_that_fails_costs_only_itself().await;
     a_pruned_conversation_takes_its_problem_with_it().await;
+    a_listed_conversation_whose_detail_is_missing_keeps_what_is_held().await;
     a_failed_attachment_says_why_and_is_tried_again_while_unchanged().await;
     a_file_chatgpt_no_longer_has_is_not_asked_for_again().await;
     a_rate_limit_on_a_file_ends_the_walk().await;
@@ -338,6 +339,29 @@ async fn a_pruned_conversation_takes_its_problem_with_it() {
     acct.list(&[conversation("c-a", 1.0)]);
     let s = acct.run(&[]).await.unwrap();
     assert_eq!(s.pruned, 1, "{s:?}");
+    assert_eq!(acct.keys().await, Vec::<String>::new());
+}
+
+/// A conversation the listing still names, whose detail answers 404, was
+/// deleted from the mirror on every run while the listing kept naming it.
+/// Only a complete listing that leaves it out says it is gone.
+async fn a_listed_conversation_whose_detail_is_missing_keeps_what_is_held() {
+    let acct = Account::new(&[conversation("c-a", 1.0)]);
+    acct.run(&[]).await.unwrap();
+    assert_eq!(acct.stored_conversations().await, 1);
+
+    acct.list(&[conversation("c-a", 2.0)]);
+    acct.answer(&conversation_request("c-a"), 404);
+    acct.run(&[]).await.unwrap();
+    assert_eq!(
+        acct.stored_conversations().await,
+        1,
+        "what the mirror held stays while the listing names it"
+    );
+    assert_eq!(acct.keys().await, ["conversations:c-a"]);
+
+    acct.list(&[conversation("c-a", 2.0)]);
+    acct.run(&[]).await.unwrap();
     assert_eq!(acct.keys().await, Vec::<String>::new());
 }
 

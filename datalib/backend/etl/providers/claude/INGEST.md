@@ -106,8 +106,9 @@ the step.
 | a conversation or project in a bulk export with no `uuid` | `phase:export` | the next export ingest without one |
 
 Render shows a `conversations:` or `claude_attachments:` row on the
-conversation's page. A conversation whose detail answers `404` was
-deleted between the listing and the fetch, and is deleted here. The `listing:`/`phase:` rows and the `config:` rows
+conversation's page. A `404` on the detail of a conversation the
+listing names is a failure like any other: what the mirror holds stays,
+and only a listing that leaves the conversation out deletes it. The `listing:`/`phase:` rows and the `config:` rows
 of a run that got to its end replace the last run's, on both the listing
 path and the `conv_uuids` path. A run the rate limit cut short adds its
 `listing:`/`phase:` rows and clears none, and does not rewrite the

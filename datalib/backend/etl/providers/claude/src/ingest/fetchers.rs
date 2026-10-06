@@ -140,7 +140,6 @@ impl Fetcher<Conversation> for Conversations<'_> {
                     match e {
                         _ if ctx.stop().requested() => return Err(BatchError::Batch(e.into())),
                         ClaudeError::RateLimited(_) => return Err(BatchError::Terminal(e.into())),
-                        ClaudeError::Permanent(msg) if msg.contains("HTTP 404") => Outcome::Gone,
                         e => Outcome::Failed(e.to_string()),
                     }
                 }

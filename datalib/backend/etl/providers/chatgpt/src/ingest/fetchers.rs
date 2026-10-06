@@ -24,14 +24,15 @@ use super::{parse_conversation, Ctx, ATTACH_FILE_TIMEOUT};
 
 /// What a refused request means for the record, or for the loop: the
 /// run ends on a rate limit, a stop leaves the record to the next run,
-/// a 404 is a record upstream no longer has.
+/// anything else is a failure. A 404 is one too: the listing just named
+/// the conversation, and only a complete listing that leaves it out
+/// says it is gone.
 fn not_fetched<T>(ctx: &Ctx<'_>, e: ChatGPTError) -> Result<Outcome<T>, BatchError> {
     if ctx.stop().requested() {
         return Err(BatchError::Batch(e.into()));
     }
     match e {
         ChatGPTError::RateLimited { .. } => Err(BatchError::Terminal(e.into())),
-        ChatGPTError::Permanent(msg) if msg.contains("HTTP 404") => Ok(Outcome::Gone),
         ChatGPTError::Permanent(msg) => Ok(Outcome::Failed(msg)),
     }
 }
