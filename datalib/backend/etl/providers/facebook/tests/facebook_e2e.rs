@@ -444,3 +444,90 @@ async fn a_table_missing_one_of_its_chunks_deletes_nothing() {
     assert!(keys.iter().all(|k| !k.starts_with("listing:")), "{keys:?}");
     e.db.clone().close().await;
 }
+
+// ── media edges follow their records ───────────────────────────────
+
+const POSTS_FILE: &str =
+    "your_facebook_activity/posts/your_posts__check_ins__photos_and_videos_1.json";
+const A_POSTED_PHOTO: &str = "your_facebook_activity/posts/media/your_posts/200000000000003.png";
+
+impl Export {
+    async fn edge_owners(&self) -> Vec<String> {
+        sqlx::query_scalar("SELECT owner_id FROM media_blobs ORDER BY owner_id")
+            .fetch_all(self.db.pool())
+            .await
+            .unwrap()
+    }
+
+    /// The id of every record, whichever table it landed in.
+    async fn record_ids(&self) -> std::collections::HashSet<String> {
+        let tables: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'table'")
+                .fetch_all(self.db.pool())
+                .await
+                .unwrap();
+        let mut ids = std::collections::HashSet::new();
+        for table in tables.iter().filter(|t| {
+            !t.starts_with("media_blobs") && !t.ends_with("_bookkeeping") && *t != "ingested_files"
+        }) {
+            // Audited: a table name the store itself lists, quoted.
+            let found: Result<Vec<String>, _> =
+                sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT id FROM \"{table}\"")))
+                    .fetch_all(self.db.pool())
+                    .await;
+            ids.extend(found.unwrap_or_default());
+        }
+        ids
+    }
+}
+
+/// A post a newer export no longer holds was deleted, and the edge to its
+/// photo stayed, owned by a record that is gone. Now no edge is left
+/// owned by a gone record.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dropped_post_takes_its_media_edges_and_no_edge_is_left_owned_by_a_gone_record() {
+    let e = Export::new().await;
+    e.sync().await;
+    let before = e.edge_owners().await.len();
+
+    // Post 1 carries a photo no other record names.
+    let path = e.root.join(POSTS_FILE);
+    let mut posts: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let dropped = posts.as_array_mut().unwrap().remove(1);
+    assert!(dropped.to_string().contains(A_POSTED_PHOTO));
+    fs::write(&path, serde_json::to_vec(&posts).unwrap()).unwrap();
+    e.sync().await;
+
+    assert_eq!(rows(&e.db, POSTS_TABLE).await.len(), 3);
+    let owners = e.edge_owners().await;
+    let records = e.record_ids().await;
+    for owner in &owners {
+        assert!(
+            records.contains(owner),
+            "edge owned by a gone record: {owner}"
+        );
+    }
+    assert_eq!(owners.len(), before - 1);
+    e.db.clone().close().await;
+}
+
+/// A table held back (a chunk missing) deletes no record, so its records
+/// keep their media edges too.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_held_table_keeps_its_records_media_edges() {
+    let e = Export::new().await;
+    fs::write(
+        e.root.join(ALBUM_1),
+        format!(
+            r#"{{"name": "Holodeck Three", "photos": [{{"uri": "{A_POSTED_PHOTO}"}}], "description": "Dixon Hill."}}"#
+        ),
+    )
+    .unwrap();
+    e.sync().await;
+    let before = e.edge_owners().await;
+
+    fs::remove_file(e.root.join(ALBUM_1)).unwrap();
+    e.sync().await;
+    assert_eq!(e.edge_owners().await, before);
+    e.db.clone().close().await;
+}
