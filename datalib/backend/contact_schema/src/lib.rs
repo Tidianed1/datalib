@@ -21,6 +21,13 @@ pub struct DatalibContact {
     pub names: Vec<String>,
     pub handles: Vec<ContactHandle>,
     pub photo: Option<Photo>,
+    /// Where the app serves the photo from, as a path on its own origin
+    /// (`/applet/…`): a source's photo beside its rendered document, or
+    /// the contacts app's for a contact a person gave one. Never another
+    /// host's URL, which the app does not fetch unasked. `None` draws the
+    /// person's initial instead.
+    #[serde(default)]
+    pub photo_url: Option<String>,
     pub org: Option<String>,
     pub title: Option<String>,
     pub note: Option<String>,
@@ -56,6 +63,7 @@ impl DatalibContact {
             names: Vec::new(),
             handles: Vec::new(),
             photo: None,
+            photo_url: None,
             org: None,
             title: None,
             note: None,
