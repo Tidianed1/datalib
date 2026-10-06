@@ -96,7 +96,9 @@ async fn ingest_all(
 
     if let Some(users) = users.as_ref() {
         summary.users = upsert_users(&mut tx, users, &now).await?;
-        summary.pruned += prune_to(&mut tx, "users", &ids_of(users, "uuid")).await?;
+        if names_its_entries(found, "users.json", users) {
+            summary.pruned += prune_to(&mut tx, "users", &ids_of(users, "uuid")).await?;
+        }
     } else {
         // Not fatal: every export conversation already names its own
         // `account`, so the only thing a missing users.json costs is
@@ -112,15 +114,20 @@ async fn ingest_all(
         let (n_projects, n_docs) = upsert_projects(&mut tx, projects, &now).await?;
         summary.projects = n_projects;
         summary.project_docs = n_docs;
-        let project_ids = ids_of(projects, "uuid");
-        summary.pruned += prune_to(&mut tx, "projects", &project_ids).await?;
-        summary.pruned += prune_to(&mut tx, "project_docs", &project_doc_ids(projects)).await?;
+        if names_its_entries(found, "projects", projects) {
+            let project_ids = ids_of(projects, "uuid");
+            summary.pruned += prune_to(&mut tx, "projects", &project_ids).await?;
+            summary.pruned += prune_to(&mut tx, "project_docs", &project_doc_ids(projects)).await?;
+        }
     }
 
     summary.conversations = upsert_conversations(&mut tx, &conversations, &now).await?;
     summary.without_uuid = conversations.len() - summary.conversations
         + projects.as_ref().map_or(0, |p| p.len() - summary.projects);
-    summary.pruned += prune_to(&mut tx, "conversations", &ids_of(&conversations, "uuid")).await?;
+    if names_its_entries(found, "conversations.json", &conversations) {
+        summary.pruned +=
+            prune_to(&mut tx, "conversations", &ids_of(&conversations, "uuid")).await?;
+    }
     opts.progress.set_message(&format!(
         "{} conversations, {} projects, {} knowledge docs",
         summary.conversations, summary.projects, summary.project_docs,
@@ -188,6 +195,25 @@ fn read_project_files(dir: &Path) -> Result<Option<Vec<Value>>> {
         out.push(v);
     }
     Ok(Some(out))
+}
+
+/// Whether `items`, one part of the export read whole, may prune its
+/// table. Entries none of which has a uuid are not an export that emptied
+/// the table but one in a shape this reader does not know, so they delete
+/// nothing and are a problem; an empty list is a part that holds nothing.
+fn names_its_entries(found: &RunProblems, part: &str, items: &[Value]) -> bool {
+    if items.is_empty() || items.iter().any(|v| str_field(v, "uuid").is_some()) {
+        return true;
+    }
+    found.phase(
+        part,
+        format!(
+            "none of its {} entries has a uuid, a shape this reader does not know, \
+             so nothing stored was deleted",
+            items.len()
+        ),
+    );
+    false
 }
 
 fn ids_of(items: &[Value], key: &str) -> HashSet<String> {
