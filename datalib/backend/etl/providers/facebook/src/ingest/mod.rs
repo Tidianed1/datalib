@@ -17,6 +17,7 @@ use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw::{self as dr};
 use datalib_etl::download_problems::RunProblem;
 use datalib_etl::progress::Progress;
+use datalib_etl::prune;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_files::export_files::ExportFiles;
@@ -137,6 +138,10 @@ pub struct FetchSummary {
     pub files: usize,
     pub rows: usize,
     pub parse_errors: usize,
+    /// Records the export no longer holds, deleted.
+    pub removed: usize,
+    /// Media edges of deleted records, or to a `uri` a record stopped naming.
+    pub media_edges_removed: usize,
     /// Media files whose bytes this run put into the CAS.
     pub media_stored: usize,
     /// Media files already in the CAS from an earlier run.
@@ -224,16 +229,25 @@ async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
     }
 
     let mut tx = db.pool().begin().await.context("begin facebook tx")?;
+    let mut pruned: HashSet<String> = HashSet::new();
+    let mut read_in_pruned: HashSet<&str> = HashSet::new();
     for (table, rows) in &by_table {
         let prune = export.errors.is_empty()
             && !unread_tables.contains(table)
             && !short_tables.contains(table);
-        upsert_and_prune(&mut tx, table, rows, prune).await?;
+        let gone = upsert_and_prune(&mut tx, table, rows, prune).await?;
+        if prune {
+            pruned.extend(gone);
+            read_in_pruned.extend(rows.keys().map(String::as_str));
+        }
         summary.rows += rows.len();
         for file in chunks.get(table).into_iter().flatten() {
             file_checkpoint::record_file(&mut tx, &chunk_scope(table), file).await?;
         }
     }
+    summary.removed = pruned.len();
+    summary.media_edges_removed =
+        prune_media_edges(&mut tx, &by_table, &pruned, &read_in_pruned).await?;
     tx.commit().await.context("commit facebook tx")?;
 
     // Media after the records are committed: an edge is additive, and a
@@ -254,16 +268,57 @@ async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
     Ok(summary)
 }
 
+/// Delete the media edges that are no longer true, in the transaction that
+/// prunes the records: a deleted record's, and those of a record read this
+/// run, in a table that pruned, to a `uri` it no longer names. A record in
+/// a table held back keeps its edges, as it keeps its row. Returns how many
+/// went.
+async fn prune_media_edges(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    by_table: &Tables,
+    pruned: &HashSet<String>,
+    read_in_pruned: &HashSet<&str>,
+) -> Result<usize> {
+    let mut read: HashSet<&str> = HashSet::new();
+    let mut named: HashSet<String> = HashSet::new();
+    for rows in by_table.values() {
+        for (id, record) in rows {
+            read.insert(id);
+            let mut uris = Vec::new();
+            collect_uris(record, &mut uris);
+            named.extend(uris.iter().map(|uri| MediaBlobRow::pk_recipe(id, uri)));
+        }
+    }
+    let stored: Vec<(String, String)> = sqlx::query_as("SELECT id, owner_id FROM media_blobs")
+        .fetch_all(&mut **tx)
+        .await
+        .context("list media_blobs")?;
+    let held = stored.len();
+    let keep: HashSet<String> = stored
+        .into_iter()
+        .filter(|(id, owner)| {
+            let owner = owner.as_str();
+            let owner_gone = pruned.contains(owner) && !read.contains(owner);
+            let unnamed = read_in_pruned.contains(owner) && !named.contains(id);
+            !(owner_gone || unnamed)
+        })
+        .map(|(id, _)| id)
+        .collect();
+    let gone = prune::prune_scope_in_tx(tx, MediaBlobRow::TABLE, &[], &keep).await?;
+    prune::record(MediaBlobRow::TABLE, held, gone.len());
+    Ok(gone.len())
+}
+
 /// Upsert this run's rows and, when `prune`, delete the ones the export
 /// no longer holds, in the caller's transaction, so a commit landing at
 /// any point sees either last run's table or this run's — never an
-/// emptied one.
+/// emptied one. Returns the ids deleted.
 async fn upsert_and_prune(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     table: &str,
     rows: &BTreeMap<String, Value>,
     prune: bool,
-) -> Result<()> {
+) -> Result<Vec<String>> {
     let ddl = dr::wire_payload_table_ddl(table, &[]);
     // Audited: `table` is `canonical_table`'s output — ASCII alphanumerics
     // and `_` only — so it is safe as an identifier; rows are bound.
@@ -315,7 +370,7 @@ async fn upsert_and_prune(
             .await
             .with_context(|| format!("insert into {table}"))?;
     }
-    Ok(())
+    Ok(gone.into_iter().cloned().collect())
 }
 
 /// The `ingested_files` scope naming the chunk files a table was read from.

@@ -108,6 +108,12 @@ will not read is an error on its edge instead. Either clears the run
 the file reads. The bytes are held in memory only up to 32 MB between
 flushes, since a real export's media runs to gigabytes.
 
+An edge follows its record. In the transaction that prunes the records,
+a deleted record's edges go, and so do those of a record read this run,
+in a table that pruned, to a `uri` it no longer names
+(`media_edges_removed` in the step summary). A record in a table held
+back this run (below) keeps its edges, as it keeps its row.
+
 Files nothing renders — ad preferences, login history, search history,
 notification settings — are mirrored all the same. They are the record
 of what Facebook holds about the account, and a table is cheap.

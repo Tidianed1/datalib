@@ -490,7 +490,7 @@ async fn a_dropped_post_takes_its_media_edges_and_no_edge_is_left_owned_by_a_gon
     e.sync().await;
     let before = e.edge_owners().await.len();
 
-    // Post 1 carries a photo no other record names.
+    // Post 1 carries two photos no other record names.
     let path = e.root.join(POSTS_FILE);
     let mut posts: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     let dropped = posts.as_array_mut().unwrap().remove(1);
@@ -507,7 +507,7 @@ async fn a_dropped_post_takes_its_media_edges_and_no_edge_is_left_owned_by_a_gon
             "edge owned by a gone record: {owner}"
         );
     }
-    assert_eq!(owners.len(), before - 1);
+    assert_eq!(owners.len(), before - 2);
     e.db.clone().close().await;
 }
 
