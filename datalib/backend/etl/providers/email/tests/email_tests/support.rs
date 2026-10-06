@@ -116,14 +116,15 @@ impl Mirror {
         out
     }
 
+    /// The Gmail ids held: every listed message with a held version.
     pub async fn gmail_ids(&self) -> BTreeSet<String> {
         self.read(|db| async move {
             sqlx::query_scalar::<_, String>(
-                "SELECT id FROM fetched_messages WHERE email_id IS NOT NULL",
+                "SELECT id FROM listed_messages_bookkeeping WHERE held_version IS NOT NULL",
             )
             .fetch_all(db.pool())
             .await
-            .expect("read fetched_messages")
+            .expect("read what is held")
         })
         .await
         .into_iter()

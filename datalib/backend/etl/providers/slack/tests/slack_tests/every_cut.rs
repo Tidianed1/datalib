@@ -303,14 +303,16 @@ pub fn workspace() -> Tree {
 /// What the download mirrors, and what it has covered. Not the
 /// `_bookkeeping` sidecars (attempt counts and stamps, which a run that
 /// was cut off has more of), `problems`, `sync_runs`, or the sweep
-/// markers in `sync_scope_state`, which only schedule a listing.
+/// markers in `sync_scope_state`, which only schedule a listing. The
+/// one sidecar column that is a mirror of upstream, the version each
+/// thread is held at, is dumped on its own by [`Rig::contents`].
 const MIRRORED: &[&str] = &[
     "coverage",
     "workspaces",
     "users",
     "channels",
     "messages",
-    "replies_pages",
+    "threads",
     "slack_attachments",
     "channel_read_states",
     "bookmarks",
@@ -352,7 +354,22 @@ impl Rig for Slack {
 
     async fn contents(&self, dir: &Path) -> Result<String> {
         let db = self.open(dir).await?;
-        let out = dump_tables(db.pool(), MIRRORED).await;
+        let out = async {
+            let mut out = dump_tables(db.pool(), MIRRORED).await?;
+            let held: Vec<String> = sqlx::query_scalar(
+                "SELECT id || ' ' || held_version FROM threads_bookkeeping \
+                 WHERE held_version IS NOT NULL ORDER BY id",
+            )
+            .fetch_all(db.pool())
+            .await?;
+            out.push_str("== held threads\n");
+            for h in held {
+                out.push_str(&h);
+                out.push('\n');
+            }
+            Ok::<_, anyhow::Error>(out)
+        }
+        .await;
         db.close().await;
         out
     }

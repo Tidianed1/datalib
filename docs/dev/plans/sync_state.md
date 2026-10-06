@@ -1,6 +1,6 @@
 # Sync state: what is owed is what upstream listed, minus what we hold
 
-**Status: decided 2026-10-05; steps 0 to 3 of §7 are built (the three fixes, Garmin, Slack, email's two API paths).** This is the design and
+**Status: decided 2026-10-05; steps 0 to 3 of §7 are built, and the three providers share one owed query and one fetch loop (§10).** This is the design and
 the order of work. It came out of the audit in
 [`audits/2026-10-05_loose_ends.md`](../audits/2026-10-05_loose_ends.md)
 and a read of the four downloads with the most resume state (Slack,
@@ -438,4 +438,48 @@ worklist. mbox is a local source and moves in step 6.
   Notion: move the held version into the `_bookkeeping` sidecar every
   table already has, so "owed" is one shared query, and write one
   fetch loop whose unit is a batch with an outcome per item.
+
+## 10. The one loop, from doing the three again
+
+Each of the three had implemented "listed minus held" by hand: its own
+held-version columns or table, its own owed query, its own fetch loop
+with its own budget, stop handling, attempt stamps and problem rows.
+Doing them again onto one shared form, `etl/src/owed.rs`, settled what
+the shared form is:
+
+- **The held version lives in the sidecar every raw table already has**
+  (`_bookkeeping.held_version`), written in the transaction that wrote
+  the content. A provider adds no column and no table for it. A record
+  with two fetches that can fail on their own (a Slack root message and
+  its thread) is two records with two sidecars.
+- **Held means a fetch landed, at the listed version.** A failed attempt
+  leaves a sidecar row too; it must never read as held, or a failure is
+  never retried. A record listed with no version only has to have been
+  fetched.
+- **One loop, `owed::drain`**, with a provider as a `Fetcher`: what it
+  lists, how it fetches a batch, how it stores one. The loop owns the
+  rest: a request size and a flush size apart (one `messages.get` per
+  request, two hundred per transaction, or 32 MB of bodies if that
+  comes first), requests at once, five outcomes
+  per record (fetched; fetched but unusable, held with a warning; gone;
+  failed, owed with an error; skipped by our rule, owed with a warning),
+  a stop that writes what was answered, a give-up after N fruitless
+  requests or a terminal error as one `phase:` row, an abort that fails
+  the run after writing what came. Bytes for a CAS go in during `store`,
+  once per flush, before the rows that name them.
+
+What it did not do is make the providers smaller: Garmin, Slack and
+email each came out within a few percent of where they started, the
+one-time migration rungs aside. What they lost is every mechanism of
+their own; what they gained is the trait's surface, which for a
+provider of ten-line requests costs about what the hand loop did. The
+gain is that how a stop, a failure, a skip or a give-up is handled has
+one answer, proven once, and the three providers' private accidents are
+gone: email's own meaning of `attempt_count`, Slack's thread error at
+the wrong severity, Garmin counting an unreadable file as the run's
+error. The interruption tests held through both passes.
+
+Two things stay outside the loop by nature: a walk over a range
+(`coverage`), and a producer's own state (a delta token, a listing
+mark, which scopes were listed whole).
 

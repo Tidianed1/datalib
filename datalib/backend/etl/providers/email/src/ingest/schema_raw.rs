@@ -18,7 +18,7 @@ use serde_json::Value;
 /// ([`datalib_etl::blob_cas::flush_cas_edges`]) stamps
 /// `email_blobs_bookkeeping` for error tracking, so the sidecar must
 /// exist. So is the listing, whose sidecar counts the attempts to fetch
-/// a listed message.
+/// a listed message and holds the version its email satisfies.
 pub const DATA_TABLES: &[&str] = &[
     "accounts",
     "mailboxes",
@@ -417,6 +417,11 @@ pub const LADDER: &[Migration] = &[
         version: 2,
         name: "what upstream listed is stored apart from what is held",
         apply: |conn| Box::pin(super::listed::migrate_from_cursors(conn)),
+    },
+    Migration {
+        version: 3,
+        name: "what is held is the listing sidecar's held_version",
+        apply: |conn| Box::pin(super::listed::migrate_held_into_the_sidecar(conn)),
     },
 ];
 
