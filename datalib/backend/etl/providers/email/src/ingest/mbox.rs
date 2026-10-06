@@ -125,6 +125,7 @@ const SCOPE_CONFIG_KEY: &str = "mbox:download";
 const K_ONLY_LABELS: &str = "only_extract_labels";
 const K_BLOB_CAP: &str = "blob_size_limit_bytes";
 const K_ACCOUNT: &str = "account";
+const K_ACCOUNT_ID: &str = "account_id";
 
 /// The config knobs a stored scope record is compared against. Split
 /// out of [`FetchOptions`] so the comparison can be exercised without a
@@ -133,14 +134,18 @@ struct ScopeInputs<'a> {
     only_labels: &'a [String],
     blob_size_limit_bytes: Option<u64>,
     account_config: &'a MboxAccountConfig,
+    /// The account every email is filed under: the configured id, or one
+    /// made from the input's name.
+    account_id: &'a str,
 }
 
 impl FetchOptions {
-    fn scope_inputs(&self) -> ScopeInputs<'_> {
+    fn scope_inputs<'a>(&'a self, account_id: &'a str) -> ScopeInputs<'a> {
         ScopeInputs {
             only_labels: &self.only_labels,
             blob_size_limit_bytes: self.blob_size_limit_bytes,
             account_config: &self.account_config,
+            account_id,
         }
     }
 }
@@ -160,6 +165,7 @@ fn scope_config_blob(inputs: &ScopeInputs<'_>) -> Value {
             "email_address": inputs.account_config.email_address,
             "is_personal": inputs.account_config.is_personal,
         },
+        K_ACCOUNT_ID: inputs.account_id,
     })
 }
 
@@ -170,6 +176,10 @@ struct Adjustments {
     reingest_files: bool,
     /// Re-run the account/lookup flush even if every file was skipped.
     refresh_account: bool,
+    /// The account the stored emails were filed under, when it is no
+    /// longer the one the config names. Once every file has been read under
+    /// the new one, what is left under the old is no file's.
+    retire_account: Option<String>,
 }
 
 impl Adjustments {
@@ -216,6 +226,19 @@ impl Adjustments {
                 limit = inputs.blob_size_limit_bytes,
                 "re-reading mbox files for previously-oversize attachments",
             );
+        }
+
+        if let Some(was) = prior.get(K_ACCOUNT_ID).and_then(Value::as_str) {
+            if was != inputs.account_id {
+                out.reingest_files = true;
+                out.retire_account = Some(was.to_string());
+                info!(
+                    event = "mbox_account_id_changed",
+                    was,
+                    now = inputs.account_id,
+                    "re-reading mbox files to file every email under the new account",
+                );
+            }
         }
 
         let cur_account = scope_config_blob(inputs);
@@ -270,10 +293,10 @@ async fn read_files(opts: FetchOptions, found: RunProblems) -> Result<FetchSumma
 
     // Diff the scope-affecting params against the ones that produced the
     // current checkpoints.
-    let scope_cfg = scope_config_blob(&opts.scope_inputs());
+    let scope_cfg = scope_config_blob(&opts.scope_inputs(&account_id));
     let prior_scope_cfg =
         datalib_etl::scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
-    let adjust = Adjustments::plan(prior_scope_cfg.as_ref(), &opts.scope_inputs());
+    let adjust = Adjustments::plan(prior_scope_cfg.as_ref(), &opts.scope_inputs(&account_id));
 
     let known_blobs = db.loaded_blob_ids().await?;
 
@@ -365,9 +388,13 @@ async fn read_files(opts: FetchOptions, found: RunProblems) -> Result<FetchSumma
         files_processed += 1;
         let mut unparsed = Unparsed::default();
         let mut read_whole = true;
+        let mut messages_in_file = 0usize;
         for message in messages {
             let message = match message {
-                Ok(m) => m,
+                Ok(m) => {
+                    messages_in_file += 1;
+                    m
+                }
                 // An error can repeat on every read, so the file ends here
                 // and is read again next run.
                 Err(e) => {
@@ -405,6 +432,18 @@ async fn read_files(opts: FetchOptions, found: RunProblems) -> Result<FetchSumma
         // checkpoint ahead of the data.
         flush_batch(&db, &mut batch, &mut summary).await?;
         if !read_whole {
+            continue;
+        }
+        // An mbox has no envelope that could say "no messages", so a file
+        // with none (0 bytes, no `From ` line) is not read as an empty
+        // mailbox: it holds the prune back, and deleting the file is what
+        // drops what it held.
+        if messages_in_file == 0 {
+            summary.parse_errors += 1;
+            found.push(file_unread(
+                f,
+                &anyhow!("the file holds no message: not one `From ` line"),
+            ));
             continue;
         }
         if modified.contains(f.rel.as_str()) {
@@ -452,6 +491,9 @@ async fn read_files(opts: FetchOptions, found: RunProblems) -> Result<FetchSumma
         summary.emails_removed = db
             .prune_emails_to(&account_id, &accumulator.seen_email_ids)
             .await?;
+        if let Some(was) = adjust.retire_account.as_deref() {
+            summary.emails_removed += retire_account(&db, was).await?;
+        }
         // Every message was read and refiled, so a label this run's
         // own recipe minted that none of them carries is gone from the
         // export. A label filter hides the rest of the labels, and a
@@ -498,6 +540,42 @@ async fn read_files(opts: FetchOptions, found: RunProblems) -> Result<FetchSumma
     .await;
 
     Ok(summary)
+}
+
+/// Drop what is left under an account the config no longer names, once
+/// every file has been read under the one it does: its emails (no file
+/// holds them), its threads and its name-keyed labels. The account row goes
+/// once nothing names it; a label with a real Gmail id is the API sync's.
+async fn retire_account(db: &RawDb, account_id: &str) -> Result<usize> {
+    let removed = db.prune_emails_to(account_id, &BTreeSet::new()).await?;
+    let labels: Vec<(String, Option<String>)> = db
+        .mailbox_names(account_id)
+        .await?
+        .into_keys()
+        .filter(|id| id.starts_with(labels::NAME_KEYED_PREFIX))
+        .map(|id| (id, None))
+        .collect();
+    let now = datalib_time::IsoOffsetTimestamp::now_local();
+    super::refile_mailboxes(db, &now, &labels).await?;
+    let still_named: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM emails WHERE account_id = ?1) \
+              + (SELECT count(*) FROM threads WHERE account_id = ?1) \
+              + (SELECT count(*) FROM mailboxes WHERE account_id = ?1)",
+    )
+    .bind(account_id)
+    .fetch_one(db.pool())
+    .await
+    .context("count what still names the old account")?;
+    if still_named == 0 {
+        datalib_etl::prune::prune_scope(
+            db.pool(),
+            "accounts",
+            &[("id", account_id)],
+            &HashSet::new(),
+        )
+        .await?;
+    }
+    Ok(removed)
 }
 
 /// What one read of a file could not use, as its `file:` problem row.
@@ -2048,6 +2126,7 @@ mod scope_config_tests {
         only_labels: Vec<String>,
         blob_size_limit_bytes: Option<u64>,
         account_config: MboxAccountConfig,
+        account_id: String,
     }
 
     impl Inputs {
@@ -2056,6 +2135,7 @@ mod scope_config_tests {
                 only_labels: &self.only_labels,
                 blob_size_limit_bytes: self.blob_size_limit_bytes,
                 account_config: &self.account_config,
+                account_id: &self.account_id,
             }
         }
     }
@@ -2065,6 +2145,7 @@ mod scope_config_tests {
             only_labels: labels.iter().map(|s| s.to_string()).collect(),
             blob_size_limit_bytes: cap,
             account_config: account,
+            account_id: "trek".to_string(),
         }
     }
 
@@ -2197,9 +2278,28 @@ mod scope_config_tests {
     async fn blob_shape_is_the_scope_affecting_subset() {
         let obj = scope_config_blob(&opts(&["Sent"], Some(7), named(Some("Work"))).as_scope());
         let obj = obj.as_object().unwrap();
-        assert_eq!(obj.len(), 3, "unexpected keys: {obj:?}");
+        assert_eq!(obj.len(), 4, "unexpected keys: {obj:?}");
         assert_eq!(obj[K_ONLY_LABELS], json!(["Sent"]));
         assert_eq!(obj[K_BLOB_CAP], json!(7));
         assert_eq!(obj[K_ACCOUNT]["display_name"], json!("Work"));
+        assert_eq!(obj[K_ACCOUNT_ID], json!("trek"));
+    }
+
+    #[tokio::test]
+    async fn a_changed_account_id_rereads_and_retires_the_old_one() {
+        let prior = scope_config_blob(&opts(&[], None, named(None)).as_scope());
+        let mut moved = opts(&[], None, named(None));
+        moved.account_id = "defiant".to_string();
+        let plan = Adjustments::plan(Some(&prior), &moved.as_scope());
+        assert!(plan.reingest_files);
+        assert_eq!(plan.retire_account.as_deref(), Some("trek"));
+    }
+
+    #[tokio::test]
+    async fn a_record_that_never_named_the_account_retires_nothing() {
+        let mut prior = scope_config_blob(&opts(&[], None, named(None)).as_scope());
+        prior.as_object_mut().unwrap().remove(K_ACCOUNT_ID);
+        let plan = Adjustments::plan(Some(&prior), &opts(&[], None, named(None)).as_scope());
+        assert_eq!(plan, Adjustments::default());
     }
 }
