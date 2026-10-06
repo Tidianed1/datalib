@@ -75,6 +75,7 @@ rust_test(
         "INSTA_WORKSPACE_ROOT": ".",
         "RUST_TEST_THREADS": "1",
     },
+    proc_macro_deps = ["@datalib_crates//:async-trait"],
     deps = [
         "//datalib/backend/etl/providers/claude_render:datalib_etl_claude_render",
         "//datalib/backend/etl/render:datalib_etl_render",

@@ -160,6 +160,11 @@ impl Account {
             .await
     }
 
+    async fn problems_with_severity(&self) -> Vec<(String, String)> {
+        self.query("SELECT scope_key, severity FROM problems ORDER BY scope_key")
+            .await
+    }
+
     async fn keys(&self) -> Vec<String> {
         self.problems().await.into_iter().map(|(k, _)| k).collect()
     }
@@ -264,17 +269,29 @@ async fn project_listings_that_fail_are_rows_until_they_list() {
     acct.run(day_two)
         .await
         .expect("the conversations still synced");
+    // A project's docs listing is a record of its own, keyed by the
+    // project. p-1's were listed the day before, so its failure leaves
+    // them stale rather than missing; a refusal is a warning by kind.
     assert_eq!(
-        acct.keys().await,
+        acct.problems_with_severity().await,
         [
-            "listing:project_docs Bridge Operations",
-            "listing:project_docs Holodeck",
-            "listing:projects org:Defiant",
+            (
+                "listing:projects org:Defiant".to_string(),
+                "error".to_string()
+            ),
+            (
+                "project_docs_listings:p-1".to_string(),
+                "warning".to_string()
+            ),
+            (
+                "project_docs_listings:p-2".to_string(),
+                "warning".to_string()
+            ),
         ]
     );
 
-    // A docs listing that failed left its sweep marker alone, so the
-    // same run's now asks for it again.
+    // A docs listing that failed is not held, so the same run's now
+    // asks for it again.
     acct.holds(&convs, &held);
     let s = acct.run(day_two).await.unwrap();
     assert_eq!(s.project_docs_fetched, 3, "{s:?}");
@@ -423,10 +440,7 @@ async fn a_project_whose_docs_failed_is_asked_again() {
     acct.fail(&docs(ENTERPRISE, "p-1"), 500);
     let an_hour_on = |o: &mut FetchOptions| o.now = Some("2369-02-01T01:00:00Z".into());
     acct.run(an_hour_on).await.unwrap();
-    assert_eq!(
-        acct.keys().await,
-        ["listing:project_docs Bridge Operations"]
-    );
+    assert_eq!(acct.keys().await, ["project_docs_listings:p-1"]);
 
     acct.holds(&convs, &[changed]);
     let s = acct.run(an_hour_on).await.unwrap();

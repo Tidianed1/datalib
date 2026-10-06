@@ -9,6 +9,7 @@ mod claude_conv_uuid_problems;
 mod claude_projects;
 mod claude_render;
 mod claude_translate;
+mod interrupt;
 mod live;
 mod playback_roundtrip;
 mod progress_countdown;
