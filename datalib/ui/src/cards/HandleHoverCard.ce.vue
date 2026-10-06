@@ -18,6 +18,7 @@ const style = computed(() => ({
 
 <template>
   <div class="handle-hover-card" :style="style" role="tooltip">
+    <img v-if="card.photo" :src="card.photo" alt="" class="hh-photo" />
     <div class="hh-name">{{ card.name }}</div>
     <div class="hh-value">
       <img v-if="mark" :src="mark" alt="" class="hh-mark" />
@@ -39,6 +40,13 @@ const style = computed(() => ({
   box-shadow: 0 4px 16px rgb(0 0 0 / 16%);
   font-size: 12px;
   pointer-events: none;
+}
+.handle-hover-card .hh-photo {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  object-fit: cover;
+  margin-bottom: 6px;
 }
 .handle-hover-card .hh-name {
   font-weight: 600;

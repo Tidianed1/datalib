@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { EVERY_ROW, clickRowByUuid, inDocFrame, stubClipboard } from "./grid-helpers";
+import { EVERY_ROW, selectRowByUuid, inDocFrame, stubClipboard } from "./grid-helpers";
 
 // A person in a document is a chip (docs/dev/plans/chips.md). Right-click
 // on one opens the chip's own menu rather than the document's; its
@@ -27,7 +27,7 @@ async function openADocumentWithAChip(
   expect(message, "the slack fixture must have a message row with an author").toBeTruthy();
   await page.goto(EVERY_ROW);
   await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
-  await clickRowByUuid(page, message!.uuid);
+  await selectRowByUuid(page, message!.uuid);
   const chips = await inDocFrame(page, "a.chip[data-handle]");
   const chip = chips.first();
   await expect(chip).toBeVisible();

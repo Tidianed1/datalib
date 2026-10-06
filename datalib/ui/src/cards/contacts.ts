@@ -33,6 +33,9 @@ export type DatalibContact = {
   org: string | null;
   title: string | null;
   seen: { items: number; last_at: string | null } | null;
+  /** A photo the app serves, app-relative, where the source has one and
+   *  the server can serve it; absent or null otherwise. The chip's lead. */
+  photo_url?: string | null;
 };
 
 export type ContactSummary = { contact_id: string; name: string; kind: string };
@@ -108,7 +111,15 @@ export type ChipLook = {
    *  unresolved handle, which shows its kind's mark instead. */
   initial: string | null;
   icon: string | null;
+  /** The person's photo, which leads in place of the initial or the
+   *  mark: your contact's, else the best a source gave. */
+  photo: string | null;
 };
+
+/** The photo to lead with: your contact's, else the first source's. */
+function photoOf(who: Who): string | null {
+  return who.mine?.photo_url ?? who.accounts.find((a) => a.photo_url)?.photo_url ?? null;
+}
 
 /** `canLink` is whether a contacts app is there to link the handle with. */
 export function chipLook(handle: string, shownAs: string, who: Who, canLink: boolean): ChipLook {
@@ -121,6 +132,7 @@ export function chipLook(handle: string, shownAs: string, who: Who, canLink: boo
       classes: ["handle-chip", "handle-unresolved", ...(canLink ? ["handle-linkable"] : [])],
       initial: null,
       icon: handleIcon(handle),
+      photo: photoOf(who),
     };
   }
   const name = nameOf(mine);
@@ -134,6 +146,7 @@ export function chipLook(handle: string, shownAs: string, who: Who, canLink: boo
     ],
     initial: [...name.trim()][0]?.toUpperCase() ?? "?",
     icon: null,
+    photo: photoOf(who),
   };
 }
 
@@ -183,6 +196,7 @@ export type HoverCard = {
   /** The handle as a person reads it, beside its kind's mark. */
   value: string;
   icon: string | null;
+  photo: string | null;
   lines: string[];
 };
 
@@ -217,7 +231,7 @@ export function hoverCard(handle: string, shownAs: string, who: Who, canLink: bo
   if (others.length) lines.push(`Also ${others.slice(0, MAX_OTHER_HANDLES).join(", ")}`);
   if (mine) lines.push("Click to edit");
   else if (canLink) lines.push("Not linked to a contact. Click to link it.");
-  return { name, value: handleValue(handle), icon: handleIcon(handle), lines };
+  return { name, value: handleValue(handle), icon: handleIcon(handle), photo: photoOf(who), lines };
 }
 
 /** A chip as copied text: the name it shows and the identifier behind
@@ -379,29 +393,55 @@ export async function decorateHandles(root: HTMLElement): Promise<Decorated | nu
   for (const s of spans) {
     if (!s.isConnected) continue;
     const handle = s.dataset.handle ?? "";
-    const look = chipLook(handle, s.dataset.shownAs ?? "", who[handle], canLink);
-    // The link's own class stays; a redraw replaces only what the chip
-    // added. The title was the static hover for other viewers; here the
-    // hover card says more, and says it live.
-    s.dataset.baseClass ??= s.className;
-    s.className = [s.dataset.baseClass, ...look.classes].join(" ");
-    s.removeAttribute("title");
-    s.setAttribute("aria-label", look.ariaLabel);
-    s.dataset.label = look.text;
-    const lead = s.ownerDocument.createElement(look.initial ? "span" : "img");
-    lead.setAttribute("aria-hidden", "true");
-    if (look.initial) {
-      lead.className = "handle-initial";
-      lead.textContent = look.initial;
-    } else {
-      const url = iconUrl(look.icon);
-      if (url) (lead as HTMLImageElement).src = url;
-      (lead as HTMLImageElement).alt = "";
-      lead.className = "handle-mark";
-    }
-    s.replaceChildren(lead, s.ownerDocument.createTextNode(look.text));
+    drawChip(s, chipLook(handle, s.dataset.shownAs ?? "", who[handle], canLink));
   }
   return { who, canLink };
+}
+
+/** Draw `look` onto a chip link: the lead (an initial in a disc, or the
+ *  kind's mark), then the name. The link's own class stays; a redraw
+ *  replaces only what the chip added. The title was the static hover
+ *  for other viewers; here the hover card says more, and says it live. */
+export function drawChip(el: HTMLElement, look: ChipLook): void {
+  el.dataset.baseClass ??= el.className;
+  el.className = [el.dataset.baseClass, ...look.classes].join(" ");
+  el.removeAttribute("title");
+  el.setAttribute("aria-label", look.ariaLabel);
+  el.dataset.label = look.text;
+  const lead = el.ownerDocument.createElement(look.initial && !look.photo ? "span" : "img");
+  lead.setAttribute("aria-hidden", "true");
+  if (look.photo) {
+    (lead as HTMLImageElement).src = look.photo;
+    (lead as HTMLImageElement).alt = "";
+    lead.className = "handle-photo";
+  } else if (look.initial) {
+    lead.className = "handle-initial";
+    lead.textContent = look.initial;
+  } else {
+    const url = iconUrl(look.icon);
+    if (url) (lead as HTMLImageElement).src = url;
+    (lead as HTMLImageElement).alt = "";
+    lead.className = "handle-mark";
+  }
+  el.replaceChildren(lead, el.ownerDocument.createTextNode(look.text));
+}
+
+/** A chip for a grid cell: the same link a renderer writes, drawn at
+ *  once from what is known. `who` is undefined until the grid has asked. */
+export function chipCell(
+  handle: string,
+  shownAs: string,
+  who: Who | undefined,
+  canLink: boolean,
+): HTMLAnchorElement {
+  const a = document.createElement("a");
+  a.className = "chip";
+  const uri = uriFromHandle(handle);
+  if (uri) a.href = uri;
+  a.dataset.handle = handle;
+  a.dataset.shownAs = shownAs;
+  drawChip(a, chipLook(handle, shownAs, who ?? { mine: null, accounts: [] }, canLink));
+  return a;
 }
 
 /** The selection, as a range inside `root`, or null when it is elsewhere.

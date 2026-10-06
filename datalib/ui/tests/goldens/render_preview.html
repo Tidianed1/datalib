@@ -688,12 +688,6 @@ code.hljs {
 .chat-body .msg h2 > a.chip {
   font-weight: 600;
 }
-/* A chip is a link the app resolves (docs/dev/plans/chips.md): drawn as
-   the person, not as a link. */
-.chat-body a.chip {
-  color: inherit;
-  text-decoration: none;
-}
 /* The recipients line is a paragraph of its own under the header. */
 .chat-body p:has(> .msg-recipients:only-child) {
   margin: 0;
@@ -707,51 +701,6 @@ code.hljs {
 .chat-body .msg-recipients .msg-recipient,
 .chat-body .msg-recipients a.chip {
   color: var(--datalib-fg, inherit);
-}
-/* A handle the contacts app can name: a chip. One it cannot yet: the
-   source's own text, marked as clickable to link it. */
-.chat-body .handle-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  border-radius: 999px;
-}
-.chat-body .handle-resolved,
-.chat-body .handle-linkable {
-  cursor: pointer;
-}
-.chat-body .handle-resolved {
-  padding: 0 0.5rem 0 0.15rem;
-  background: var(--datalib-hover, #f0f0f0);
-}
-.chat-body .handle-stale {
-  opacity: 0.7;
-  font-style: italic;
-}
-.chat-body .handle-initial {
-  /* Decoration: a copy carries the name and identifier, not the disc. */
-  user-select: none;
-  display: inline-grid;
-  place-items: center;
-  width: 1.3em;
-  height: 1.3em;
-  border-radius: 50%;
-  font-size: 0.75em;
-  background: var(--datalib-accent, #4f46e5);
-  color: #fff;
-}
-.chat-body .handle-mark {
-  width: 0.9em;
-  height: 0.9em;
-  opacity: 0.6;
-}
-.chat-body .handle-linkable::after {
-  content: "+";
-  font-weight: 400;
-  color: var(--datalib-muted, #94a3b8);
-}
-.chat-body .handle-chip:hover {
-  outline: 1px solid var(--datalib-border, #d8d8d8);
 }
 .chat-body .msg-ts {
   font-size: 0.75rem;
@@ -820,6 +769,70 @@ code.hljs {
   color: #dc2626;
   opacity: 1;
   filter: none;
+}
+
+/* A chip: a link the app resolves, drawn as the person it names
+   (docs/dev/plans/chips.md). Shared by the document frame and the
+   grid's cells, so both draw the same chip; each includes this file
+   in its own root, since neither sees the page's styles. */
+/* A handle the contacts app can name: a chip. One it cannot yet: the
+   source's own text, marked as clickable to link it. */
+.handle-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border-radius: 999px;
+}
+.handle-resolved,
+.handle-linkable {
+  cursor: pointer;
+}
+.handle-resolved {
+  padding: 0 0.5rem 0 0.15rem;
+  background: var(--datalib-hover, #f0f0f0);
+}
+.handle-stale {
+  opacity: 0.7;
+  font-style: italic;
+}
+.handle-initial {
+  /* Decoration: a copy carries the name and identifier, not the disc. */
+  user-select: none;
+  display: inline-grid;
+  place-items: center;
+  width: 1.3em;
+  height: 1.3em;
+  border-radius: 50%;
+  font-size: 0.75em;
+  background: var(--datalib-accent, #4f46e5);
+  color: #fff;
+}
+.handle-photo {
+  /* Decoration, like the disc: a copy carries the name and identifier. */
+  user-select: none;
+  width: 1.3em;
+  height: 1.3em;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.handle-mark {
+  width: 0.9em;
+  height: 0.9em;
+  opacity: 0.6;
+}
+.handle-linkable::after {
+  content: "+";
+  font-weight: 400;
+  color: var(--datalib-muted, #94a3b8);
+}
+.handle-chip:hover {
+  outline: 1px solid var(--datalib-border, #d8d8d8);
+}
+/* A chip is a link the app resolves (docs/dev/plans/chips.md): drawn as
+   the person, not as a link. */
+a.chip {
+  color: inherit;
+  text-decoration: none;
 }
 
 

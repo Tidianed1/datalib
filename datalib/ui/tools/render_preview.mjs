@@ -68,6 +68,7 @@ const css = [
     "utf8",
   ),
   readFileSync(join(uiRoot, "src/cards/documentBody.css"), "utf8"),
+  readFileSync(join(uiRoot, "src/cards/chip.css"), "utf8"),
   vueStyles("src/cards/DocCard.ce.vue"),
   vueStyles("src/cards/ChatBody.ce.vue"),
   // Preview-only chrome. The real pane is a resizable Miller column;

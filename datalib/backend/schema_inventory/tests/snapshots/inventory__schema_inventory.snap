@@ -1821,6 +1821,7 @@ grid_rows
     touched_offset
     is_document
     author
+    author_handle
     account
     project
     org_uuid
