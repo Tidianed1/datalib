@@ -33,8 +33,8 @@ pub struct FetchOptions {
     /// timestamps sort correctly) is the one we ingest.
     pub snapshot_root: PathBuf,
     /// This host's shared fingerprint cache. Host state, so it lives
-    /// outside the scan store — see [`datalib_etl::fingerprint_cache`].
-    pub cache: datalib_etl::fingerprint_cache::FingerprintCache,
+    /// outside the scan store — see [`datalib_etl_files::fingerprint_cache`].
+    pub cache: datalib_etl_files::fingerprint_cache::FingerprintCache,
     /// Directory holding the encrypted attachment blobs (the shared
     /// `files/XX/<media_name>` tree). When `None`, defaults to
     /// `snapshot_root.join("files")` — the layout Signal Android

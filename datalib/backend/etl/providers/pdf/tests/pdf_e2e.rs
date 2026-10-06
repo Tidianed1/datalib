@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use sqlx::Row;
 
-use datalib_etl::fingerprint_cache::FingerprintCache;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_pdf::ingest::{self, RawDb};
 use datalib_etl_pdf_render::render;
 

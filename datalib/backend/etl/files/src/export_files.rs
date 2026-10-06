@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::download_problems::RunProblem;
+use datalib_etl::download_problems::RunProblem;
 
 /// The raw table for an export file, from its path relative to the
 /// export root: lowercase, every non-alphanumeric run collapsed to `_`,
@@ -104,7 +104,7 @@ impl ExportFiles {
     }
 
     /// The `listing:files` row a walk with errors leaves, for
-    /// [`crate::download_problems::report_run`]; empty for a clean walk.
+    /// [`datalib_etl::download_problems::report_run`]; empty for a clean walk.
     pub fn walk_problems(&self) -> Vec<RunProblem> {
         let Some((path, error)) = self.errors.first() else {
             return Vec::new();

@@ -4,9 +4,9 @@
 
 use std::path::{Path, PathBuf};
 
-use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::progress::Progress;
 use datalib_etl::store_handle::RawStoreHandle;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_google_takeout::ingest::{self, FetchOptions, RawDb, SyncFlags};
 
 fn fixture_root() -> PathBuf {

@@ -166,6 +166,10 @@ datalib/
     etl/           shared ingest machinery (raw stores, blob CAS, render
                    cursors) — the download side, and where a
                    downloader's dependencies stop.
+    etl/files/     `datalib_etl_files`: what changed on disk for a
+                   source that reads local files (fsscan, the
+                   fingerprint cache, the per-feed file checkpoint).
+                   Only those sources link it.
     etl/render/    `datalib_etl_render`: the render store, the
                    unified-index load, `RenderCtx`. Everything that knows
                    `datalib_schema` sits here or above.
@@ -173,12 +177,12 @@ datalib/
     etl/providers/ <p>/ (ingest) + <p>_render/ (render) + <p>_config/
                    (config schema) per provider. Twelve of the
                    file-backed ones scan a local tree through
-                   etl/src/fsscan.rs (claude_code and codex by way of
-                   etl/agent_sessions/; fsindex has its own walker over
-                   etl/src/fswalk.rs); four mirror a SQLite file through
-                   etl/sqlite_mirror/; three render time series
-                   (airvisual, yolink, garmin). fsindex, media, lightroom
-                   and apple_photos have no <p>_render.
+                   etl/files/src/fsscan.rs (claude_code and codex by way
+                   of etl/agent_sessions/; fsindex has its own walker
+                   over etl/files/src/fswalk.rs); four mirror a SQLite
+                   file through etl/sqlite_mirror/; three render time
+                   series (airvisual, yolink, garmin). fsindex, media,
+                   lightroom and apple_photos have no <p>_render.
     etl/sqlite_mirror/ the table-for-table SQLite→doltlite mirror engine.
     table/         `BulkUpsertable`, alone.
     probe/         what "Check connection" and a picker's "Load" ask
@@ -585,12 +589,12 @@ is `source_id` everywhere. `source_name` survives in one place because a
 ## A local file or folder: ask `fsscan` what changed
 
 **Don't walk a folder or re-read an input yourself to learn whether it
-changed; ask `datalib_etl::fsscan`.** It hashes each file once per host
+changed; ask `datalib_etl_files::fsscan`.** It hashes each file once per host
 (a shared fingerprint cache), so an unchanged input costs a `stat` —
 milliseconds, where re-reading costs seconds — and `file_checkpoint`
 keeps this source's `path → blake3` cursor to diff against. The recipe
-is `datalib/backend/etl/README.md` §"Answering "did it change?" for a
-file-backed source"; `lightroom`'s `ingest/sync.rs` is a small example.
+is `datalib/backend/etl/files/README.md` §"Answering "did it change?"
+for a file-backed source"; `lightroom`'s `ingest/sync.rs` is a small example.
 
 ## A cursor is only valid under the config that set it
 

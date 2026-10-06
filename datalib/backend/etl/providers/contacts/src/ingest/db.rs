@@ -378,7 +378,7 @@ impl RawDb {
                 .await
                 .context("delete addressbook")?;
         }
-        datalib_etl::file_checkpoint::forget_file(&mut tx, checkpoint_scope, rel).await?;
+        datalib_etl_files::file_checkpoint::forget_file(&mut tx, checkpoint_scope, rel).await?;
         tx.commit().await.context("commit delete addressbook tx")?;
         Ok(contacts as usize)
     }

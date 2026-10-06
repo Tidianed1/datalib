@@ -11,12 +11,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use datalib_etl::fingerprint_cache::FingerprintCache;
-use datalib_etl::fsscan;
-use datalib_etl::fswalk;
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
+use datalib_etl_files::fsscan;
+use datalib_etl_files::fswalk;
 
 pub use db::{db_path_for, RawDb, RenderTarget};
 use schema_raw::{PdfDocumentRow, PdfKind, PdfPathRow, PdfScanMetaRow};
@@ -35,7 +35,7 @@ pub struct FetchOptions {
     pub ignore: Vec<String>,
     pub max_bytes: Option<u64>,
     /// This host's shared fingerprint cache. Host state, so it lives
-    /// outside the scan store — see [`datalib_etl::fingerprint_cache`].
+    /// outside the scan store — see [`datalib_etl_files::fingerprint_cache`].
     pub cache: FingerprintCache,
     /// Run-pinned "now", per AGENTS.md — steps prefer `DATALIB_DAG_NOW`
     /// over sampling their own clock so one run's outputs agree. Every

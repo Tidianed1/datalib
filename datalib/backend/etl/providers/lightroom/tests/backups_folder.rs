@@ -9,10 +9,10 @@ use anyhow::Result;
 use sqlx::sqlite::SqlitePool;
 
 use datalib_etl::doltlite_raw as dr;
-use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::progress::Progress;
 use datalib_etl::scope_config;
 use datalib_etl::stop::StopFlag;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_lightroom::ingest::sync::{self, SyncRun};
 use datalib_etl_lightroom::ingest::{mirror, MirrorOptions};
 

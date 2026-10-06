@@ -7,11 +7,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_etl::control::DownloadControl;
-use datalib_etl::file_checkpoint;
-use datalib_etl::fingerprint_cache::FingerprintCache;
-use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_files::file_checkpoint;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
+use datalib_etl_files::fsscan;
 use datalib_problems::{Outcome, Problem, Reason};
 use tracing::warn;
 

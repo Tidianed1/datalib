@@ -15,10 +15,11 @@ use datalib_etl::bulk::{
     bulk_upsert_entity_in_tx, push_placeholder_list, push_placeholders, SQL_CHUNK,
 };
 use datalib_etl::control::DownloadControl;
-use datalib_etl::fingerprint_cache::FingerprintCache;
+use datalib_etl::download_problems;
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
-use datalib_etl::{download_problems, file_checkpoint, fsscan};
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
+use datalib_etl_files::{file_checkpoint, fsscan};
 use mail_parser::MessageParser;
 use serde::Serialize;
 use serde_json::{json, Value};

@@ -158,7 +158,7 @@ async fn replace_file_problem(
     rel: &str,
     problem: Option<(datalib_problems::Outcome, datalib_problems::Problem)>,
 ) -> Result<()> {
-    use crate::bulk::BulkUpsertable as _;
+    use datalib_etl::bulk::BulkUpsertable as _;
     use datalib_problems::{ProblemRow, Scope, ScopeKind, Stage};
     let key = file_problem_key(scope, rel);
     let first_seen: Option<String> = sqlx::query_scalar(
@@ -193,7 +193,7 @@ async fn replace_file_problem(
             None,
         )
     };
-    let sql = crate::bulk::insert_sql::<ProblemRow>();
+    let sql = datalib_etl::bulk::insert_sql::<ProblemRow>();
     // Audited: `sql` is built from `ProblemRow`'s associated consts, never
     // from row data; all values bound.
     row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
@@ -257,7 +257,7 @@ pub async fn ingest_snapshot<T, F>(
     parse: F,
 ) -> Result<SnapshotCounts>
 where
-    T: crate::bulk::BulkUpsertable,
+    T: datalib_etl::bulk::BulkUpsertable,
     F: FnOnce(&[u8]) -> Result<Vec<T>>,
 {
     let Some(f) = file else {
@@ -275,10 +275,10 @@ where
         .begin()
         .await
         .with_context(|| format!("begin {scope} tx"))?;
-    crate::bulk::bulk_upsert_in_tx(&mut tx, &rows, &now).await?;
+    datalib_etl::bulk::bulk_upsert_in_tx(&mut tx, &rows, &now).await?;
     let keep: HashSet<String> = rows.iter().map(|r| r.id().to_string()).collect();
-    let gone = crate::prune::prune_scope_in_tx(&mut tx, T::TABLE, &[], &keep).await?;
-    crate::prune::record(T::TABLE, keep.len() + gone.len(), gone.len());
+    let gone = datalib_etl::prune::prune_scope_in_tx(&mut tx, T::TABLE, &[], &keep).await?;
+    datalib_etl::prune::record(T::TABLE, keep.len() + gone.len(), gone.len());
     let counts = SnapshotCounts {
         written: rows.len(),
         removed: gone.len(),
@@ -336,6 +336,15 @@ mod tests {
     use std::str::FromStr;
     use tempfile::tempdir;
 
+    /// The store forgets every cursor when a table is recreated, and it
+    /// finds them by name in `datalib_etl`, which cannot see this crate.
+    /// A cursor table missing from that list would survive a schema
+    /// change and let the next run skip files the table no longer has.
+    #[test]
+    fn the_store_forgets_this_cursor_on_a_schema_change() {
+        assert!(datalib_etl::doltlite_raw::CURSOR_TABLES.contains(&INGESTED_FILES_TABLE));
+    }
+
     /// A provider store, a private fingerprint cache, and a tree to
     /// scan — so no test touches, or is influenced by, the host's real
     /// cache.
@@ -364,7 +373,7 @@ mod tests {
             .await
             .unwrap();
         ensure_schema(&pool).await.unwrap();
-        sqlx::query(crate::doltlite_raw::PROBLEMS_DDL)
+        sqlx::query(datalib_etl::doltlite_raw::PROBLEMS_DDL)
             .execute(&pool)
             .await
             .unwrap();

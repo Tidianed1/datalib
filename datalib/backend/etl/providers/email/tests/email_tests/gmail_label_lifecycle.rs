@@ -7,10 +7,10 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl_email::ingest::gmail_api::{self, FetchOptions, FetchSummary};
 use datalib_etl_email::ingest::labels::{gmail_mailbox_id, mailbox_id};
 use datalib_etl_email::ingest::{mbox, RawDb};
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use serde_json::{json, Value};
 
 use crate::support::{

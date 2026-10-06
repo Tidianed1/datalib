@@ -1,6 +1,6 @@
 //! End-to-end test for the "SMS Backup & Restore" provider.
 
-use datalib_etl::fingerprint_cache::FingerprintCache;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use std::fs;
 use std::path::PathBuf;
 

@@ -198,7 +198,7 @@ pub fn full_ddl() -> Vec<String> {
             .to_string(),
         // The `.ics` method's resume cursor: a file whose size and mtime
         // have not moved is not read again.
-        datalib_etl::file_checkpoint::INGESTED_FILES_DDL.to_string(),
+        datalib_etl_files::file_checkpoint::INGESTED_FILES_DDL.to_string(),
     ];
     // What CalDAV's / CardDAV's listings owe the store across runs.
     out.extend(datalib_etl::dav::state::DDL.map(str::to_string));

@@ -1,6 +1,6 @@
 //! Program A `DataProcessor`s for the email source.
 
-use datalib_etl::fingerprint_cache::{self, FingerprintCache};
+use datalib_etl_files::fingerprint_cache::{self, FingerprintCache};
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
