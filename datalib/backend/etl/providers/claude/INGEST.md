@@ -198,7 +198,13 @@ and writes the same rows the API walk writes: `users` from
 project split into a `projects` row plus one `project_docs` row per
 nested knowledge document — the same split the API gets from its two
 separate endpoints. Render then reads the store exactly as it does for
-the `api` method, and each run is a `sync_runs` row like any download's.
+the `api` method.
+
+Every run reads the whole export, so a row's `_bookkeeping` sidecar is
+stamped the first time a run reads the row and left alone after (its
+`held_version` still follows the export's `updated_at`), and a run
+keeps no `sync_runs` row. Reading an unchanged export again commits
+nothing (`reading_an_unchanged_export_again_commits_nothing`).
 
 A bulk export is a complete snapshot, so an id it stops mentioning has
 been deleted upstream: after upserting, the ingest drops the rows the
