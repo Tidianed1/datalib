@@ -3,121 +3,24 @@
 //! again and works, and a run that was stopped records nothing and moves
 //! no cursor.
 
-use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use datalib_etl::event_store::{diff_and_save, make_record};
-use datalib_etl::http::{fixture_key, HttpRequest, HttpService, PLAYBACK_ENV};
+use datalib_etl::http::{HttpRequest, HttpService};
 use datalib_etl::progress::{Progress, ProgressSink};
 use datalib_etl::retry::RetryGuard;
 use datalib_etl::stop::StopFlag;
 use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::{json_response, write_fixture, Synthesizer};
+use datalib_etl::synthesize::{json_response, write_fixture};
 use datalib_etl_github::ingest::{
-    block_on_load_all, db_path_for, fetch, search_url, FetchOptions, FetchSummary, RawDb, BASE,
-    DEFAULT_SCOPES, ENTITY_PR, ENTITY_SELF,
+    db_path_for, search_url, FetchOptions, RawDb, BASE, DEFAULT_SCOPES,
 };
-use datalib_etl_github::synthesize::GithubSynth;
-use serde_json::{json, Map};
+use serde_json::json;
 use tempfile::tempdir;
 
-const REPO: &str = "enterprise-d/holodeck";
-/// What the TNG clock's runs stamp a cursor with, as search takes it.
-const SINCE: &str = "2369-04-15";
-
-/// A playback tree for an account on PRs `prs` of [`REPO`], none with
-/// comments, captured at the TNG clock — so it also answers the searches
-/// a run resumed from that moment sends, with nothing.
-fn tape(dir: &Path, prs: &[u64]) -> PathBuf {
-    let api = dir.join("events");
-    fs::create_dir_all(&api).unwrap();
-    let mut k = Map::new();
-    k.insert("user_id".into(), json!(17010001));
-    let mut me = make_record(k, json!({"id": 17010001, "login": "jlpicard"}));
-    me["_recorded_at"] = json!(crate::tng_now().to_rfc3339_secs());
-    diff_and_save(&api, ENTITY_SELF, &[me], &HashMap::new(), |r| r.to_string()).unwrap();
-    for num in prs {
-        let mut k = Map::new();
-        k.insert("repo_full_name".into(), json!(REPO));
-        k.insert("pr_number".into(), json!(num));
-        let pr = make_record(
-            k,
-            json!({"number": num, "title": "Safety protocols", "state": "open"}),
-        );
-        diff_and_save(&api, ENTITY_PR, &[pr], &HashMap::new(), |r| r.to_string()).unwrap();
-    }
-    let pb = dir.join("playback");
-    GithubSynth::new(&api).synthesize(&pb).unwrap();
-    pb
-}
-
-fn tape_of(pb: &Path, url: &str) -> PathBuf {
-    let path = pb
-        .join("github")
-        .join(fixture_key(&HttpRequest::get(HttpService::Github, url)));
-    assert!(
-        path.is_file(),
-        "no tape for {url}; if the request shape changed, this test would \
-         stage nothing and pass for the wrong reason"
-    );
-    path
-}
-
-async fn run(
-    out: &Path,
-    pb: &Path,
-    tweak: impl FnOnce(FetchOptions) -> FetchOptions,
-) -> Result<FetchSummary, String> {
-    std::env::set_var(PLAYBACK_ENV, pb);
-    let db = RawDb::open(&db_path_for(out)).await.unwrap();
-    let opts = FetchOptions {
-        refresh_window_days: 0,
-        ..FetchOptions::new(db.clone(), crate::tng_now())
-    };
-    let summary = fetch(tweak(opts)).await.map_err(|e| format!("{e:#}"));
-    // As the processor does: a run that fails commits nothing, and the
-    // next open of the store drops what it wrote.
-    if summary.is_ok() {
-        db.commit_all("test").await.unwrap();
-    }
-    db.close().await;
-    summary
-}
-
-async fn query(out: &Path, sql: &'static str) -> Vec<(String, String)> {
-    let db = RawDb::open(&db_path_for(out)).await.unwrap();
-    let rows = sqlx::query_as(sql).fetch_all(db.pool()).await.unwrap();
-    db.close().await;
-    rows
-}
-
-async fn problems(out: &Path) -> Vec<(String, String)> {
-    query(
-        out,
-        "SELECT scope_key, severity FROM problems ORDER BY scope_key",
-    )
-    .await
-}
-
-async fn cursors(out: &Path) -> Vec<(String, String)> {
-    query(
-        out,
-        "SELECT scope, last_seen_at_utc FROM sync_scope_state ORDER BY scope",
-    )
-    .await
-}
-
-fn stored_prs(out: &Path) -> Vec<u32> {
-    let raw = block_on_load_all(&db_path_for(out)).unwrap();
-    raw.pull_requests.iter().map(|p| p.pr_number).collect()
-}
-
-fn row(key: &str, severity: &str) -> (String, String) {
-    (key.to_string(), severity.to_string())
-}
+use crate::support::*;
 
 /// A PR whose own record will not fetch is an error row on it, and the
 /// other PR is mirrored all the same. The next run asks for it again
