@@ -267,7 +267,8 @@ Everything is in `datalib/ui/src/cards/`:
 - `contacts.ts` holds the pure rules, unit-tested in `contacts.test.ts`:
   `chipLook` (what a chip shows, from the contact if there is one,
   else the best-ranked account, else what the source showed),
-  `hoverCard`, `chipMenu` (copy the name, the identifier or both; find
+  `chipTooltip` (the chip's title: who, the identifier, each source's
+  account and the person's other handles), `chipMenu` (copy the name, the identifier or both; find
   everything from the person; link or edit), `copyText` and the copy
   rewrite. `people` is who each handle is, for the whole app: an
   instance of `resolver.ts`, the one resolver every document and grid
@@ -279,7 +280,7 @@ Everything is in `datalib/ui/src/cards/`:
   it collects the chips under a body, asks `people`, and draws.
   `chipCell` draws the same chip in a grid cell.
 - `ChatBody.ce.vue` runs the decorate pass over a document's frame and
-  owns the hover card (`HandleHoverCard.ce.vue`), the popover
+  owns the popover
   (`HandlePopover.ce.vue`: link to a contact, create one, unlink, mark
   a handle as no longer working) and the right-click menu
   (`ChipMenu.ce.vue`). `chip.css` is the one look.

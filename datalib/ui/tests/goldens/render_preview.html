@@ -782,6 +782,10 @@ code.hljs {
   align-items: center;
   gap: 0.3rem;
   border-radius: 999px;
+  /* A message header is a wrapping flex row: the chip moves to its own
+     line rather than shrinking until the name breaks. */
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .handle-resolved,
 .handle-linkable {

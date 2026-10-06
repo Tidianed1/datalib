@@ -1,14 +1,16 @@
-// The chip rules: which links count, what a chip and its hover card say,
+// The chip rules: which links count, what a chip and its tooltip say,
 // what a copy carries, and the name a new contact is offered.
 
 import { describe, expect, it } from "vitest";
+
+import chipCss from "./chip.css?inline";
 
 import {
   chipLook,
   chipMenu,
   copyText,
   drawChip,
-  hoverCard,
+  chipTooltip,
   isAbsent,
   type DatalibContact,
   rewriteChipsForCopy,
@@ -101,7 +103,7 @@ describe("chipLook", () => {
       chipLook("email:q@continuum.org", "Captain Picard", { mine, accounts: [] }, true).text,
     ).toBe("Q");
     expect(
-      hoverCard("email:q@continuum.org", "Captain Picard", { mine, accounts: [] }, true).lines,
+      chipTooltip("email:q@continuum.org", "Captain Picard", { mine, accounts: [] }, true),
     ).toContain("Shown here as “Captain Picard”");
   });
 
@@ -154,7 +156,7 @@ describe("chipMenu", () => {
 describe("a photo", () => {
   /// Your contact's photo leads; without one, the best a source gave; the
   /// identifier still copies, the picture does not.
-  it("leads the chip and the hover card when the resolver serves one", () => {
+  it("leads the chip when the resolver serves one", () => {
     const withPhoto = (c: DatalibContact, url: string | null) => ({ ...c, photo_url: url });
     const mine = withPhoto(
       contact("datalib_contacts", "Will Riker", [[TEL, null]]),
@@ -171,9 +173,6 @@ describe("a photo", () => {
       "/applet/unified_index/asset/u/blobs/r.png",
     );
     expect(chipLook(TEL, "+1 555", NOBODY, true).photo).toBeNull();
-    expect(hoverCard(TEL, "+1 555", { mine, accounts: [] }, true).photo).toBe(
-      "/applet/datalib_contacts/photo/c1",
-    );
     const el = dom(`<a class="chip" data-handle="${TEL}">+1 555</a>`)
       .firstElementChild as HTMLElement;
     drawChip(el, chipLook(TEL, "+1 555", { mine, accounts: [] }, true));
@@ -189,8 +188,8 @@ describe("a photo", () => {
   });
 });
 
-describe("hoverCard", () => {
-  it("says what each source knows, and the person's other handles", () => {
+describe("chipTooltip", () => {
+  it("says who, the identifier, what each source knows, and the person's other handles", () => {
     const mine = contact("datalib_contacts", "Will Riker", [
       [TEL, "2019"],
       ["email:riker@enterprise.org", null],
@@ -199,11 +198,9 @@ describe("hoverCard", () => {
       contact("tng_contacts", "William T. Riker", [[TEL, null]]),
       contact("whatsapp", "Will", [[TEL, null]], 1),
     ];
-    const card = hoverCard(TEL, "+1 555 012 3456", { mine, accounts }, true);
-    expect(card.name).toBe("Will Riker");
-    expect(card.value).toBe("+15550123456");
-    expect(card.icon).toBe("sms");
-    expect(card.lines).toEqual([
+    expect(chipTooltip(TEL, "+1 555 012 3456", { mine, accounts }, true).split("\n")).toEqual([
+      "Will Riker",
+      "+15550123456",
       "Stopped working by 2019",
       "Shown here as “+1 555 012 3456”",
       "William T. Riker in tng_contacts",
@@ -214,11 +211,21 @@ describe("hoverCard", () => {
   });
 
   it("offers to link only when there is a contacts app to link with", () => {
-    const card = hoverCard("email:q@continuum.org", "Q <q@continuum.org>", NOBODY, true);
-    expect(card.name).toBe("Q");
-    expect(card.lines.at(-1)).toContain("Not linked");
-    const without = hoverCard("email:q@continuum.org", "Q <q@continuum.org>", NOBODY, false);
-    expect(without.lines.join(" ")).not.toContain("link");
+    const linkable = chipTooltip("email:q@continuum.org", "Q <q@continuum.org>", NOBODY, true);
+    expect(linkable.split("\n")[0]).toBe("Q");
+    expect(linkable.split("\n").at(-1)).toContain("Not linked");
+    const without = chipTooltip("email:q@continuum.org", "Q <q@continuum.org>", NOBODY, false);
+    expect(without).not.toContain("link");
+  });
+
+  /// The hover card that used to say this was a large panel with a
+  /// photo, popping over the text on every pass of the pointer; a
+  /// person asked for a tooltip instead.
+  it("is the drawn chip's title", () => {
+    const accounts = [contact("slack", "Worf", [[TEL, null]], 6894)];
+    const el = dom(chip(TEL, "Worf")).querySelector<HTMLElement>("a")!;
+    drawChip(el, chipLook(TEL, "Worf", { mine: null, accounts }, false));
+    expect(el.title).toBe("Worf\n+15550123456\nWorf in slack · 6894 items");
   });
 });
 
@@ -292,5 +299,21 @@ describe("isAbsent", () => {
     ).toBe(false);
     expect(isAbsent(500, body)).toBe(false);
     expect(isAbsent(502, "<html>bad gateway</html>")).toBe(false);
+  });
+});
+
+describe("chip.css", () => {
+  /// A message header is a wrapping flex row, so a chip in it shrank to
+  /// its longest word and "Jean-Luc Picard" broke over two lines.
+  it("keeps a chip's name on one line", () => {
+    const style = document.createElement("style");
+    style.textContent = chipCss;
+    document.head.append(style);
+    const el = dom(chip(TEL, "Jean-Luc Picard")).querySelector<HTMLElement>("a")!;
+    drawChip(el, chipLook(TEL, "Jean-Luc Picard", NOBODY, false));
+    document.body.append(el);
+    expect(getComputedStyle(el).whiteSpace).toBe("nowrap");
+    style.remove();
+    el.remove();
   });
 });

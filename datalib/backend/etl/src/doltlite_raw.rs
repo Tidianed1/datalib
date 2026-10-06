@@ -1441,11 +1441,20 @@ async fn forget_cursors(pool: &SqlitePool, created: &[String], recreated: &[Stri
             cleared.push(format!("{table}={n}"));
         }
     }
+    // A store with no cursors (every render store) lost nothing.
+    if cleared.is_empty() {
+        tracing::debug!(
+            created = %created.join(","),
+            recreated = %recreated.join(","),
+            "a table is new or empty, and the store kept no cursor past it"
+        );
+        return Ok(());
+    }
     tracing::warn!(
         created = %created.join(","),
         recreated = %recreated.join(","),
         cursors_cleared = %cleared.join(","),
-        "doltlite_raw: a table is empty that the store's cursors would skip past, \
+        "a table is empty that the store's cursors would skip past, \
          so the cursors were cleared; the next run walks from the start"
     );
     Ok(())
@@ -3548,6 +3557,58 @@ mod tests {
             "a new, empty table is one the cursors would skip past"
         );
         pool.close().await;
+    }
+
+    /// How many WARN lines `doltlite_raw` writes while `f` runs, on this
+    /// thread (the test runtime's only one).
+    async fn warnings_during<F: std::future::Future>(f: F) -> (F::Output, usize) {
+        use tracing_subscriber::layer::SubscriberExt;
+        struct Count(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+        impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Count {
+            fn on_event(
+                &self,
+                event: &tracing::Event<'_>,
+                _: tracing_subscriber::layer::Context<'_, S>,
+            ) {
+                let m = event.metadata();
+                if *m.level() == tracing::Level::WARN && m.target() == "datalib_etl::doltlite_raw" {
+                    self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+        }
+        let n = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let _default =
+            tracing::subscriber::set_default(tracing_subscriber::registry().with(Count(n.clone())));
+        let out = f.await;
+        (out, n.load(std::sync::atomic::Ordering::SeqCst))
+    }
+
+    /// Every render store in a demo root warned "the cursors were
+    /// cleared" when a build added two tables, though render stores keep
+    /// no cursors and none were cleared: a warning that cried wolf on
+    /// every source after every upgrade.
+    #[tokio::test]
+    async fn a_new_table_in_a_store_with_no_cursors_warns_of_nothing() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("no_cursors.doltlite_db");
+        open(&p, &[WIDGETS_DDL]).await.unwrap().close().await;
+
+        const GADGETS: &str = "CREATE TABLE IF NOT EXISTS gadgets (id TEXT PRIMARY KEY)";
+        let (pool, warnings) = warnings_during(open(&p, &[WIDGETS_DDL, GADGETS])).await;
+        pool.unwrap().close().await;
+        assert_eq!(warnings, 0, "nothing was cleared, so nothing to warn of");
+    }
+
+    #[tokio::test]
+    async fn clearing_cursors_is_a_warning() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("cleared.doltlite_db");
+        store_with_cursors(&p, &[WIDGETS_DDL]).await;
+
+        const GADGETS: &str = "CREATE TABLE IF NOT EXISTS gadgets (id TEXT PRIMARY KEY)";
+        let (pool, warnings) = warnings_during(open(&p, &[WIDGETS_DDL, GADGETS])).await;
+        pool.unwrap().close().await;
+        assert_eq!(warnings, 1);
     }
 
     /// `column_clause` hands back a column's definition as the DDL wrote

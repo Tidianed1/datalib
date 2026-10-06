@@ -116,6 +116,8 @@ export type ChipLook = {
   /** The person's photo, which leads in place of the initial or the
    *  mark: your contact's, else the best a source gave. */
   photo: string | null;
+  /** The tooltip: who, the identifier, and what each source knows. */
+  title: string;
 };
 
 /** The photo to lead with: your contact's, else the first source's. */
@@ -135,6 +137,7 @@ export function chipLook(handle: string, shownAs: string, who: Who, canLink: boo
       initial: null,
       icon: handleIcon(handle),
       photo: photoOf(who),
+      title: chipTooltip(handle, shownAs, who, canLink),
     };
   }
   const name = nameOf(mine);
@@ -149,6 +152,7 @@ export function chipLook(handle: string, shownAs: string, who: Who, canLink: boo
     initial: [...name.trim()][0]?.toUpperCase() ?? "?",
     icon: null,
     photo: photoOf(who),
+    title: chipTooltip(handle, shownAs, who, canLink),
   };
 }
 
@@ -193,26 +197,18 @@ export function searchQueryFor(handle: string, shownAs: string, who: Who): strin
   return filterToken("author", chipLook(handle, shownAs, who, false).text, false);
 }
 
-export type HoverCard = {
-  name: string;
-  /** The handle as a person reads it, beside its kind's mark. */
-  value: string;
-  icon: string | null;
-  photo: string | null;
-  lines: string[];
-};
-
 const MAX_ACCOUNTS = 4;
 const MAX_OTHER_HANDLES = 4;
 
-export function hoverCard(handle: string, shownAs: string, who: Who, canLink: boolean): HoverCard {
+export function chipTooltip(handle: string, shownAs: string, who: Who, canLink: boolean): string {
   const { mine, accounts } = who;
   const name = mine
     ? nameOf(mine)
     : accounts[0]
       ? nameOf(accounts[0])
       : sourceLabel(shownAs, handle);
-  const lines: string[] = [];
+  const value = handleValue(handle);
+  const lines: string[] = value === name ? [name] : [name, value];
   const stopped = stoppedBy(mine, handle);
   if (stopped) lines.push(`Stopped working by ${stopped}`);
   if (shownAs.trim() && shownAs.trim() !== name) lines.push(`Shown here as “${shownAs.trim()}”`);
@@ -233,7 +229,7 @@ export function hoverCard(handle: string, shownAs: string, who: Who, canLink: bo
   if (others.length) lines.push(`Also ${others.slice(0, MAX_OTHER_HANDLES).join(", ")}`);
   if (mine) lines.push("Click to edit");
   else if (canLink) lines.push("Not linked to a contact. Click to link it.");
-  return { name, value: handleValue(handle), icon: handleIcon(handle), photo: photoOf(who), lines };
+  return lines.join("\n");
 }
 
 /** A chip as copied text: the name it shows and the identifier behind
@@ -432,13 +428,12 @@ export async function decorateHandles(root: HTMLElement): Promise<void> {
 }
 
 /** Draw `look` onto a chip link: the lead (an initial in a disc, or the
- *  kind's mark), then the name. The link's own class stays; a redraw
- *  replaces only what the chip added. The title was the static hover
- *  for other viewers; here the hover card says more, and says it live. */
+ *  kind's mark), then the name, and the tooltip. The link's own class
+ *  stays; a redraw replaces only what the chip added. */
 export function drawChip(el: HTMLElement, look: ChipLook): void {
   el.dataset.baseClass ??= el.className;
   el.className = [el.dataset.baseClass, ...look.classes].join(" ");
-  el.removeAttribute("title");
+  el.title = look.title;
   el.setAttribute("aria-label", look.ariaLabel);
   el.dataset.label = look.text;
   const lead = chipLead(el.ownerDocument, look);

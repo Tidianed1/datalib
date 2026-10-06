@@ -63,6 +63,9 @@ pub async fn run(
                 .await
                 .with_context(|| format!("processor {}", proc.id()))?;
             tracing::info!(source = %planned.name, summary = %summary, "the download is done");
+            // The Manage row keeps the last message it was sent, which
+            // mid-walk is about one channel or one phase, not the run.
+            progress.set_message(&summary.to_string());
         }
         Ok::<_, anyhow::Error>(())
     };

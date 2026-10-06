@@ -656,6 +656,10 @@ async fn ranked(
     if let Some(list) = s.results.get(&key) {
         return Ok((list, key.at));
     }
+    let _turn = s.results.turn(&key).await;
+    if let Some(list) = s.results.get(&key) {
+        return Ok((list, key.at));
+    }
     if !datalib_unified_index::qmd::qmd_index_path(&s.root).exists() {
         return Err(SearchFailure::NoIndex);
     }
