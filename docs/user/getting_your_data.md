@@ -642,7 +642,9 @@ reports this service's credential as `invalid` even when it works;
 only a real request tells you.
 
 To mirror only part of the workspace, list the pages in `api.roots`
-(page ids or paste-able URLs); everything under them comes along.
+(page ids or paste-able URLs); every page linked under them comes
+along. A database embedded in one of those pages does not: its rows
+are mirrored only by the whole-workspace default.
 
 ## PDFs
 

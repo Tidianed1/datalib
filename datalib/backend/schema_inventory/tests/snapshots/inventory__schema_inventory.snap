@@ -1073,6 +1073,10 @@ comments_bookkeeping
     volatile_payload
     tz_offset
     held_version
+coverage
+    scope
+    lo
+    hi
 notion_attachments
     id
     page_id
@@ -1087,12 +1091,22 @@ notion_attachments_bookkeeping
     volatile_payload
     tz_offset
     held_version
+page_comments
+    id
+page_comments_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+    held_version
 page_markdown
     id
     markdown
     truncated
     unresolved_block_ids
-    source_last_edited_time
 page_markdown_bookkeeping
     id
     fetched_at_utc
