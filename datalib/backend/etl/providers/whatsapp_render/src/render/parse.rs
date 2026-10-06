@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use datalib_contact_schema::{ContactHandle, ContactKind, DatalibContact};
 use datalib_etl::blob_cas::{self, BlobBundle};
 use datalib_etl::doltlite_raw::table_exists;
 use datalib_etl::periodize::Period;
@@ -144,6 +145,7 @@ async fn parse_async(
             display,
             last_read_rowid: r.get("last_read_message_row_id"),
             items_by_period: HashMap::new(),
+            author_jids: Vec::new(),
             inputs,
         });
     }
@@ -345,6 +347,13 @@ async fn parse_async(
             chats[idx].inputs.read("jid", &i.to_string());
         }
         let sender_jid = sender_jid_row_id.and_then(|i| jids.get(&i).cloned());
+        if key.from_me == 0 {
+            // 1:1 incoming: the chat JID is the sender, by definition.
+            let author = sender_jid.clone().unwrap_or_else(|| key.chat_jid.clone());
+            if !chats[idx].author_jids.contains(&author) {
+                chats[idx].author_jids.push(author);
+            }
+        }
         let rowid: i64 = r.get("_id");
         let unread =
             key.from_me == 0 && chats[idx].last_read_rowid.is_some_and(|mark| rowid > mark);
@@ -396,7 +405,12 @@ async fn parse_async(
             });
         }
         out.push(NormalizedChat {
-            contacts: Vec::new(),
+            // Each author's address-book entry, read the way their label was.
+            contacts: ch
+                .author_jids
+                .iter()
+                .filter_map(|j| names.contact(j, source_id))
+                .collect(),
             inputs: ch.inputs.declared(),
             path_prefix: None,
             id: ch.chat_jid.clone(),
@@ -537,6 +551,9 @@ struct ChatHeader {
     display: String,
     last_read_rowid: Option<i64>,
     items_by_period: HashMap<String, Vec<NormalizedChatItem>>,
+    /// Who wrote in the chat, in the order they first did; the account
+    /// itself is not among them.
+    author_jids: Vec<String>,
     inputs: Inputs,
 }
 
@@ -570,6 +587,9 @@ struct JidNames {
     book_name: HashMap<String, String>,
     /// `wa_contacts.wa_name`, by jid: the name the person set themselves.
     own_name: HashMap<String, String>,
+    /// Every `wa_contacts` row for a jid, in `_id` order: what the
+    /// provider's account of the person is built from.
+    book: HashMap<String, Vec<serde_json::Value>>,
     /// Whether the store has `wa_db_contacts` to declare reads of.
     has_contacts: bool,
     /// `jid` string → its row id, so a name lookup can declare the
@@ -622,8 +642,9 @@ impl JidNames {
                     out.book_name.insert(jid.clone(), n);
                 }
                 if let Some(n) = first("wa_name") {
-                    out.own_name.insert(jid, n);
+                    out.own_name.insert(jid.clone(), n);
                 }
+                out.book.insert(jid, contact_rows);
             }
         }
         if table_exists(pool, "jid_map").await? {
@@ -645,6 +666,49 @@ impl JidNames {
     /// A linked id's handle is its phone number's, where `jid_map` knows it.
     fn handle(&self, jid: &str) -> Option<Handle> {
         Handle::whatsapp_jid(self.phone_jid.get(jid).map_or(jid, String::as_str))
+    }
+
+    /// The person as the phone's address book has them: every name an
+    /// entry gives, the name they gave themselves, their company and
+    /// title, keyed by their number. `None` for a jid with no handle
+    /// or no entry. The reads are the ones [`JidNames::label`] declares.
+    fn contact(&self, jid: &str, source_id: &str) -> Option<DatalibContact> {
+        let handle = self.handle(jid)?;
+        let phone = self.phone_jid.get(jid).map_or(jid, String::as_str);
+        let rows = self.book.get(phone)?;
+        let field = |row: &serde_json::Value, name: &str| {
+            row.get(name)?
+                .as_str()
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(String::from)
+        };
+        let mut c = DatalibContact::new(source_id, handle.as_str(), ContactKind::Person);
+        let mut push_name = |name: Option<String>| {
+            if let Some(name) = name {
+                if !c.names.contains(&name) {
+                    c.names.push(name);
+                }
+            }
+        };
+        for row in rows {
+            push_name(field(row, "display_name"));
+        }
+        for row in rows {
+            push_name(
+                match (field(row, "given_name"), field(row, "family_name")) {
+                    (Some(g), Some(f)) => Some(format!("{g} {f}")),
+                    (g, f) => g.or(f),
+                },
+            );
+        }
+        for row in rows {
+            push_name(field(row, "wa_name"));
+        }
+        c.handles.push(ContactHandle::of(handle));
+        c.org = rows.iter().find_map(|r| field(r, "company"));
+        c.title = rows.iter().find_map(|r| field(r, "title"));
+        Some(c)
     }
 
     fn label(&self, jid: &str, inputs: &Inputs) -> String {
@@ -703,6 +767,52 @@ fn label_from_jid(jid: &str) -> String {
 #[cfg(test)]
 mod jid_names_tests {
     use super::{Handle, Inputs, JidNames};
+
+    /// The address book's account of a person: every name its entries
+    /// give, keyed by the number, reached through a linked id too; a jid
+    /// with no entry, or no handle, has none.
+    #[test]
+    fn an_address_book_entry_is_the_providers_account_of_the_person() {
+        let mut names = JidNames {
+            has_contacts: true,
+            ..JidNames::default()
+        };
+        let riker = "17015550102@s.whatsapp.net".to_string();
+        names.phone_jid.insert("8@lid".into(), riker.clone());
+        names.book.insert(
+            riker.clone(),
+            vec![
+                serde_json::json!({"display_name": "William Riker", "given_name": "William",
+                    "family_name": "Riker", "wa_name": "Number One", "company": "Starfleet",
+                    "title": " First Officer "}),
+                serde_json::json!({"display_name": "Will Riker (Starfleet)", "wa_name": "Number One"}),
+            ],
+        );
+        names.book.insert(
+            "bridge-crew@g.us".into(),
+            vec![serde_json::json!({"display_name": "Bridge"})],
+        );
+        let c = names.contact("8@lid", "wa").expect("through the linked id");
+        assert_eq!(c.key, "tel:+17015550102");
+        assert_eq!(
+            c.names,
+            ["William Riker", "Will Riker (Starfleet)", "Number One"],
+            "every distinct name once, the address book's first"
+        );
+        assert_eq!(c.handles.len(), 1);
+        assert_eq!(c.handles[0].handle, Handle::tel("+17015550102"));
+        assert_eq!(c.org.as_deref(), Some("Starfleet"));
+        assert_eq!(c.title.as_deref(), Some("First Officer"));
+        assert_eq!(names.contact(&riker, "wa").map(|c| c.key), Some(c.key));
+        assert!(
+            names.contact("17015550109@s.whatsapp.net", "wa").is_none(),
+            "no entry"
+        );
+        assert!(
+            names.contact("bridge-crew@g.us", "wa").is_none(),
+            "no handle"
+        );
+    }
 
     /// Most people in a current backup are a linked id, not a phone JID;
     /// without the map their messages would carry no handle at all.
