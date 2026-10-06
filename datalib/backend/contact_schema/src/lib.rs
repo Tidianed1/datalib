@@ -186,7 +186,7 @@ impl Medium {
         match kind {
             HandleKind::Email => Medium::Email,
             HandleKind::Tel => Medium::Phone,
-            HandleKind::Slack => Medium::Other,
+            HandleKind::Slack | HandleKind::SignalAci => Medium::Other,
         }
     }
 }
