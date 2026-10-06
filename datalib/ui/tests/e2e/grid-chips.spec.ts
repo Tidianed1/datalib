@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { EVERY_ROW, SEARCH_MENU, searchMenuItem, stubClipboard } from "./grid-helpers";
+import { SEARCH_MENU, searchMenuItem, stubClipboard } from "./grid-helpers";
 
 // The search grid's Author cell is the same chip a document draws
 // (docs/dev/plans/chips.md § "In a grid"): a link with the handle, the
@@ -10,8 +10,12 @@ import { EVERY_ROW, SEARCH_MENU, searchMenuItem, stubClipboard } from "./grid-he
 
 type Row = { uuid: string; author_handle: string | null; author_ref: { id: string } | null };
 
+// Slack's authors all carry a handle, and the grid draws only the rows in
+// view, so the grid is opened on Slack rather than on everything.
+const SLACK_ROWS = "/gridView()::q%3Dsource_id%3Aslack";
+
 async function anAuthorChip(page: import("@playwright/test").Page) {
-  await page.goto(EVERY_ROW);
+  await page.goto(SLACK_ROWS);
   await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
   const chip = page.locator(".grid-box .slick-cell a.chip[data-handle]").first();
   await expect(chip).toBeVisible({ timeout: 10_000 });
@@ -19,7 +23,7 @@ async function anAuthorChip(page: import("@playwright/test").Page) {
 }
 
 test("an author with a handle is drawn as a chip link", async ({ page, request }) => {
-  const resp = await request.get("/applet/unified_index/search?q=&limit=200");
+  const resp = await request.get("/applet/unified_index/search?q=source_id%3Aslack&limit=200");
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as { rows: Row[] };
   const withHandle = rows.find((r) => r.author_handle);

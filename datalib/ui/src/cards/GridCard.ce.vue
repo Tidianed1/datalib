@@ -37,6 +37,7 @@ import { copyText, typedColumns, groupTitle } from "./typedColumns";
 import type { Identity } from "@/api";
 import { handleFromUri } from "./chipLinks";
 import {
+  chipCell,
   chipLook,
   chipMenu,
   copyText as copyHandleText,
@@ -645,7 +646,7 @@ function buildFilterCtx(colId: string, data: Row): FilterCtx | null {
   // account's from the accounts map, a conversation's from its own cell.
   const shown = row[colId];
   const label =
-    colId === "author" || colId === "account"
+    colId === "author_ref" || colId === "account"
       ? (accounts.value[value]?.label ?? "")
       : spec.search.field !== colId && typeof shown === "string"
         ? shown
@@ -1018,7 +1019,7 @@ const ADAPTIVE_FIELDS: Record<string, keyof SearchRow> = {
   kind: "kind",
   channel: "channel",
   touched_at: "touched_at",
-  author: "author",
+  author_ref: "author",
   account: "account",
 };
 
@@ -1212,6 +1213,18 @@ const accountFormatter: Formatter<Row> = (_r, _c, value) => {
   return { text: label, toolTip: v && label !== v ? v : "" };
 };
 
+/// The Author cell: a chip where the author has a handle, drawn from
+/// what `askWho` has learned so far; otherwise the name as shown, with
+/// an account's uuid read as the account's name.
+const authorFormatter: Formatter<Row> = (_r, _c, _v, _col, row) => {
+  const ref = row.author_ref;
+  const handle = ref ? handleFromUri(ref.id) : null;
+  if (handle && ref) return chipCell(handle, ref.label, who.get(handle), canLink);
+  const v = row.author ?? "";
+  const label = accountLabel(v);
+  return { text: label, toolTip: v && label !== v ? v : "" };
+};
+
 /// What this card adds to the applet's declared columns: the widths and
 /// hovers a type cannot know, the account-name formatting on the
 /// author/account cells (the accounts map is the browser's), and the
@@ -1235,9 +1248,9 @@ const columnOverrides: Record<string, Partial<Column<Row>>> = {
       return div;
     },
   },
-  author: {
+  author_ref: {
     width: 130,
-    formatter: accountFormatter,
+    formatter: authorFormatter,
     grouping: {
       getter: (row: Row) => accountLabel(row.author ?? ""),
       formatter: groupTitle("Author"),

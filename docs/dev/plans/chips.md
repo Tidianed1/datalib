@@ -1,8 +1,10 @@
 # Chips: a link the app can resolve, drawn as the thing it names
 
-*Decided 2026-10-06. Step 1 of §"Order of work" is built (#1022): a
-person in a document is a chip link, drawn and copied as this plan
-says; steps 2 to 5 are not. The facts about the tree were read that
+*Decided 2026-10-06. Steps 1 and 3 of §"Order of work" are built
+(#1022, #1026): a person in a document is a chip link, drawn and copied
+as this plan says, with the right-click menu and the double-click; step
+2 is landing provider by provider in the contacts work; steps 4 and 5
+are not built. The facts about the tree were read that
 day and are cited by path; check one before relying on it. The first
 slice of chips for people landed in #958 and is described in
 [`contacts.md`](contacts.md) — this plan replaces its §"Chips" and
@@ -170,13 +172,17 @@ formatter in `ui/src/cards/typedColumns.ts` draws through the same
 
 - The Manage rows (`http/src/manage/mod.rs`) send `datalib:group/<id>`
   and `datalib:step/<group>/<function>` where they send bare ids
-  today. The first grid PR checks what reads `Identity.id` in the UI
-  before changing it; a row key that happens to equal the id is a row
-  key, not an identity.
+  today. This waits for a resolver for groups and steps to exist
+  (`datalib-http` already serves the run store); the first grid PR did
+  people only, and checks what reads `Identity.id` in the UI before
+  changing it — a row key that happens to equal the id is a row key,
+  not an identity.
 - The search grid's Author column changes from `text` to `identity`.
   `grid_rows` gains `author_handle`, following the checklist in
   [`grid_rows.md`](../grid_rows.md) §"Adding a column"; the applet
-  sends `{id: "mailto:…", label: <the author as shown>, icon: "email"}`.
+  sends `author_ref: {id: "mailto:…", label: <the author as shown>,
+  icon: "email"}` beside `author`, as `source_ref` sits beside
+  `source`, so a row without a handle still has its author to draw.
 - **The producer sends the id and the label it knows; the viewer
   overlays the entity layer.** For the visible page of rows, the grid
   asks each kind's resolver once — the way `askAboutVisibleRows` in
