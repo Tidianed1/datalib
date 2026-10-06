@@ -28,7 +28,8 @@ use datalib_schema::providers::Provider;
 /// Every uuid moved, `chat_uuid` among them.
 /// v11: the author span carries the author's handle as `data-handle`.
 /// v12: a `+1` number without ten digits after the 1 has no handle.
-pub const RENDER_VERSION: u32 = 12;
+/// v13: each chat carries its authors' address-book entries as contacts.
+pub const RENDER_VERSION: u32 = 13;
 
 const SOURCE_LABEL: &str = "WhatsApp";
 

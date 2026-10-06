@@ -96,7 +96,10 @@ leaves the stored contacts as they were, as a missing `Media/` does.
 Render names a jid by the first of: its address-book name, its
 `lid_display_name`, the name the person set, its phone number, the raw
 jid — each looked up under the jid and, for a linked id, under the phone
-number `jid_map` gives it.
+number `jid_map` gives it. The same rows are each author's account of
+the person in the chat's contacts (`NormalizedChat::contacts`): every
+name the entries give, the name they set, company and title, keyed by
+the number.
 
 Profile photos are not in any backup: `wa_contacts` has only their
 timestamps (`photo_ts`, `thumb_ts`), and the images stay in the app's
