@@ -408,3 +408,39 @@ async fn a_reactions_file_that_will_not_parse_keeps_its_rows() {
     assert!(keys.contains(&format!("listing:file {broken}")), "{keys:?}");
     e.db.clone().close().await;
 }
+
+/// An export unpacked only in part, missing one chunk of a table it has
+/// the rest of, pruned that chunk's rows: the table prunes only when every
+/// chunk it was last read from is there and read. A table missing every
+/// chunk is left out of the export, and deletes nothing either.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_table_missing_one_of_its_chunks_deletes_nothing() {
+    let e = Export::new().await;
+    e.sync().await;
+    assert_eq!(rows(&e.db, ALBUMS_TABLE).await.len(), 2);
+
+    fs::remove_file(e.root.join(ALBUM_1)).unwrap();
+    e.sync().await;
+    assert_eq!(
+        rows(&e.db, ALBUMS_TABLE).await.len(),
+        2,
+        "the missing chunk's album stays"
+    );
+    let keys: Vec<String> = e.problems().await.into_iter().map(|r| r.0).collect();
+    assert!(
+        keys.contains(&format!("listing:file {ALBUM_1}")),
+        "{keys:?}"
+    );
+
+    // Whole again, a chunk is the whole of its rows: what it dropped goes.
+    fs::write(
+        e.root.join(ALBUM_1),
+        r#"{"name": "Holodeck Four", "photos": [], "description": "Sherlock."}"#,
+    )
+    .unwrap();
+    e.sync().await;
+    assert_eq!(rows(&e.db, ALBUMS_TABLE).await.len(), 2);
+    let keys: Vec<String> = e.problems().await.into_iter().map(|r| r.0).collect();
+    assert!(keys.iter().all(|k| !k.starts_with("listing:")), "{keys:?}");
+    e.db.clone().close().await;
+}
