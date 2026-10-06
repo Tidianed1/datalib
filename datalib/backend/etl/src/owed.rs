@@ -204,7 +204,9 @@ pub trait Fetcher<T: Send>: Sync {
 
     /// Write a flush's content in `tx`, which then also records what is
     /// held, gone, failed and skipped, and commits. Bytes for a blob CAS
-    /// go to the CAS before this, in `fetch`.
+    /// go in here first, one `put_many` for the flush: the CAS is its own
+    /// file and commits itself, so the bytes are there before the rows
+    /// that name them, and a kill between leaves only unnamed bytes.
     async fn store(
         &self,
         tx: &mut Transaction<'static, Sqlite>,
@@ -411,10 +413,11 @@ async fn write<T: Send, F: Fetcher<T>>(
 }
 
 fn give_up(l: &Loop<'_>, done: &Drained, why: &str, said: &str) {
+    // The problem's sample shows eighty characters: the cause first.
     l.found.phase(
         l.phase,
         format!(
-            "stopped after {why}; {} fetched, {} left for the next run: {said}",
+            "{said}; stopped after {why}: {} fetched, {} left for the next run",
             done.got, done.left
         ),
     );
