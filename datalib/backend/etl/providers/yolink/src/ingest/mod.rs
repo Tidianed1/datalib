@@ -1226,6 +1226,8 @@ mod walk_tests {
     /// transport that fails the windows it is told to.
     struct Fake {
         deployed: i64,
+        /// The meter's last reading is before this.
+        until: i64,
         /// Window start → the status it is refused with, or `None` for a
         /// connection that drops.
         failing: Mutex<HashMap<i64, Option<u16>>>,
@@ -1238,6 +1240,7 @@ mod walk_tests {
         fn new() -> Self {
             Self {
                 deployed: day(0),
+                until: i64::MAX,
                 failing: Mutex::new(HashMap::new()),
                 fail_all: false,
                 asked: Mutex::new(Vec::new()),
@@ -1271,7 +1274,7 @@ mod walk_tests {
             }
             let mut csv = String::from("Device Id,Time,Water Meter(GAL),Water Consumption(GAL)\n");
             let mut noon = self.deployed + DAY / 2;
-            while noon < end {
+            while noon < end.min(self.until) {
                 if noon >= start {
                     let t = Utc.timestamp_millis_opt(noon).unwrap();
                     csv.push_str(&format!(
@@ -1566,6 +1569,77 @@ mod walk_tests {
             st.count("SELECT last_ts_ms FROM yolink_devices").await,
             day(6) + DAY / 2,
             "the next run resumes after what landed"
+        );
+    }
+
+    /// Y1: a device that stops reporting answers every window after its
+    /// last reading with an empty body. Nothing recorded that those
+    /// windows were looked at, so each run asked for everything from the
+    /// last reading to now again, a stretch that grew by the day.
+    #[tokio::test]
+    async fn a_silent_device_is_not_asked_for_its_silence_again() {
+        let st = Store::new().await;
+        let cfg = sync(vec![device(DEVICE, "2369-04-01")], 7);
+        let mut fake = Fake::new();
+        fake.until = day(10);
+        st.run(&fake, &cfg, day(28)).await;
+        assert_eq!(fake.asked().len(), 4);
+
+        let s = st.run(&fake, &cfg, day(29)).await;
+        let asked = fake.asked();
+        assert_eq!(
+            asked.len(),
+            1,
+            "only the day since the last run is asked for, not the silence before it: {asked:?}"
+        );
+        assert!(
+            asked[0].0 >= day(28) - FIVE_MIN,
+            "the one window starts at the last run's end, less the overlap: {asked:?}"
+        );
+        assert_eq!((s.windows, s.errors), (1, 0), "{s:?}");
+    }
+
+    /// A widened `start` is owed below what was walked, once. When one
+    /// other device could not be walked, the record of the widening was
+    /// never written, so every widened device re-walked from its start
+    /// on every run after.
+    #[tokio::test]
+    async fn a_widened_start_is_walked_once_whatever_another_device_does() {
+        let st = Store::new().await;
+        let fake = Fake::new();
+        let narrow = sync(
+            vec![
+                device(DEVICE, "2369-04-15"),
+                device("cargo-bay-2", "2369-04-15"),
+            ],
+            7,
+        );
+        st.run(&fake, &narrow, day(28)).await;
+        fake.asked();
+
+        let wide = sync(
+            vec![
+                device(DEVICE, "2369-04-01"),
+                device("cargo-bay-2", "2369-04-01"),
+                device("holodeck-3", "stardate 47457.1"),
+            ],
+            7,
+        );
+        let s = st.run(&fake, &wide, day(28)).await;
+        assert_eq!(s.errors, 1, "{s:?}");
+        let asked = fake.asked();
+        assert_eq!(
+            asked.iter().filter(|(s, _)| *s == day(0)).count(),
+            2,
+            "both widened devices are walked from the new start: {asked:?}"
+        );
+
+        let s = st.run(&fake, &wide, day(29)).await;
+        assert_eq!(s.errors, 1, "{s:?}");
+        let asked = fake.asked();
+        assert!(
+            !asked.iter().any(|(s, _)| *s == day(0)),
+            "the widened stretch was walked last run; nothing asks for it again: {asked:?}"
         );
     }
 
