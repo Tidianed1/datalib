@@ -21,11 +21,22 @@ pub fn chip_link(shown: &str, handle: &Handle) -> String {
     } else {
         shown
     };
+    link_with_title(text, &handle.to_uri(), &handle.describe(shown))
+}
+
+/// A chip naming anything else the app resolves — a group, a step — by
+/// its URI (`datalib:group/slack`). The same link shape as a person's:
+/// the text is the name to show until it resolves, the title the hover.
+pub fn entity_link(text: &str, uri: &str, title: &str) -> String {
+    link_with_title(text, uri, title)
+}
+
+fn link_with_title(text: &str, href: &str, title: &str) -> String {
     format!(
         "[{}]({} \"{}\")",
         escape_md_inline(text),
-        md_link_dest(&handle.to_uri()),
-        md_link_title(&handle.describe(shown)),
+        md_link_dest(href),
+        md_link_title(title),
     )
 }
 

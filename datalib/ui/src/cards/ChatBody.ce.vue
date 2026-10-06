@@ -39,6 +39,17 @@ import {
   type ChipMenuId,
 } from "./contacts";
 import ChipMenu from "./ChipMenu.ce.vue";
+import { entityFromUri } from "./chipLinks";
+import {
+  browseQuery,
+  decorateEntities,
+  entities,
+  entityCardSource,
+  entityCopyText,
+  entityMenu,
+  type EntityMenuEntry,
+  type EntityMenuId,
+} from "./entities";
 import HandleHoverCard from "./HandleHoverCard.ce.vue";
 import HandlePopover from "./HandlePopover.ce.vue";
 import { copyToClipboard } from "@/clipboard";
@@ -118,6 +129,8 @@ const emit = defineEmits<{
   (e: "frame-contextmenu", ev: MouseEvent, view: { win: Window; dx: number; dy: number }): void;
   /** A chip asked for everything from its person: the search to open. */
   (e: "open-search", q: string): void;
+  /** A group or step chip asked to open its card: the card source. */
+  (e: "open-card", source: string): void;
 }>();
 
 const sanitized = computed(() =>
@@ -169,6 +182,15 @@ const stopPeople = people.subscribe((handles) => {
   if (shown.some((a) => handles.has(a.dataset.handle ?? ""))) void redrawHandles();
 });
 onBeforeUnmount(stopPeople);
+
+// The same for the group and step chips, answered by `entities`.
+const stopEntities = entities.subscribe((uris) => {
+  const root = body.value;
+  if (!root) return;
+  const shown = Array.from(root.querySelectorAll<HTMLElement>("a.chip[data-entity]"));
+  if (shown.some((a) => uris.has(a.dataset.entity ?? ""))) void decorateEntities(root);
+});
+onBeforeUnmount(stopEntities);
 
 /// Where the frame's viewport sits in this window: the hover card and
 /// the popover are drawn out here, over the frame, from points inside it.
@@ -236,6 +258,23 @@ function openPopover(chip: HTMLElement, x: number, y: number) {
   };
 }
 
+function entityChipAt(ev: MouseEvent): HTMLElement | null {
+  return asElement(ev.target)?.closest<HTMLElement>("a.chip[data-entity]") ?? null;
+}
+
+/// A group or step chip's href names something in this app, not a page:
+/// no click on it, plain or modified, leaves for the browser or the OS.
+function onEntityChipClick(ev: MouseEvent) {
+  if (!entityChipAt(ev)) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+}
+
+function openEntityCard(uri: string) {
+  const source = entityCardSource(uri);
+  if (source) emit("open-card", source);
+}
+
 function onHandleChipClick(ev: MouseEvent) {
   const chip = chipAt(ev);
   // A chip is a link; a plain click on it is for the chip, not for the
@@ -257,6 +296,13 @@ function onHandleChipClick(ev: MouseEvent) {
 /// (docs/dev/plans/contacts.md, phase 4); until then, everything from
 /// them, as a search.
 function onChipDblClick(ev: MouseEvent) {
+  const entity = entityChipAt(ev);
+  if (entity) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    openEntityCard(entity.dataset.entity ?? "");
+    return;
+  }
   const chip = chipAt(ev);
   if (!chip || isBrowserClick(ev)) return;
   ev.preventDefault();
@@ -269,11 +315,29 @@ function onChipDblClick(ev: MouseEvent) {
   );
 }
 
-type ChipMenuAt = { chip: HTMLElement; entries: ChipMenuEntry[]; x: number; y: number };
+type ChipMenuAt = {
+  chip: HTMLElement;
+  entries: (ChipMenuEntry | EntityMenuEntry)[];
+  x: number;
+  y: number;
+};
 const chipMenuAt = ref<ChipMenuAt | null>(null);
 
 /// Right-click on a chip is the chip's menu, not the document's.
 function onChipContextMenu(ev: MouseEvent): boolean {
+  const entity = entityChipAt(ev);
+  if (entity) {
+    ev.preventDefault();
+    const at = frameOrigin();
+    const uri = entity.dataset.entity ?? "";
+    chipMenuAt.value = {
+      chip: entity,
+      entries: entityMenu(uri, entity.dataset.label ?? entity.dataset.shownAs ?? uri),
+      x: at.x + ev.clientX,
+      y: at.y + ev.clientY,
+    };
+    return true;
+  }
   const chip = chipAt(ev);
   if (!chip) return false;
   ev.preventDefault();
@@ -294,7 +358,7 @@ function onChipContextMenu(ev: MouseEvent): boolean {
   return true;
 }
 
-async function onChipMenuPick(id: ChipMenuId) {
+async function onChipMenuPick(id: ChipMenuId | EntityMenuId) {
   const menu = chipMenuAt.value;
   chipMenuAt.value = null;
   if (!menu) return;
@@ -306,7 +370,30 @@ async function onChipMenuPick(id: ChipMenuId) {
     if (await copyToClipboard(text)) pushToast(`Copied ${text}`, "info");
     else pushToast("The clipboard refused the copy");
   };
-  switch (id) {
+  const uri = chip.dataset.entity;
+  if (uri) {
+    switch (id as EntityMenuId) {
+      case "copy-name":
+        await copy(name);
+        break;
+      case "copy-id":
+        await copy(entityFromUri(uri)?.id ?? uri);
+        break;
+      case "copy-both":
+        await copy(entityCopyText(uri, name));
+        break;
+      case "open":
+        openEntityCard(uri);
+        break;
+      case "browse": {
+        const q = browseQuery(uri);
+        if (q) emit("open-search", q);
+        break;
+      }
+    }
+    return;
+  }
+  switch (id as ChipMenuId) {
     case "copy-name":
       await copy(name);
       break;
@@ -481,6 +568,7 @@ function paint() {
   decorateRemoteMedia(el);
   decorateLongMessages(el);
   void redrawHandles();
+  void decorateEntities(el);
   decorateEdgeSources();
   applySelection(bodyChanged);
   bodyChanged = false;
@@ -514,13 +602,17 @@ function onFrameLoad() {
     frameStops.push(() => doc.removeEventListener(type, fn));
   };
   on("click", (ev) => {
+    onEntityChipClick(ev);
     onHandleChipClick(ev);
     onBodyEdgeClick(ev);
     onCopyClick(ev);
     onRemoteChipClick(ev);
     onFrameLinkClick(ev);
   });
-  on("auxclick", onFrameLinkClick);
+  on("auxclick", (ev) => {
+    onEntityChipClick(ev);
+    onFrameLinkClick(ev);
+  });
   on("dblclick", onChipDblClick);
   on("mouseover", (ev) => {
     onBodyMouseOver(ev);

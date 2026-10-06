@@ -249,6 +249,15 @@ describe("copy", () => {
     expect(a?.getAttribute("data-handle")).toBe("email:riker@enterprise.org");
     expect(rewriteChipsForCopy(dom("<p>no chips</p>"))).toBe(false);
   });
+
+  it("copies a group or step chip as its name and its URI", () => {
+    const root = dom(
+      `<p>In <a class="chip handle-chip entity-chip" href="datalib:group/slack" data-entity="datalib:group/slack" data-label="Work Slack"><span class="handle-mark"></span>Work Slack</a>.</p>`,
+    );
+    expect(rewriteChipsForCopy(root)).toBe(true);
+    expect(root.textContent).toBe("In Work Slack (datalib:group/slack).");
+    expect(root.querySelector("a")?.getAttribute("href")).toBe("datalib:group/slack");
+  });
 });
 
 describe("suggestedName", () => {

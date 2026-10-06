@@ -257,6 +257,18 @@ export function copyText(handle: string, label: string): string {
  *  back into the app chips it again. Mutates `fragment`; returns whether
  *  it held any chip. */
 export function rewriteChipsForCopy(fragment: DocumentFragment | Element): boolean {
+  // A group or step chip copies as its name and its URI, the link it was.
+  const named = Array.from(fragment.querySelectorAll<HTMLElement>("a.chip[data-entity]"));
+  for (const chip of named) {
+    const uri = chip.dataset.entity ?? "";
+    const text = `${chip.dataset.label ?? chip.textContent ?? ""} (${uri})`;
+    const a = chip.ownerDocument.createElement("a");
+    a.href = uri;
+    a.dataset.entity = uri;
+    a.title = text;
+    a.textContent = text;
+    chip.replaceWith(a);
+  }
   const chips = Array.from(fragment.querySelectorAll<HTMLElement>(".handle-chip[data-handle]"));
   for (const chip of chips) {
     const handle = chip.dataset.handle ?? "";
@@ -269,7 +281,7 @@ export function rewriteChipsForCopy(fragment: DocumentFragment | Element): boole
     a.textContent = text;
     chip.replaceWith(a);
   }
-  return chips.length > 0;
+  return chips.length + named.length > 0;
 }
 
 /** Every chip link under `root`: the links `chipLinks.js` marked because
