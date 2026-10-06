@@ -12,12 +12,46 @@ use datalib_columns::{
     source_catalog, ColumnSearch, ColumnSpec, ColumnType, DocumentLink, FreeTextMatch, Identity,
     RowsSpec,
 };
+use datalib_handle::{Handle, HandleKind};
 use datalib_query::table::{FreeText, SearchTable};
 use datalib_schema::grid_rows::{GridRow, GridRowColumn};
 use datalib_unified_index::db::datalib_source_id;
 use datalib_unified_index::grid_columns::GridColumn;
 use datalib_unified_index::search::SearchRow;
 use datalib_unified_index::view::{self, View};
+
+/// The Author cell (docs/dev/plans/chips.md § "In a grid"): the handle
+/// as a URI for its id, so the viewer resolves it as it does a chip link
+/// in a document, the name the source showed for its label, and the
+/// handle kind's mark. A row with neither has no author to draw.
+pub fn author_identity(author: &str, handle: Option<&str>) -> Option<Identity> {
+    let handle = handle.and_then(Handle::parse);
+    if author.is_empty() && handle.is_none() {
+        return None;
+    }
+    let label = match (&handle, author.is_empty()) {
+        (Some(h), true) => h.value().to_string(),
+        _ => author.to_string(),
+    };
+    Some(Identity {
+        id: handle
+            .as_ref()
+            .map_or_else(|| author.to_string(), Handle::to_uri),
+        label,
+        icon: handle.as_ref().map(|h| handle_mark(h.kind()).to_string()),
+        detail: handle.as_ref().map(|h| h.describe(author)),
+    })
+}
+
+/// The icon token for a handle kind; `KIND_ICON` in `ui/src/cards/contacts.ts`
+/// is the same table.
+fn handle_mark(kind: HandleKind) -> &'static str {
+    match kind {
+        HandleKind::Email => "email",
+        HandleKind::Tel => "sms",
+        HandleKind::Slack => "slack",
+    }
+}
 
 pub fn columns() -> Vec<ColumnSpec> {
     searchable::<GridColumn>(declared())
@@ -100,7 +134,11 @@ fn declared() -> Vec<ColumnSpec> {
                  not known to have changed since it was created.",
             )
             .hidden(),
-        ColumnSpec::new("author", "Author", ColumnType::Text),
+        ColumnSpec::new("author_ref", "Author", ColumnType::Identity).describe(
+            "Who wrote it, as the source showed them. Where the source has an identifier \
+             for them — an address, a number, a Slack user — the cell is a chip the \
+             contacts app resolves, and `author_handle:` filters on that identifier.",
+        ),
         ColumnSpec::new("account", "Account", ColumnType::Text).hidden(),
         ColumnSpec::new("org_name", "Org", ColumnType::Text).hidden(),
         ColumnSpec::new("byte_size", "Size", ColumnType::Bytes).hidden(),
@@ -194,6 +232,7 @@ impl Sources {
             source.detail = Some(row.source.clone());
         }
         row.source_ref = Some(source);
+        row.author_ref = author_identity(&row.author, row.author_handle.as_deref());
     }
 
     /// The source as the grid shows it: the name the config gives the
@@ -290,6 +329,8 @@ mod tests {
             source_id: "slack".into(),
             kind: "k".into(),
             author: "who".into(),
+            author_handle: None,
+            author_ref: None,
             channel: "#c".into(),
             source_url: "https://x".into(),
             notion_page_uuid: "n".into(),
@@ -313,6 +354,8 @@ mod tests {
             "markdown_uuid",
             "message_index",
             "sender",
+            "author",
+            "author_handle",
             "entire_chat",
             "source",
             "provider",

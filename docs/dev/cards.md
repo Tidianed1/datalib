@@ -602,7 +602,7 @@ own layout shape and decodes to nothing when it cannot be read.
 | `datetime` | an ISO stamp that is the record's (when a message was sent) | the date and time it names; sorts on the instant |
 | `quantity` | `{value, unit, note, detail}` | one figure by its unit (`count` grouped, `seconds` as "25 min"), or `note` in its place — a word, muted — when there is none; the reasoning on hover |
 | `timeseries` | `{value, unit, samples, detail, window_secs}` | the value and its change over the window, over a sparkline scaled to its own range; each value names its own window, so minutes of bytes and days of items share a table |
-| `identity` | `{id, label, icon, detail}` | icon + label, id on hover; the icon is a *token* (`slack`, `step:ingest`) the viewer maps to an asset |
+| `identity` | `{id, label, icon, detail}` | icon + label, id on hover; the icon is a *token* (`slack`, `step:ingest`) the viewer maps to an asset. An id that is a person's handle as a URI (`mailto:…`) draws as a chip instead, see below |
 | `status` | `{key, label, at, last_success_at, detail}` | a glyph for the key (a spinner while running), when it got there, the reason on hover |
 | `chips` | `[{kind, text, title}]` | a row of chips |
 | `actions` | `[{id, label, enabled, hint, disabled_reason, danger, on}]` | buttons, or a switch when `on` is set; the card supplies the handler for each id, and an id with no handler draws nothing |
@@ -612,6 +612,18 @@ The producer resolves, the viewer presents: an `identity` arrives with
 its label already looked up, because only the producer can, and the
 viewer decides what the icon token looks like. An action is an *id*,
 never a URL — a URL arriving as data would be a capability.
+
+One layer is joined in the viewer, deliberately: a person. The search
+grid's Author cell arrives as an identity whose id is the author's
+handle as a URI and whose label is the name the source showed; the grid
+draws it as a chip and asks the contacts app and the index who the
+visible page's handles are, one request per page, then repaints the
+cells that answered (`GridCard`'s `askAboutVisibleAuthors`). The
+producer still resolves what only it can; the contact a person linked
+is live state that moves while the row does not, so it is joined where
+it is live, the same way a document draws its chips. The reasons, and
+what a chip offers on click, are in
+[`plans/chips.md`](plans/chips.md) § "In a grid".
 
 `GET /api/manage/rows` and the `unified_index` applet's `/search` are
 the two producers. The applet resolves the search grid's Source

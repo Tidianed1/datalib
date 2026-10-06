@@ -34,6 +34,18 @@ import type {
   SlickEventData,
 } from "@slickgrid-universal/common";
 import { copyText, typedColumns, groupTitle } from "./typedColumns";
+import type { Identity } from "@/api";
+import { handleFromUri } from "./chipLinks";
+import {
+  chipLook,
+  chipMenu,
+  copyText as copyHandleText,
+  handleValue,
+  peopleFor,
+  resolveHandles,
+  type ChipMenuEntry,
+  type Who,
+} from "./contacts";
 import {
   SEARCH,
   type AccountsMap,
@@ -54,7 +66,7 @@ import { subscribeLive } from "@/live";
 import { encodeColumns } from "@/router/columns";
 import { KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
 import { followFrame, isDarkTheme } from "@/grid/gridFrame";
-import { keepExcludeEntries, withToken, type FilterEntry } from "@/grid/query";
+import { filterToken, keepExcludeEntries, withToken, type FilterEntry } from "@/grid/query";
 import { onAfterMenuShowFit, perOpening } from "@/grid/menu";
 import { newlyPicked } from "@/grid/selection";
 import { copySelectedRowsOnKey } from "@/grid/copyRows";
@@ -198,7 +210,60 @@ function refreshQmdState() {
   else void askQmdState([]);
 }
 
+// Who the Author chips are (docs/dev/plans/chips.md § "In a grid"): the
+// applet sends each row's handle and the name the source showed; this
+// asks the contacts app and the index about the visible page, once per
+// handle, and repaints the cells that answered — so a link made in a
+// document redraws here too, on the next ask.
+const who = new Map<string, Who>();
+const whoAsked = new Set<string>();
+let canLink = false;
+const NOBODY: Who = { mine: null, accounts: [] };
+const AUTHOR_COLUMN = "author_ref";
+
+function authorHandleOf(row: Row | null): string | null {
+  const id = row?.author_ref?.id;
+  return id ? handleFromUri(id) : null;
+}
+
+function askAboutVisibleAuthors() {
+  const grid = vueGrid?.slickGrid;
+  const column = grid?.getColumnIndex(AUTHOR_COLUMN);
+  if (!grid || column == null || column < 0) return;
+  const { top, bottom } = widen(grid.getRenderedRange(), grid.getDataLength());
+  const handles = new Set<string>();
+  for (let row = top; row <= bottom; row++) {
+    const h = authorHandleOf(rowData(row));
+    if (h && !whoAsked.has(h)) handles.add(h);
+  }
+  if (handles.size > 0) void askWho([...handles]);
+}
+
+async function askWho(handles: string[]) {
+  for (const h of handles) whoAsked.add(h);
+  try {
+    const [mine, people] = await Promise.all([resolveHandles(handles), peopleFor(handles)]);
+    canLink = mine !== null;
+    for (const h of handles) who.set(h, { mine: mine?.[h] ?? null, accounts: people[h] ?? [] });
+    refreshAuthorCells();
+  } catch (e) {
+    // The cells keep the source's name; the next scroll over them asks
+    // again. The toast dedupes itself.
+    for (const h of handles) whoAsked.delete(h);
+    pushToast(`Contacts: ${(e as Error).message}`);
+  }
+}
+
+function refreshAuthorCells() {
+  const grid = vueGrid?.slickGrid;
+  const column = grid?.getColumnIndex(AUTHOR_COLUMN);
+  if (!grid || column == null || column < 0) return;
+  const { top, bottom } = grid.getRenderedRange();
+  for (let row = top; row <= bottom; row++) grid.updateCell(row, column);
+}
+
 function askAboutVisibleRows() {
+  askAboutVisibleAuthors();
   const grid = vueGrid?.slickGrid;
   if (!grid || !qmdColumnsVisible()) return;
   const { top, bottom } = widen(grid.getRenderedRange(), grid.getDataLength());
@@ -549,6 +614,11 @@ function copyCell(column: Column<Row>, row: Row): string {
   if (column.id === "qmd_indexed") return indexFlag(qmdDocState(row)?.indexed);
   if (column.id === "qmd_embedded") return indexFlag(qmdDocState(row)?.embedded);
   const spec = columns.value.find((c) => c.field === column.id);
+  if (spec?.type === "identity") {
+    const v = row[spec.field] as Identity | null | undefined;
+    const handle = v ? handleFromUri(v.id) : null;
+    if (handle && v) return copyHandleText(handle, v.label);
+  }
   return spec ? copyText(spec.type, row[spec.field]) : "";
 }
 
@@ -1275,6 +1345,7 @@ watch(
     const typed = typedColumns<Row>(specs, {
       overrides: columnOverrides,
       groupable: true,
+      chips: { who: (h) => who.get(h), canLink: () => canLink },
     });
     const at = typed.findIndex((c) => c.id === "project") + 1;
     const own = qmd() ? extraColumns : [];
@@ -1340,6 +1411,9 @@ type MenuScope = {
   filter: FilterEntry[];
   notion: FilterEntry[];
   links: { web: Row[]; local: string[] };
+  /// The chip in the cell under the click, when the cell is an Author
+  /// with a handle: the same entries a document's chip offers.
+  chip: { handle: string; name: string; entries: ChipMenuEntry[] } | null;
 };
 
 const linkOf = (r: Row): string => r.source_url || "";
@@ -1382,11 +1456,27 @@ function menuScope(args: MenuFromCellCallbackArgs): MenuScope {
   // browser blocks it silently. Split on the URL SCHEME rather than on
   // provider, so any future local-file source inherits this.
   const linked = targets.filter((r) => linkOf(r));
+  const chipEl = el?.querySelector<HTMLElement>("a.chip[data-handle]") ?? null;
+  const chip = chipEl
+    ? (() => {
+        const handle = chipEl.dataset.handle ?? "";
+        const shownAs = chipEl.dataset.shownAs ?? "";
+        const w = who.get(handle) ?? NOBODY;
+        // No popover in a grid cell yet, so the link entry is not offered
+        // here; the document view has it.
+        return {
+          handle,
+          name: chipLook(handle, shownAs, w, false).text,
+          entries: chipMenu(handle, shownAs, w, false),
+        };
+      })()
+    : null;
   return {
     anchor,
     cell,
     copy,
     targets,
+    chip,
     filter: filterCtx ? keepExcludeEntries(filterCtx) : [],
     notion: notionCtx ? keepExcludeEntries(notionCtx) : [],
     links: {
@@ -1433,7 +1523,17 @@ function openFeedback(surface: "grid_cell" | "grid_row", m: MenuScope) {
 // The right-click menu, ahead of the grid's own entries (the grouping
 // commands). Each entry decides for itself whether the
 // cell under the click gives it anything to do.
+const chipEntry = (id: ChipMenuEntry["id"], run: (m: MenuScope) => void) =>
+  entry(`chip-${id}`, (m) => m.chip?.entries.find((e) => e.id === id)?.label ?? null, run);
+
 const menuItems: (MenuCommandItem | "divider")[] = [
+  chipEntry("copy-name", (m) => void copyToClipboard(m.chip!.name)),
+  chipEntry("copy-id", (m) => void copyToClipboard(handleValue(m.chip!.handle))),
+  chipEntry("copy-both", (m) => void copyToClipboard(copyHandleText(m.chip!.handle, m.chip!.name))),
+  chipEntry("search", (m) =>
+    appendFilterToQuery(filterToken("author_handle", m.chip!.handle, false)),
+  ),
+  dividerAfter((m) => m.chip !== null),
   entry(
     "keep",
     (m) => m.filter[0]?.label ?? null,
@@ -1788,7 +1888,16 @@ function onSelectedRowsChanged(_e: SlickEventData, args: OnSelectedRowsChangedEv
   if (doc) props.ctx.host.openCards(docSource(doc.md, doc.anchor));
 }
 
-function onClick(_e: SlickEventData, args: OnClickEventArgs) {
+/// The chip under a pointer event in a cell, if any.
+function chipAt(e: SlickEventData): HTMLElement | null {
+  const target = e.getNativeEvent<MouseEvent>()?.target as Element | null | undefined;
+  return target?.closest?.<HTMLElement>("a.chip[data-handle]") ?? null;
+}
+
+function onClick(e: SlickEventData, args: OnClickEventArgs) {
+  // A chip is a link; a click on it selects the row and nothing more —
+  // the mail client its href would open is not what a click here asks.
+  if (chipAt(e)) e.getNativeEvent<MouseEvent>()?.preventDefault();
   // A data row that is already the one selected selects again as far
   // as the reader is concerned, though the selection model sees no
   // change: keep the persisted selection on it.
@@ -1801,7 +1910,14 @@ function onClick(_e: SlickEventData, args: OnClickEventArgs) {
   }
 }
 
-function onDblClick(_e: SlickEventData, args: OnDblClickEventArgs) {
+function onDblClick(e: SlickEventData, args: OnDblClickEventArgs) {
+  // Double-click on a chip is everything from that person: the grid,
+  // narrowed to their handle (docs/dev/plans/chips.md § Clicks).
+  const chip = chipAt(e);
+  if (chip) {
+    appendFilterToQuery(filterToken("author_handle", chip.dataset.handle ?? "", false));
+    return;
+  }
   const data = rowData(args.row);
   if (data) openRow(data);
 }
