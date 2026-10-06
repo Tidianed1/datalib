@@ -99,7 +99,7 @@ Every entity table `<t>` is paired with a sidecar `<t>_bookkeeping`. The split i
 2. **Writer-supplied identity / joins** (synthesized-PK components, FK references to parent entities the walker knows but the payload doesn't, namespace discriminators like beeper's `source`/`network`) → stored typed columns on `<t>`.
 3. **Writer-supplied per-fetch state** (`fetched_at_utc`, `attempt_count`, `last_attempt_at_utc`, `last_error`, `volatile_payload`) → the `<t>_bookkeeping` sidecar.
 
-A per-row resume cursor is the one kind of writer state that lives on the entity table: YoLink's and AirVisual's `<device>.last_ts_ms`, an address book's `ctag` / `sync_token`, a contact's `etag`. Each is a typed column advanced by its own `UPDATE` once the work it vouches for is stored, and left out of the upsert's column list so a re-fetch of the row cannot clobber it.
+A per-row resume cursor is the one kind of writer state that lives on the entity table: AirVisual's `<device>.last_ts_ms`, an address book's `ctag` / `sync_token`, a contact's `etag`. Each is a typed column advanced by its own `UPDATE` once the work it vouches for is stored, and left out of the upsert's column list so a re-fetch of the row cannot clobber it.
 
 The split matters because bookkeeping changes on every attempt regardless of upstream change. Storing it on the entity table makes every `dolt diff` noisy, defeats the wire-fidelity of `payload`, and forces re-renders of unchanged content. Keeping it on the sidecar means `<t>` mutates only when upstream actually changed.
 
@@ -567,7 +567,7 @@ Cursor / resume is the **download-side specialization** of the [Incremental upda
 - **Coverage spans + refresh window** (slack): each page of a channel's history records the stretch it covered, in the transaction that stores its messages ([`coverage.rs`](/datalib/backend/etl/src/coverage.rs)). A run walks the gaps in `[since, ∞)` and re-reads the trailing `refresh_window_days` to catch edits and deletions. A newest stored message is never read as "fetched up to here".
 - **Forward-walk + refresh window** (github, gitlab): resume from the newest `updated_at` previously recorded; also re-query the trailing `refresh_window_days` to catch edits / late-arriving items. Dedup collapses the overlap to zero writes.
 - **Listing diff** (claude, chatgpt): re-list everything each run and compare each item's listing `updated_at`/`update_time` against the stored copy; only new/changed items get a detail fetch. An optional `since` bounds the diff — items updated before it are never detail-fetched, and chatgpt's newest-first paginated listing additionally stops walking once it pages past the cutoff.
-- **Time-windowed sampling** (yolink): walk `[start, now]` in fixed-stride windows. Windows align across runs and devices. Per-window UPSERT dedups re-fetched samples.
+- **Time-windowed sampling** (yolink): the gaps in a device's `coverage` of `[start, now]`, walked in fixed-stride windows, each window covered in the transaction that stores its samples. Per-window UPSERT dedups re-fetched samples.
 
 No checkpoint files. The dedup index is the resume cursor.
 
@@ -666,7 +666,7 @@ Current consumers, and what each does when the knob widens:
 | email (mbox) | `only_extract_labels` | Re-read every file |
 | garmin | — | Keeps no cursor and no record. An earlier `since` leaves days with no row and start dates with no `coverage` span, and the next run fetches exactly those |
 | notion | — | Keeps no record. The search walk stops where its `coverage` span begins, lowered by `refresh_window_days`; a widened window lists more, and a page is owed only if its stamp moved |
-| yolink | `devices[].start` | Re-walk that device from the new start |
+| yolink | — | Keeps no cursor and no record. An earlier `devices[].start` is a gap below the spans the device holds, and the next run walks it |
 
 The longest write-up of the reasoning, including what is deliberately
 *not* recorded and why, is `providers/slack/INGEST.md` § "A changed
@@ -697,7 +697,7 @@ the render params a processor declares re-renders everything. See
 Two patterns:
 
 - **Most providers**: shell out to `latchkey curl` ([`latchkey.md`](latchkey.md)). Auth lives in the latchkey keyring, under a service picked by the request's URL and an account within it. The provider's HTTP transport never sees the bearer token.
-- **Yolink**: latchkey doesn't know about `us.yosmart.com`, and the consumer download path isn't bearer-authed — the URL itself is signed (`build_signed_url` in [`providers/yolink/src/ingest/mod.rs`](/datalib/backend/etl/providers/yolink/src/ingest/mod.rs)). Per-device secrets live in config (REDACT before publishing).
+- **Yolink**: latchkey doesn't know about `us.yosmart.com`, and the consumer download path isn't bearer-authed — the URL itself is signed (`window_request` in [`providers/yolink/src/ingest/mod.rs`](/datalib/backend/etl/providers/yolink/src/ingest/mod.rs)), so each request goes through the shared HTTP layer as a plain `curl`, bypassing latchkey. Per-device secrets live in config (REDACT before publishing).
 
 If you add a new provider with a new auth shape, prefer extending latchkey upstream before adding a third pattern.
 
