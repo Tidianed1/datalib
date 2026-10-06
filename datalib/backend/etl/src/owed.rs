@@ -212,6 +212,12 @@ pub trait Fetcher<T: Send>: Sync {
         tx: &mut Transaction<'static, Sqlite>,
         batch: &[Fetched<T>],
     ) -> Result<()>;
+
+    /// Bytes a fetched record holds until its flush, for
+    /// [`Loop::flush_bytes`]. Zero for a record too small to matter.
+    fn weight(&self, _content: &T) -> usize {
+        0
+    }
 }
 
 /// What the loop is working for.
@@ -232,6 +238,10 @@ pub struct Loop<'a> {
     /// Records per transaction. A stop or a give-up writes what was
     /// answered so far whatever the count.
     pub flush: usize,
+    /// Bytes of fetched content per transaction, by [`Fetcher::weight`],
+    /// so a run of large records flushes before it fills memory; `0`
+    /// for no bound.
+    pub flush_bytes: usize,
     /// Requests in a row that came to nothing before the loop gives up
     /// on this run; `0` for never.
     pub failures_in_a_row: usize,
@@ -267,6 +277,7 @@ pub async fn drain<T: Send, F: Fetcher<T>>(
     let flush = l.flush.max(1);
     let mut fruitless = 0usize;
     let mut pending: Vec<Fetched<T>> = Vec::new();
+    let mut pending_bytes = 0usize;
     let mut batches = owed.into_iter().peekable();
     let mut in_flight = FuturesUnordered::new();
     let mut ended: Option<End> = None;
@@ -294,6 +305,7 @@ pub async fn drain<T: Send, F: Fetcher<T>>(
                 } else {
                     fruitless += 1;
                 }
+                pending_bytes += weigh(f, &answered);
                 pending.extend(answered);
             }
             Err(_) if l.stop.requested() => {
@@ -321,8 +333,10 @@ pub async fn drain<T: Send, F: Fetcher<T>>(
                 .unwrap_or_default();
             ended = Some(End::GaveUp(said));
         }
-        if pending.len() >= flush || ended.is_some() {
+        let heavy = l.flush_bytes > 0 && pending_bytes >= l.flush_bytes;
+        if pending.len() >= flush || heavy || ended.is_some() {
             write(l, f, &mut pending, &mut done).await?;
+            pending_bytes = 0;
         }
     }
     // Requests still in flight at a stop or an end are dropped
@@ -365,6 +379,16 @@ impl<T> Outcome<T> {
 
 /// One transaction for everything answered so far: the provider's
 /// content, then what each record is held at or failed with.
+fn weigh<T: Send, F: Fetcher<T>>(f: &F, answered: &[Fetched<T>]) -> usize {
+    answered
+        .iter()
+        .map(|a| match &a.outcome {
+            Outcome::Got(content) | Outcome::Unusable(content, _) => f.weight(content),
+            _ => 0,
+        })
+        .sum()
+}
+
 async fn write<T: Send, F: Fetcher<T>>(
     l: &Loop<'_>,
     f: &F,
@@ -494,6 +518,7 @@ mod tests {
             batch,
             concurrency: 1,
             flush: batch,
+            flush_bytes: 0,
             failures_in_a_row: budget,
         }
     }
@@ -826,6 +851,68 @@ mod tests {
             owed(&pool, T, listing).await.unwrap(),
             [listed("k05", Some("v1"))]
         );
+        pool.close().await;
+    }
+
+    /// A fetcher that says each record weighs its key's length, and
+    /// counts the flushes it was asked to store.
+    struct Heavy {
+        flushes: AtomicUsize,
+        sizes: Mutex<Vec<usize>>,
+    }
+
+    #[async_trait]
+    impl Fetcher<String> for Heavy {
+        async fn fetch(
+            &self,
+            batch: Vec<Listed>,
+        ) -> std::result::Result<Vec<Fetched<String>>, BatchError> {
+            Ok(batch
+                .into_iter()
+                .map(|listed| Fetched {
+                    outcome: Outcome::Got(listed.key.clone()),
+                    listed,
+                })
+                .collect())
+        }
+        async fn store(
+            &self,
+            _tx: &mut Transaction<'static, Sqlite>,
+            batch: &[Fetched<String>],
+        ) -> Result<()> {
+            self.flushes.fetch_add(1, Ordering::SeqCst);
+            self.sizes.lock().unwrap().push(batch.len());
+            Ok(())
+        }
+        fn weight(&self, content: &String) -> usize {
+            content.len()
+        }
+    }
+
+    /// Large records flush by bytes before the record count is reached,
+    /// so a run of big bodies never waits for `flush` of them.
+    #[tokio::test]
+    async fn heavy_records_flush_by_bytes() {
+        let d = tempfile::tempdir().unwrap();
+        let pool = store_at(&d).await;
+        let stop = StopFlag::new();
+        let found = RunProblems::unwritten();
+        let mut l = a_loop(&pool, &stop, &found, 1, 0);
+        l.flush = 100;
+        l.flush_bytes = 10;
+        // Each key is 4 bytes: a flush fills at the third record.
+        let listing: Vec<Listed> = (0..7)
+            .map(|i| listed(&format!("k{i:03}"), Some("v1")))
+            .collect();
+        let f = Heavy {
+            flushes: AtomicUsize::new(0),
+            sizes: Mutex::new(Vec::new()),
+        };
+        let drained = drain(&l, listing.clone(), &f).await.unwrap();
+        assert_eq!(drained.got, 7);
+        assert_eq!(*f.sizes.lock().unwrap(), [3, 3, 1]);
+        assert_eq!(f.flushes.load(Ordering::SeqCst), 3);
+        assert!(owed(&pool, T, listing).await.unwrap().is_empty());
         pool.close().await;
     }
 }

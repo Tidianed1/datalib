@@ -172,11 +172,20 @@ async fn garmin_synth_playback_ingest_roundtrip() {
     assert_eq!(
         count(
             &raw,
-            "SELECT COUNT(*) FROM garmin_daily WHERE fetched_on = '2369-04-15'"
+            "SELECT COUNT(*) FROM garmin_daily_bookkeeping WHERE held_version IS NOT NULL"
         )
         .await,
         (DAILY_METRICS.len() * 15) as i64,
-        "every day carries the date it was fetched on"
+        "every day is held at the date it is final from"
+    );
+    assert_eq!(
+        count(
+            &raw,
+            "SELECT COUNT(*) FROM garmin_daily_bookkeeping WHERE held_version = '2369-04-15'"
+        )
+        .await,
+        (DAILY_METRICS.len() * 8) as i64,
+        "the 8th settles today; the 9th through the 15th are held as of today, until they settle"
     );
 
     // The FIT bytes are in the CAS, unzipped.
