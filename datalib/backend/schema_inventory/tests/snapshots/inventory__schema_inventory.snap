@@ -294,13 +294,23 @@ calendars_bookkeeping
     volatile_payload
     tz_offset
     held_version
+dav_resources
+    id
+    collection
+    href
+    etag
+dav_resources_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+    held_version
 dav_unconfirmed
     collection
     href
-dav_unstored
-    collection
-    href
-    detail
 google_events
     id
     payload
@@ -402,13 +412,23 @@ contacts_bookkeeping
     volatile_payload
     tz_offset
     held_version
+dav_resources
+    id
+    collection
+    href
+    etag
+dav_resources_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+    held_version
 dav_unconfirmed
     collection
     href
-dav_unstored
-    collection
-    href
-    detail
 ingested_files
     scope
     rel_path
