@@ -63,13 +63,14 @@ export function entityLook(
     initial: null,
     icon: view?.icon ?? fallbackIcon,
     photo: null,
+    title: entityTitle(uri, text, view),
   };
 }
 
 /** The hover: what it is, and where it stands. */
-export function entityTitle(uri: string, look: ChipLook, view: EntityView | undefined): string {
+function entityTitle(uri: string, text: string, view: EntityView | undefined): string {
   const id = entityFromUri(uri)?.id ?? uri;
-  const lines = [`${look.text} (${id})`];
+  const lines = [`${text} (${id})`];
   if (view?.detail) lines.push(view.detail);
   if (view?.status) {
     lines.push(
@@ -134,9 +135,7 @@ export function entityCell(
   a.dataset.entity = uri;
   a.dataset.shownAs = shown;
   if (fallbackIcon) a.dataset.icon = fallbackIcon;
-  const look = entityLook(uri, shown, view, fallbackIcon);
-  drawChip(a, look);
-  a.title = entityTitle(uri, look, view);
+  drawChip(a, entityLook(uri, shown, view, fallbackIcon));
   return a;
 }
 
@@ -153,8 +152,6 @@ export async function decorateEntities(root: HTMLElement): Promise<void> {
     if (!c.isConnected) continue;
     const uri = c.dataset.entity ?? "";
     const view = entities.get(uri);
-    const look = entityLook(uri, c.dataset.shownAs ?? "", view, c.dataset.icon ?? null);
-    drawChip(c, look);
-    c.title = entityTitle(uri, look, view);
+    drawChip(c, entityLook(uri, c.dataset.shownAs ?? "", view, c.dataset.icon ?? null));
   }
 }

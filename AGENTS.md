@@ -211,7 +211,7 @@ datalib/
     handle/        `Handle`: one identifier for a person (`email:`, `tel:`,
                    `slack:`), normalized; what renders write as
                    `data-handle`. No first-party deps.
-    contact_schema/ `DatalibContact`: a person as one source describes
+    contact_schema/ `NormalizedContact`: a person as one source describes
                    them. Only the shape; contact-common renders it.
     contacts/      the contacts app's store under `datalib_curated/`;
                    the `datalib_contacts` applet is its one writer.

@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 pub use datalib_contact_schema::ContactKind;
-use datalib_contact_schema::{ContactHandle, DatalibContact, Medium};
+use datalib_contact_schema::{ContactHandle, Medium, NormalizedContact};
 use datalib_etl::doltlite_raw;
 use datalib_handle::{Handle, HandleKind};
 use datalib_store_meta::{Migration, StoreKind};
@@ -323,7 +323,7 @@ impl Store {
 
     /// The contact holding each of `handles`, by handle; a handle no
     /// contact holds is absent.
-    pub async fn resolve(&self, handles: &[Handle]) -> Result<HashMap<String, DatalibContact>> {
+    pub async fn resolve(&self, handles: &[Handle]) -> Result<HashMap<String, NormalizedContact>> {
         let mut out = HashMap::new();
         for h in handles {
             let holder: Option<String> =
@@ -371,7 +371,7 @@ impl Store {
             .collect())
     }
 
-    pub async fn contact(&self, contact_id: &str) -> Result<Option<DatalibContact>> {
+    pub async fn contact(&self, contact_id: &str) -> Result<Option<NormalizedContact>> {
         let Some(r) = sqlx::query(
             "SELECT contact_id, name, kind, note, created_at_utc, updated_at_utc \
                FROM contacts WHERE contact_id = ?",
@@ -384,7 +384,7 @@ impl Store {
             return Ok(None);
         };
         let kind: String = r.get("kind");
-        let mut contact = DatalibContact::new(
+        let mut contact = NormalizedContact::new(
             SOURCE_ID,
             contact_id,
             ContactKind::parse(&kind).unwrap_or(ContactKind::Person),

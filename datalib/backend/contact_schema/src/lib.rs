@@ -1,4 +1,4 @@
-//! `DatalibContact`: a person as one source describes them — a Slack
+//! `NormalizedContact`: a person as one source describes them — a Slack
 //! user, a vCard, a LinkedIn connection, a contact someone made in the
 //! contacts app. Many describe the same person; `source_id` tells them
 //! apart. This crate is only the shape, so anything can take it: the
@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use strum::{EnumString, IntoStaticStr, VariantArray};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DatalibContact {
+pub struct NormalizedContact {
     /// Who describes the person: a source's group id, or the contacts app.
     pub source_id: String,
     /// That source's own id for them: a vCard UID, a Slack user id, a
@@ -55,7 +55,7 @@ pub struct Seen {
     pub last_at: Option<String>,
 }
 
-impl DatalibContact {
+impl NormalizedContact {
     pub fn new(source_id: impl Into<String>, key: impl Into<String>, kind: ContactKind) -> Self {
         Self {
             source_id: source_id.into(),

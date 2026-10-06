@@ -24,7 +24,7 @@ import { decorateRemoteMedia, type RemoteContext, type RemoteRef } from "./remot
 import {
   copyWithHandles,
   decorateHandles,
-  type DatalibContact,
+  type NormalizedContact,
   type Who,
   chipMenu,
   copyText,
@@ -146,7 +146,7 @@ watch(
 type ChipTarget = {
   handle: string;
   shownAs: string;
-  resolved: DatalibContact | null;
+  resolved: NormalizedContact | null;
   x: number;
   y: number;
 };

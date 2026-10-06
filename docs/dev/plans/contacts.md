@@ -2,7 +2,7 @@
 
 *Proposal (2026-10-01). Phases 1 to 3 are built, and what the tree
 does is [`../contacts.md`](../contacts.md): handles, each source's
-account of a person, the contacts app's store and routes, chips. This
+record of a person, the contacts app's store and routes, chips. This
 plan keeps only what is not built yet. Facts about the tree it cites
 were read when each section was written; check one before relying on
 it.*
@@ -20,7 +20,7 @@ hold here. One more:
 
 | word | means |
 |---|---|
-| **address-book card** | a record the `contacts` *provider* mirrors from CardDAV or a `.vcf`: upstream data, like a Slack profile, and so an account, not a contact. See [The code name](#the-code-name). |
+| **address-book card** | a record the `contacts` *provider* mirrors from CardDAV or a `.vcf`: upstream data, like a Slack profile, and so a source contact, not a contact. See [The code name](#the-code-name). |
 
 ## Handle kinds not made yet
 
@@ -30,7 +30,7 @@ hold here. One more:
 | `linkedin` | the profile URL | LinkedIn |
 | `lightroom-face` | the face tag's name | later |
 
-A new kind is not a rules change; the reference lists the six places
+A new kind is not a rules change; the reference lists the places
 one touches (§"Changing the rules"). Phone numbers written without a
 country code have no handle today; giving them one needs a default
 region, a setting of the applet that the render reads through the
@@ -226,7 +226,7 @@ measurement to ask for.
 ## Order of work
 
 Phases 1 to 3 (handles end to end, the store and its applet and chips,
-`DatalibContact` and each source's account) are built, but for the two
+`NormalizedContact` and the source contacts) are built, but for the two
 pieces of phase 1 above: `row_handles`, and mentions outside Slack.
 
 4. **Managing contacts.** The contact card, merge, undo, groups and

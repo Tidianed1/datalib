@@ -338,7 +338,7 @@ backup, and expect a re-key when you do:
    on every bucket whose id is not the chat's own — a period of a chat,
    a subagent's transcript. For contact-common providers,
    `ContactRenderProfile::contact_entity_kind` and
-   `NormalizedContact::{external_id, upstream_account}`.
+   `ContactDoc::upstream_account` (the external id is the contact's `key`).
 3. Thread `source_id` — the render's `ctx.name` — to wherever the ids
    are minted; a bucket key the driver hands back is the raw key, so
    a parse that narrows by it maps the id back (beeper, chatgpt,

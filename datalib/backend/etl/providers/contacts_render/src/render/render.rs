@@ -1,4 +1,4 @@
-//! Map parsed vCards into `DatalibContact`s and hand them to the shared
+//! Map parsed vCards into `NormalizedContact`s and hand them to the shared
 //! [`datalib_etl_contact_common`] renderer.
 
 use std::collections::HashMap;
@@ -6,7 +6,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use datalib_contact_schema::{ContactHandle, ContactKind, DatalibContact, Detail, Photo};
+use datalib_contact_schema::{ContactHandle, ContactKind, Detail, NormalizedContact, Photo};
 use datalib_etl::progress::Progress;
 use datalib_etl_contact_common::{render_all as cc_render_all, ContactDoc, ContactRenderProfile};
 use datalib_etl_render::grid_index::RenderedMarkdown;
@@ -140,7 +140,7 @@ fn normalize(
     } else {
         ContactKind::Person
     };
-    let mut person = DatalibContact::new(source_id, id.natural_key.clone(), kind);
+    let mut person = NormalizedContact::new(source_id, id.natural_key.clone(), kind);
     let mut inputs = contact.inputs.clone();
     // The group's name is on this page, and its card is where the
     // membership lives: a member added or dropped re-renders this card.

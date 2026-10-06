@@ -129,7 +129,7 @@ The rules stay pure (`chipLook`, unit-tested); only the decorate pass
 touches a DOM. The look is the one in `documentBody.css` today, moved
 to a shared `chip.css` so the grid draws the same thing.
 
-**Icons come from the resolver.** `DatalibContact` keeps its
+**Icons come from the resolver.** `NormalizedContact` keeps its
 `photo: Option<Photo>` (an inline image or a remote URL, as the source
 had it) and gains `photo_url: Option<String>` beside it: a URL the app
 serves, app-relative, which the chip and the hover card lead with. The
@@ -303,7 +303,7 @@ out here over the frame, as `ChatBody.ce.vue` does now.
    the identity Author column; the identity formatter through
    `chipLook`; visible-page resolution; menu and double-click in a
    cell; `copyRows`. cards.md's typed-cells section updated.
-5. **Photos.** `photo_url` on `DatalibContact`; the contacts applet's
+5. **Photos.** `photo_url` on `NormalizedContact`; the contacts applet's
    photo route; the index's asset route for source avatars. The UI half
    (the chip and the hover card lead with `photo_url` when it is there)
    is built; the store, the routes and the field are with the contacts
