@@ -1,6 +1,7 @@
 //! `datalib-applet datalib_contacts` — the contacts app: the one writer of
 //! `datalib_curated/datalib_contacts/`, serving what a chip needs to resolve a
-//! handle and what its popover needs to create or link a contact.
+//! handle, what its popover needs to create or link a contact, and the
+//! photo a person put on one.
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -8,8 +9,9 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use axum::{
+    body::Bytes,
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{header, HeaderMap, StatusCode},
     middleware,
     response::{IntoResponse, Json, Response},
     routing::{get, post},
@@ -57,6 +59,10 @@ pub fn serve(port: u16) -> Result<()> {
             .route("/unlink", post(unlink))
             .route("/stopped_working", post(stopped_working))
             .route("/rename", post(rename))
+            .route(
+                "/photo/{contact_id}",
+                get(photo).put(put_photo).delete(delete_photo),
+            )
             .route("/health", get(|| async { Json(json!({"ok": true})) }))
             .with_state(store)
             .layer(middleware::from_fn_with_state(
@@ -89,6 +95,8 @@ fn refused(e: anyhow::Error) -> ApiError {
         "needs a name",
         "is not a date",
         "no contact",
+        "is not a photo",
+        "the photo is",
     ]
     .iter()
     .any(|m| msg.contains(m));
@@ -237,6 +245,53 @@ async fn stopped_working(
         .await
         .map_err(refused)?;
     Ok(Json(json!({ "found": found })))
+}
+
+/// The photo itself, with its type, for an `<img>`.
+async fn photo(
+    State(store): AppState,
+    Path(contact_id): Path<String>,
+) -> Result<Response, ApiError> {
+    match store.photo(&contact_id).await.map_err(refused)? {
+        Some((content_type, bytes)) => Ok((
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, content_type)],
+            bytes,
+        )
+            .into_response()),
+        None => Err(ApiError(
+            StatusCode::NOT_FOUND,
+            format!("no photo for {contact_id}"),
+        )),
+    }
+}
+
+/// The body is the image; its `Content-Type` says what kind.
+async fn put_photo(
+    State(store): AppState,
+    Path(contact_id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    store
+        .set_photo(&contact_id, content_type, &body)
+        .await
+        .map_err(refused)?;
+    Ok(Json(
+        json!({ "photo_url": datalib_contacts::photo_url(&contact_id) }),
+    ))
+}
+
+async fn delete_photo(
+    State(store): AppState,
+    Path(contact_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let had = store.clear_photo(&contact_id).await.map_err(refused)?;
+    Ok(Json(json!({ "had_photo": had })))
 }
 
 #[derive(Deserialize)]
