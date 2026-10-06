@@ -410,9 +410,11 @@ export function useSourcesCard(ctx: CardCtx) {
   }
 
   /// Double-clicking a status opens the log it came from; a problems count,
-  /// the problems; a queue or an ETA, the sync dashboard.
+  /// the problems, or on System, whose count is the config's warnings, the
+  /// config; a queue or an ETA, the sync dashboard.
   function onCellDoubleClicked(data: Row, field: string) {
-    if (field === "problems") actions.openProblems(data, `${UNIFIED_INDEX}/problems`);
+    if (field === "problems" && data.kind === "system") openConfig();
+    else if (field === "problems") actions.openProblems(data, `${UNIFIED_INDEX}/problems`);
     else if (field === "status") void actions.openStepLog(data);
     else if (field === "queue" || field === "eta") actions.openDashboard(data);
   }

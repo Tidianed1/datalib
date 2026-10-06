@@ -106,7 +106,7 @@ impl Phase {
 pub fn columns() -> Vec<ColumnSpec> {
     vec![
         ColumnSpec::new("name", "Name", ColumnType::Identity)
-            .describe("What the config calls it, led by the mark of the service a source mirrors or the glyph of what a step does; its id — for a group, the folder under the data root — is on hover. After it, in red and yellow, the errors (records dropped) and warnings (records kept with something lost) its store holds as of its last run; double-click them for the list.")
+            .describe("What the config calls it, led by the mark of the service a source mirrors or the glyph of what a step does; its id — for a group, the folder under the data root — is on hover. After it, in red and yellow, the errors (records dropped) and warnings (records kept with something lost) its store holds as of its last run; double-click them for the list. On System, the yellow number is the config's warnings; double-click it for the config.")
             .editable()
             .badges("problems"),
         ColumnSpec::new("actions", "Actions", ColumnType::Actions)
@@ -179,7 +179,7 @@ pub struct ManageRow {
     pub eta: Quantity,
     /// The errors and warnings its store holds, drawn after the name —
     /// see `manage::problems`. A group shows its render step's, the
-    /// union for the source.
+    /// union for the source; the System row, the config's warnings.
     pub problems: Vec<Chip>,
     /// The items its store holds, as of the run it last counted in,
     /// with the series behind the number — see `manage::items`. No
@@ -617,7 +617,7 @@ impl Snapshot<'_> {
             reveal_path: on_disk.map(|t| t.abs.clone()),
             raw_store_path: None,
         };
-        let group = row(
+        let mut group = row(
             dir,
             vec![dir.to_string()],
             Identity {
@@ -673,6 +673,7 @@ impl Snapshot<'_> {
             ),
             log_disk,
         );
+        group.problems = problems::config_warning_chips(self.diagnostics);
         [group, logs]
     }
 }
