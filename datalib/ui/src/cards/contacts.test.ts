@@ -7,6 +7,7 @@ import {
   chipLook,
   chipMenu,
   copyText,
+  drawChip,
   hoverCard,
   isAbsent,
   type DatalibContact,
@@ -147,6 +148,40 @@ describe("chipMenu", () => {
     );
     const mine = contact("datalib_contacts", "Riker", [[TEL, null]]);
     expect(searchQueryFor(TEL, "+1 555", { mine, accounts: [] })).toBe("author:Riker");
+  });
+});
+
+describe("a photo", () => {
+  /// Your contact's photo leads; without one, the best a source gave; the
+  /// identifier still copies, the picture does not.
+  it("leads the chip and the hover card when the resolver serves one", () => {
+    const withPhoto = (c: DatalibContact, url: string | null) => ({ ...c, photo_url: url });
+    const mine = withPhoto(
+      contact("datalib_contacts", "Will Riker", [[TEL, null]]),
+      "/applet/datalib_contacts/photo/c1",
+    );
+    const slack = withPhoto(
+      contact("slack", "Riker", [[TEL, null]]),
+      "/applet/unified_index/asset/u/blobs/r.png",
+    );
+    expect(chipLook(TEL, "+1 555", { mine, accounts: [slack] }, true).photo).toBe(
+      "/applet/datalib_contacts/photo/c1",
+    );
+    expect(chipLook(TEL, "+1 555", { mine: null, accounts: [slack] }, true).photo).toBe(
+      "/applet/unified_index/asset/u/blobs/r.png",
+    );
+    expect(chipLook(TEL, "+1 555", NOBODY, true).photo).toBeNull();
+    expect(hoverCard(TEL, "+1 555", { mine, accounts: [] }, true).photo).toBe(
+      "/applet/datalib_contacts/photo/c1",
+    );
+    const el = dom(`<a class="chip" data-handle="${TEL}">+1 555</a>`)
+      .firstElementChild as HTMLElement;
+    drawChip(el, chipLook(TEL, "+1 555", { mine, accounts: [] }, true));
+    const lead = el.firstElementChild as HTMLImageElement;
+    expect(lead.className).toBe("handle-photo");
+    expect(lead.getAttribute("src")).toBe("/applet/datalib_contacts/photo/c1");
+    expect(el.querySelector(".handle-initial")).toBeNull();
+    expect(el.textContent).toBe("Will Riker");
   });
 });
 
