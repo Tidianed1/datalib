@@ -9,6 +9,7 @@
 // unit-tested; only `decorateHandles` touches a DOM.
 
 import { iconUrl } from "@/config/icons";
+import { filterToken } from "@/grid/query";
 import { uriFromHandle } from "./chipLinks";
 import { pushToast } from "@/toasts";
 import { UNIFIED_INDEX } from "@/api";
@@ -127,6 +128,47 @@ export function chipLook(handle: string, shownAs: string, who: Who, canLink: boo
     initial: [...name.trim()][0]?.toUpperCase() ?? "?",
     icon: null,
   };
+}
+
+/** What a right-click on a chip offers. An entry is an *id* the surface
+ *  binds a handler to — the document view and a grid cell draw the same
+ *  menu and act on it their own way (docs/dev/plans/chips.md § Clicks). */
+export type ChipMenuId = "copy-name" | "copy-id" | "copy-both" | "search" | "edit";
+export type ChipMenuEntry = { id: ChipMenuId; label: string; separator?: boolean };
+
+/** The menu for one chip: copy its name, its identifier, or both; find
+ *  everything from this person; and, with a contacts app, link or edit
+ *  the link. `canLink` is whether a contacts app is there to link with. */
+export function chipMenu(
+  handle: string,
+  shownAs: string,
+  who: Who,
+  canLink: boolean,
+): ChipMenuEntry[] {
+  const { text: name } = chipLook(handle, shownAs, who, canLink);
+  const value = handleValue(handle);
+  const named = name !== value;
+  const out: ChipMenuEntry[] = [];
+  if (named) out.push({ id: "copy-name", label: `Copy “${name}”` });
+  out.push({ id: "copy-id", label: `Copy ${value}` });
+  if (named) out.push({ id: "copy-both", label: `Copy “${copyText(handle, name)}”` });
+  out.push({ id: "search", label: `Everything from ${name}`, separator: true });
+  if (canLink) {
+    out.push({
+      id: "edit",
+      label: who.mine ? "Edit contact link…" : "Link to a contact…",
+      separator: true,
+    });
+  }
+  return out;
+}
+
+/** The search that finds everything from this person. The grid's Author
+ *  column is the author as shown, so the term is the name the chip shows;
+ *  once `grid_rows` carries `author_handle` (chips.md, step 4) this
+ *  becomes a term on the handle itself. */
+export function searchQueryFor(handle: string, shownAs: string, who: Who): string {
+  return filterToken("author", chipLook(handle, shownAs, who, false).text, false);
 }
 
 export type HoverCard = {
