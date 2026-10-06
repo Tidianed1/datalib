@@ -959,6 +959,9 @@ export type Identity = {
   label: string;
   icon?: string | null;
   detail?: string | null;
+  /// The group or step this names, as a chip's URI (`datalib:group/slack`),
+  /// when the viewer should draw it as a chip it can resolve and open.
+  entity?: string | null;
 };
 
 export type Sample = { at: string; value: number };

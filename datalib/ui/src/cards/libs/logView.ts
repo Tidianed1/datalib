@@ -10,20 +10,10 @@ import tableGridCss from "../tableGrid.css?inline";
 import slickCss from "@slickgrid-universal/common/dist/styles/css/slickgrid-theme-default.css?inline";
 import { vueCard } from "../vueCard";
 import type { CardRender } from "../types";
+import type { LogViewOpts } from "../cardSources";
 
-export type LogViewOpts = {
-  run?: string | null;
-  step?: string | null;
-  launch?: string | null;
-  q?: string;
-  jumpToEnd?: boolean;
-};
+export { logSource, type LogViewOpts } from "../cardSources";
 
 export function logView(opts: LogViewOpts = {}): CardRender {
   return vueCard(LogCard, { opts }, { styleSources: [slickCss, tableGridCss, RunLogPanel] });
-}
-
-/// The source of a log card, for whoever opens one.
-export function logSource(opts: LogViewOpts): string {
-  return `logView(${JSON.stringify(opts)})`;
 }

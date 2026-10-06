@@ -35,7 +35,15 @@ import type {
 } from "@slickgrid-universal/common";
 import { copyText, typedColumns, groupTitle } from "./typedColumns";
 import type { Identity } from "@/api";
-import { handleFromUri } from "./chipLinks";
+import { entityFromUri, handleFromUri } from "./chipLinks";
+import {
+  browseQuery,
+  entities,
+  entityCardSource,
+  entityCopyText,
+  entityMenu,
+  type EntityMenuEntry,
+} from "./entities";
 import {
   NOBODY,
   canLinkHandles,
@@ -215,12 +223,15 @@ function refreshQmdState() {
 // document and grid asks (docs/dev/plans/chips.md § "One resolver"): a
 // cell that draws a handle asks as it draws, and when an answer changes —
 // it lands, or a link made anywhere forgets it — the cells are drawn again.
+// The Source cells are group chips, answered by `entities` the same way.
 const AUTHOR_COLUMN = "author_ref";
-const stopPeople = people.subscribe(() => refreshAuthorCells());
+const SOURCE_COLUMN = "source_ref";
+const stopPeople = people.subscribe(() => refreshCells(AUTHOR_COLUMN));
+const stopEntities = entities.subscribe(() => refreshCells(SOURCE_COLUMN));
 
-function refreshAuthorCells() {
+function refreshCells(columnId: string) {
   const grid = vueGrid?.slickGrid;
-  const column = grid?.getColumnIndex(AUTHOR_COLUMN);
+  const column = grid?.getColumnIndex(columnId);
   if (!grid || column == null || column < 0) return;
   const { top, bottom } = grid.getRenderedRange();
   for (let row = top; row <= bottom; row++) grid.updateCell(row, column);
@@ -579,6 +590,7 @@ function copyCell(column: Column<Row>, row: Row): string {
   const spec = columns.value.find((c) => c.field === column.id);
   if (spec?.type === "identity") {
     const v = row[spec.field] as Identity | null | undefined;
+    if (v?.entity) return entityCopyText(v.entity, v.label);
     const handle = v ? handleFromUri(v.id) : null;
     if (handle && v) return copyHandleText(handle, v.label);
   }
@@ -1153,6 +1165,7 @@ onMounted(() => {
 });
 onBeforeUnmount(() => unsubscribeLive?.());
 onBeforeUnmount(stopPeople);
+onBeforeUnmount(stopEntities);
 
 function docSource(md: string, anchor: string | null): string {
   const args = [md, anchor].map((a) => JSON.stringify(a)).join(", ");
@@ -1321,7 +1334,11 @@ watch(
     const typed = typedColumns<Row>(specs, {
       overrides: columnOverrides,
       groupable: true,
-      chips: { who: (h) => people.lookup(h), canLink: canLinkHandles },
+      chips: {
+        who: (h) => people.lookup(h),
+        canLink: canLinkHandles,
+        entity: (uri) => entities.lookup(uri),
+      },
     });
     const at = typed.findIndex((c) => c.id === "project") + 1;
     const own = qmd() ? extraColumns : [];
@@ -1390,6 +1407,8 @@ type MenuScope = {
   /// The chip in the cell under the click, when the cell is an Author
   /// with a handle: the same entries a document's chip offers.
   chip: { handle: string; name: string; entries: ChipMenuEntry[] } | null;
+  /// The group or step chip in the cell under the click: its entries.
+  entity: { uri: string; name: string; entries: EntityMenuEntry[] } | null;
 };
 
 const linkOf = (r: Row): string => r.source_url || "";
@@ -1447,12 +1466,21 @@ function menuScope(args: MenuFromCellCallbackArgs): MenuScope {
         };
       })()
     : null;
+  const entityEl = el?.querySelector<HTMLElement>("a.chip[data-entity]") ?? null;
+  const entity = entityEl
+    ? (() => {
+        const uri = entityEl.dataset.entity ?? "";
+        const name = entityEl.dataset.label ?? entityEl.dataset.shownAs ?? uri;
+        return { uri, name, entries: entityMenu(uri, name) };
+      })()
+    : null;
   return {
     anchor,
     cell,
     copy,
     targets,
     chip,
+    entity,
     filter: filterCtx ? keepExcludeEntries(filterCtx) : [],
     notion: notionCtx ? keepExcludeEntries(notionCtx) : [],
     links: {
@@ -1499,6 +1527,15 @@ function openFeedback(surface: "grid_cell" | "grid_row", m: MenuScope) {
 // The right-click menu, ahead of the grid's own entries (the grouping
 // commands). Each entry decides for itself whether the
 // cell under the click gives it anything to do.
+const entityEntry = (id: EntityMenuEntry["id"], run: (m: MenuScope) => void) =>
+  entry(`entity-${id}`, (m) => m.entity?.entries.find((e) => e.id === id)?.label ?? null, run);
+
+/// A group's dashboard or a step's log, beside this card.
+function openEntity(uri: string) {
+  const source = entityCardSource(uri);
+  if (source) props.ctx.host.openCards(source);
+}
+
 const chipEntry = (id: ChipMenuEntry["id"], run: (m: MenuScope) => void) =>
   entry(`chip-${id}`, (m) => m.chip?.entries.find((e) => e.id === id)?.label ?? null, run);
 
@@ -1510,6 +1547,21 @@ const menuItems: (MenuCommandItem | "divider")[] = [
     appendFilterToQuery(filterToken("author_handle", m.chip!.handle, false)),
   ),
   dividerAfter((m) => m.chip !== null),
+  entityEntry("copy-name", (m) => void copyToClipboard(m.entity!.name)),
+  entityEntry(
+    "copy-id",
+    (m) => void copyToClipboard(entityFromUri(m.entity!.uri)?.id ?? m.entity!.uri),
+  ),
+  entityEntry(
+    "copy-both",
+    (m) => void copyToClipboard(entityCopyText(m.entity!.uri, m.entity!.name)),
+  ),
+  entityEntry("open", (m) => openEntity(m.entity!.uri)),
+  entityEntry("browse", (m) => {
+    const q = browseQuery(m.entity!.uri);
+    if (q) query.value = q;
+  }),
+  dividerAfter((m) => m.entity !== null),
   entry(
     "keep",
     (m) => m.filter[0]?.label ?? null,
@@ -1867,7 +1919,7 @@ function onSelectedRowsChanged(_e: SlickEventData, args: OnSelectedRowsChangedEv
 /// The chip under a pointer event in a cell, if any.
 function chipAt(e: SlickEventData): HTMLElement | null {
   const target = e.getNativeEvent<MouseEvent>()?.target as Element | null | undefined;
-  return target?.closest?.<HTMLElement>("a.chip[data-handle]") ?? null;
+  return target?.closest?.<HTMLElement>("a.chip[data-handle], a.chip[data-entity]") ?? null;
 }
 
 function onClick(e: SlickEventData, args: OnClickEventArgs) {
@@ -1889,7 +1941,13 @@ function onClick(e: SlickEventData, args: OnClickEventArgs) {
 function onDblClick(e: SlickEventData, args: OnDblClickEventArgs) {
   // Double-click on a chip is everything from that person: the grid,
   // narrowed to their handle (docs/dev/plans/chips.md § Clicks).
+  // On a group or step chip, it opens that group's dashboard or that
+  // step's log.
   const chip = chipAt(e);
+  if (chip?.dataset.entity) {
+    openEntity(chip.dataset.entity);
+    return;
+  }
   if (chip) {
     appendFilterToQuery(filterToken("author_handle", chip.dataset.handle ?? "", false));
     return;

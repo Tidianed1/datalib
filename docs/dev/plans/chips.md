@@ -2,8 +2,9 @@
 
 *Decided 2026-10-06. For people it is built, and what the tree does
 is [`../contacts.md`](../contacts.md), whose §"Not built" says what is
-left. Not built here: groups and steps as chips (§"In a grid", the
-Manage rows) and system events. The facts about the tree were read on
+left. A group is a chip in the search and problems grids' Source
+column (§"In a grid"). Not built here: group and step chips in
+documents and in the run log, and system events. The facts about the tree were read on
 2026-10-06 and are cited by path; check one before relying on it.*
 
 A **chip** is how datalib shows an entity inline: a person, a source
@@ -168,17 +169,31 @@ changes nothing in `/people`.
 
 The `identity` cell type (`{id, label, icon, detail}`,
 [`cards.md`](../cards.md) §"typed cells") is a chip in all but name.
-It becomes one: **`Identity.id` is the entity URI**, and the identity
-formatter in `ui/src/cards/typedColumns.ts` draws through the same
-`chipLook` as a document.
+It becomes one, two ways. A person's identity (the Author column)
+carries the handle as a URI in `id`. A group's or a step's carries it
+in a field of its own, **`Identity.entity`** (`datalib:group/slack`),
+beside a bare `id`: the document view keys a source's remote-media
+setting on the Source cell's bare id, and stored settings would stop
+matching if it moved. The identity formatter in
+`ui/src/cards/typedColumns.ts` draws either through the same
+`drawChip` as a document.
 
-- The Manage rows (`http/src/manage/mod.rs`) send `datalib:group/<id>`
-  and `datalib:step/<group>/<function>` where they send bare ids
-  today. This waits for a resolver for groups and steps to exist
-  (`datalib-http` already serves the run store); the first grid PR did
-  people only, and checks what reads `Identity.id` in the UI before
-  changing it — a row key that happens to equal the id is a row key,
-  not an identity.
+- The `unified_index` applet sets `entity` on the Source cell of any
+  source the config declares (`columns.rs::Sources::identity`); the
+  search and problems grids draw it as a group chip. `datalib-http`
+  answers what each named group or step is now, in a batch:
+  `POST /api/entities` with `{entities: [uri]}` gives each one's label
+  (a step's under its group's, "Work Slack · Download"), mark,
+  detail and status (`manage::post_entities`). `entities` in
+  `ui/src/cards/entities.ts` is the resolver over it.
+- A group chip's double-click opens the group's sync dashboard and a
+  step chip's opens the step's log; the menu copies the name, the id or
+  both, opens it, and for a group browses its documents. A status worth
+  noticing (running, queued, failed, blocked, interrupted) is a dot
+  after the name; the words are on hover.
+- The Manage table's Name cell is not a chip: the row is the group or
+  step, its double-click renames, and its own menu already does all a
+  chip's would.
 - The search grid's Author column changes from `text` to `identity`.
   `grid_rows` gains `author_handle`, following the checklist in
   [`grid_rows.md`](../grid_rows.md) §"Adding a column"; the applet
@@ -284,7 +299,7 @@ out here over the frame, as `ChatBody.ce.vue` does now.
    events as each provider gets a handle for them.
 3. **Clicks in the viewer.** `chipMenu`; right-click in `DocCard`;
    double-click; the click handler's `detail` guard.
-4. **The grid.** `Identity.id` as a URI on Manage; `author_handle` and
+4. **The grid.** A group in the Source column (`Identity.entity`); `author_handle` and
    the identity Author column; the identity formatter through
    `chipLook`; visible-page resolution; menu and double-click in a
    cell; `copyRows`. cards.md's typed-cells section updated.
