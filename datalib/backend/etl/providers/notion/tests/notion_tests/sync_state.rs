@@ -33,7 +33,8 @@ async fn a_failed_comments_listing_survives_the_page_being_written_again() {
     );
 
     // Upstream now answers; this run is stopped at the request for the
-    // comments, after the page and its body have been written.
+    // comments, after the page has been written again (its 404 body is
+    // held from the first run).
     serve_comment_list(&tape, BRIDGE, json!([comment("c1", BRIDGE, None)]));
     let stop = StopFlag::new();
     let fast = std::time::Duration::from_millis(1);
@@ -47,7 +48,7 @@ async fn a_failed_comments_listing_survives_the_page_being_written_again() {
     std::env::set_var(datalib_etl::http::PLAYBACK_ENV, &tape);
     let db = RawDb::open(&store).await.unwrap();
     let ran = interrupt::run(
-        Some(3),
+        Some(2),
         How::Stop,
         stop.clone(),
         retry::scope(
@@ -63,10 +64,7 @@ async fn a_failed_comments_listing_survives_the_page_being_written_again() {
         ),
     )
     .await;
-    assert_eq!(
-        ran.requests, 3,
-        "the page, its body, and the cut at its comments"
-    );
+    assert_eq!(ran.requests, 2, "the page, and the cut at its comments");
     ran.finished
         .unwrap()
         .expect("a stopped run is a shorter run");
@@ -109,7 +107,7 @@ async fn max_pages_bounds_the_listing_and_leaves_the_rest_for_the_next_run() {
     assert_eq!(stored_pages(&store).await, vec![BRIDGE.to_string()]);
     assert_eq!(
         problems(&store).await,
-        vec![row("listing:search", "warning")],
+        vec![row("listing:search", "error")],
         "a listing cut off at max_pages says so"
     );
 
