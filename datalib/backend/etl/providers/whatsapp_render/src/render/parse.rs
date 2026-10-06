@@ -145,7 +145,7 @@ async fn parse_async(
             display,
             last_read_rowid: r.get("last_read_message_row_id"),
             items_by_period: HashMap::new(),
-            author_jids: Vec::new(),
+            person_jids: Vec::new(),
             inputs,
         });
     }
@@ -313,13 +313,20 @@ async fn parse_async(
         if let Some(i) = sender_jid_row_id {
             inputs.read("jid", &i.to_string());
         }
-        let sender_jid = sender_jid_row_id.and_then(|i| jids.get(&i));
+        // The author's rule: the account's own reaction names nobody, and
+        // a 1:1 chat leaves the sender empty, as it does on a message, so
+        // the chat JID is who reacted (a group's maps to no handle).
+        let reactor: Option<String> = (from_me != 1).then(|| {
+            sender_jid_row_id
+                .and_then(|i| jids.get(&i))
+                .map_or(chat_jid, String::as_str)
+                .to_string()
+        });
         let emoji: Option<String> = r.get("reaction");
         let timestamp: Option<i64> = r.get("timestamp");
-        let reactor_display = match sender_jid {
+        let reactor_display = match reactor.as_deref() {
             Some(j) => names.label(j, inputs),
-            None if from_me == 1 => "Me".to_string(),
-            None => "?".to_string(),
+            None => "Me".to_string(),
         };
         // A NULL `timestamp` column is "we don't know when", which is a
         // null `created_at` — not 1970.
@@ -329,12 +336,18 @@ async fn parse_async(
             .or_default()
             .push(NormalizedReaction {
                 reaction_uuid: id.uuid,
-                reactor_handle: sender_jid.and_then(|j| names.handle(j)),
+                reactor_handle: reactor.as_deref().and_then(|j| names.handle(j)),
                 reactor_display,
                 source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
                 emoji: emoji.unwrap_or_else(|| "?".to_string()),
                 date_ms: timestamp,
             });
+        if let Some(j) = reactor {
+            let people = &mut chats[chat_idx].person_jids;
+            if !people.contains(&j) {
+                people.push(j);
+            }
+        }
     }
 
     // 5) Walk messages, bucket by period, attach media + reactions.
@@ -351,8 +364,8 @@ async fn parse_async(
         if key.from_me == 0 {
             // 1:1 incoming: the chat JID is the sender, by definition.
             let author = sender_jid.clone().unwrap_or_else(|| key.chat_jid.clone());
-            if !chats[idx].author_jids.contains(&author) {
-                chats[idx].author_jids.push(author);
+            if !chats[idx].person_jids.contains(&author) {
+                chats[idx].person_jids.push(author);
             }
         }
         let rowid: i64 = r.get("_id");
@@ -408,7 +421,7 @@ async fn parse_async(
         out.push(NormalizedChat {
             // Each author's address-book entry, read the way their label was.
             contacts: ch
-                .author_jids
+                .person_jids
                 .iter()
                 .filter_map(|j| names.contact(j, source_id))
                 .collect(),
@@ -552,9 +565,9 @@ struct ChatHeader {
     display: String,
     last_read_rowid: Option<i64>,
     items_by_period: HashMap<String, Vec<NormalizedChatItem>>,
-    /// Who wrote in the chat, in the order they first did; the account
-    /// itself is not among them.
-    author_jids: Vec<String>,
+    /// Who wrote or reacted in the chat, in the order they first did;
+    /// the account itself is not among them.
+    person_jids: Vec<String>,
     inputs: Inputs,
 }
 
@@ -675,8 +688,17 @@ impl JidNames {
     /// or no entry. The reads are the ones [`JidNames::label`] declares.
     fn contact(&self, jid: &str, source_id: &str) -> Option<DatalibContact> {
         let handle = self.handle(jid)?;
-        let phone = self.phone_jid.get(jid).map_or(jid, String::as_str);
-        let rows = self.book.get(phone)?;
+        // Under the jid and, for a linked id, its number, as `label` reads.
+        let phone = self.phone_jid.get(jid).map(String::as_str);
+        let rows: Vec<&serde_json::Value> = [Some(jid), phone.filter(|p| *p != jid)]
+            .into_iter()
+            .flatten()
+            .filter_map(|j| self.book.get(j))
+            .flatten()
+            .collect();
+        if rows.is_empty() {
+            return None;
+        }
         let field = |row: &serde_json::Value, name: &str| {
             row.get(name)?
                 .as_str()
@@ -692,10 +714,10 @@ impl JidNames {
                 }
             }
         };
-        for row in rows {
+        for row in &rows {
             push_name(field(row, "display_name"));
         }
-        for row in rows {
+        for row in &rows {
             push_name(
                 match (field(row, "given_name"), field(row, "family_name")) {
                     (Some(g), Some(f)) => Some(format!("{g} {f}")),
@@ -703,7 +725,7 @@ impl JidNames {
                 },
             );
         }
-        for row in rows {
+        for row in &rows {
             push_name(field(row, "wa_name"));
         }
         c.handles.push(ContactHandle::of(handle));
@@ -793,12 +815,21 @@ mod jid_names_tests {
             "bridge-crew@g.us".into(),
             vec![serde_json::json!({"display_name": "Bridge"})],
         );
+        // A row under the linked id itself counts as well as the number's.
+        names
+            .book
+            .insert("8@lid".into(), vec![serde_json::json!({"wa_name": "Bill"})]);
         let c = names.contact("8@lid", "wa").expect("through the linked id");
         assert_eq!(c.key, "tel:+17015550102");
         assert_eq!(
             c.names,
-            ["William Riker", "Will Riker (Starfleet)", "Number One"],
-            "every distinct name once, the address book's first"
+            [
+                "William Riker",
+                "Will Riker (Starfleet)",
+                "Bill",
+                "Number One"
+            ],
+            "every distinct name once, the address book's first, from both jids"
         );
         assert_eq!(c.handles.len(), 1);
         assert_eq!(c.handles[0].handle, Handle::tel("+17015550102"));

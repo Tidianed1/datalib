@@ -1068,6 +1068,62 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ],
             "WhatsApp's address book, as each chat's contacts",
         )
+        # What only the provider's account says: an address-book entry's
+        # company and title (the baseline has names and counts alone),
+        # and a name from given and family name. Troi only reacts, so she
+        # reaches the index as a reactor (no items written) under the
+        # account her entry gives.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT DISTINCT h.handle || '|' "
+                "|| coalesce(json_extract(c.contact_json, '$.org'), '') || '|' "
+                "|| coalesce(json_extract(c.contact_json, '$.title'), '') "
+                "FROM source_contact_handles h JOIN source_contacts c "
+                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
+                "JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
+                "WHERE m.source_id = 'whatsapp' AND h.handle = 'tel:+17015550103';",
+            ),
+            ["tel:+17015550103|Starfleet|Second Officer"],
+            "Data's company and title, from the address book alone",
+        )
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT h.handle || '|' || json_extract(c.contact_json, '$.names') || '|' "
+                "|| json_extract(c.contact_json, '$.org') || '|' "
+                "|| json_extract(c.contact_json, '$.title') || '|' || c.seen_items "
+                "FROM source_contact_handles h JOIN source_contacts c "
+                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
+                "JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
+                "WHERE m.source_id = 'whatsapp' AND h.handle = 'tel:+17015550106';",
+            ),
+            ['tel:+17015550106|["Deanna Troi"]|Starfleet|Counselor|0'],
+            "a WhatsApp reactor who writes nothing, under her address-book entry",
+        )
+        # A 1:1 chat leaves an incoming reaction's sender empty, as it does
+        # a message's: the chat's person reacted. The account's own
+        # reaction names nobody.
+        riker_chat = self._markdown("whatsapp", "private word about Commander Data")
+        self.assertIn(
+            '🖖 [William Riker](tel:+17015550102 "William Riker (+17015550102)")',
+            riker_chat,
+            "a 1:1 reaction is the chat's person, as a chip",
+        )
+        self.assertIn("👍 Me</span>", riker_chat, "the account's own reaction is Me")
+        # A Slack reactor with no profile and no message: in the document
+        # all the same, under the id Slack gave, having written nothing.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT DISTINCT c.name || '|' || c.seen_items "
+                "FROM source_contact_handles h JOIN source_contacts c "
+                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
+                "WHERE h.handle = 'slack:T_NCC1701D/U_TROI';",
+            ),
+            ["U_TROI|0"],
+            "a Slack reactor who writes nothing",
+        )
         # A card's photo is written beside its page and the index holds
         # where the app serves it from, so a chip can draw it; a card
         # without one carries no URL. Only `Bridge.vcf`'s two cards have one.
