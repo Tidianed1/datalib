@@ -329,6 +329,7 @@ async fn parse_async(
             .or_default()
             .push(NormalizedReaction {
                 reaction_uuid: id.uuid,
+                reactor_handle: sender_jid.and_then(|j| names.handle(j)),
                 reactor_display,
                 source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
                 emoji: emoji.unwrap_or_else(|| "?".to_string()),

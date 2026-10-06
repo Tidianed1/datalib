@@ -1,6 +1,7 @@
 //! The people a chat document shows, as chat-common alone can describe
 //! them: each author handle, the names the provider showed it under, and
-//! how much it wrote. Every chat provider gets this with no code of its
+//! how much it wrote; whom a message went to and who reacted, having
+//! written nothing. Every chat provider gets this with no code of its
 //! own; a provider that knows more says so in its own `DatalibContact`s.
 
 use std::collections::BTreeMap;
@@ -17,11 +18,20 @@ pub fn baseline_contacts(source_id: &str, items: &[NormalizedChatItem]) -> Vec<D
         last_ms: Option<i64>,
     }
     let mut by_handle: BTreeMap<&str, (&datalib_handle::Handle, Tally)> = BTreeMap::new();
-    // Whom an item was addressed to: in the document, but writing nothing.
-    for r in items.iter().flat_map(|i| &i.recipients) {
-        let Some(handle) = &r.handle else {
-            continue;
-        };
+    // Whom an item was addressed to, and who reacted to it: in the
+    // document, but writing nothing.
+    let named_only = items.iter().flat_map(|i| {
+        let recipients = i
+            .recipients
+            .iter()
+            .filter_map(|r| Some((r.handle.as_ref()?, &r.display)));
+        let reactors = i
+            .reactions
+            .iter()
+            .filter_map(|r| Some((r.reactor_handle.as_ref()?, &r.reactor_display)));
+        recipients.chain(reactors)
+    });
+    for (handle, display) in named_only {
         let (_, tally) = by_handle.entry(handle.as_str()).or_insert((
             handle,
             Tally {
@@ -30,7 +40,7 @@ pub fn baseline_contacts(source_id: &str, items: &[NormalizedChatItem]) -> Vec<D
                 last_ms: None,
             },
         ));
-        let name = name_without_handle(&r.display, handle);
+        let name = name_without_handle(display, handle);
         if !name.is_empty() && !name.eq_ignore_ascii_case(handle.value()) {
             match tally.names.iter_mut().find(|(n, _)| n == name) {
                 Some((_, count)) => *count += 1,
@@ -237,6 +247,40 @@ mod tests {
         assert_eq!(p.seen.as_ref().unwrap().items, 2);
         let r = got.iter().find(|c| c.key == "slack:T1/U_RIKER").unwrap();
         assert_eq!(r.names, ["Riker"], "no profile: the baseline as it was");
+    }
+
+    /// Someone who only reacted is in the document too, under the name
+    /// the provider showed for them, having written nothing.
+    #[test]
+    fn reactors_are_in_the_document_with_nothing_written() {
+        use crate::types::NormalizedReaction;
+        let picard = Handle::email("picard@enterprise.org").unwrap();
+        let worf = Handle::tel("+15550104040").unwrap();
+        let mut item = by(Some(&picard), "Jean-Luc Picard", 1);
+        let react = |handle: Option<&Handle>, who: &str| NormalizedReaction {
+            reaction_uuid: format!("r-{who}"),
+            reactor_handle: handle.cloned(),
+            reactor_display: who.to_string(),
+            emoji: "🫡".to_string(),
+            date_ms: Some(2),
+            source_ref: None,
+        };
+        item.reactions = vec![
+            react(Some(&worf), "Worf"),
+            react(Some(&picard), "Jean-Luc Picard"),
+            react(None, "Me"),
+        ];
+        let got = baseline_contacts("chat", &[item]);
+        assert_eq!(got.len(), 2, "a reaction with no handle names nobody");
+        let w = got.iter().find(|c| c.key == worf.as_str()).unwrap();
+        assert_eq!(w.names, ["Worf"]);
+        assert_eq!(w.seen.as_ref().unwrap().items, 0);
+        let p = got.iter().find(|c| c.key == picard.as_str()).unwrap();
+        assert_eq!(
+            p.seen.as_ref().unwrap().items,
+            1,
+            "a reaction is not an item written"
+        );
     }
 
     /// Whom a message went to is in the document too, having written
