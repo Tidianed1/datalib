@@ -34,7 +34,9 @@ use datalib_schema::providers::Provider;
 ///     Email — rather than the export's column names.
 /// v7: a post of several lines loses the quotes the export puts around
 ///     each line.
-pub const RENDER_VERSION: u32 = 7;
+/// v8: a connection's photo reaches the index as the URL the app serves
+///     it at.
+pub const RENDER_VERSION: u32 = 8;
 
 fn profile() -> RenderProfile {
     RenderProfile {
