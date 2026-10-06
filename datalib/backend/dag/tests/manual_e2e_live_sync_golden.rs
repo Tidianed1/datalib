@@ -245,7 +245,6 @@ fn is_storage_row(map: &serde_json::Map<String, Value>) -> bool {
 /// table. Applied in [`dump_store`], which knows the table name for
 /// certain — no shape-sniffing required.
 const TABLE_VOLATILE_KEYS: &[(&str, &[&str])] = &[
-    ("sync_scope_config", &["updated_at_utc"]),
     // The store's record of which build wrote it: the stamp is the wall
     // clock, and the `git_hash` row (redacted below, by key) is a new
     // commit on every bake. The versions and the schema hash stay.
@@ -1312,7 +1311,6 @@ const NON_CONTENT_TABLES: &[&str] = &[
     "_datalib_meta",
     "sync_runs",
     "sync_scope_state",
-    "sync_scope_config",
     "problems",
     "ingested_files",
     "scan_meta",

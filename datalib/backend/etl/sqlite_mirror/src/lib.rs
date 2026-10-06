@@ -18,6 +18,6 @@ pub mod plan;
 pub use ingest::{fetch, fetch_and_commit, FetchOptions};
 pub use mirror::{
     open_mirror, open_sqlite, run, run_or_report, snapshot, MirrorOptions, MirrorStats,
-    NothingToMirror, Snapshot, KEY_RULE_VERSION,
+    NothingToMirror, Snapshot,
 };
 pub use plan::{KeyOrigin, TableKind};

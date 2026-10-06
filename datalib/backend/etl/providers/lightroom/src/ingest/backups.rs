@@ -114,10 +114,6 @@ pub fn plan(entries: Vec<Entry>, ledger: &[Held]) -> Plan {
     out
 }
 
-pub fn newest(ledger: &[Held]) -> Option<&Held> {
-    ledger.iter().max_by_key(|h| h.taken_at)
-}
-
 /// `Ok(None)` for an entry with no catalog in it, which is not a backup.
 fn read_entry(entry: &Entry) -> Result<Option<Backup>, String> {
     let path = |f: &&ScannedFile| f.path.clone();

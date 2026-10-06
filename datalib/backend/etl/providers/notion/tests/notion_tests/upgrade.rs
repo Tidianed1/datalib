@@ -142,9 +142,17 @@ async fn a_store_from_before_the_sidecar_held_anything_opens_holding_what_it_had
     dr::upsert_scope_state(&pool, "workspace", EDITED)
         .await
         .unwrap();
-    datalib_etl::scope_config::store(&pool, "notion:download", &json!({"refresh_window_days": 0}))
+    // The table an older build declared, and its record.
+    sqlx::query("CREATE TABLE IF NOT EXISTS sync_scope_config (scope TEXT PRIMARY KEY, config TEXT NOT NULL, updated_at_utc TEXT NOT NULL, tz_offset TEXT NULL)")
+        .execute(&pool)
         .await
         .unwrap();
+    sqlx::query(
+        "INSERT INTO sync_scope_config VALUES ('notion:download', '{\"refresh_window_days\":0}', '2369-04-15T00:00:00Z', NULL)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     dr::commit_run(&pool, "an earlier build").await.unwrap();
     pool.close().await;
 
@@ -238,9 +246,13 @@ async fn a_store_from_before_the_sidecar_held_anything_opens_holding_what_it_had
     assert!(strings(pool, "SELECT scope FROM sync_scope_state")
         .await
         .is_empty());
-    assert!(strings(pool, "SELECT scope FROM sync_scope_config")
-        .await
-        .is_empty());
+    let retired: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'sync_scope_config'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(retired, 0, "the retired table is dropped on open");
     assert_eq!(
         strings(
             pool,

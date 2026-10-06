@@ -191,20 +191,6 @@ pub const SYNC_SCOPE_STATE_DDL: &str = "CREATE TABLE IF NOT EXISTS sync_scope_st
     tz_offset TEXT NULL
 )";
 
-/// The config subset that produced each scope's cursor, so a download can
-/// spot config changes the cursor would otherwise swallow (a widened
-/// `since`, a relaxed blob cap). Written only once a run has satisfied it;
-/// see [`crate::scope_config`] for what belongs in the blob.
-///
-/// Separate from `sync_scope_state` because the two aren't 1:1 — a provider
-/// can have config worth remembering with no cursor to hang it on.
-pub const SYNC_SCOPE_CONFIG_DDL: &str = "CREATE TABLE IF NOT EXISTS sync_scope_config (
-    scope TEXT PRIMARY KEY,
-    config TEXT NOT NULL,
-    updated_at_utc TEXT NOT NULL,
-    tz_offset TEXT NULL
-)";
-
 /// DDL every provider gets for free, appended inside [`open`].
 /// The raw store's `problems`: what a download could not do with one
 /// record, keyed `<table>:<id>` under the entity scope. `source_id` is
@@ -214,12 +200,15 @@ pub const SYNC_SCOPE_CONFIG_DDL: &str = "CREATE TABLE IF NOT EXISTS sync_scope_c
 /// render.
 pub const PROBLEMS_DDL: &str = datalib_problems::DDL[0].1;
 
-pub const SHARED_DDL: &[&str] = &[
-    SYNC_RUNS_DDL,
-    SYNC_SCOPE_STATE_DDL,
-    SYNC_SCOPE_CONFIG_DDL,
-    PROBLEMS_DDL,
-];
+pub const SHARED_DDL: &[&str] = &[SYNC_RUNS_DDL, SYNC_SCOPE_STATE_DDL, PROBLEMS_DDL];
+
+/// Shared tables no build declares any more. A store that still has one
+/// drops it on open, after its ladder (a rung may read it one last time),
+/// so it leaves no orphan beside the source's tables; its rows stay in
+/// the store's history. `sync_scope_config` recorded the config a
+/// cursor was taken under, before a run worked out from the store what
+/// it owes.
+const RETIRED_SHARED_TABLES: &[&str] = &["sync_scope_config"];
 
 /// The tables every raw store has that are datalib's, not the
 /// source's: what a mirror must leave alone and a content diff must
@@ -230,7 +219,6 @@ pub const SHARED_TABLES: &[&str] = &[
     datalib_store_meta::TABLE,
     "sync_runs",
     "sync_scope_state",
-    "sync_scope_config",
     "problems",
 ];
 
@@ -865,6 +853,15 @@ async fn open_inner(
             .await
             .with_context(|| format!("commit migration v{}", rung.version))?;
     }
+    if include_shared {
+        for table in RETIRED_SHARED_TABLES {
+            // Audited: `table` is one of the `&'static str` names above.
+            sqlx::query(sqlx::AssertSqlSafe(format!("DROP TABLE IF EXISTS {table}")))
+                .execute(&pool)
+                .await
+                .with_context(|| format!("drop the retired {table}"))?;
+        }
+    }
     // Tables, then indexes — see the README for why the order is
     // load-bearing. `parse_create_table_name` returns `None` for exactly
     // the statements that must wait.
@@ -1415,11 +1412,11 @@ async fn apply_table_plan(
 }
 
 /// The tables a resume cursor can live in, store-wide. Per-row cursors
-/// (a sidecar's `last_ts_ms`, an address book's `ctag`) go with the
-/// table that holds them; these three outlive any one table.
+/// (an address book's sync token) go with the table that holds them;
+/// these two outlive any one table.
 /// `ingested_files` is `datalib_etl_files`' file checkpoint, which tests
 /// that its table is named here.
-pub const CURSOR_TABLES: &[&str] = &["sync_scope_state", "sync_scope_config", "ingested_files"];
+pub const CURSOR_TABLES: &[&str] = &["sync_scope_state", "ingested_files"];
 
 /// A cursor is only valid under the schema that set it. A recreated
 /// table is empty, and so is one that just appeared, and a cursor that
@@ -3547,7 +3544,7 @@ mod tests {
         assert_eq!(rows, 1, "the table that was there keeps its row");
         assert_eq!(
             cursor_counts(&pool).await,
-            (0, 0, 0),
+            (0, 0),
             "a new, empty table is one the cursors would skip past"
         );
         pool.close().await;
@@ -3607,13 +3604,6 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "INSERT INTO sync_scope_config (scope, config, updated_at_utc, tz_offset) \
-             VALUES ('widgets', '{}', '2026-09-18T10:00:00+00:00', '+00:00')",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::query(
             "INSERT INTO ingested_files (scope, rel_path, blake3, size_bytes, last_finished_at_utc) \
              VALUES ('widgets/files', 'a.json', 'aa', 1, '2026-09-18T10:00:00+00:00')",
         )
@@ -3624,7 +3614,7 @@ mod tests {
         pool.close().await;
     }
 
-    async fn cursor_counts(pool: &SqlitePool) -> (i64, i64, i64) {
+    async fn cursor_counts(pool: &SqlitePool) -> (i64, i64) {
         let n = |sql: &'static str| async move {
             sqlx::query_scalar::<_, i64>(sql)
                 .fetch_one(pool)
@@ -3633,7 +3623,6 @@ mod tests {
         };
         (
             n("SELECT COUNT(*) FROM sync_scope_state").await,
-            n("SELECT COUNT(*) FROM sync_scope_config").await,
             n("SELECT COUNT(*) FROM ingested_files").await,
         )
     }
@@ -3658,7 +3647,7 @@ mod tests {
         assert_eq!(rows, 0, "the column removal recreated the table");
         assert_eq!(
             cursor_counts(&pool).await,
-            (0, 0, 0),
+            (0, 0),
             "every cursor must go with the rows it pointed past"
         );
         pool.close().await;
@@ -3678,7 +3667,42 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(rows, 1, "ADD COLUMN keeps the row");
-        assert_eq!(cursor_counts(&pool).await, (1, 1, 1));
+        assert_eq!(cursor_counts(&pool).await, (1, 1));
+        pool.close().await;
+    }
+
+    /// A store from a build that still declared `sync_scope_config`
+    /// kept it as an orphan beside the source's tables, which a mirror
+    /// and the history view would read as the source's own.
+    #[tokio::test]
+    async fn a_retired_shared_table_is_dropped_on_open() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("retired.doltlite_db");
+        let pool = open(&p, &[WIDGETS_DDL]).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE sync_scope_config (scope TEXT PRIMARY KEY, config TEXT NOT NULL, \
+             updated_at_utc TEXT NOT NULL, tz_offset TEXT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO sync_scope_config VALUES ('widgets', '{}', '2026-09-18T10:00:00Z', NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        commit_run(&pool, "an older build").await.unwrap();
+        pool.close().await;
+
+        let pool = open(&p, &[WIDGETS_DDL]).await.unwrap();
+        let left: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'sync_scope_config'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(left, 0);
         pool.close().await;
     }
 

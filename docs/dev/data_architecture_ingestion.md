@@ -390,7 +390,7 @@ therefore what it can see:
 | `contacts` (`.vcf` folder), `calendar` (`.ics` folder) | the folder's scan, and each re-read file | a gone file's address book or calendar; cards or events a re-read file dropped. Nothing is deleted when the walk reported an error. A file that is nothing deletes nothing and is a `listing:` problem: a `.vcf` with no card or cut off inside one, an `.ics` with no `VCALENDAR`, cut off before `END:VCALENDAR`, or whose events all lack a `UID`. Only a whole `VCALENDAR` with no events empties its calendar; a book is emptied by deleting its file |
 | `google_takeout` Chat, Maps photos | the export's scan, and each re-read `messages.json` | a gone file's user, group, messages or photo; messages a re-read file dropped. A missing `Google Chat/` or photos folder deletes nothing, nor does a `messages.json` listing entries none of which has a `message_id`. Deletions land in the transaction that stamps the files |
 | `google_takeout` Maps reviews and saved places, YouTube, Gemini | each re-read file, which is the feed's whole table | records the file no longer lists, and a Gemini activity's attachment edges. A missing file deletes nothing, and so does one in a layout the reader does not know (no list, or entries none of which it could read): that fails the feed as a `phase:` problem. A Gemini log really emptied upstream cannot prune: no empty layout has been seen to tell it from one the reader does not know |
-| `email` (mbox), `sms_backup_restore`, `google_takeout` Voice | a read of every file, whenever one was removed or rewritten | records no file holds any more, in the transaction that stamps the files. Nothing is deleted when the walk or any file's read failed (an mbox with no message, an SMS backup with no XML element or cut off before its root closes, a Voice thread with no message, a call with no time, a `Bills.html` with no table each count as a failed read), or when Takeout's `Voice/` is missing. A changed mbox `account_id` re-reads every file and then deletes what is left under the old account |
+| `email` (mbox), `sms_backup_restore`, `google_takeout` Voice | a read of every file: every run for mbox, and for the others whenever one was removed or rewritten | records no file holds any more, in the transaction that writes what was read. Nothing is deleted when the walk or any file's read failed (an mbox with no message, an SMS backup with no XML element or cut off before its root closes, a Voice thread with no message, a call with no time, a `Bills.html` with no table each count as a failed read), or when Takeout's `Voice/` is missing. After a clean read of the mbox folder, everything under an account other than the configured one is deleted |
 | `slack` | the trailing `refresh_window_days` re-walk, and each `conversations.replies` thread | top-level messages inside the walked range, each with its thread's replies; replies on a re-fetched thread |
 | `github` / `gitlab` | every PR's / MR's whole child list, per fetch | deleted comments, reviews, discussions |
 | `claude` (`api`) | `/chat_conversations`, one org at a time | that org's conversations |
@@ -485,9 +485,7 @@ and never sees a deletion, so a diff over such a source shows adds and
 edits but not removals until something re-walks the range. A provider
 that reads a whole export or file each time (the `.vcf` address books,
 a Takeout tree) sees deletions on every sync. When you build a
-provider, this is one more reason to prefer the full re-read where it
-is cheap, and to record in `scope_config` what a cursor was taken
-under when it is not.
+provider, this is one more reason to prefer the full re-read.
 
 **`deleted_upstream_at` is specified but not built.** [Transient vs
 non-transient](#transient-vs-non-transient) below says a confirmed 404
@@ -621,11 +619,10 @@ need none of this.
 
 ### A claim of completeness is written only by a walk that completed
 
-Three things a download writes are not data but **claims about how far
-it got**: a resume cursor or state token ("everything up to here is
-mirrored"), the `scope_config` record ("the config as it stands has
-been satisfied"), and the authority a prune needs ("this enumeration
-was complete, so absence means deletion"). Each is read by the *next*
+Two things a download writes are not data but **claims about how far
+it got**: a state token ("everything up to here is mirrored") and the
+authority a prune needs ("this enumeration was complete, so absence
+means deletion"). Each is read by the *next*
 run as permission to skip work. A claim written by a walk that did
 not finish is therefore a silent data loss: the next run believes it,
 does less, and nothing anywhere reports the gap.
@@ -690,11 +687,10 @@ leaves an on-disk superset, and nothing deletes it.
 | contacts, calendar | A newly selected collection has no token and is listed whole |
 | chatgpt, claude | The enumeration is re-read every run, so a moved `since` admits what it now covers |
 
-Two consumers still keep `datalib_etl::scope_config`, a record of the
-scope-affecting config in the store's `sync_scope_config` table: email's
-mbox path (`only_extract_labels`, which re-reads every file when it
-widens) and `lightroom`, which uses it as a small key-value store. Both
-are local sources and go with the whole-pass change for local sources.
+No source records the config it ran under: a local source reads its
+whole input every run under the config it has now (email's mbox
+folder, a lightroom catalog or its newest backup), so a widened filter
+needs nothing remembered.
 
 Render has the same failure mode and resolves it differently —
 wholesale invalidation rather than a proportional reaction: a change to
