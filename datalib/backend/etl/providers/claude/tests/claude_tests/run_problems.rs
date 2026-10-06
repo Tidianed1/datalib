@@ -160,6 +160,11 @@ impl Account {
             .await
     }
 
+    async fn problems_with_severity(&self) -> Vec<(String, String)> {
+        self.query("SELECT scope_key, severity FROM problems ORDER BY scope_key")
+            .await
+    }
+
     async fn keys(&self) -> Vec<String> {
         self.problems().await.into_iter().map(|(k, _)| k).collect()
     }
@@ -199,6 +204,7 @@ async fn part_of_a_sync_that_fails_is_a_problem_row() {
     an_account_that_will_not_load_is_a_phase_row().await;
     a_failed_attachment_says_why_and_lands_on_a_later_run().await;
     a_stub_no_listing_names_goes_with_its_problem().await;
+    a_listed_conversation_whose_detail_is_missing_keeps_what_is_held().await;
     a_refused_org_holds_back_the_stub_prune_and_all_refused_fails().await;
     a_project_whose_docs_failed_is_asked_again().await;
     a_file_claude_no_longer_has_is_not_asked_for_again().await;
@@ -264,17 +270,29 @@ async fn project_listings_that_fail_are_rows_until_they_list() {
     acct.run(day_two)
         .await
         .expect("the conversations still synced");
+    // A project's docs listing is a record of its own, keyed by the
+    // project. p-1's were listed the day before, so its failure leaves
+    // them stale rather than missing; a refusal is a warning by kind.
     assert_eq!(
-        acct.keys().await,
+        acct.problems_with_severity().await,
         [
-            "listing:project_docs Bridge Operations",
-            "listing:project_docs Holodeck",
-            "listing:projects org:Defiant",
+            (
+                "listing:projects org:Defiant".to_string(),
+                "error".to_string()
+            ),
+            (
+                "project_docs_listings:p-1".to_string(),
+                "warning".to_string()
+            ),
+            (
+                "project_docs_listings:p-2".to_string(),
+                "warning".to_string()
+            ),
         ]
     );
 
-    // A docs listing that failed left its sweep marker alone, so the
-    // same run's now asks for it again.
+    // A docs listing that failed is not held, so the same run's now
+    // asks for it again.
     acct.holds(&convs, &held);
     let s = acct.run(day_two).await.unwrap();
     assert_eq!(s.project_docs_fetched, 3, "{s:?}");
@@ -374,6 +392,32 @@ async fn a_stub_no_listing_names_goes_with_its_problem() {
     assert_eq!(acct.conversation_ids().await, ["c-a1"]);
 }
 
+/// A conversation the listing still names, whose detail answers 404, was
+/// deleted from the mirror on every run while the listing kept naming it.
+/// Only a listing that leaves it out says it is gone.
+async fn a_listed_conversation_whose_detail_is_missing_keeps_what_is_held() {
+    let acct = Account::new(true);
+    acct.holds(&[conv("c-a1", ENTERPRISE)], &[]);
+    acct.run(|_| {}).await.unwrap();
+    assert_eq!(acct.conversation_ids().await, ["c-a1"]);
+
+    let mut edited = conv("c-a1", ENTERPRISE);
+    edited["updated_at"] = json!("2369-01-03T00:00:00Z");
+    acct.holds(&[edited.clone()], &[]);
+    acct.fail(&detail(ENTERPRISE, "c-a1"), 404);
+    acct.run(|_| {}).await.unwrap();
+    assert_eq!(
+        acct.conversation_ids().await,
+        ["c-a1"],
+        "what the mirror held stays while the listing names it"
+    );
+    assert_eq!(acct.keys().await, ["conversations:c-a1"]);
+
+    acct.holds(&[edited], &[]);
+    acct.run(|_| {}).await.unwrap();
+    assert_eq!(acct.keys().await, no_keys());
+}
+
 /// A stub belongs to whichever org listed it, so an org that refused its
 /// listing holds the stub prune back; and a run every org refuses (a
 /// session expired inside the org cache) fails rather than reading as
@@ -423,10 +467,7 @@ async fn a_project_whose_docs_failed_is_asked_again() {
     acct.fail(&docs(ENTERPRISE, "p-1"), 500);
     let an_hour_on = |o: &mut FetchOptions| o.now = Some("2369-02-01T01:00:00Z".into());
     acct.run(an_hour_on).await.unwrap();
-    assert_eq!(
-        acct.keys().await,
-        ["listing:project_docs Bridge Operations"]
-    );
+    assert_eq!(acct.keys().await, ["project_docs_listings:p-1"]);
 
     acct.holds(&convs, &[changed]);
     let s = acct.run(an_hour_on).await.unwrap();

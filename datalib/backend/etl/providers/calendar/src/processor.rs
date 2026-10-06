@@ -92,7 +92,7 @@ impl DataProcessor for CalendarIngest {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let db = ingest::RawDb::open(&ingest::db_path_for(&self.raw_path)).await?;
         let pool = db.pool().clone();
-        ctx.run_store(pool.clone(), None, |_| async {
+        ctx.run_store(pool.clone(), None, |sealer| async {
             // The run's own record in `sync_runs`: its summary, and what it
             // changed in each table.
             let run = DownloadRun::start(&pool, &self.run_config()).await?;
@@ -105,6 +105,7 @@ impl DataProcessor for CalendarIngest {
                         latchkey: self.latchkey.clone(),
                         progress: ctx.progress.clone(),
                         control: ctx.control.clone(),
+                        sealer: Some(sealer),
                     })
                     .await
                 }
@@ -121,6 +122,7 @@ impl DataProcessor for CalendarIngest {
                         latchkey: self.latchkey.clone(),
                         progress: ctx.progress.clone(),
                         control: ctx.control.clone(),
+                        sealer: Some(sealer),
                     })
                     .await
                 }

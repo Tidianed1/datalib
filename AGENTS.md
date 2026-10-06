@@ -592,15 +592,20 @@ keeps this source's `path → blake3` cursor to diff against. The recipe
 is `datalib/backend/etl/README.md` §"Answering "did it change?" for a
 file-backed source"; `lightroom`'s `ingest/sync.rs` is a small example.
 
-## A cursor is only valid under the config that set it
+## A network source owes what upstream listed and the store does not hold
 
-A provider that resumes from a stored cursor never re-reads the config
-that narrowed its first walk, so *widening* it is a silent no-op unless
-the provider records the scope beside the cursor and diffs it next run —
-`datalib_etl::scope_config`, written up in
-`docs/dev/data_architecture_ingestion.md` § "When the cursor swallows a
-config change". `lint_repo.py` check 8 catches a new provider that keeps
-a cursor without the record.
+**Never store a position in a walk, and never mark a record done.** A
+download stores what upstream *listed* (key and version), the version
+each record's content satisfies (`held_version` on its `_bookkeeping`
+sidecar, written with the content), and for a range, the spans already
+walked (`datalib_etl::coverage`). What is owed is a query over those;
+`datalib_etl::owed` fetches it and records every outcome. A stored
+cursor is the bug this replaces: a run that stopped halfway, or a
+config widened later, leaves work no cursor will ever name. The one
+position kept is upstream's own delta token, written with the page it
+covers. `docs/dev/data_architecture_ingestion.md` § "What is left to
+fetch" has the per-source table; each provider's
+`tests/*/interrupt.rs` is the proof it holds.
 
 ## Unordered collections: give a bag an order before storing it
 
@@ -722,8 +727,12 @@ find yourself writing `strftime("%Y-%m-%dT%H:%M:%SZ")`, stop —
 
 ## Auth (web API)
 
-Every web source signs in through latchkey, and a downloader only ever
-runs `latchkey curl`: [`docs/dev/latchkey.md`](docs/dev/latchkey.md).
+Every web source that needs a credential signs in through latchkey,
+and its requests go out as `latchkey curl`:
+[`docs/dev/latchkey.md`](docs/dev/latchkey.md). A URL that carries its
+own authority skips latchkey and goes out as plain `curl` through the
+same HTTP layer (`HttpRequest::plain`): YoLink's signed CSV downloads,
+Notion's pre-signed file links, LinkedIn's public photos.
 Cloudflare-fronted hosts go through the bundled `curl-impersonate`
 ([`docs/dev/curl_impersonate.md`](docs/dev/curl_impersonate.md)); if
 Cloudflare still 403s, the IP or user agent may be flagged — wait it
