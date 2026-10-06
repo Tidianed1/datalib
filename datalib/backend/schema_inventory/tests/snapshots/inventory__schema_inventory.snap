@@ -229,6 +229,17 @@ project_docs_bookkeeping
     volatile_payload
     tz_offset
     held_version
+project_docs_listings
+    id
+project_docs_listings_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+    held_version
 projects
     id
     payload
@@ -587,6 +598,10 @@ scan_meta_bookkeeping
     held_version
 
 == github/raw ==
+coverage
+    scope
+    lo
+    hi
 issue_comments
     id
     payload
@@ -605,6 +620,9 @@ issue_comments_bookkeeping
     volatile_payload
     tz_offset
     held_version
+listed_change_requests
+    id
+    updated_at
 pr_review_comments
     id
     payload
@@ -687,6 +705,10 @@ self_identity_bookkeeping
     held_version
 
 == gitlab/raw ==
+coverage
+    scope
+    lo
+    hi
 discussions
     id
     payload
@@ -704,6 +726,9 @@ discussions_bookkeeping
     volatile_payload
     tz_offset
     held_version
+listed_change_requests
+    id
+    updated_at
 merge_requests
     id
     payload
