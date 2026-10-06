@@ -503,6 +503,15 @@ DDL in `schema_raw.rs`, then calls `bulk_upsert_in_tx`, which chunks the rows,
 emits one multi-row statement per chunk, and stamps `<table>_bookkeeping` for
 every id in the same transaction. The caller commits.
 
+A source that reads its whole input every run (a local file or folder)
+calls `bulk_upsert_first_seen_in_tx` instead, and flushes CAS edges with
+`CasEdgeAccumulator::flush_first_seen`: a row's sidecar is stamped the
+first time it is written, or when it so far records only a failure, and
+left alone after. Re-stamping every row would make every run a commit,
+and the store grow, with nothing changed. Each such source has a test
+that reads an unchanged input twice and asserts the second
+`commit_run` returns `None`.
+
 `insert_sql` exists for the one path where upserting would be wrong. In
 `grid_index`, a primary-key collision is a *finding* — two sources minting
 the same `grid_rows.uuid` is a correctness emergency — so that path wants the
