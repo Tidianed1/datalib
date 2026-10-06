@@ -209,6 +209,19 @@ formatter in `ui/src/cards/typedColumns.ts` draws through the same
 - `ui/src/grid/copyRows.ts` copies an identity cell the way a document
   copies a chip (below).
 
+## One resolver
+
+Every surface that draws chips asks one resolver who they are
+(`ui/src/cards/resolver.ts`; for people, `people` in
+`ui/src/cards/contacts.ts`). A surface asks as it draws; the questions
+drawn in one pass go out as one request; answers are kept for the life
+of the page. An edit — a link, an unlink, a new contact, "no longer
+works" — forgets the handles it touched, and the resolver tells every
+subscribed surface, so a grid already open redraws a chip linked in a
+document beside it. An answer to a question asked before the edit is
+dropped when it lands. Groups and steps get a resolver of their own of
+the same shape, with `datalib-http` behind it.
+
 ## Copy
 
 A copy keeps the name and the identifier, in both clipboard flavours,

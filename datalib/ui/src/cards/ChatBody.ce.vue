@@ -26,13 +26,15 @@ import {
   decorateHandles,
   hoverCard,
   type DatalibContact,
-  type Decorated,
   type HoverCard,
   type Who,
   chipMenu,
   copyText,
   handleValue,
   searchQueryFor,
+  people,
+  canLinkHandles,
+  NOBODY,
   type ChipMenuEntry,
   type ChipMenuId,
 } from "./contacts";
@@ -152,13 +154,21 @@ type ChipTarget = {
   y: number;
 };
 const chipTarget = ref<ChipTarget | null>(null);
-const decorated = ref<Decorated | null>(null);
-const NOBODY: Who = { mine: null, accounts: [] };
 
 async function redrawHandles() {
   if (!body.value) return;
-  decorated.value = await decorateHandles(body.value);
+  await decorateHandles(body.value);
 }
+
+// An answer changed somewhere — a link made in another document, or in
+// this one — so draw again if any chip here shows one of those handles.
+const stopPeople = people.subscribe((handles) => {
+  const root = body.value;
+  if (!root) return;
+  const shown = Array.from(root.querySelectorAll<HTMLElement>("a.chip[data-handle]"));
+  if (shown.some((a) => handles.has(a.dataset.handle ?? ""))) void redrawHandles();
+});
+onBeforeUnmount(stopPeople);
 
 /// Where the frame's viewport sits in this window: the hover card and
 /// the popover are drawn out here, over the frame, from points inside it.
@@ -186,8 +196,8 @@ function onChipOver(ev: MouseEvent) {
       card: hoverCard(
         handle,
         chip.dataset.shownAs ?? "",
-        decorated.value?.who[handle] ?? NOBODY,
-        decorated.value?.canLink ?? false,
+        people.get(handle) ?? NOBODY,
+        canLinkHandles(),
       ),
       x: at.x + rect.left,
       y: at.y + rect.bottom,
@@ -210,7 +220,7 @@ function chipAt(ev: MouseEvent): HTMLElement | null {
 }
 
 function whoIs(chip: HTMLElement): Who {
-  return decorated.value?.who[chip.dataset.handle ?? ""] ?? NOBODY;
+  return people.get(chip.dataset.handle ?? "") ?? NOBODY;
 }
 
 /// The link/create popover for `chip`, at a point in this window.
@@ -237,7 +247,7 @@ function onHandleChipClick(ev: MouseEvent) {
   if (ev.detail > 1) return;
   // Without a contacts app there is nothing to change; the hover card is
   // all a chip has to say.
-  if (!decorated.value?.canLink) return;
+  if (!canLinkHandles()) return;
   ev.stopPropagation();
   const at = frameOrigin();
   openPopover(chip, at.x + ev.clientX, at.y + ev.clientY);
@@ -276,7 +286,7 @@ function onChipContextMenu(ev: MouseEvent): boolean {
       chip.dataset.handle ?? "",
       chip.dataset.shownAs ?? "",
       whoIs(chip),
-      decorated.value?.canLink ?? false,
+      canLinkHandles(),
     ),
     x: at.x + ev.clientX,
     y: at.y + ev.clientY,

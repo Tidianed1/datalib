@@ -11,6 +11,7 @@
 import { iconUrl } from "@/config/icons";
 import { filterToken } from "@/grid/query";
 import { uriFromHandle } from "./chipLinks";
+import { Resolver } from "./resolver";
 import { pushToast } from "@/toasts";
 import { UNIFIED_INDEX } from "@/api";
 
@@ -345,57 +346,76 @@ export async function searchContacts(q: string): Promise<ContactSummary[]> {
   return r.contacts;
 }
 
+// Every edit forgets the handles it touched, so every document and grid
+// showing them draws them again from the next answer.
+
 export async function createContact(name: string, handles: string[]): Promise<string> {
-  return (await post<{ contact_id: string }>("/contacts", { name, handles })).contact_id;
+  const id = (await post<{ contact_id: string }>("/contacts", { name, handles })).contact_id;
+  people.forget(handles);
+  return id;
 }
 
 export async function linkHandle(handle: string, contactId: string): Promise<void> {
   await post("/link", { handle, contact_id: contactId });
+  people.forget([handle]);
 }
 
 export async function unlinkHandle(handle: string): Promise<void> {
   await post("/unlink", { handle });
+  people.forget([handle]);
 }
 
 export async function setStoppedWorking(handle: string, by: string | null): Promise<void> {
   await post("/stopped_working", { handle, by });
+  people.forget([handle]);
+}
+
+// ── Who a handle is, for the whole app ────────────────────────────────
+
+export const NOBODY: Who = { mine: null, accounts: [] };
+
+let contactsApp = false;
+
+/** Who each handle is: the contact a person made, if any, and every
+ *  source's account of them. One resolver for every document and grid
+ *  (`resolver.ts`). */
+export const people = new Resolver<Who>(
+  async (handles) => {
+    const [mine, accounts] = await Promise.all([resolveHandles(handles), peopleFor(handles)]);
+    contactsApp = mine !== null;
+    return new Map(
+      handles.map((h) => [h, { mine: mine?.[h] ?? null, accounts: accounts[h] ?? [] }]),
+    );
+  },
+  // The toast dedupes itself, so a page of chips failing says so once.
+  (e) => pushToast(`Contacts: ${e.message}`),
+);
+
+/** Whether a contacts app answered the last question, so a chip can offer
+ *  to link a handle. */
+export function canLinkHandles(): boolean {
+  return contactsApp;
 }
 
 // ── The DOM ───────────────────────────────────────────────────────────
 
-let warnedOnce = false;
-
-export type Decorated = { who: Record<string, Who>; canLink: boolean };
-
-/** Ask who every trusted handle span under `root` is and draw it as a
- *  chip; `null` when there is nothing to draw. Safe to call again after
- *  an edit: each span keeps what the source showed in `data-shown-as`. */
-export async function decorateHandles(root: HTMLElement): Promise<Decorated | null> {
+/** Ask who every chip link under `root` is and draw it as a chip, from
+ *  `people`. Safe to call again — after an edit, or when `people` says an
+ *  answer changed: each link keeps what the source showed in
+ *  `data-shown-as`. A handle whose question failed is drawn unresolved. */
+export async function decorateHandles(root: HTMLElement): Promise<void> {
   const spans = chipAnchors(root);
-  if (spans.length === 0) return null;
+  if (spans.length === 0) return;
   for (const s of spans) {
     if (s.dataset.shownAs === undefined) s.dataset.shownAs = s.textContent ?? "";
   }
-  const handles = [...new Set(spans.map((s) => s.dataset.handle ?? ""))];
-  let mine: Record<string, DatalibContact> | null;
-  let people: Record<string, DatalibContact[]>;
-  try {
-    [mine, people] = await Promise.all([resolveHandles(handles), peopleFor(handles)]);
-  } catch (e) {
-    if (!warnedOnce) pushToast(`Contacts: ${(e as Error).message}`);
-    warnedOnce = true;
-    return null;
-  }
-  const canLink = mine !== null;
-  const who: Record<string, Who> = Object.fromEntries(
-    handles.map((h) => [h, { mine: mine?.[h] ?? null, accounts: people[h] ?? [] }]),
-  );
+  await people.ask(new Set(spans.map((s) => s.dataset.handle ?? "")));
+  const canLink = canLinkHandles();
   for (const s of spans) {
     if (!s.isConnected) continue;
     const handle = s.dataset.handle ?? "";
-    drawChip(s, chipLook(handle, s.dataset.shownAs ?? "", who[handle], canLink));
+    drawChip(s, chipLook(handle, s.dataset.shownAs ?? "", people.get(handle) ?? NOBODY, canLink));
   }
-  return { who, canLink };
 }
 
 /** Draw `look` onto a chip link: the lead (an initial in a disc, or the
