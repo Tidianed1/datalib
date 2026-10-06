@@ -453,7 +453,7 @@ newly created table is empty, and a cursor that says "read through
 here" would let the next run resume past rows the table does not have,
 and the table would stay empty until upstream changed, with nothing
 saying why. So either clears every store-wide cursor
-(`sync_scope_state`, `sync_scope_config`, `ingested_files`) and logs
+(`sync_scope_state`, `ingested_files`) and logs
 that it did; the next run walks from the start, and the tables that kept
 their rows absorb it as no-op upserts. Per-row state — an address
 book's sync token, a sidecar's `held_version` — lives on the table that

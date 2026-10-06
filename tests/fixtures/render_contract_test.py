@@ -191,7 +191,6 @@ _SKIP_TABLES = (
     "_datalib_meta",
     "sync_runs",
     "sync_scope_state",
-    "sync_scope_config",
     "ingested_files",
 )
 _SKIP_SUFFIXES = ("_bookkeeping",)

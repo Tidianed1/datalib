@@ -1,6 +1,6 @@
 # Sync state: what is owed is what upstream listed, minus what we hold
 
-**Status: decided 2026-10-05; steps 0 to 5 of §7 are built: every network source is on one owed query and one fetch loop (§10), and the reference description is `data_architecture_ingestion.md` § "What is left to fetch". Step 6 is open.** This is the design and
+**Status: decided 2026-10-05; steps 0 to 6 of §7 are built: every network source is on one owed query and one fetch loop (§10), every local source names its units of completeness (§11), and the reference description is `data_architecture_ingestion.md` § "What is left to fetch" and § "Local inputs".** This is the design and
 the order of work. It came out of the audit in
 [`audits/2026-10-05_loose_ends.md`](../audits/2026-10-05_loose_ends.md)
 and a read of the four downloads with the most resume state (Slack,
@@ -268,11 +268,14 @@ section. Built. AirVisual reads a mounted share, so it is a local
 source and moved to step 6. `scope_config` could not go: email's mbox
 path and `lightroom` still use it, and both are local.
 
-**Step 6 — local sources.** Decided 2026-10-06 and written up in §11:
-completeness is a unit the provider names, and a unit is replaced in
-the seal that rewrites it. `always_clear_before_ingest` goes. The skip
-for an unchanged file stays as an optimization that never decides a
-deletion, because the large inputs cannot be timed from here.
+**Step 6 — local sources.** Built, with §11: completeness is a unit
+the provider names, a unit is replaced in the seal that rewrites it,
+and `always_clear_before_ingest` is gone. Then, on the owner's word that
+mbox and lightroom need no optimizations, both read their whole input
+every run, and `scope_config` went with the last of its users (its
+table is dropped when an older store opens). The skip for an unchanged
+file stays for the other file-backed sources, where it never decides a
+deletion.
 
 ## 8. The interruption test
 
