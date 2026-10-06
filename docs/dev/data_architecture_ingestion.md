@@ -212,10 +212,10 @@ The first sync from a given source is often very long (hours to days, many GB, s
 ## Stoppable and resumable
 A sync that gets interrupted — ^C, OOM, laptop sleep, upstream 5xx — must be able to make forward progress on the next run. We **do not require runs to complete to be useful**.
 
-The dedup index *is* the resume cursor:
+The store *is* the resume point:
 
 - Provider-side dedup keys every UPSERT on the upstream identifier, so re-walking already-fetched items is cheap and correct.
-- There are no separate checkpoint files. The data we already have tells us where to resume. (One narrow exception, for config changes rather than for resumption: see [Cursor / resume strategy](#cursor--resume-strategy).)
+- There are no checkpoint files and no stored position in a walk. What is left is worked out from what upstream listed and what the store holds: see [What is left to fetch](#what-is-left-to-fetch-listed-minus-held).
 
 ## Efficiently incremental
 Any subsequent sync should pick up as close as possible to where the last one left off: walk what the upstream API forces us to walk, although it should also be safe to fetch with a bit of overlap, too.
@@ -225,7 +225,7 @@ Two layers do the work:
 - **Provider-side dedup**: every UPSERT uses the upstream identifier as PK with `ON CONFLICT(id) DO UPDATE`; unchanged rows are no-op writes, and the run's closing commit finds nothing to commit.
 - **Render-side dedup**: render diffs the raw store from the commit its `render_cursor` row names and renders only the buckets that moved; every document it renders is written, and an unchanged one writes an identical row, which doltlite's content-addressed tables store as no change. The grid_index step reaches a document at all only when that store's `dolt_diff` surfaced it (see `source_cursors`).
 
-Different upstreams expose different surfaces for "what changed since X", and that drives the cursor pattern (see [Cursor / resume strategy](#cursor--resume-strategy)).
+Different upstreams expose different surfaces for "what changed since X": a delta token, an enumeration, a search over a range. Each becomes a listing, and what is owed is the same query over it (see [What is left to fetch](#what-is-left-to-fetch-listed-minus-held)).
 
 **Both layers rest on writes being surgical, and that is easy to break by accident.** The diff is cheap because it is proportional to what actually changed; a write that touches every row produces a diff the size of the table, and every consumer downstream re-does all its work for nothing. So a record that is *unchanged* upstream must serialize *identically* to itself, byte for byte, on every fetch.
 
@@ -272,9 +272,9 @@ like that. It is not a one-off: another bake had claude.ai return a
 conversation with `files[].size_bytes` null on one fetch and populated
 on the fetches either side of it.
 
-Incrementality then preserves the mistake. A [listing-diff
-provider](#cursor--resume-strategy) re-fetches a record only when its
-listing stamp moves, and a degraded detail fetch does not move the
+Incrementality then preserves the mistake. A [listed-minus-held
+provider](#what-is-left-to-fetch-listed-minus-held) re-fetches a record
+only when its listing stamp moves, and a degraded detail fetch does not move the
 stamp, so the stale field sits until the upstream edits that record for
 some other reason — possibly never. The `me` row healed on the next run
 only because it is one of the few fetched unconditionally every time.
@@ -561,15 +561,62 @@ There is no fingerprint compare beside it: rewriting an identical row to a conte
 
 **Rule for new stages.** Any new derivation added to the pipeline follows the same recipe: read its input pinned at a commit, record that commit beside its output in the same transaction, and on the next run diff the input from there. The grid index does the same over every render store (`source_cursors`). The compare-and-skip loop is what makes the system feel responsive on a laptop with months of accumulated data.
 
-## Cursor / resume strategy
-Cursor / resume is the **download-side specialization** of the [Incremental update](#efficiently-incremental) pattern: "what was the last upstream identifier we successfully recorded?" answers "where does the next walk start?" Three patterns in the tree, picked by upstream API shape:
+## What is left to fetch: listed minus held
 
-- **Coverage spans + refresh window** (slack): each page of a channel's history records the stretch it covered, in the transaction that stores its messages ([`coverage.rs`](/datalib/backend/etl/src/coverage.rs)). A run walks the gaps in `[since, ∞)` and re-reads the trailing `refresh_window_days` to catch edits and deletions. A newest stored message is never read as "fetched up to here".
-- **Stored listing + coverage of `updated_at`** (github, gitlab): each search's results are stored as a listing (key and `updated_at`), and the stretch of `updated_at` it looked at is a `coverage` span per scope, written in the same transaction. A run searches the gaps in `[now - refresh_window_days, now]`, unbounded on a first sync; a search cut at the forge's result cap covers only down to its oldest result. A change request is owed when its sidecar does not hold the listed `updated_at`.
-- **Listing diff** (claude, chatgpt): re-list everything each run and compare each item's listing `updated_at`/`update_time` against the stored copy; only new/changed items get a detail fetch. An optional `since` bounds the diff — items updated before it are never detail-fetched, and chatgpt's newest-first paginated listing additionally stops walking once it pages past the cutoff.
-- **Time-windowed sampling** (yolink): the gaps in a device's `coverage` of `[start, now]`, walked in fixed-stride windows, each window covered in the transaction that stores its samples. Per-window UPSERT dedups re-fetched samples.
+A network source stores three facts and works out the rest each run.
+Nothing is marked done, and no position in a walk is stored.
 
-No checkpoint files. The dedup index is the resume cursor.
+- **Listed.** What upstream named, each at a version: an update time,
+  an etag, a newest-reply stamp, or no version for a record that only
+  has to exist. A listing can be a table the provider keeps (email's
+  `listed_messages`, the forges' `listed_change_requests`, DAV's
+  `dav_resources`), the rows of an enumeration it re-reads every run
+  (chatgpt, claude), or results that are themselves the content
+  (Notion's search, Google Calendar's events).
+- **Held.** The version each record's content satisfies, in
+  `held_version` on that table's `_bookkeeping` sidecar, written in the
+  transaction that writes the content. A failed attempt leaves a
+  sidecar row too, and never reads as held. A record whose parts can
+  fail on their own gets a table per part (Slack's `threads`, Notion's
+  `page_comments`, claude's `project_docs_listings`), so rewriting one
+  part never clears another's failure.
+- **Looked at.** For a range that does not divide into listable items
+  (a channel's history, a search over `updated_at`, a device's
+  readings, an activity list by date), the spans already walked, in
+  `coverage`, written in the transaction that stores what the walk
+  found, an empty stretch included
+  ([`coverage.rs`](/datalib/backend/etl/src/coverage.rs)).
+
+What is **owed** is the listing minus what is held, plus the gaps in the
+range wanted. [`owed.rs`](/datalib/backend/etl/src/owed.rs) asks the
+store for it and fetches it: in batches, as many requests at once as
+the provider allows, a flush per transaction by count or by bytes, a
+stop that writes what was answered, and one outcome per record (got;
+got but partly unusable, held with a warning; gone; failed, owed with
+an error; skipped by our rule, owed with a warning). A provider says
+how it lists, how it fetches a batch and how it stores one; how a stop,
+a failure, a skip or a give-up is handled is in `owed.rs`, once.
+
+The one position kept is upstream's own **delta token** (JMAP `state`,
+Gmail `historyId`, RFC 6578 `sync-token`, Google's `syncToken`),
+written in the transaction that stores the page it covers, and a
+**sweep marker** that only schedules when to list again (Slack's
+channel list, claude's orgs and project docs).
+
+| Source | Listed | Held at | Range in `coverage` |
+|---|---|---|---|
+| slack | channels, threads (by `latest_reply`), file edges | `messages`, `threads`, `slack_attachments` sidecars | each channel's history |
+| github, gitlab | `listed_change_requests`, from each scope's search | the PR / MR sidecar, at `updated_at` | each scope's `updated_at` |
+| email (JMAP, Gmail) | `listed_messages`, from the delta or an enumeration | `emails` sidecar, then the `.eml` edge | — |
+| notion | search results are the `pages` rows | `page_markdown`, `page_comments`, attachment edges | the search's `last_edited_time` |
+| garmin | days, activities, files | each table's sidecar | activity dates |
+| contacts, calendar (DAV) | `dav_resources`, at each href's etag | `dav_resources` sidecar | — |
+| calendar (Google) | the events page is the content | — | — |
+| chatgpt, claude | the conversation enumeration, at `update_time` / `updated_at` | `conversations` sidecar, its attachment edges, claude's `projects` and `project_docs_listings` | — |
+| yolink | — | — | each device's readings |
+
+Local sources (files on disk) are read whole each run in one seal and
+need none of this.
 
 ### A claim of completeness is written only by a walk that completed
 
@@ -611,82 +658,42 @@ So the rule has two halves:
 early on purpose — the stop flag, raised from the progress sink after
 the first unit, is the deterministic way — and assert the marker was
 *not* written. A test that only checks the happy path checks the
-write, not the gate. A provider with no marker to gate is tested the
-other way round: cut the run off at every request and require that
-running it again ends where an uninterrupted run does
-([`interrupt.rs`](/datalib/backend/etl/src/interrupt.rs); Garmin and
-Slack).
+write, not the gate. Every source on listed minus held is tested the
+other way round as well: cut the run off at every request, from an
+empty store and from one an earlier run wrote against a moved
+upstream, and require that running it again ends where an
+uninterrupted run does
+([`interrupt.rs`](/datalib/backend/etl/src/interrupt.rs); each
+provider's `tests/*/interrupt.rs`). Nothing mechanical catches a claim
+written too early, which is why the rule is written here.
 
-`scripts/lint_repo.py` check 8 catches a provider that keeps a cursor
-and never records the scope config at all. It does not catch a record
-written too early; nothing mechanical does, which is why the rule
-is written here.
+### When a config change widens what is wanted
 
-### When the cursor swallows a config change
+A cursor answers "where do I start?" from stored data alone, so it
+stops consulting the config that set it, and *widening* that config is
+a silent no-op. Listed minus held cannot have that bug: the config is
+read every run to say what is wanted, and what is wanted but not held
+or not covered is owed. An earlier `since` is a gap below the spans
+held; a new label or mailbox is a listing that names more; a raised
+size cap makes a held record with no bytes owed. A narrowed config
+leaves an on-disk superset, and nothing deletes it.
 
-A forward-walk cursor answers "where do I start?" from stored data
-alone, so it stops consulting the config that set it. The knob that set
-the starting point is read only on the cold-start arm, which makes
-*widening* it a silent no-op on an already-synced data root — and for a
-strictly-forward walk, structurally unrepresentable: a widened `since`
-is a request to go backwards.
+| Provider | Widening a knob |
+|---|---|
+| slack | An earlier `since` is a gap below the spans held; `media` turned on makes every stored file edge without bytes owed |
+| github, gitlab | A wider `refresh_window_days` is a gap below each scope's `coverage` |
+| email (JMAP, Gmail) | An admitted mailbox or label with no `listed_whole` row is enumerated until an enumeration of it finishes; a raised `blob_size_limit_bytes` makes a held message with no `.eml` owed |
+| garmin | An earlier `since` leaves days with no row and dates with no `coverage`, and the next run fetches exactly those |
+| notion | A wider `refresh_window_days` lowers where the search stops |
+| yolink | An earlier `devices[].start` is a gap below the spans the device holds |
+| contacts, calendar | A newly selected collection has no token and is listed whole |
+| chatgpt, claude | The enumeration is re-read every run, so a moved `since` admits what it now covers |
 
-Listing-diff providers are immune by construction. They re-apply the
-config filter to a freshly-fetched listing every run, so moving `since`
-back simply makes previously-out-of-scope items reappear as missing.
-That's worth preferring when an upstream API allows it.
-
-Where a cursor is unavoidable, `datalib_etl::scope_config` records
-the scope-affecting config subset alongside it, in the raw store's
-`sync_scope_config` table. The next run diffs current-vs-stored and
-reacts proportionally rather than re-downloading wholesale — a widened
-`since` backfills only the newly-in-scope window. Two invariants:
-
-- **Only widenings do work.** A narrowed knob leaves an on-disk
-  superset, and nothing in the pipeline deletes.
-- **An absent record plans no work.** A store written before its
-  provider kept a record has none, and reading that as "unknown,
-  therefore re-download" would backfill every installed mirror at once
-  on upgrade.
-
-What belongs in the record is only what changes *which data lands on
-disk* — not per-run budgets (`max_prs`, `limit`), not one-off overrides
-(`conv_uuids`, `targets`, `full_sync`). That curation is why it isn't
-just a diff of `sync_runs.config`, which is an audit log and records
-everything.
-
-Current consumers, and what each does when the knob widens:
-
-| Provider | Knob | Reaction |
-|---|---|---|
-| slack | — | Keeps no record. An earlier `since` is a gap below the spans held, and the next run walks it; `media` turned on makes every stored file edge without bytes owed, with no re-walk |
-| github, gitlab | — | Keeps no cursor and no record. A wider `refresh_window_days` is a gap below each scope's `coverage`, and the next run searches it |
-| email (JMAP) | — | Keeps no record. An admitted mailbox with no `listed_whole` row is enumerated until an enumeration of it finishes |
-| email (Gmail) | — | The same, per admitted label, or `*` for the whole account |
-| email (mbox) | `only_extract_labels` | Re-read every file |
-| garmin | — | Keeps no cursor and no record. An earlier `since` leaves days with no row and start dates with no `coverage` span, and the next run fetches exactly those |
-| notion | — | Keeps no record. The search walk stops where its `coverage` span begins, lowered by `refresh_window_days`; a widened window lists more, and a page is owed only if its stamp moved |
-| yolink | — | Keeps no cursor and no record. An earlier `devices[].start` is a gap below the spans the device holds, and the next run walks it |
-
-The longest write-up of the reasoning, including what is deliberately
-*not* recorded and why, is `providers/slack/INGEST.md` § "A changed
-config"; Gmail's is in
-[`email_download_modes.md`](email_download_modes.md).
-
-**The rule is opt-in, and that is how it gets missed.**
-`scripts/lint_repo.py` check 8 refuses a provider crate that writes
-`sync_scope_state` without also calling `scope_config::store` — a
-crate-level check, so it catches a new provider, not a new *mode*
-inside an existing one (Gmail arrived as a new mode of `email` with a
-cursor and no record, and widening its label filter was a silent no-op
-until it was fixed). The structural fix — a cursor primitive that takes
-the scope config on the way in and hands back the `FilterChange` with
-the token, so a cursor cannot be read without saying what scope it is
-read under — touches every consumer in the table and is worth doing as
-its own change.
-
-A raised `blob_size_limit_bytes` needs no record on either API path: a
-held message with no `.eml` bytes that now fits under the cap is owed.
+Two consumers still keep `datalib_etl::scope_config`, a record of the
+scope-affecting config in the store's `sync_scope_config` table: email's
+mbox path (`only_extract_labels`, which re-reads every file when it
+widens) and `lightroom`, which uses it as a small key-value store. Both
+are local sources and go with the whole-pass change for local sources.
 
 Render has the same failure mode and resolves it differently —
 wholesale invalidation rather than a proportional reaction: a change to
