@@ -1,5 +1,15 @@
 import { test, expect } from "@playwright/test";
-import { SEARCH_MENU, cardOf, searchMenuItem, stubClipboard } from "./grid-helpers";
+import {
+  EVERY_ROW,
+  SEARCH_MENU,
+  cardOf,
+  gridSettled,
+  inDocFrame,
+  searchAndSettle,
+  searchMenuItem,
+  selectRowByUuid,
+  stubClipboard,
+} from "./grid-helpers";
 
 // The search grid's Author cell is the same chip a document draws
 // (docs/dev/plans/chips.md § "In a grid"): a link with the handle, the
@@ -88,4 +98,51 @@ test("a row's Source is a group chip that resolves, copies its id and opens its 
   await expect(cardOf(page, 'syncDashboardView({"group":"slack"})')).toBeVisible({
     timeout: 10_000,
   });
+});
+
+/// A source's storage report names its group in its heading and each
+/// store's step in its own column, as chips: they resolve to what the
+/// config calls them now, and a double-click opens the group's dashboard
+/// or the step's log.
+test("a storage report's group and step are chips that open their cards", async ({
+  page,
+  request,
+}) => {
+  const resp = await request.get(
+    `/applet/unified_index/search?q=${encodeURIComponent("source_id:datalib")}&limit=500`,
+  );
+  expect(resp.ok()).toBeTruthy();
+  const { rows } = (await resp.json()) as {
+    rows: { uuid: string; markdown_uuid: string | null; conversation_name: string }[];
+  };
+  const report = rows.find((r) => r.conversation_name === "slack storage" && r.markdown_uuid);
+  expect(report, "the fixture must have the slack storage report").toBeTruthy();
+  await page.goto(EVERY_ROW);
+  await searchAndSettle(page, "source_id:datalib");
+  await gridSettled(page);
+  await selectRowByUuid(page, report!.uuid);
+
+  const group = (await inDocFrame(page, 'a.chip[data-entity="datalib:group/slack"]')).first();
+  await expect(group).toHaveAttribute("title", /\(slack\)\n.+/, { timeout: 10_000 });
+  // The report names the step its store sits under, `slack/ingest`. This
+  // fixture root declares its sources render-only, so no such step is in
+  // its config and the chip stays as written: the step's name and id,
+  // nothing resolved. It still opens the step's log.
+  const step = (await inDocFrame(page, 'a.chip[data-entity="datalib:step/slack/ingest"]')).first();
+  await expect(step).toHaveAttribute("title", "ingest (slack/ingest)");
+
+  // The document's right-click menu on a group chip is the chip's.
+  await stubClipboard(page);
+  await group.click({ button: "right" });
+  await page.locator(".chip-menu .chip-menu-item", { hasText: /^Copy slack$/ }).click();
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { __copied?: string }).__copied))
+    .toBe("slack");
+
+  await group.dblclick();
+  await expect(cardOf(page, 'syncDashboardView({"group":"slack"})')).toBeVisible({
+    timeout: 10_000,
+  });
+  await step.dblclick();
+  await expect(cardOf(page, 'logView({"step":"slack/ingest"')).toBeVisible({ timeout: 10_000 });
 });
