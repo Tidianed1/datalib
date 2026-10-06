@@ -173,14 +173,24 @@ export async function actOnRowByUuid<T>(
   return out;
 }
 
-// Scroll a (possibly virtualized-away) row into view, then click it.
-// Returns after the click; callers assert on the consequences.
-export async function clickRowByUuid(page: Page, uuid: string) {
-  await actOnRowByUuid(page, uuid, (row) => row.click({ timeout: 3_000 }));
-}
+// Where a click on a row lands: near its left end, not its middle. The
+// columns keep their widths, so a row can be wider than the grid, and
+// its middle scrolled out of sight — Playwright then finds whatever is
+// drawn there (the "add a card" button, in one CI run), scrolls the
+// grid sideways to reach the row, and the click lands on a row the
+// grid has redrawn under it.
+const ROW_CLICK_POINT = { x: 40, y: 10 };
 
 // Select a row and confirm the grid agrees that it is selected — asked
 // of the grid's own selection model, not read off a styling class.
+//
+// Every attempt asks the grid first and clicks only if it says no. A
+// click whose mouse events landed can still throw: on a loaded runner
+// WebKit has answered the click three seconds late. A second click on
+// the row would then scroll the Columns row back to it — undoing the
+// reveal of the document column the first click opened — and select
+// nothing new. So a thrown click is not retried as a pair; the next
+// attempt starts from the grid's answer.
 export async function selectRowByUuid(page: Page, uuid: string): Promise<Locator> {
   const selected = () =>
     page.evaluate(
@@ -188,7 +198,9 @@ export async function selectRowByUuid(page: Page, uuid: string): Promise<Locator
       uuid,
     );
   await expect(async () => {
-    if (!(await selected())) await clickRowByUuid(page, uuid);
+    if (await selected()) return;
+    const rowIndex = await scrollRowIntoView(page, uuid);
+    await rowLocator(page, rowIndex).click({ position: ROW_CLICK_POINT, timeout: 3_000 });
     await expect.poll(selected, { timeout: 1_000 }).toBe(true);
   }, `row ${uuid} never became selected`).toPass({
     timeout: 15_000,
@@ -199,14 +211,12 @@ export async function selectRowByUuid(page: Page, uuid: string): Promise<Locator
 }
 
 // Right-click a row located by uuid. Same virtualization dance as
-// `clickRowByUuid` — a row scrolled out of the viewport has no DOM
+// `selectRowByUuid` — a row scrolled out of the viewport has no DOM
 // node to dispatch at — but opens the context menu instead of
-// selecting. The click is near the row's left end, not its middle: the
-// columns keep their widths, so a row can be wider than the grid, and
-// its middle scrolled out of sight.
+// selecting.
 export async function contextMenuRowByUuid(page: Page, uuid: string) {
   await actOnRowByUuid(page, uuid, (row) =>
-    row.click({ button: "right", position: { x: 40, y: 10 }, timeout: 3_000 }),
+    row.click({ button: "right", position: ROW_CLICK_POINT, timeout: 3_000 }),
   );
   await expect(page.locator(SEARCH_MENU)).toBeVisible({ timeout: 5_000 });
 }
