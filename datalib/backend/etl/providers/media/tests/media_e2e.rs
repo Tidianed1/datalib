@@ -948,27 +948,39 @@ async fn a_shortened_playlist_loses_its_trailing_entries() -> Result<()> {
     Ok(())
 }
 
+/// The last copy of an item gone, its `media_items` row and its class
+/// row stayed for good. After a clean walk they go; a file moved within
+/// the tree keeps its item and is not identified again.
 #[tokio::test]
-async fn a_deleted_file_disappears_from_the_path_table_but_the_item_remains() -> Result<()> {
-    // Scan a copy of the corpus so a file can be removed.
+async fn an_item_no_path_names_goes_and_a_moved_one_stays() -> Result<()> {
     let h = Harness::on_a_copy().await?;
     let db = &h.db;
     h.scan().await?;
     let hash = files(db).await?["music/untagged_hum.mp3"].clone();
+    let audio_rows = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM media_audio WHERE blake3 = ?")
+            .bind(&hash)
+            .fetch_one(db.pool())
+            .await
+    };
+    assert_eq!(audio_rows().await?, 1);
 
     std::fs::remove_file(h.root.join("music/untagged_hum.mp3"))?;
-    h.scan().await?;
+    std::fs::rename(
+        h.root.join("photos/bridge.jpg"),
+        h.root.join("archive/bridge.jpg"),
+    )?;
+    let s = h.scan().await?;
 
+    assert!(!files(db).await?.contains_key("music/untagged_hum.mp3"));
     assert!(
-        !files(db).await?.contains_key("music/untagged_hum.mp3"),
-        "the path row should fall out with the truncate"
+        !items(db).await?.contains_key(&hash),
+        "no path names the item any more"
     );
-    // The item survives: it is keyed on content, which has no notion of
-    // "no longer present", and keeping it keeps when it was first seen.
-    assert!(
-        items(db).await?.contains_key(&hash),
-        "the item row should remain (see INGEST.md §Orphaned items)"
-    );
+    assert_eq!(audio_rows().await?, 0);
+    assert_eq!(s.items, 0, "the moved photo is not identified again");
+    let moved = files(db).await?["archive/bridge.jpg"].clone();
+    assert!(items(db).await?.contains_key(&moved));
     Ok(())
 }
 
