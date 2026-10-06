@@ -177,6 +177,7 @@ rust_test(
     crate_root = "tests/step_tests/main.rs",
     data = [
         ":datalib_step",
+        "//datalib/backend/etl/providers/sms_backup_restore:tng_fixture",
         "//tests/fixtures:ingested/qmd-index.tar",
         "//third-party/doltlite:doltlite",
     ],
@@ -185,6 +186,7 @@ rust_test(
         "DATALIB_STEP_BIN": "$(rootpath :datalib_step)",
         "DOLTLITE_BIN": "$(rootpath //third-party/doltlite:doltlite)",
         "QMD_INDEX_TAR": "$(rootpath //tests/fixtures:ingested/qmd-index.tar)",
+        "SMS_FIXTURE_DIR": "datalib/backend/etl/providers/sms_backup_restore/tests/fixtures/sms_backup_restore_tng",
     },
     deps = [
         "//datalib/backend/etl/providers/slack:datalib_etl_slack",
