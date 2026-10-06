@@ -15,9 +15,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use datalib_etl::blob_cas::{blake3_hex, CasEdgeAccumulator, CasEdgeRow as _};
-use datalib_etl::bulk::{
-    bulk_upsert_entity_in_tx, push_placeholder_list, push_placeholders, SQL_CHUNK,
-};
+use datalib_etl::bulk::{bulk_upsert_entity_in_tx, push_placeholder_list, SQL_CHUNK};
 use datalib_etl::control::DownloadControl;
 use datalib_etl::download_problems::{self, RunProblem, SkippedRecord};
 use datalib_etl::progress::Progress;
@@ -849,7 +847,7 @@ async fn flush_account_and_lookups(
     let mut tx = db.pool().begin().await.context("begin lookups tx")?;
 
     // Account row: route through `AccountRow::from_mbox_config` and
-    // the shared `bulk_upsert_in_tx` so the synthesized row has the
+    // the shared bulk upsert so the synthesized row has the
     // exact same shape (columns + JSONB payload) that the JMAP path
     // produces. Display name defaults to the account id when the
     // config doesn't supply one; `is_personal` defaults to true.
@@ -863,7 +861,7 @@ async fn flush_account_and_lookups(
         account_config.email_address.as_deref(),
         account_config.is_personal.unwrap_or(true),
     );
-    datalib_etl::bulk::bulk_upsert_in_tx(&mut tx, &[account_row], &now).await?;
+    datalib_etl::bulk::bulk_upsert_first_seen_in_tx(&mut tx, &[account_row], &now).await?;
 
     // Mailboxes.
     let mailbox_specs: Vec<(String, String, Option<&'static str>, String)> = accumulator
@@ -888,7 +886,7 @@ async fn flush_account_and_lookups(
         })
         .collect();
     bulk_insert_mailboxes(&mut tx, account_id, &mailbox_specs).await?;
-    datalib_etl::bulk::bulk_upsert_bookkeeping(
+    datalib_etl::bulk::bulk_stamp_first_seen(
         &mut tx,
         "mailboxes",
         mailbox_specs.iter().map(|(id, _, _, _)| id.as_str()),
@@ -911,7 +909,7 @@ async fn flush_account_and_lookups(
         thread_specs.push((tid.clone(), count, payload));
     }
     bulk_insert_threads(&mut tx, account_id, &thread_specs).await?;
-    datalib_etl::bulk::bulk_upsert_bookkeeping(
+    datalib_etl::bulk::bulk_stamp_first_seen(
         &mut tx,
         "threads",
         thread_specs.iter().map(|(id, _, _)| id.as_str()),
@@ -925,13 +923,10 @@ async fn flush_account_and_lookups(
 }
 
 async fn bulk_insert_emails(tx: &mut Transaction<'_, Sqlite>, rows: &[EmailRow]) -> Result<()> {
-    // Standard `bulk_upsert_in_tx` path — `EmailRow` carries its
-    // own `BulkUpsertable` impl. The framework picks the right
-    // column list + binding sequence; the conflict clause uses the
-    // universal "every non-PK col = excluded.<col>" shape from
-    // `data_architecture_ingestion.md` §"One writer per row".
+    // `EmailRow` carries its own `BulkUpsertable` impl; the sidecar is
+    // stamped once, since every run reads every file.
     let now = datalib_time::IsoOffsetTimestamp::now_local();
-    datalib_etl::bulk::bulk_upsert_in_tx(tx, rows, &now).await
+    datalib_etl::bulk::bulk_upsert_first_seen_in_tx(tx, rows, &now).await
 }
 
 async fn bulk_insert_email_mailboxes(
@@ -1004,11 +999,13 @@ async fn bulk_insert_mailboxes(
     if specs.is_empty() {
         return Ok(());
     }
-    let cols = 5;
     for chunk in specs.chunks(SQL_CHUNK) {
+        // `jsonb(?)` on the insert as on the update: a payload stored as
+        // text once and as JSONB the next time differs by its bytes, and
+        // an unchanged mailbox would read as modified.
         let mut sql =
             String::from("INSERT INTO mailboxes (id, account_id, name, role, payload) VALUES ");
-        push_placeholders(&mut sql, chunk.len(), cols);
+        sql.push_str(&vec!["(?, ?, ?, ?, jsonb(?))"; chunk.len()].join(", "));
         sql.push_str(
             " ON CONFLICT(id) DO UPDATE SET
                 account_id = excluded.account_id,
@@ -1043,7 +1040,7 @@ async fn bulk_insert_threads(
     for chunk in specs.chunks(SQL_CHUNK) {
         let mut sql =
             String::from("INSERT INTO threads (id, account_id, email_count, payload) VALUES ");
-        push_placeholders(&mut sql, chunk.len(), 4);
+        sql.push_str(&vec!["(?, ?, ?, jsonb(?))"; chunk.len()].join(", "));
         sql.push_str(
             " ON CONFLICT(id) DO UPDATE SET
                 account_id = excluded.account_id,
@@ -1248,6 +1245,7 @@ mod tests {
         let work = tempfile::tempdir().unwrap();
         let db_path = work.path().join("e.doltlite_db");
         let mut summaries: Vec<FetchSummary> = Vec::new();
+        let mut commits: Vec<Option<String>> = Vec::new();
         for _ in 0..2 {
             let db = RawDb::open(&db_path).await.unwrap();
             let s = fetch(FetchOptions {
@@ -1257,9 +1255,18 @@ mod tests {
             .await
             .unwrap();
             summaries.push(s);
-            db.commit_all("test").await.unwrap();
+            commits.push(
+                datalib_etl::doltlite_raw::commit_run(db.pool(), "test")
+                    .await
+                    .unwrap(),
+            );
             db.close().await;
         }
+        assert!(commits[0].is_some());
+        assert_eq!(
+            commits[1], None,
+            "reading an unchanged folder again changes nothing in the store"
+        );
         let db = RawDb::open(&db_path).await.unwrap();
         assert_eq!(db.load_emails().await.unwrap().len(), 2);
 
