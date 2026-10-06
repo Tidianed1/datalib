@@ -68,8 +68,8 @@ impl WriteBatch {
 }
 
 impl RawDb {
-    /// What this source already ingested. Must run **before**
-    /// [`Self::reset_paths`].
+    /// What this source already ingested. Must run **before** the scan
+    /// writes anything.
     ///
     /// Only the caller's half: which path held which content. The stat
     /// cursor is host state and lives in the shared
@@ -119,6 +119,27 @@ impl RawDb {
         self.delete_where("media_playlist_entries", "playlist_id", ids)
             .await?;
         Ok(n)
+    }
+
+    /// Delete the items no `media_files` row names, with their class rows
+    /// and bookkeeping. Returns how many items went.
+    pub async fn delete_unnamed_items(&self) -> Result<u64> {
+        let mut tx = self.pool().begin().await.context("begin item prune tx")?;
+        let mut removed = 0;
+        for sql in [
+            "DELETE FROM media_audio WHERE blake3 NOT IN (SELECT blake3 FROM media_files)",
+            "DELETE FROM media_visual WHERE blake3 NOT IN (SELECT blake3 FROM media_files)",
+            "DELETE FROM media_items_bookkeeping WHERE id NOT IN (SELECT blake3 FROM media_files)",
+            "DELETE FROM media_items WHERE blake3 NOT IN (SELECT blake3 FROM media_files)",
+        ] {
+            removed = sqlx::query(sql)
+                .execute(&mut *tx)
+                .await
+                .context("prune unnamed items")?
+                .rows_affected();
+        }
+        tx.commit().await.context("commit item prune tx")?;
+        Ok(removed)
     }
 
     pub async fn clear_playlist_entries(&self, playlist_id: &str) -> Result<()> {

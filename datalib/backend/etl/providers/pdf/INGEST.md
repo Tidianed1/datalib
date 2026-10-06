@@ -27,7 +27,11 @@ rescan hashes nothing and still retries the corrupt fixture.
 
 A scan truncates `pdf_paths` once the walk is done and rebuilds it, so
 deletions fall out; content already in `pdf_documents` is not
-identified again.
+identified again. A file over `max_bytes` is there and not read, so it
+keeps the path row the last scan wrote. Once the paths are rebuilt
+after a clean walk, a document no path names goes with its bookkeeping
+(`documents_removed`); a file moved within the tree is named at its new
+path by then and keeps its document.
 
 ## When part of a scan fails
 

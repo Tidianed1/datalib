@@ -97,6 +97,8 @@ pub struct FetchSummary {
     /// Path rows dropped because this scan did not see them — files and
     /// playlists that are gone from the tree.
     pub removed: usize,
+    /// Items no path names any more, dropped with their class rows.
+    pub items_removed: usize,
     pub errors: usize,
 }
 
@@ -262,6 +264,10 @@ async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummar
                 .delete_playlists(&gone_playlists)
                 .await
                 .context("delete vanished playlists")?) as usize;
+        // An item is reached only through a path, so one no path names is
+        // gone from the tree. A file moved within it is named at its new
+        // path by now, and keeps its item.
+        summary.items_removed = opts.db.delete_unnamed_items().await? as usize;
     }
     // Every scan retries every file it could not read, so a row stands
     // only on a path this scan did not try: under an entry the walk could

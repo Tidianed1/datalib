@@ -59,8 +59,15 @@ impl DataProcessor for PdfIngest {
             })
             .await?;
             Ok(format!(
-                "pdfs={} docs={} hashed={} reused={} needs_ocr={} too_large={} errors={}",
-                s.pdfs_seen, s.documents, s.hashed, s.reused, s.needs_ocr, s.too_large, s.errors,
+                "pdfs={} docs={} hashed={} reused={} needs_ocr={} too_large={} docs_removed={} errors={}",
+                s.pdfs_seen,
+                s.documents,
+                s.hashed,
+                s.reused,
+                s.needs_ocr,
+                s.too_large,
+                s.documents_removed,
+                s.errors,
             ))
         })
         .await

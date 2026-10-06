@@ -74,7 +74,7 @@ impl DataProcessor for MediaIngest {
             Ok(format!(
                 "files={} items={} audio={} images={} videos={} hashed={} reused={} \
                  payload_hashed={} payload_skipped={} playlists={} entries={} entries_in_tree={} \
-                 hls_skipped={} dataless_skipped={} too_large={} removed={} errors={}",
+                 hls_skipped={} dataless_skipped={} too_large={} removed={} items_removed={} errors={}",
                 s.files_seen,
                 s.items,
                 s.audio,
@@ -91,6 +91,7 @@ impl DataProcessor for MediaIngest {
                 s.dataless_skipped,
                 s.too_large,
                 s.removed,
+                s.items_removed,
                 s.errors,
             ))
         })

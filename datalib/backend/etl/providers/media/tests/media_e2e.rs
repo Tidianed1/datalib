@@ -1111,16 +1111,14 @@ async fn a_rescan_after_edits_changes_exactly_what_it_should() -> Result<()> {
         "a changed sample is a different recording"
     );
 
-    // (5) Deleted: the path is gone; the item is not.
+    // (5) Deleted: the path is gone, and the item no path names with it.
     assert!(!files_after.contains_key("music/corrupt.mp3"));
-    assert!(
-        items_after.contains_key(&files_before["music/corrupt.mp3"]),
-        "content-keyed rows survive their last path (see INGEST.md)"
-    );
+    assert!(!items_after.contains_key(&files_before["music/corrupt.mp3"]));
 
-    // Items only ever grow: two added, none removed — including the
-    // now-orphaned pre-retag version of the MP3.
-    assert_eq!(items_after.len(), items_before.len() + 2);
+    // Two items added; two no path names any more go: the deleted file's
+    // and the pre-retag version of the MP3.
+    assert!(!items_after.contains_key(&files_before["music/untagged_hum.mp3"]));
+    assert_eq!(items_after.len(), items_before.len() + 2 - 2);
 
     // (6) Playlist: rewritten, not merged. The old positions are gone.
     let n: i64 = sqlx::query(
