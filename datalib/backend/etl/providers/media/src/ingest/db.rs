@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use sqlx::Row;
 
-use datalib_etl::bulk::{bulk_upsert_entity_in_tx, bulk_upsert_in_tx};
+use datalib_etl::bulk::{bulk_upsert_entity_in_tx, bulk_upsert_first_seen_in_tx};
 use datalib_time::IsoOffsetTimestamp;
 
 use super::schema_raw::{
@@ -189,7 +189,7 @@ impl RawDb {
         now: &IsoOffsetTimestamp,
     ) -> Result<()> {
         let mut tx = self.pool().begin().await.context("begin scan_meta tx")?;
-        bulk_upsert_in_tx(&mut tx, std::slice::from_ref(row), now)
+        bulk_upsert_first_seen_in_tx(&mut tx, std::slice::from_ref(row), now)
             .await
             .context("upsert media_scan_meta")?;
         tx.commit().await.context("commit scan_meta tx")?;
@@ -213,7 +213,7 @@ impl RawDb {
             return Ok(());
         }
         let mut tx = self.pool().begin().await.context("begin write tx")?;
-        bulk_upsert_in_tx(&mut tx, &b.items, now)
+        bulk_upsert_first_seen_in_tx(&mut tx, &b.items, now)
             .await
             .context("upsert media_items")?;
         bulk_upsert_entity_in_tx(&mut tx, &b.audio)
@@ -222,7 +222,7 @@ impl RawDb {
         bulk_upsert_entity_in_tx(&mut tx, &b.visual)
             .await
             .context("upsert media_visual")?;
-        bulk_upsert_in_tx(&mut tx, &b.files, now)
+        bulk_upsert_first_seen_in_tx(&mut tx, &b.files, now)
             .await
             .context("upsert media_files")?;
         tx.commit().await.context("commit write tx")?;
@@ -239,7 +239,7 @@ impl RawDb {
             return Ok(());
         }
         let mut tx = self.pool().begin().await.context("begin playlist tx")?;
-        bulk_upsert_in_tx(&mut tx, playlists, now)
+        bulk_upsert_first_seen_in_tx(&mut tx, playlists, now)
             .await
             .context("upsert media_playlists")?;
         bulk_upsert_entity_in_tx(&mut tx, entries)
