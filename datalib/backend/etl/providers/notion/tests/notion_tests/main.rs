@@ -10,3 +10,5 @@ mod incremental_render;
 mod live;
 mod playback_roundtrip;
 mod run_problems;
+mod support;
+mod sync_state;
