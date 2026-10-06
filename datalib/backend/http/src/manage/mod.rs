@@ -255,12 +255,27 @@ pub async fn get_manage_rows(
     if crate::flag_is_set(p.refresh.as_deref()) {
         usage::sample_on_demand(&s.usage, &s.app, s.root.clone(), &s.root_tx).await;
     }
+    let response = manage_rows(&s).await;
+    if response.ok {
+        summary::record(
+            &s.root,
+            &response.rows,
+            response.run.as_ref(),
+            response.storage.root.bytes,
+        );
+    }
+    Json(response)
+}
+
+/// Every row of the Manage table as it stands: the config as written,
+/// the loop's record, the disk. What the table and a chip both read.
+async fn manage_rows(s: &AppState) -> ManageResponse {
     let config_path = s.config_path();
     let text = std::fs::read_to_string(&config_path).unwrap_or_default();
     let record = crate::dag_record(&s.root, &s.sync).await;
     // After the record: a request it names was opened before the record
     // was saved, so it is there to read, open or not.
-    let requests = requests_named(&s, &record).await;
+    let requests = requests_named(s, &record).await;
     let storage = s
         .usage
         .snapshot(s.root.as_path(), &usage::measured_trees(&config_path))
@@ -273,7 +288,7 @@ pub async fn get_manage_rows(
     let written = match datalib_dag::written::entries_as_written(&text) {
         Ok(w) => w,
         Err(e) => {
-            return Json(ManageResponse {
+            return ManageResponse {
                 ok: false,
                 error: Some(e),
                 columns: columns(),
@@ -281,7 +296,7 @@ pub async fn get_manage_rows(
                 run: record.run,
                 storage: root_storage,
                 rows: Vec::new(),
-            })
+            }
         }
     };
     let diagnostics = datalib_dag::config::check_text(&text).diagnostics;
@@ -298,8 +313,7 @@ pub async fn get_manage_rows(
         applet_errors: &applet_errors,
     }
     .rows();
-    summary::record(&s.root, &rows, record.run.as_ref(), root_storage.root.bytes);
-    Json(ManageResponse {
+    ManageResponse {
         ok: true,
         error: None,
         columns: columns(),
@@ -307,7 +321,80 @@ pub async fn get_manage_rows(
         run: record.run,
         storage: root_storage,
         rows,
-    })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EntitiesBody {
+    entities: Vec<String>,
+}
+
+/// What a chip naming a group or a step shows: its name as the config
+/// gives it now, its mark, what the mark stands for, and its status.
+#[derive(Debug, Clone, Serialize)]
+pub struct EntityView {
+    pub label: String,
+    pub icon: Option<String>,
+    pub detail: Option<String>,
+    pub status: StatusView,
+}
+
+/// `POST /api/entities`: who each `datalib:group/…` or `datalib:step/…`
+/// URI names now, by URI (docs/dev/plans/chips.md § "One resolver"). A
+/// URI that names nothing in the config is absent from the answer.
+pub async fn post_entities(
+    State(s): State<AppState>,
+    Json(body): Json<EntitiesBody>,
+) -> Json<serde_json::Value> {
+    let rows = manage_rows(&s).await.rows;
+    let answers: serde_json::Map<String, serde_json::Value> = body
+        .entities
+        .iter()
+        .filter_map(|uri| {
+            let view = entity_view(&rows, datalib_columns::Entity::parse(uri)?)?;
+            Some((uri.clone(), serde_json::to_value(view).ok()?))
+        })
+        .collect();
+    Json(serde_json::json!({ "entities": answers }))
+}
+
+/// A step is named under its group ("Slack · Download"), since a chip
+/// shows it away from the table that nests it.
+fn entity_view(rows: &[ManageRow], entity: datalib_columns::Entity) -> Option<EntityView> {
+    use datalib_columns::Entity;
+    let group_label = |id: &str| {
+        rows.iter()
+            .find(|r| r.kind == RowKind::Group && r.id == id)
+            .map(|r| r.name.label.clone())
+    };
+    match entity {
+        Entity::Group(id) => {
+            let row = rows
+                .iter()
+                .find(|r| r.kind == RowKind::Group && r.id == id)?;
+            Some(EntityView {
+                label: row.name.label.clone(),
+                icon: row.name.icon.clone(),
+                detail: row.name.detail.clone(),
+                status: row.status.clone(),
+            })
+        }
+        Entity::Step(id) => {
+            let row = rows
+                .iter()
+                .find(|r| r.kind == RowKind::Step && r.id == id)?;
+            let label = match row.group.as_deref().and_then(group_label) {
+                Some(group) => format!("{group} · {}", row.name.label),
+                None => row.name.label.clone(),
+            };
+            Some(EntityView {
+                label,
+                icon: row.name.icon.clone(),
+                detail: row.name.detail.clone(),
+                status: row.status.clone(),
+            })
+        }
+    }
 }
 
 fn raw_stores(outputs: &[OutputStorage]) -> HashMap<String, String> {
@@ -422,6 +509,7 @@ fn group_name(g: &WrittenGroup, r#type: Option<&Identity>) -> Identity {
         label: g.name.clone().unwrap_or_else(|| g.id.clone()),
         icon,
         detail: Some(detail),
+        entity: None,
     }
 }
 
@@ -625,6 +713,7 @@ impl Snapshot<'_> {
                 label: "System".into(),
                 icon: Some("system".into()),
                 detail: Some("System".into()),
+                entity: None,
             },
             bytes_series(
                 dir_disk,
@@ -654,6 +743,7 @@ impl Snapshot<'_> {
                 label: "Logs".into(),
                 icon: None,
                 detail: Some("Every run's step states and log lines".into()),
+                entity: None,
             },
             bytes_series(
                 log_disk,
@@ -994,6 +1084,7 @@ impl RowCtx<'_> {
                     label,
                     icon: Some(phase.icon().into()),
                     detail: Some(phase.label().into()),
+                    entity: None,
                 };
                 (name, s.params.clone(), s.function.clone(), phase, r#type)
             }
@@ -1003,6 +1094,7 @@ impl RowCtx<'_> {
                     label: default_name(&id),
                     icon: Some("applet".into()),
                     detail: Some("Applet".into()),
+                    entity: None,
                 },
                 serde_json::Value::Object(Default::default()),
                 None,

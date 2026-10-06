@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { handleFromUri, uriFromHandle } from "../src/cards/chipLinks";
+import { entityFromUri, handleFromUri, uriFromHandle } from "../src/cards/chipLinks";
 import { renderDocument } from "../src/cards/renderDocument";
 
 /// A chip is a link whose href names a handle (docs/dev/plans/chips.md).
@@ -38,6 +38,20 @@ describe("handleFromUri / uriFromHandle", () => {
   });
 });
 
+/// The group and step URIs `datalib_columns::Entity` writes and reads.
+describe("entityFromUri", () => {
+  it("reads a group and a step, and nothing else", () => {
+    expect(entityFromUri("datalib:group/slack")).toEqual({ kind: "group", id: "slack" });
+    expect(entityFromUri("datalib:step/slack/ingest")).toEqual({
+      kind: "step",
+      id: "slack/ingest",
+    });
+    expect(entityFromUri("datalib:group/")).toBeNull();
+    expect(entityFromUri("datalib:handle/tel/+15550123456")).toBeNull();
+    expect(entityFromUri("mailto:riker@enterprise.org")).toBeNull();
+  });
+});
+
 describe("the chipLinks markdown plugin", () => {
   const page = (md: string) => {
     const div = document.createElement("div");
@@ -59,6 +73,18 @@ describe("the chipLinks markdown plugin", () => {
     expect(chips[0].getAttribute("href")).toBe("mailto:riker@enterprise.org");
     expect(chips[0].textContent).toBe("Will Riker");
     expect(chips[1].getAttribute("href")).toBe("slack://user?team=T01&id=U02");
+  });
+
+  it("marks a link naming a group or a step with its URI", () => {
+    const div = page(
+      "Stored by [Slack](datalib:group/slack), fetched by [ingest](datalib:step/slack/ingest).\n",
+    );
+    const chips = Array.from(div.querySelectorAll<HTMLAnchorElement>("a.chip"));
+    expect(chips.map((a) => a.dataset.entity)).toEqual([
+      "datalib:group/slack",
+      "datalib:step/slack/ingest",
+    ]);
+    expect(chips.every((a) => a.dataset.handle === undefined)).toBe(true);
   });
 
   /** A bare address in running text is a link linkify made, not one the

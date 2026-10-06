@@ -9,8 +9,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use datalib_columns::{
-    source_catalog, ColumnSearch, ColumnSpec, ColumnType, DocumentLink, FreeTextMatch, Identity,
-    RowsSpec,
+    source_catalog, ColumnSearch, ColumnSpec, ColumnType, DocumentLink, Entity, FreeTextMatch,
+    Identity, RowsSpec,
 };
 use datalib_handle::{Handle, HandleKind};
 use datalib_query::table::{FreeText, SearchTable};
@@ -40,6 +40,7 @@ pub fn author_identity(author: &str, handle: Option<&str>) -> Option<Identity> {
         label,
         icon: handle.as_ref().map(|h| handle_mark(h.kind()).to_string()),
         detail: handle.as_ref().map(|h| h.describe(author)),
+        entity: None,
     })
 }
 
@@ -248,6 +249,7 @@ impl Sources {
                 label: "Datalib".to_string(),
                 icon: Some("system".to_string()),
                 detail: Some("Datalib's own row, not a source's data".to_string()),
+                entity: None,
             };
         }
         let group = self.groups.get(source_id);
@@ -263,6 +265,9 @@ impl Sources {
                 .unwrap_or_else(|| source_id.to_string()),
             icon: r#type.as_ref().and_then(|t| t.icon.clone()),
             detail: r#type.map(|t| t.label),
+            // A group the config declares is a chip the viewer can
+            // resolve and open; an id it does not know is only a name.
+            entity: group.map(|_| Entity::Group(source_id).uri()),
         }
     }
 }

@@ -84,6 +84,53 @@ async fn write_root(root: &Path, config: &str, state_json: Option<&str>) {
     }
 }
 
+/// What a chip naming a group or a step resolves to: the name the config
+/// gives it now (a step under its group's), its mark and its status; a
+/// URI naming nothing in the config, or no entity at all, is absent.
+#[tokio::test]
+async fn entities_answer_a_chip_for_a_group_and_a_step() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_root(tmp.path(), CONFIG, None).await;
+    let app = router(state(tmp.path()).await);
+    let body = serde_json::json!({
+        "entities": [
+            "datalib:group/slack",
+            "datalib:step/slack/ingest",
+            "datalib:group/nowhere",
+            "mailto:riker@enterprise.org",
+        ]
+    });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/entities")
+                .header("x-datalib-token", TEST_TOKEN)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    let got: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let entities = got["entities"].as_object().unwrap();
+    assert_eq!(
+        entities.keys().collect::<Vec<_>>(),
+        ["datalib:group/slack", "datalib:step/slack/ingest"]
+    );
+    let group = &entities["datalib:group/slack"];
+    assert_eq!(group["label"], "Work Slack");
+    assert_eq!(group["icon"], "slack");
+    assert_eq!(group["status"]["key"], "never_run");
+    let step = &entities["datalib:step/slack/ingest"];
+    assert_eq!(step["label"], "Work Slack · Ingest");
+    assert_eq!(step["icon"], "step:ingest");
+}
+
 /// The tree: a row per group, its steps and applets under it by
 /// `path`, in config order — and the names each row shows.
 #[tokio::test]

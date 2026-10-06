@@ -74,8 +74,19 @@ export function uriFromHandle(handle) {
   return null;
 }
 
+/** The group or step a `datalib:group/<id>` or `datalib:step/<id>` URI
+ *  names, or null. Mirrors `datalib_columns::Entity::parse`.
+ *  @param {string} href
+ *  @returns {{ kind: "group" | "step", id: string } | null} */
+export function entityFromUri(href) {
+  const m = /^datalib:(group|step)\/(.+)$/.exec(href.trim());
+  if (!m) return null;
+  return { kind: /** @type {"group" | "step"} */ (m[1]), id: m[2] };
+}
+
 /** The markdown-it plugin: an explicit link whose href names a handle
- *  gets `class="chip"` and `data-handle`. A link linkify made from a bare
+ *  gets `class="chip"` and `data-handle`; one naming a group or a step,
+ *  `class="chip"` and `data-entity` (its URI). A link linkify made from a bare
  *  address in running text is left alone — its token says so — so a
  *  signature's address stays an address.
  *  @param {import("markdown-it").MarkdownIt} md */
@@ -91,6 +102,9 @@ export function chipLinks(md) {
       if (handle) {
         token.attrJoin("class", "chip");
         token.attrSet("data-handle", handle);
+      } else if (entityFromUri(href)) {
+        token.attrJoin("class", "chip");
+        token.attrSet("data-entity", href.trim());
       }
     }
     return fallback(tokens, idx, options, env, self);

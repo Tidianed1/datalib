@@ -14,11 +14,9 @@ import uplotCss from "uplot/dist/uPlot.min.css?inline";
 import slickCss from "@slickgrid-universal/common/dist/styles/css/slickgrid-theme-default.css?inline";
 import { vueCard } from "../vueCard";
 import type { CardRender } from "../types";
+import type { SyncDashboardOpts } from "../cardSources";
 
-export type SyncDashboardOpts = {
-  group: string;
-  step?: string;
-};
+export { syncDashboardSource, type SyncDashboardOpts } from "../cardSources";
 
 export function syncDashboardView(opts: SyncDashboardOpts): CardRender {
   return vueCard(
@@ -26,9 +24,4 @@ export function syncDashboardView(opts: SyncDashboardOpts): CardRender {
     { opts },
     { styleSources: [slickCss, tableGridCss, uplotCss, TimeChart, RunLogPanel] },
   );
-}
-
-/// The source of a dashboard card, for whoever opens one.
-export function syncDashboardSource(opts: SyncDashboardOpts): string {
-  return `syncDashboardView(${JSON.stringify(opts)})`;
 }

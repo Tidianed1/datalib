@@ -9,6 +9,7 @@
 // unit-tested; only `decorateHandles` touches a DOM.
 
 import { iconUrl } from "@/config/icons";
+import { STEP_GLYPHS, glyphSvg } from "@/config/glyphs";
 import { filterToken } from "@/grid/query";
 import { uriFromHandle } from "./chipLinks";
 import { Resolver } from "./resolver";
@@ -428,25 +429,57 @@ export function drawChip(el: HTMLElement, look: ChipLook): void {
   el.removeAttribute("title");
   el.setAttribute("aria-label", look.ariaLabel);
   el.dataset.label = look.text;
-  const lead = el.ownerDocument.createElement(look.initial && !look.photo ? "span" : "img");
-  lead.setAttribute("aria-hidden", "true");
-  if (look.photo) {
-    (lead as HTMLImageElement).src = look.photo;
-    (lead as HTMLImageElement).alt = "";
-    lead.className = "handle-photo";
+  const lead = chipLead(el.ownerDocument, look);
+  if (look.photo && lead) {
     // A photo the browser cannot draw (a type it does not decode, a blob
     // gone since the render) gives way to what the chip draws without one.
     lead.addEventListener("error", () => drawChip(el, { ...look, photo: null }), { once: true });
-  } else if (look.initial) {
-    lead.className = "handle-initial";
-    lead.textContent = look.initial;
-  } else {
-    const url = iconUrl(look.icon);
-    if (url) (lead as HTMLImageElement).src = url;
-    (lead as HTMLImageElement).alt = "";
-    lead.className = "handle-mark";
   }
-  el.replaceChildren(lead, el.ownerDocument.createTextNode(look.text));
+  const text = el.ownerDocument.createTextNode(look.text);
+  if (lead) el.replaceChildren(lead, text);
+  else el.replaceChildren(text);
+}
+
+/// The chip's lead: the photo, else the initial in a disc, else the
+/// mark its icon token names — a bundled picture, or a pipeline glyph
+/// for a step. Decoration: `aria-hidden`, and not copied.
+function chipLead(doc: Document, look: ChipLook): Element | null {
+  if (look.photo) {
+    const img = doc.createElement("img");
+    img.src = look.photo;
+    img.alt = "";
+    img.className = "handle-photo";
+    img.setAttribute("aria-hidden", "true");
+    return img;
+  }
+  if (look.initial) {
+    const disc = doc.createElement("span");
+    disc.className = "handle-initial";
+    disc.textContent = look.initial;
+    disc.setAttribute("aria-hidden", "true");
+    return disc;
+  }
+  const url = iconUrl(look.icon);
+  if (url) {
+    const img = doc.createElement("img");
+    img.src = url;
+    img.alt = "";
+    img.className = "handle-mark";
+    img.setAttribute("aria-hidden", "true");
+    return img;
+  }
+  const glyph =
+    look.icon === "applet"
+      ? STEP_GLYPHS.applet
+      : look.icon?.startsWith("step:")
+        ? STEP_GLYPHS[look.icon.slice(5) as keyof typeof STEP_GLYPHS]
+        : undefined;
+  if (!glyph) return null;
+  const mark = doc.createElement("span");
+  mark.className = "handle-mark handle-glyph";
+  mark.setAttribute("aria-hidden", "true");
+  mark.append(doc.importNode(glyphSvg(glyph, "", 12), true));
+  return mark;
 }
 
 /** A chip for a grid cell: the same link a renderer writes, drawn at
