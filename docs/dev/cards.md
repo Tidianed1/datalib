@@ -616,9 +616,10 @@ never a URL — a URL arriving as data would be a capability.
 One layer is joined in the viewer, deliberately: a person. The search
 grid's Author cell arrives as an identity whose id is the author's
 handle as a URI and whose label is the name the source showed; the grid
-draws it as a chip and asks the contacts app and the index who the
-visible page's handles are, one request per page, then repaints the
-cells that answered (`GridCard`'s `askAboutVisibleAuthors`). The
+draws it as a chip, and each cell it draws with a handle not yet asked
+about queues that handle; the queue goes to the contacts app and the
+index as one request once the grid has finished drawing, and the cells
+that answered are drawn again (`GridCard`'s `wantWho`). The
 producer still resolves what only it can; the contact a person linked
 is live state that moves while the row does not, so it is joined where
 it is live, the same way a document draws its chips. The reasons, and

@@ -151,9 +151,22 @@ pub fn to_commonmark(text: &str, labels: Labels<'_>) -> String {
 
     let mut out = escape_typed_markdown(text);
 
-    out = USER_REF
-        .replace_all(&out, |caps: &Captures<'_>| hold(user_mention(caps, labels)))
-        .into_owned();
+    // A mention is a chip link in text, and `@Name` in code, which shows
+    // what it holds literally.
+    out = code_parts_whole_constructs(&out)
+        .into_iter()
+        .map(|(part, is_code)| {
+            USER_REF
+                .replace_all(&part, |caps: &Captures<'_>| {
+                    if is_code {
+                        format!("@{}", user_label(caps, labels, slack_encode))
+                    } else {
+                        hold(user_mention(caps, labels))
+                    }
+                })
+                .into_owned()
+        })
+        .collect();
 
     out = CHANNEL_REF
         .replace_all(&out, |caps: &Captures<'_>| {
@@ -240,7 +253,13 @@ fn escape_typed_markdown(text: &str) -> String {
             out.push_str(part);
         } else {
             let starts_line = out.is_empty() || out.ends_with('\n');
-            out.push_str(&escape_md_syntax(part, starts_line));
+            // A `!` typed straight before a construct that becomes a
+            // link would make that link an image.
+            let escaped = escape_md_syntax(part, starts_line).replace(
+                &format!("!{CONSTRUCT_OPEN}"),
+                &format!("\\!{CONSTRUCT_OPEN}"),
+            );
+            out.push_str(&escaped);
         }
     }
     CONSTRUCT_HELD
@@ -252,6 +271,30 @@ fn escape_typed_markdown(text: &str) -> String {
                 .unwrap_or_default()
         })
         .into_owned()
+}
+
+/// [`code_span_parts`] over Slack text, with each `<…>` construct kept
+/// whole inside one part: a mention's label may hold a backtick, which
+/// must not open a code span that cuts the mention in two.
+fn code_parts_whole_constructs(text: &str) -> Vec<(String, bool)> {
+    let mut constructs: Vec<String> = Vec::new();
+    let masked = SLACK_CONSTRUCT.replace_all(text, |caps: &Captures<'_>| {
+        constructs.push(caps[0].to_string());
+        format!("{CONSTRUCT_OPEN}{}{CONSTRUCT_CLOSE}", constructs.len() - 1)
+    });
+    code_span_parts(&masked)
+        .into_iter()
+        .map(|(part, is_code)| {
+            let whole = CONSTRUCT_HELD.replace_all(part, |caps: &Captures<'_>| {
+                caps[1]
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|n| constructs.get(n).cloned())
+                    .unwrap_or_default()
+            });
+            (whole.into_owned(), is_code)
+        })
+        .collect()
 }
 
 static SLACK_CONSTRUCT: Lazy<Regex> = Lazy::new(|| Regex::new(r"<[^<>]*>").unwrap());
@@ -509,6 +552,43 @@ mod tests {
             to_commonmark("<@U_DATA> there?", no_team),
             "@Lt. Cmdr. Data there?",
             "no workspace, no handle: plain text"
+        );
+    }
+
+    /// Code shows what it holds, so a mention there is `@Name`, not the
+    /// markdown of a link; outside the code beside it, it is still a chip.
+    #[test]
+    fn a_mention_in_code_is_its_name_as_text() {
+        let lbl = labels();
+        assert_eq!(
+            to_commonmark("ask `<@U_DATA>` or <@U_DATA>", lbl),
+            "ask `@Lt. Cmdr. Data` or [@Lt. Cmdr. Data](slack://user?team=T01&id=U_DATA \
+             \"@Lt. Cmdr. Data (slack:T01/U_DATA)\")"
+        );
+        assert_eq!(
+            to_commonmark("```\n<@U_DATA>, <@U_X|a&amp;b>\n```", lbl),
+            "```\n@Lt. Cmdr. Data, @a&b\n```"
+        );
+    }
+
+    /// A `!` typed straight before a mention or a labelled link stays a
+    /// `!`; unescaped, markdown reads the link after it as an image.
+    #[test]
+    fn a_bang_before_a_construct_is_not_an_image() {
+        let lbl = labels();
+        assert_eq!(
+            to_commonmark("wow!<@U_DATA>", lbl),
+            "wow\\![@Lt. Cmdr. Data](slack://user?team=T01&id=U_DATA \
+             \"@Lt. Cmdr. Data (slack:T01/U_DATA)\")"
+        );
+        assert_eq!(
+            to_commonmark("!<https://x.test/i.png|pic>", lbl),
+            "\\![pic](https://x.test/i.png)"
+        );
+        assert_eq!(
+            to_commonmark("hi! there", lbl),
+            "hi! there",
+            "a lone `!` is left alone"
         );
     }
 

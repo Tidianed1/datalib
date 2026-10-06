@@ -27,7 +27,9 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// v10 moved only the `source_contacts` rows (`people.rs` counts
 /// reactors), and every document had to be rendered again for an
 /// existing root to hold them.
-pub const LAYOUT_VERSION: u32 = 11;
+/// v12: the people baseline counts a reactor to a message not in
+/// the mirror, which moves only the `source_contacts` rows.
+pub const LAYOUT_VERSION: u32 = 12;
 
 /// What every chat-common provider declares through
 /// `RenderProcessor::render_params`, merged with its own knobs: the
@@ -295,7 +297,12 @@ fn render_one(
         rows,
         sections,
         edges: Vec::new(),
-        contacts: crate::people::document_contacts(source_id, &doc.items, &chat.contacts),
+        contacts: crate::people::document_contacts(
+            source_id,
+            &doc.items,
+            &doc.orphan_reactions,
+            &chat.contacts,
+        ),
         problems,
     })
     .with_context(|| format!("on_doc_complete {}", doc.markdown_uuid))?;

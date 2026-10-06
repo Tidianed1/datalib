@@ -212,32 +212,30 @@ function refreshQmdState() {
 }
 
 // Who the Author chips are (docs/dev/plans/chips.md § "In a grid"): the
-// applet sends each row's handle and the name the source showed; this
-// asks the contacts app and the index about the visible page, once per
-// handle, and repaints the cells that answered — so a link made in a
-// document redraws here too, on the next ask.
+// applet sends each row's handle and the name the source showed. A cell
+// that draws a handle the grid has not asked about queues it, and the
+// queue goes to the contacts app and the index in one request once the
+// grid has finished drawing; the cells that answered are drawn again.
+// Asking from the drawing, not from a results load, is what catches a
+// cell drawn later — a scroll, a page landing, the Author column shown
+// after the load that hid it.
 const who = new Map<string, Who>();
 const whoAsked = new Set<string>();
+const whoWanted = new Set<string>();
+let whoFlush: ReturnType<typeof setTimeout> | null = null;
 let canLink = false;
 const NOBODY: Who = { mine: null, accounts: [] };
 const AUTHOR_COLUMN = "author_ref";
 
-function authorHandleOf(row: Row | null): string | null {
-  const id = row?.author_ref?.id;
-  return id ? handleFromUri(id) : null;
-}
-
-function askAboutVisibleAuthors() {
-  const grid = vueGrid?.slickGrid;
-  const column = grid?.getColumnIndex(AUTHOR_COLUMN);
-  if (!grid || column == null || column < 0) return;
-  const { top, bottom } = widen(grid.getRenderedRange(), grid.getDataLength());
-  const handles = new Set<string>();
-  for (let row = top; row <= bottom; row++) {
-    const h = authorHandleOf(rowData(row));
-    if (h && !whoAsked.has(h)) handles.add(h);
-  }
-  if (handles.size > 0) void askWho([...handles]);
+function wantWho(handle: string) {
+  if (whoAsked.has(handle)) return;
+  whoWanted.add(handle);
+  whoFlush ??= setTimeout(() => {
+    whoFlush = null;
+    const handles = [...whoWanted];
+    whoWanted.clear();
+    void askWho(handles);
+  }, 0);
 }
 
 async function askWho(handles: string[]) {
@@ -264,7 +262,6 @@ function refreshAuthorCells() {
 }
 
 function askAboutVisibleRows() {
-  askAboutVisibleAuthors();
   const grid = vueGrid?.slickGrid;
   if (!grid || !qmdColumnsVisible()) return;
   const { top, bottom } = widen(grid.getRenderedRange(), grid.getDataLength());
@@ -1219,7 +1216,10 @@ const accountFormatter: Formatter<Row> = (_r, _c, value) => {
 const authorFormatter: Formatter<Row> = (_r, _c, _v, _col, row) => {
   const ref = row.author_ref;
   const handle = ref ? handleFromUri(ref.id) : null;
-  if (handle && ref) return chipCell(handle, ref.label, who.get(handle), canLink);
+  if (handle && ref) {
+    wantWho(handle);
+    return chipCell(handle, ref.label, who.get(handle), canLink);
+  }
   const v = row.author ?? "";
   const label = accountLabel(v);
   return { text: label, toolTip: v && label !== v ? v : "" };

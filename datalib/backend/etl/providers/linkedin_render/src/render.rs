@@ -36,7 +36,8 @@ use datalib_schema::providers::Provider;
 ///     each line.
 /// v8: a connection's photo reaches the index as the URL the app serves
 ///     it at.
-pub const RENDER_VERSION: u32 = 8;
+/// v9: a photo no browser draws (the SVG ghost avatar) has no URL.
+pub const RENDER_VERSION: u32 = 9;
 
 fn profile() -> RenderProfile {
     RenderProfile {
