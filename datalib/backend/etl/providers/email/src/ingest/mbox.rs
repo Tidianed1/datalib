@@ -1697,6 +1697,96 @@ mod tests {
         );
     }
 
+    /// A `.mbox` rewritten to 0 bytes, or to text with no `From ` line,
+    /// read as a clean file holding no messages, and the prune deleted what
+    /// only it held. An mbox has no envelope that could say "no messages",
+    /// so such a file is a problem and deletes nothing; deleting the file
+    /// is what drops what it held.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_mbox_that_is_recognizably_nothing_deletes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.mbox"), msg_one()).unwrap();
+        std::fs::write(dir.path().join("b.mbox"), msg_two()).unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let db_path = work.path().join("e.doltlite_db");
+        let cache = test_cache().await;
+        let run = || {
+            run_once(&db_path, dir.path(), |db| {
+                FetchOptions::new(db, cache.clone())
+            })
+        };
+        run().await;
+
+        for (what, body) in [
+            ("an empty file", ""),
+            (
+                "text with no From line",
+                "Captain's log, stardate 41153.7\n",
+            ),
+        ] {
+            std::fs::write(dir.path().join("b.mbox"), body).unwrap();
+            let s = run().await;
+            assert_eq!(s.emails_removed, 0, "{what} deleted emails");
+            assert_eq!(stored(&db_path).await.0.len(), 2, "{what}");
+            assert!(
+                problems(&db_path)
+                    .await
+                    .iter()
+                    .any(|(k, _)| k == "listing:mbox b.mbox"),
+                "{what} is a problem on the file"
+            );
+        }
+    }
+
+    /// A changed `account_id` wrote the account row and read nothing, so
+    /// every email stayed filed under the old account and nothing ever
+    /// removed it. The files are read again under the new id and the old
+    /// account goes.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_changed_account_id_moves_the_emails_and_retires_the_old_account() {
+        let (_d, path) = write_tmp_mbox(TWO_MSG_MBOX);
+        let work = tempfile::tempdir().unwrap();
+        let db_path = work.path().join("e.doltlite_db");
+        let cache = test_cache().await;
+        let account = |id: &str| MboxAccountConfig {
+            account_id: Some(id.to_string()),
+            ..Default::default()
+        };
+        run_once(&db_path, &path, |db| FetchOptions {
+            account_config: account("enterprise"),
+            ..FetchOptions::new(db, cache.clone())
+        })
+        .await;
+        run_once(&db_path, &path, |db| FetchOptions {
+            account_config: account("defiant"),
+            ..FetchOptions::new(db, cache.clone())
+        })
+        .await;
+
+        let db = RawDb::open(&db_path).await.unwrap();
+        let accounts_of = |table: &'static str| {
+            let pool = db.pool().clone();
+            async move {
+                sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(format!(
+                    "SELECT DISTINCT account_id FROM {table} ORDER BY account_id"
+                )))
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        assert_eq!(accounts_of("emails").await, ["defiant"]);
+        assert_eq!(accounts_of("threads").await, ["defiant"]);
+        assert_eq!(accounts_of("mailboxes").await, ["defiant"]);
+        let accounts: Vec<String> = sqlx::query_scalar("SELECT id FROM accounts")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(accounts, ["defiant"]);
+        assert_eq!(db.load_emails().await.unwrap().len(), 2);
+        db.close().await;
+    }
+
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_walk_error_deletes_nothing() {
