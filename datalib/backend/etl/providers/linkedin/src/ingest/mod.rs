@@ -158,6 +158,8 @@ async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
     found.extend(export.walk_problems());
     let mut tx = db.pool().begin().await.context("begin linkedin tx")?;
 
+    // Each CSV read whole replaces its table. A table whose CSV this
+    // export left out is not touched: the export form offers a subset.
     for path in export.with_extension("csv") {
         let table = table_name(&opts.input_path, path);
         if known_file(&table).is_none() {
@@ -272,6 +274,11 @@ pub(crate) fn csv_reader(body: &str) -> csv::Reader<&[u8]> {
 fn parse_rows(table: &str, body: &str) -> Result<Vec<(String, String)>> {
     let mut rdr = csv_reader(body);
     let headers = dedup_headers(rdr.headers().context("read CSV header")?);
+    // A CSV with a header and no rows empties its table; one with no
+    // header is not that, but a file cut short or never written.
+    if headers.is_empty() {
+        anyhow::bail!("no header row: the file is empty, or holds only its Notes preamble");
+    }
     let id_cols = known_file(table)
         .map(|f| f.id_cols)
         .filter(|c| !c.is_empty());
