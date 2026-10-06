@@ -1228,7 +1228,14 @@ class IngestedTngPipelineTest(unittest.TestCase):
             worf,
             "a word edit inside a chat message",
         )
-        self.assertIn("<ins>🛡️ Jean-Luc Picard</ins>", worf, "the reaction added")
+        # The reactor is a chip link (docs/dev/plans/chips.md), so the
+        # added reaction carries Picard's Slack handle.
+        self.assertIn(
+            "<ins>🛡️ [Jean-Luc Picard](slack://user?team=T_NCC1701D&id=U_PICARD "
+            '"Jean-Luc Picard (slack:T_NCC1701D/U_PICARD)")</ins>',
+            worf,
+            "the reaction added",
+        )
 
         # PDFs specifically: 4 renderable documents, 5 pages between
         # them (the scanned blueprints are recorded but not rendered,

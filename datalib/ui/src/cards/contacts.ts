@@ -414,6 +414,9 @@ export function drawChip(el: HTMLElement, look: ChipLook): void {
     (lead as HTMLImageElement).src = look.photo;
     (lead as HTMLImageElement).alt = "";
     lead.className = "handle-photo";
+    // A photo the browser cannot draw (a type it does not decode, a blob
+    // gone since the render) gives way to what the chip draws without one.
+    lead.addEventListener("error", () => drawChip(el, { ...look, photo: null }), { once: true });
   } else if (look.initial) {
     lead.className = "handle-initial";
     lead.textContent = look.initial;

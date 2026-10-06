@@ -182,6 +182,10 @@ describe("a photo", () => {
     expect(lead.getAttribute("src")).toBe("/applet/datalib_contacts/photo/c1");
     expect(el.querySelector(".handle-initial")).toBeNull();
     expect(el.textContent).toBe("Will Riker");
+    // A photo the browser cannot decode falls back to the initial.
+    lead.dispatchEvent(new Event("error"));
+    expect(el.querySelector(".handle-photo")).toBeNull();
+    expect(el.querySelector(".handle-initial")?.textContent).toBe("W");
   });
 });
 
