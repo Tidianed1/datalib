@@ -22,7 +22,8 @@ use strum::{EnumString, IntoStaticStr, VariantArray};
 
 /// Bump whenever any constructor below returns something different for
 /// some input — a spelling newly accepted or refused, a value normalized
-/// another way.
+/// another way. A new kind is not that: no handle already stored reads
+/// differently, so it moves nothing.
 pub const RULES_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, IntoStaticStr, VariantArray)]
@@ -31,6 +32,9 @@ pub enum HandleKind {
     Email,
     Tel,
     Slack,
+    /// A Signal account's id (ACI): the one identifier a Signal backup
+    /// has for a person whose number it does not know.
+    SignalAci,
 }
 
 impl HandleKind {
@@ -137,6 +141,31 @@ impl Handle {
             .then(|| Self::of(HandleKind::Slack, &format!("{team_id}/{user_id}")))
     }
 
+    /// A Signal ACI, a UUID: 32 hex digits, with or without the dashes,
+    /// in any case. Spelled the way Signal does, lowercase with dashes.
+    /// A PNI is not accepted here: it names a number, not a person, and
+    /// the number is the handle.
+    pub fn signal_aci(aci: &str) -> Option<Self> {
+        let hex: String = aci
+            .trim()
+            .chars()
+            .filter(|c| *c != '-')
+            .map(|c| c.to_ascii_lowercase())
+            .collect();
+        if hex.len() != 32 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            return None;
+        }
+        let dashed = format!(
+            "{}-{}-{}-{}-{}",
+            &hex[..8],
+            &hex[8..12],
+            &hex[12..16],
+            &hex[16..20],
+            &hex[20..]
+        );
+        Some(Self::of(HandleKind::SignalAci, &dashed))
+    }
+
     /// A handle as written by [`Handle::as_str`]. `None` for an unknown
     /// kind or a value its kind would not have produced.
     pub fn parse(s: &str) -> Option<Self> {
@@ -156,6 +185,7 @@ impl Handle {
                 let (team, user) = value.split_once('/')?;
                 Self::slack(team, user)
             }
+            HandleKind::SignalAci => Self::signal_aci(value),
         }
     }
 
@@ -393,14 +423,41 @@ mod tests {
     }
 
     #[test]
+    fn signal_aci_is_a_uuid_however_it_was_written() {
+        let aci = Handle::signal_aci("0195683AD14087F9BDF6234DA6D6880C").unwrap();
+        assert_eq!(
+            aci.as_str(),
+            "signal_aci:0195683a-d140-87f9-bdf6-234da6d6880c"
+        );
+        assert_eq!(
+            Handle::signal_aci(" 0195683a-d140-87f9-bdf6-234da6d6880c "),
+            Some(aci)
+        );
+        for bad in [
+            "",
+            "0195683a",
+            "0195683a-d140-87f9-bdf6-234da6d6880",
+            "+15550123456",
+            "g195683ad14087f9bdf6234da6d6880c",
+        ] {
+            assert_eq!(Handle::signal_aci(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
     fn parse_round_trips_and_refuses_unnormalized_spellings() {
         for h in [
             Handle::email("riker@enterprise.org").unwrap(),
             Handle::tel("+15550123456").unwrap(),
             Handle::slack("T01", "U02").unwrap(),
+            Handle::signal_aci("0195683ad14087f9bdf6234da6d6880c").unwrap(),
         ] {
             assert_eq!(Handle::parse(h.as_str()), Some(h.clone()));
         }
+        assert_eq!(
+            Handle::parse("signal_aci:0195683AD14087F9BDF6234DA6D6880C"),
+            None
+        );
         assert_eq!(Handle::parse("email:Riker@Enterprise.org"), None);
         assert_eq!(Handle::parse("tel:+1 555 012 3456"), None);
         assert_eq!(Handle::parse("fax:+15550123456"), None);

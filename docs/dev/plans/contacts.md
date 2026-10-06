@@ -50,7 +50,7 @@ own.
 | `slack` | `{team_id}/{user_id}` | Slack messages and reactions |
 | `beeper` | the Matrix user id | Beeper |
 | `linkedin` | the profile URL | LinkedIn |
-| `signal-aci` | the ACI | Signal, when a recipient has no e164 |
+| `signal_aci` | the ACI as a lowercase UUID | Signal, when a recipient has no e164; a recipient with both ties them in Signal's account |
 | `lightroom-face` | the face tag's name | later |
 
 Phone normalization needs a default region for numbers written without
@@ -494,8 +494,8 @@ chat carries the provider's own accounts (`NormalizedChat::contacts`),
 merged with the baseline — Slack's profiles first, which tie a Slack
 user to an email; Signal's numbers as handles; email's To and Cc as a
 recipients line under the header, chipped like the author; WhatsApp's
-address book as accounts. Not yet: Signal's ACI, reactions and
-mentions, `row_handles`, groups, merge, undo, adopting a card's handles,
+address book as accounts; Signal's ACI as a handle, and its recipients
+as accounts tying number to ACI. Not yet: reactions and mentions, `row_handles`, groups, merge, undo, adopting a card's handles,
 the contact card, chips in the grid, and phases 4–6.
 
 1. **Handles end to end, nothing visible.** The handle crate (pure,
