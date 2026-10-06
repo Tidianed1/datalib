@@ -28,8 +28,9 @@ use datalib_schema::providers::Provider;
 /// `CREATED` became `created_at`, and groups listed their members; to 7
 /// when a card listed the groups it is in, and to 8 when its `CATEGORIES`
 /// joined them; to 10 when a `+1` number without ten digits after the 1
-/// stopped having a handle.
-pub const RENDER_VERSION: u32 = 11;
+/// stopped having a handle; to 12 when a card's photo reached the index
+/// as the URL the app serves it at.
+pub const RENDER_VERSION: u32 = 12;
 
 /// Every card by `(addressbook, UID)`, for a group to name its members.
 type Cards<'a> = HashMap<(&'a str, &'a str), &'a ParsedContact>;

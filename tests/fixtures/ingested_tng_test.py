@@ -1068,6 +1068,22 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ],
             "WhatsApp's address book, as each chat's contacts",
         )
+        # A card's photo is written beside its page and the index holds
+        # where the app serves it from, so a chip can draw it; a card
+        # without one carries no URL. Only `Bridge.vcf`'s two cards have one.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT c.name || '|' || coalesce(json_extract(c.contact_json, '$.photo_url') "
+                "  = '/applet/unified_index/asset/' || c.markdown_uuid || '/blobs/' "
+                "    || c.markdown_uuid || '.png', 'none') "
+                "FROM source_contacts c JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
+                "WHERE m.source_id = 'tng_contacts' "
+                "AND c.name IN ('William T. Riker', 'Jean-Luc Picard', 'Worf') ORDER BY 1;",
+            ),
+            ["Jean-Luc Picard|1", "William T. Riker|1", "Worf|none"],
+            "a card's photo, as the URL the index serves it at",
+        )
         # Signal ties a number to an ACI: Riker's account carries both,
         # so a link made through either finds the other; Q, whom the
         # backup knows by ACI alone, has the ACI as his handle; Guinan,
