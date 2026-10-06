@@ -3,6 +3,7 @@
 
 mod clear_before_ingest;
 mod embedding_map;
+mod final_message;
 mod interrupt;
 mod item_table;
 mod reset;
