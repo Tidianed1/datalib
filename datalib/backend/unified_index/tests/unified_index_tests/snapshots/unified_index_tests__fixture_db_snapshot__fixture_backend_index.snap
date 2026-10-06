@@ -1621,7 +1621,7 @@ expression: snapshot
       "message": "schema: grid index"
     },
     {
-      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=142 markdowns_read=142 markdowns_removed=3 rows_inserted=611"
+      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=142 markdowns_read=142 markdowns_removed=3 rows_inserted=613"
     }
   ],
   "grid_rows": [
@@ -12471,8 +12471,8 @@ expression: snapshot
     },
     {
       "kind": "Table",
-      "members_sha": "sha256:5bde415008f3b34e214f4dfe7fe13225b1cdd48e7cd5e6eaf1a053665b512175",
-      "rows": 156,
+      "members_sha": "sha256:d6c392a9642b61e9f6b7e98f56cbc390b022ace6586ba7c2355770cf8e48d5c2",
+      "rows": 158,
       "source": ""
     }
   ],
@@ -12480,6 +12480,6 @@ expression: snapshot
     "documents_count": 134,
     "dolt_log_count": 3,
     "grid_rows_count": 361,
-    "storage_rows_count": 213
+    "storage_rows_count": 215
   }
 }
