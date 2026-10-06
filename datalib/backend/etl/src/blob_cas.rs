@@ -956,6 +956,37 @@ impl CasEdgeAccumulator {
         T: crate::bulk::BulkUpsertable,
         F: Fn(&str, &str, Option<&str>) -> T,
     {
+        self.flush_stamped(pool, cas, build_row, EdgeStamp::EveryWrite)
+            .await
+    }
+
+    /// [`Self::flush`] for a source that reads its whole input every run:
+    /// see [`crate::bulk::bulk_stamp_first_seen`].
+    pub async fn flush_first_seen<T, F>(
+        &self,
+        pool: &sqlx::SqlitePool,
+        cas: &BlobCas,
+        build_row: F,
+    ) -> Result<()>
+    where
+        T: crate::bulk::BulkUpsertable,
+        F: Fn(&str, &str, Option<&str>) -> T,
+    {
+        self.flush_stamped(pool, cas, build_row, EdgeStamp::FirstSeen)
+            .await
+    }
+
+    async fn flush_stamped<T, F>(
+        &self,
+        pool: &sqlx::SqlitePool,
+        cas: &BlobCas,
+        build_row: F,
+        stamp: EdgeStamp,
+    ) -> Result<()>
+    where
+        T: crate::bulk::BulkUpsertable,
+        F: Fn(&str, &str, Option<&str>) -> T,
+    {
         let mut blake3_by_ref: HashMap<&str, &str> = HashMap::new();
         for f in self.bundle.fetched_refs() {
             blake3_by_ref.insert(f.ref_id, f.blake3);
@@ -997,8 +1028,23 @@ impl CasEdgeAccumulator {
             }
         }
 
-        flush_cas_edges(pool, cas, &self.bundle.cas_inserts(), rows, &error_stamps).await
+        flush_cas_edges_stamped(
+            pool,
+            cas,
+            &self.bundle.cas_inserts(),
+            rows,
+            &error_stamps,
+            stamp,
+        )
+        .await
     }
+}
+
+/// Which bulk stamp an edge flush gives the edges that landed.
+#[derive(Clone, Copy)]
+enum EdgeStamp {
+    EveryWrite,
+    FirstSeen,
 }
 
 impl Default for CasEdgeAccumulator {
@@ -1019,6 +1065,17 @@ pub async fn flush_cas_edges<T: crate::bulk::BulkUpsertable>(
     cas_inserts: &[CasInsert<'_>],
     rows: Vec<T>,
     errors: &[BlobNotFetched],
+) -> Result<()> {
+    flush_cas_edges_stamped(pool, cas, cas_inserts, rows, errors, EdgeStamp::EveryWrite).await
+}
+
+async fn flush_cas_edges_stamped<T: crate::bulk::BulkUpsertable>(
+    pool: &SqlitePool,
+    cas: &BlobCas,
+    cas_inserts: &[CasInsert<'_>],
+    rows: Vec<T>,
+    errors: &[BlobNotFetched],
+    stamp: EdgeStamp,
 ) -> Result<()> {
     if rows.is_empty() && cas_inserts.is_empty() && errors.is_empty() {
         return Ok(());
@@ -1045,15 +1102,18 @@ pub async fn flush_cas_edges<T: crate::bulk::BulkUpsertable>(
         .filter(|r| !holding.contains(r.id()))
         .collect();
     crate::bulk::bulk_upsert_entity_in_tx(&mut tx, &rows).await?;
-    crate::bulk::bulk_upsert_bookkeeping(
-        &mut tx,
-        T::TABLE,
-        rows.iter()
-            .map(|r| r.id())
-            .filter(|id| !not_fetched.contains(id)),
-        &now,
-    )
-    .await?;
+    let landed = rows
+        .iter()
+        .map(|r| r.id())
+        .filter(|id| !not_fetched.contains(id));
+    match stamp {
+        EdgeStamp::EveryWrite => {
+            crate::bulk::bulk_upsert_bookkeeping(&mut tx, T::TABLE, landed, &now).await?
+        }
+        EdgeStamp::FirstSeen => {
+            crate::bulk::bulk_stamp_first_seen(&mut tx, T::TABLE, landed, &now).await?
+        }
+    }
     for problem in errors {
         match problem.reason {
             datalib_problems::Reason::FetchFailed => {

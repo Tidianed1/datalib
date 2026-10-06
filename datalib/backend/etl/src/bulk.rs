@@ -129,7 +129,8 @@ async fn clear_fetch_problems(
 /// [`bulk_upsert_bookkeeping`] for a source that reads its whole input
 /// every run: a row's sidecar is written the first time a read finds it
 /// and left alone after, so reading an unchanged input again commits
-/// nothing.
+/// nothing. A sidecar that so far records only a failed attempt is
+/// stamped as an ordinary one would be.
 pub async fn bulk_stamp_first_seen<'a, I>(
     tx: &mut Transaction<'_, Sqlite>,
     table: &str,
@@ -148,7 +149,15 @@ where
                 (id, fetched_at_utc, attempt_count, last_attempt_at_utc, last_error, tz_offset) VALUES "
         );
         push_placeholders(&mut sql, chunk.len(), 6);
-        sql.push_str(" ON CONFLICT(id) DO NOTHING");
+        sql.push_str(&format!(
+            " ON CONFLICT(id) DO UPDATE SET
+                fetched_at_utc = excluded.fetched_at_utc,
+                attempt_count = {bk_table}.attempt_count + 1,
+                last_attempt_at_utc = excluded.last_attempt_at_utc,
+                last_error = NULL,
+                tz_offset = excluded.tz_offset
+              WHERE {bk_table}.fetched_at_utc IS NULL OR {bk_table}.last_error IS NOT NULL"
+        ));
         // Audited: only `bk_table` (= `{table}_bookkeeping`) is
         // interpolated, and the VALUES run is `push_placeholders` over
         // `chunk.len()`. All bound.
