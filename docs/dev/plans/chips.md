@@ -233,9 +233,15 @@ out here over the frame, as `ChatBody.ce.vue` does now.
    snapshots updated, the render preview now showing unresolved chips.
    The chat-common README's header section and the sanitizer's
    vocabulary test change in the same PR.
-2. **Chips in bodies.** Slack mentions and reactions, WhatsApp and
-   Signal reactions, system events, each provider in its own PR as it
-   gets a handle for them.
+2. **Chips in bodies.** Reactions: `NormalizedReaction` gains
+   `reactor_handle` (the contacts work fills it for Slack, WhatsApp,
+   Signal and Beeper), and chat-common emits the reactor as a link; no
+   provider writes a span or a link of its own. Slack `<@U…>` mentions
+   are the Slack render's own mrkdwn conversion
+   (`slack_render/src/render/mrkdwn.rs`), so they become
+   `[@Name](slack://user?team=T&id=U)` in a Slack PR after step 1
+   gives it `Handle::to_uri`. System events as each provider gets a
+   handle for them.
 3. **Clicks in the viewer.** `chipMenu`; right-click in `DocCard`;
    double-click; the click handler's `detail` guard.
 4. **The grid.** `Identity.id` as a URI on Manage; `author_handle` and
