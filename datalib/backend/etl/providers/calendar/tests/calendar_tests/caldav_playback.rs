@@ -63,6 +63,11 @@ pub(crate) fn multistatus(inner: &str) -> String {
 
 /// Discovery and the calendar listing, shared by both runs.
 pub(crate) fn account_fixtures(root: &Path) {
+    account_fixtures_listing(root, true);
+}
+
+/// The same with the home listing holding only the scheduling boxes.
+fn account_fixtures_listing(root: &Path, with_bridge: bool) {
     let find_principal = dav::BODY_CURRENT_USER_PRINCIPAL;
     fixture(
         root,
@@ -98,16 +103,19 @@ pub(crate) fn account_fixtures(root: &Path) {
              <C:calendar-user-address-set><href>mailto:picard@enterprise.test</href></C:calendar-user-address-set>\
              </prop><status>HTTP/1.1 200 OK</status></propstat></response>"
         ))));
+    let bridge = format!(
+        "<response><href>{BRIDGE}</href><propstat><prop><resourcetype><collection/><C:calendar/></resourcetype>\
+         <displayname><![CDATA[Bridge Duty]]></displayname>\
+         <C:supported-calendar-component-set><C:comp name=\"VEVENT\"/></C:supported-calendar-component-set>\
+         <C:calendar-timezone><![CDATA[BEGIN:VCALENDAR\r\nBEGIN:VTIMEZONE\r\nTZID:America/Los_Angeles\r\nEND:VTIMEZONE\r\nEND:VCALENDAR\r\n]]></C:calendar-timezone>\
+         </prop><status>HTTP/1.1 200 OK</status></propstat></response>"
+    );
     fixture(root, HttpMethod::Propfind, &format!("{HOST}{HOME}"), "1", dav::BODY_LIST_CALENDARS,
         xml(207, &multistatus(&format!(
-            "<response><href>{HOME}</href><propstat><prop><resourcetype><collection/></resourcetype><displayname><![CDATA[Jean-Luc Picard]]></displayname></prop><status>HTTP/1.1 200 OK</status></propstat></response>\
-             <response><href>{BRIDGE}</href><propstat><prop><resourcetype><collection/><C:calendar/></resourcetype>\
-             <displayname><![CDATA[Bridge Duty]]></displayname>\
-             <C:supported-calendar-component-set><C:comp name=\"VEVENT\"/></C:supported-calendar-component-set>\
-             <C:calendar-timezone><![CDATA[BEGIN:VCALENDAR\r\nBEGIN:VTIMEZONE\r\nTZID:America/Los_Angeles\r\nEND:VTIMEZONE\r\nEND:VCALENDAR\r\n]]></C:calendar-timezone>\
-             </prop><status>HTTP/1.1 200 OK</status></propstat></response>\
+            "<response><href>{HOME}</href><propstat><prop><resourcetype><collection/></resourcetype><displayname><![CDATA[Jean-Luc Picard]]></displayname></prop><status>HTTP/1.1 200 OK</status></propstat></response>{}\
              <response><href>{HOME}Inbox/</href><propstat><prop><resourcetype><collection/><C:schedule-inbox/></resourcetype><displayname><![CDATA[Inbox]]></displayname></prop><status>HTTP/1.1 200 OK</status></propstat></response>\
-             <response><href>{HOME}Outbox/</href><propstat><prop><resourcetype><collection/><C:schedule-outbox/></resourcetype><displayname><![CDATA[Outbox]]></displayname></prop><status>HTTP/1.1 200 OK</status></propstat></response>"
+             <response><href>{HOME}Outbox/</href><propstat><prop><resourcetype><collection/><C:schedule-outbox/></resourcetype><displayname><![CDATA[Outbox]]></displayname></prop><status>HTTP/1.1 200 OK</status></propstat></response>",
+            if with_bridge { bridge.as_str() } else { "" }
         ))));
 }
 
@@ -689,4 +697,38 @@ async fn an_object_the_multiget_did_not_return_is_asked_for_again_next_run() {
     );
     assert_eq!((second.events_new, second.errors), (1, 0), "{second:?}");
     assert_eq!(problem_keys(&store).await, Vec::<String>::new());
+}
+
+/// A calendar the home listing no longer names goes with its events
+/// and everything it listed: the listing is one PROPFIND, whole by
+/// nature, so absence from it is deletion.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_calendar_the_server_no_longer_lists_goes_with_its_events() {
+    let d = tempfile::tempdir().expect("tempdir");
+    let (one, two, store) = (
+        d.path().join("one"),
+        d.path().join("two"),
+        d.path().join("store"),
+    );
+    std::fs::create_dir_all(&store).unwrap();
+    account_fixtures(&one);
+    first_listing(&one);
+    account_fixtures_listing(&two, false);
+
+    let first = run(&one, &store).await;
+    assert_eq!(first.events_new, 2, "{first:?}");
+    let second = run(&two, &store).await;
+    assert_eq!(
+        (second.calendars, second.events_deleted),
+        (0, 2),
+        "{second:?}"
+    );
+    assert_eq!(stored_uids(&store).await, None);
+    for sql in [
+        "SELECT CAST(count(*) AS TEXT) FROM calendars",
+        "SELECT CAST(count(*) AS TEXT) FROM dav_resources",
+        "SELECT CAST(count(*) AS TEXT) FROM dav_resources_bookkeeping",
+    ] {
+        assert_eq!(scalar(&store, sql).await.as_deref(), Some("0"), "{sql}");
+    }
 }

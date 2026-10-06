@@ -84,6 +84,11 @@ pub(crate) fn multistatus(inner: &str) -> String {
 
 /// Discovery and the addressbook listing, shared by both runs.
 pub(crate) fn account_fixtures(root: &Path) {
+    account_fixtures_listing(root, true);
+}
+
+/// The same with the home listing holding no address book at all.
+fn account_fixtures_listing(root: &Path, with_bridge: bool) {
     let find_principal = dav::BODY_CURRENT_USER_PRINCIPAL;
     fixture(
         root,
@@ -127,14 +132,17 @@ pub(crate) fn account_fixtures(root: &Path) {
             )),
         ),
     );
+    let bridge = format!(
+        "<response><href>{BOOK}</href>\
+         <propstat><prop><resourcetype><collection/><card:addressbook/></resourcetype><displayname><![CDATA[Bridge]]></displayname><cs:getctag>2370-1</cs:getctag></prop><status>HTTP/1.1 200 OK</status></propstat>\
+         <propstat><prop><card:addressbook-description/></prop><status>HTTP/1.1 404 Not Found</status></propstat></response>"
+    );
     fixture(root, HttpMethod::Propfind, &format!("{HOST}{HOME}"), "1", api::BODY_LIST_ADDRESSBOOKS,
         xml(207, &multistatus(&format!(
             "<response><href>{HOME}</href>\
              <propstat><prop><resourcetype><collection/></resourcetype><displayname><![CDATA[#addressbooks]]></displayname></prop><status>HTTP/1.1 200 OK</status></propstat>\
-             <propstat><prop><card:addressbook-description/><cs:getctag/></prop><status>HTTP/1.1 404 Not Found</status></propstat></response>\
-             <response><href>{BOOK}</href>\
-             <propstat><prop><resourcetype><collection/><card:addressbook/></resourcetype><displayname><![CDATA[Bridge]]></displayname><cs:getctag>2370-1</cs:getctag></prop><status>HTTP/1.1 200 OK</status></propstat>\
-             <propstat><prop><card:addressbook-description/></prop><status>HTTP/1.1 404 Not Found</status></propstat></response>"
+             <propstat><prop><card:addressbook-description/><cs:getctag/></prop><status>HTTP/1.1 404 Not Found</status></propstat></response>{}",
+            if with_bridge { bridge.as_str() } else { "" }
         ))));
 }
 
@@ -667,4 +675,56 @@ async fn a_card_the_multiget_did_not_return_is_asked_for_again_next_run() {
     );
     assert_eq!((second.contacts_new, second.errors), (1, 0), "{second:?}");
     assert_eq!(problem_keys(&store).await, Vec::<String>::new());
+}
+
+/// An address book the home listing no longer names goes with its
+/// cards and everything it listed: the listing is one PROPFIND, whole
+/// by nature, so absence from it is deletion.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_address_book_the_server_no_longer_lists_goes_with_its_cards() {
+    let d = tempfile::tempdir().expect("tempdir");
+    let (one, two, store) = (
+        d.path().join("one"),
+        d.path().join("two"),
+        d.path().join("store"),
+    );
+    std::fs::create_dir_all(&store).unwrap();
+    account_fixtures(&one);
+    let v1 = cards(BRIDGE_V1);
+    fixture(
+        &one,
+        HttpMethod::Report,
+        &format!("{HOST}{BOOK}"),
+        "0",
+        &api::body_sync_collection(""),
+        xml(
+            207,
+            &multistatus(&format!(
+                "{}<sync-token>data:,1</sync-token>",
+                resource("tng-picard", "\"p1\"", card(&v1, "tng-picard")),
+            )),
+        ),
+    );
+    account_fixtures_listing(&two, false);
+
+    let first = run_named(&one, &store, Default::default(), &[])
+        .await
+        .expect("first run");
+    assert_eq!(first.contacts_new, 1, "{first:?}");
+    let second = run_named(&two, &store, Default::default(), &[])
+        .await
+        .expect("second run");
+    assert_eq!(
+        (second.addressbooks, second.contacts_deleted),
+        (0, 1),
+        "{second:?}"
+    );
+    assert_eq!(stored_uids(&store).await, None);
+    for sql in [
+        "SELECT CAST(count(*) AS TEXT) FROM addressbooks",
+        "SELECT CAST(count(*) AS TEXT) FROM dav_resources",
+        "SELECT CAST(count(*) AS TEXT) FROM dav_resources_bookkeeping",
+    ] {
+        assert_eq!(scalar(&store, sql).await.as_deref(), Some("0"), "{sql}");
+    }
 }

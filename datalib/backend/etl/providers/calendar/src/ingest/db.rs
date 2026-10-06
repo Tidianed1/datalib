@@ -172,32 +172,78 @@ impl RawDb {
             .begin()
             .await
             .context("begin delete calendar tx")?;
-        sqlx::query(
-            "DELETE FROM ics_objects_bookkeeping WHERE id IN \
-             (SELECT id FROM ics_objects WHERE calendar_id = ?)",
-        )
-        .bind(calendar_id)
-        .execute(&mut *tx)
-        .await
-        .context("delete the calendar's event sidecars")?;
-        let events = sqlx::query("DELETE FROM ics_objects WHERE calendar_id = ?")
+        let events = Self::delete_calendar(&mut tx, calendar_id).await?;
+        datalib_etl::file_checkpoint::forget_file(&mut tx, checkpoint_scope, rel).await?;
+        tx.commit().await.context("commit delete calendar tx")?;
+        Ok(events)
+    }
+
+    /// The calendars of `account_id` upstream no longer lists, with
+    /// everything stored for them: a calendar listing is whole by
+    /// nature, so absence from it is deletion. Returns how many events
+    /// went.
+    pub async fn delete_calendars_not_in(
+        &self,
+        account_id: &str,
+        listed: &[String],
+    ) -> Result<usize> {
+        let stored: Vec<String> =
+            sqlx::query_scalar("SELECT id FROM calendars WHERE account_id = ?")
+                .bind(account_id)
+                .fetch_all(self.pool())
+                .await
+                .context("select calendars")?;
+        let gone: Vec<&String> = stored.iter().filter(|id| !listed.contains(id)).collect();
+        if gone.is_empty() {
+            return Ok(0);
+        }
+        let mut tx = self
+            .pool()
+            .begin()
+            .await
+            .context("begin delete calendars tx")?;
+        let mut events = 0;
+        for id in gone {
+            events += Self::delete_calendar(&mut tx, id).await?;
+            datalib_etl::dav::state::forget_collection(&mut tx, id).await?;
+        }
+        tx.commit().await.context("commit delete calendars tx")?;
+        Ok(events)
+    }
+
+    /// The calendar, its events of either shape and their sidecars.
+    /// Returns how many events went.
+    async fn delete_calendar(tx: &mut Transaction<'_, Sqlite>, calendar_id: &str) -> Result<usize> {
+        let mut events = 0;
+        for table in ["ics_objects", "google_events"] {
+            // Audited: `table` is one of the two literals above.
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "DELETE FROM {table}_bookkeeping WHERE id IN \
+                 (SELECT id FROM {table} WHERE calendar_id = ?)"
+            )))
             .bind(calendar_id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
+            .await
+            .context("delete the calendar's event sidecars")?;
+            events += sqlx::query(sqlx::AssertSqlSafe(format!(
+                "DELETE FROM {table} WHERE calendar_id = ?"
+            )))
+            .bind(calendar_id)
+            .execute(&mut **tx)
             .await
             .context("delete the calendar's events")?
             .rows_affected();
+        }
         for sql in [
             "DELETE FROM calendars WHERE id = ?",
             "DELETE FROM calendars_bookkeeping WHERE id = ?",
         ] {
             sqlx::query(sql)
                 .bind(calendar_id)
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await
                 .context("delete calendar")?;
         }
-        datalib_etl::file_checkpoint::forget_file(&mut tx, checkpoint_scope, rel).await?;
-        tx.commit().await.context("commit delete calendar tx")?;
         Ok(events as usize)
     }
 

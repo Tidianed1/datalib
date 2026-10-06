@@ -391,7 +391,7 @@ therefore what it can see:
 | --- | --- | --- |
 | `email` (JMAP) | `Email/changes` / `Mailbox/changes` tombstones | emails, mailboxes, and the label joins |
 | `email` (Gmail) | `history.list` deletions; a whole-account walk whenever the account is not listed whole | emails, via the same cascade |
-| `contacts` (CardDAV), `calendar` (CalDAV) | RFC 6578 sync-collection `404`/`410`; a whole listing on a first sync or after the server calls the token invalid, and every run for a windowed calendar | contacts or events a whole listing does not name, once it reaches its end: a listing the server cut short (a 507 it would not page past, or 50 pages) deletes nothing until a later run carries it to the end (`dav_unconfirmed`); `datalib_etl::dav` |
+| `contacts` (CardDAV), `calendar` (CalDAV) | RFC 6578 sync-collection `404`/`410`; a whole listing on a first sync or after the server calls the token invalid, and every run for a windowed calendar; the home listing of address books or calendars, whole by nature | contacts or events a whole listing does not name, once it reaches its end: a listing the server cut short (a 507 it would not page past, or 50 pages) deletes nothing until a later run carries it to the end (`dav_unconfirmed`); an address book or calendar the home listing no longer names, with everything stored for it; `datalib_etl::dav` |
 | `contacts` (`.vcf` folder), `calendar` (`.ics` folder) | the folder's scan, and each re-read file | a gone file's address book or calendar; cards or events a re-read file dropped. Nothing is deleted when the walk reported an error |
 | `google_takeout` Chat, Maps photos | the export's scan, and each re-read `messages.json` | a gone file's user, group, messages or photo; messages a re-read file dropped. A missing `Google Chat/` or photos folder deletes nothing |
 | `google_takeout` Maps reviews and saved places, YouTube, Gemini | each re-read file, which is the feed's whole table | records the file no longer lists, and a Gemini activity's attachment edges. A missing file deletes nothing, and so does one in a layout the reader does not know (no list, or entries none of which it could read): that fails the feed as a `phase:` problem |
@@ -400,7 +400,7 @@ therefore what it can see:
 | `github` / `gitlab` | every PR's / MR's whole child list, per fetch | deleted comments, reviews, discussions |
 | `claude` (`api`) | `/chat_conversations`, one org at a time | that org's conversations |
 | `chatgpt` | `/conversations`, when the walk reached `total` | conversations |
-| `calendar` (Google) | `events.list` `cancelled` items; a whole listing on a first sync, after a `410`, and every run for a window | events a whole listing does not name. Nothing when that listing held an event with no `id`, which could be any stored one |
+| `calendar` (Google) | `events.list` `cancelled` items; a whole listing on a first sync, after a `410`, and every run for a window; the account's calendar list | events a whole listing does not name. Nothing when that listing held an event with no `id`, which could be any stored one. A calendar the list no longer names, with its events |
 | `media` | the scan; a file evicted to the cloud or over `max_bytes` is present (`Scan::present_unread`) | path rows of files the scan did not find. Nothing after a walk that reported errors |
 | `fsindex`, `pdf` | truncate-and-refill | structurally |
 | `claude` (`export`), and every source carrying [`always_clear_before_ingest`](#snapshot-inputs-always_clear_before_ingest) | the snapshot is the enumeration | structurally |

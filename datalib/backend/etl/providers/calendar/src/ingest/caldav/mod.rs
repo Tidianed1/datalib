@@ -74,6 +74,8 @@ async fn sync_account(opts: FetchOptions, problems: RunProblems) -> Result<Fetch
 
     db.upsert_calendars(&calendars.iter().map(|c| c.row.clone()).collect::<Vec<_>>())
         .await?;
+    let listed: Vec<String> = calendars.iter().map(|c| c.row.id.clone()).collect();
+    summary.events_deleted += db.delete_calendars_not_in(&account_id, &listed).await?;
 
     let selected = select_calendars(
         &problems,

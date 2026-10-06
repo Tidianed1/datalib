@@ -104,6 +104,11 @@ async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
         .await?;
     }
     summary.addressbooks = books.len();
+    let listed: Vec<String> = books
+        .iter()
+        .map(|b| addressbook_pk(&account_id, &b.href))
+        .collect();
+    summary.contacts_deleted += db.delete_addressbooks_not_in(&account_id, &listed).await?;
 
     report_unmatched_names(&found, &opts.addressbooks, &books)?;
 

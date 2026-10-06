@@ -144,6 +144,30 @@ pub async fn unlist(tx: &mut Transaction<'_, Sqlite>, collection: &str, href: &s
     Ok(())
 }
 
+/// Upstream no longer has `collection` at all: everything it listed,
+/// the sidecars, the fetch problems and any listing under way go, in
+/// the transaction that removes the provider's content for it.
+pub async fn forget_collection(tx: &mut Transaction<'_, Sqlite>, collection: &str) -> Result<()> {
+    for sql in [
+        "DELETE FROM problems WHERE scope_kind = ? AND scope_key IN \
+         (SELECT 'dav_resources:' || id FROM dav_resources WHERE collection = ?)",
+        "DELETE FROM dav_resources_bookkeeping WHERE id IN \
+         (SELECT id FROM dav_resources WHERE collection = ?)",
+        "DELETE FROM dav_resources WHERE collection = ?",
+        "DELETE FROM dav_unconfirmed WHERE collection = ?",
+    ] {
+        let mut q = sqlx::query(sql);
+        if sql.contains("scope_kind") {
+            q = q.bind(datalib_problems::ScopeKind::Entity.as_str());
+        }
+        q.bind(collection)
+            .execute(&mut **tx)
+            .await
+            .with_context(|| format!("forget what {collection} listed"))?;
+    }
+    Ok(())
+}
+
 /// A whole listing of `collection` begins: everything it lists is
 /// unconfirmed until named. A listing already under way is abandoned
 /// for this one.

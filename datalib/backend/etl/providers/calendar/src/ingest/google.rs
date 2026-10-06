@@ -73,6 +73,8 @@ async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     .await?;
     let rows: Vec<CalendarRow> = list.iter().filter_map(calendar_row).collect();
     db.upsert_calendars(&rows).await?;
+    let listed: Vec<String> = rows.iter().map(|c| c.id.clone()).collect();
+    summary.events_deleted += db.delete_calendars_not_in("google", &listed).await?;
 
     let selected = select_calendars(
         &found,

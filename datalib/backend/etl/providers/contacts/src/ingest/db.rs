@@ -319,6 +319,51 @@ impl RawDb {
             .begin()
             .await
             .context("begin delete addressbook tx")?;
+        let contacts = Self::delete_addressbook(&mut tx, addressbook_id).await?;
+        datalib_etl::file_checkpoint::forget_file(&mut tx, checkpoint_scope, rel).await?;
+        tx.commit().await.context("commit delete addressbook tx")?;
+        Ok(contacts)
+    }
+
+    /// The address books of `account_id` the server no longer lists,
+    /// with everything stored for them: a home listing is one PROPFIND,
+    /// whole by nature, so absence from it is deletion. Returns how many
+    /// contacts went.
+    pub async fn delete_addressbooks_not_in(
+        &self,
+        account_id: &str,
+        listed: &[String],
+    ) -> Result<usize> {
+        let stored: Vec<String> =
+            sqlx::query_scalar("SELECT id FROM addressbooks WHERE account_id = ?")
+                .bind(account_id)
+                .fetch_all(&self.pool)
+                .await
+                .context("select addressbooks")?;
+        let gone: Vec<&String> = stored.iter().filter(|id| !listed.contains(id)).collect();
+        if gone.is_empty() {
+            return Ok(0);
+        }
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("begin delete addressbooks tx")?;
+        let mut contacts = 0;
+        for id in gone {
+            contacts += Self::delete_addressbook(&mut tx, id).await?;
+            datalib_etl::dav::state::forget_collection(&mut tx, id).await?;
+        }
+        tx.commit().await.context("commit delete addressbooks tx")?;
+        Ok(contacts)
+    }
+
+    /// The address book, its contacts, their sidecars and what the cards
+    /// derive. Returns how many contacts went.
+    async fn delete_addressbook(
+        tx: &mut Transaction<'_, Sqlite>,
+        addressbook_id: &str,
+    ) -> Result<usize> {
         for sql in [
             "DELETE FROM contact_group_members WHERE addressbook_id = ?",
             "DELETE FROM contact_categories WHERE addressbook_id = ?",
@@ -327,13 +372,13 @@ impl RawDb {
         ] {
             sqlx::query(sql)
                 .bind(addressbook_id)
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await
                 .context("delete the addressbook's contact edges")?;
         }
         let contacts = sqlx::query("DELETE FROM contacts WHERE addressbook_id = ?")
             .bind(addressbook_id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .context("delete the addressbook's contacts")?
             .rows_affected();
@@ -343,12 +388,10 @@ impl RawDb {
         ] {
             sqlx::query(sql)
                 .bind(addressbook_id)
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await
                 .context("delete addressbook")?;
         }
-        datalib_etl::file_checkpoint::forget_file(&mut tx, checkpoint_scope, rel).await?;
-        tx.commit().await.context("commit delete addressbook tx")?;
         Ok(contacts as usize)
     }
 
