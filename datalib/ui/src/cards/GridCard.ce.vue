@@ -63,7 +63,7 @@ import FeedbackModal from "@/components/FeedbackModal.vue";
 import { buildContext, type FeedbackContext } from "@/feedback/context";
 import { filePathFromUrl, isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
 import { openExternal } from "@/externalLinks";
-import { subscribeLive } from "@/live";
+import { oneAtATime, subscribeLive } from "@/live";
 import { encodeColumns } from "@/router/columns";
 import { KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
 import { followFrame, isDarkTheme } from "@/grid/gridFrame";
@@ -1139,12 +1139,13 @@ onMounted(nameSourcesInPlaceholder);
 // download is still going.
 const cardEl = ref<HTMLElement | null>(null);
 let unsubscribeLive: (() => void) | null = null;
+const refreshRows = oneAtATime(() => runSearch(query.value, true));
 onMounted(() => {
   unsubscribeLive = subscribeLive(
     {
       root: (e) => {
         if (e.kind !== "index_changed") return;
-        void runSearch(query.value, true);
+        refreshRows();
         if (!namesASource()) void nameSourcesInPlaceholder();
       },
     },
