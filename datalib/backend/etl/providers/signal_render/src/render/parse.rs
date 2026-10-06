@@ -48,6 +48,10 @@ pub struct ScanResult {
 #[derive(Clone, Default)]
 pub struct ParsedSignal {
     pub recipients: HashMap<String, ParsedRecipient>,
+    /// Recipients whose stored frame names an ACI this build could not
+    /// read, by recipient id, with what it looked like. The recipient is
+    /// kept without it; the processor reports each.
+    pub aci_unreadable: Vec<(String, String)>,
     /// Chats indexed by `chat_id` for lookup from `DocBucket`. The
     /// chats themselves carry no items — each item ends up in the
     /// matching bucket in `docs`.
@@ -87,9 +91,14 @@ pub struct ParsedRecipient {
 }
 
 impl ParsedRecipient {
+    /// The name the backup shows, else the number, else the account id
+    /// as Signal spells it: `identifier` holds an ACI or PNI as bare hex,
+    /// which reads as nothing.
     pub fn display(&self) -> String {
         self.display_name
             .clone()
+            .or_else(|| self.identifier.clone().filter(|i| i.starts_with('+')))
+            .or_else(|| self.aci.clone())
             .or_else(|| self.identifier.clone())
             .unwrap_or_else(|| format!("recipient_{}", self.id))
     }
@@ -195,7 +204,7 @@ async fn parse_async(
         None
     };
 
-    let recipients = load_recipients(&pool).await?;
+    let (recipients, aci_unreadable) = load_recipients(&pool).await?;
     let chats = load_chats(&pool).await?;
 
     // ── Phase 1: which chats changed since the cursor? ────────────
@@ -263,6 +272,7 @@ async fn parse_async(
 
     Ok(ParsedSignal {
         recipients,
+        aci_unreadable,
         chats,
         docs,
         docs_skipped,
@@ -271,8 +281,12 @@ async fn parse_async(
     })
 }
 
-async fn load_recipients(pool: &sqlx::SqlitePool) -> Result<HashMap<String, ParsedRecipient>> {
+/// Every recipient, and those whose ACI would not read.
+type Recipients = (HashMap<String, ParsedRecipient>, Vec<(String, String)>);
+
+async fn load_recipients(pool: &sqlx::SqlitePool) -> Result<Recipients> {
     let mut recipients: HashMap<String, ParsedRecipient> = HashMap::new();
+    let mut unreadable: Vec<(String, String)> = Vec::new();
     let rrows = sqlx::query(
         "SELECT id, identifier, display_name, json(payload) AS payload FROM recipients",
     )
@@ -284,30 +298,46 @@ async fn load_recipients(pool: &sqlx::SqlitePool) -> Result<HashMap<String, Pars
         let identifier: Option<String> = r.try_get("identifier")?;
         let display_name: Option<String> = r.try_get("display_name")?;
         let payload: String = r.try_get("payload")?;
+        let aci = aci_of(&payload).unwrap_or_else(|sample| {
+            unreadable.push((id.clone(), sample));
+            None
+        });
         recipients.insert(
             id.clone(),
             ParsedRecipient {
                 id,
                 identifier,
                 display_name,
-                aci: aci_of(&payload),
+                aci,
             },
         );
     }
-    Ok(recipients)
+    unreadable.sort();
+    Ok((recipients, unreadable))
 }
 
-/// The ACI in a stored recipient frame, as a dashed lowercase UUID.
-/// The frame is the proto as JSON (`WirePayload`, read back through
-/// `json(payload)`), so a field the download never promoted to a column
-/// is still there to read.
-fn aci_of(payload: &str) -> Option<String> {
-    use datalib_signal_backup::backup::{recipient::Destination, Recipient};
-    let frame: Recipient = serde_json::from_str(payload).ok()?;
-    let Some(Destination::Contact(contact)) = frame.destination else {
-        return None;
+/// The ACI in a stored recipient frame, as a dashed lowercase UUID;
+/// `Ok(None)` for a frame that has none (a group, the account, a contact
+/// known by PNI alone). The frame is the proto as JSON (`WirePayload`,
+/// read back through `json(payload)`), and only the one path is read,
+/// so a field the proto gains or loses elsewhere costs nothing.
+/// `Err` holds what an unreadable frame or ACI looked like.
+fn aci_of(payload: &str) -> Result<Option<String>, String> {
+    let frame: serde_json::Value =
+        serde_json::from_str(payload).map_err(|e| format!("not JSON: {e}"))?;
+    let aci = match frame.pointer("/destination/Contact/aci") {
+        None | Some(serde_json::Value::Null) => return Ok(None),
+        Some(aci) => aci,
     };
-    uuid_of(contact.aci.as_deref()?)
+    let bytes: Option<Vec<u8>> = aci.as_array().and_then(|a| {
+        a.iter()
+            .map(|b| b.as_u64().and_then(|b| u8::try_from(b).ok()))
+            .collect()
+    });
+    match bytes.as_deref().map(uuid_of) {
+        Some(Some(uuid)) => Ok(Some(uuid)),
+        _ => Err(aci.to_string()),
+    }
 }
 
 fn uuid_of(bytes: &[u8]) -> Option<String> {
@@ -628,11 +658,62 @@ mod tests {
 
 #[cfg(test)]
 mod recipient_tests {
-    use super::aci_of;
+    use super::{aci_of, ParsedRecipient};
     use datalib_signal_backup::backup::{self, recipient::Destination};
 
     fn frame(destination: Option<Destination>) -> String {
         serde_json::to_string(&backup::Recipient { id: 7, destination }).unwrap()
+    }
+
+    /// Only the ACI's path is read: a frame written by an older proto,
+    /// lacking a field this build's requires, or carrying one it does not
+    /// know, still gives its ACI; an ACI that is not one says what it
+    /// looked like instead of vanishing. Decoding the whole `Recipient`
+    /// dropped every ACI the day the proto gained a required field.
+    #[test]
+    fn the_aci_is_read_alone_and_a_bad_one_is_said() {
+        let aci: Vec<u8> = (0..16).collect();
+        let mut v: serde_json::Value =
+            serde_json::from_str(&frame(Some(Destination::Contact(backup::Contact {
+                aci: Some(aci),
+                ..Default::default()
+            }))))
+            .unwrap();
+        v["destination"]["Contact"]["field_added_upstream"] = serde_json::json!(true);
+        v["destination"]["Contact"]
+            .as_object_mut()
+            .unwrap()
+            .remove("blocked")
+            .expect("the frame carries `blocked`");
+        v.as_object_mut().unwrap().remove("id").expect("and `id`");
+        assert_eq!(
+            aci_of(&v.to_string()),
+            Ok(Some("00010203-0405-0607-0809-0a0b0c0d0e0f".to_string()))
+        );
+        v["destination"]["Contact"]["aci"] = serde_json::json!([1, 2, 3]);
+        assert_eq!(aci_of(&v.to_string()), Err("[1,2,3]".to_string()));
+        v["destination"]["Contact"]["aci"] = serde_json::json!("not bytes");
+        assert!(aci_of(&v.to_string()).is_err());
+        assert!(aci_of("not json").is_err());
+    }
+
+    /// A recipient the backup knows by ACI and nothing else reads as the
+    /// ACI Signal spells, not the bare hex the download stored.
+    #[test]
+    fn a_nameless_recipient_reads_as_its_number_else_its_aci() {
+        let r = |identifier: &str, aci: Option<&str>| ParsedRecipient {
+            id: "8".into(),
+            identifier: Some(identifier.into()),
+            display_name: None,
+            aci: aci.map(String::from),
+        };
+        let dashed = "0195683a-d140-87f9-bdf6-234da6d6880f";
+        assert_eq!(
+            r("0195683ad14087f9bdf6234da6d6880f", Some(dashed)).display(),
+            dashed
+        );
+        assert_eq!(r("+17015550101", Some(dashed)).display(), "+17015550101");
+        assert_eq!(r("abcdef", None).display(), "abcdef");
     }
 
     /// The ACI is read from the frame the download stored whole, so a
@@ -648,24 +729,22 @@ mod recipient_tests {
             })))
         };
         assert_eq!(
-            aci_of(&contact(Some(aci.clone()), None)).as_deref(),
-            Some("00112233-4455-6677-8899-aabbccddeeff")
+            aci_of(&contact(Some(aci.clone()), None)),
+            Ok(Some("00112233-4455-6677-8899-aabbccddeeff".to_string()))
         );
         assert_eq!(
             aci_of(&contact(None, Some(aci.clone()))),
-            None,
+            Ok(None),
             "a PNI is no ACI"
         );
-        assert_eq!(
-            aci_of(&contact(Some(vec![1, 2, 3]), None)),
-            None,
-            "not a UUID"
+        assert!(
+            aci_of(&contact(Some(vec![1, 2, 3]), None)).is_err(),
+            "not a UUID, and said so"
         );
         assert_eq!(
             aci_of(&frame(Some(Destination::Self_(backup::Self_::default())))),
-            None
+            Ok(None)
         );
-        assert_eq!(aci_of(&frame(None)), None);
-        assert_eq!(aci_of("not json"), None);
+        assert_eq!(aci_of(&frame(None)), Ok(None));
     }
 }
