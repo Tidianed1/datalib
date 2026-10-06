@@ -531,3 +531,34 @@ async fn a_held_table_keeps_its_records_media_edges() {
     assert_eq!(e.edge_owners().await, before);
     e.db.clone().close().await;
 }
+
+/// Every run reads the whole export, so reading an unchanged one again
+/// must leave the store as it was: a re-stamped sidecar is a commit, and
+/// a bigger store, on every sync.
+///
+/// The video the fixture leaves out is put in place: a missing file is
+/// recorded as a problem again on every run, and the problems store
+/// re-stamps that row's `last_seen_at_utc` each time.
+#[tokio::test(flavor = "multi_thread")]
+async fn reading_an_unchanged_export_again_commits_nothing() {
+    let ex = Export::new().await;
+    let video = ex
+        .root
+        .join("your_facebook_activity/posts/media/videos/600000000000001.mp4");
+    fs::create_dir_all(video.parent().unwrap()).unwrap();
+    fs::write(&video, b"not really a video").unwrap();
+    let mut commits = Vec::new();
+    for _ in 0..2 {
+        ex.sync().await;
+        commits.push(
+            datalib_etl::doltlite_raw::commit_run(ex.db.pool(), "test")
+                .await
+                .unwrap(),
+        );
+    }
+    assert!(commits[0].is_some());
+    assert_eq!(
+        commits[1], None,
+        "reading an unchanged export again changes nothing in the store"
+    );
+}

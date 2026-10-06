@@ -591,3 +591,29 @@ fn a_run_that_fails_before_its_prune_prunes_on_the_next() -> Result<()> {
         Ok::<_, anyhow::Error>(())
     })
 }
+
+/// Reading an unchanged export again must leave the store as it was: a
+/// re-stamped sidecar is a commit, and a bigger store, on every sync.
+#[test]
+fn reading_an_unchanged_export_again_commits_nothing() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let raw_dir = tmp.path().join("raw");
+    fs::create_dir_all(&raw_dir)?;
+    let cache = tmp.path().join("fpcache.sqlite");
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        let db = RawDb::open(&db_path_for(&raw_dir)).await?;
+        let mut commits = Vec::new();
+        for _ in 0..2 {
+            fetch_dir(&db, &fixture_root(), &cache).await?;
+            commits.push(datalib_etl::doltlite_raw::commit_run(db.pool(), "test").await?);
+        }
+        db.close().await;
+        assert!(commits[0].is_some());
+        assert_eq!(
+            commits[1], None,
+            "reading an unchanged export again changes nothing in the store"
+        );
+        Ok(())
+    })
+}

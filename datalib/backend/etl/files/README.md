@@ -72,7 +72,8 @@ for f in changes.needs_reading() { …; record_file(&mut tx, SCOPE, f).await?; }
 A scope namespaces cursor rows per `(provider, feed)`, so two feeds can claim
 the same file without colliding. Stamping is per file and inside the caller's
 transaction, so a crash partway through keeps what landed and re-reads only
-the rest.
+the rest. A file stamped again with the same bytes keeps its stamp, so a
+source that reads an unchanged file again commits nothing for it.
 
 **A file that is gone takes its records with it.** `changes.removed` names
 every path the cursor has and the scan does not. A source whose rows are keyed
