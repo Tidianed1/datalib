@@ -3,7 +3,7 @@
 //! grid-row plumbing to
 //! [`datalib_etl_chat_common::render::render_all`].
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use anyhow::{Context as _, Result};
 use serde_json::Value;
