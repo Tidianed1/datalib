@@ -177,9 +177,9 @@ pub struct ManageRow {
     pub queue: Quantity,
     /// When that work is done at its recent pace — see `manage::queue`.
     pub eta: Quantity,
-    /// The errors and warnings its store holds, drawn after the name —
-    /// see `manage::problems`. A group shows its render step's, the
-    /// union for the source; the System row, the config's warnings.
+    /// The errors and warnings the step found, drawn after the name —
+    /// see `manage::problems`. A group shows the sum of its steps'; the
+    /// System row, the config's warnings.
     pub problems: Vec<Chip>,
     /// The items its store holds, as of the run it last counted in,
     /// with the series behind the number — see `manage::items`. No
@@ -1408,16 +1408,12 @@ impl RowCtx<'_> {
             .collect();
         let cells =
             queue::group_cells(&child_cells.iter().map(|(l, c)| (*l, c)).collect::<Vec<_>>());
-        // The last step in the pipeline that has counted: render's store
-        // is the union of everything upstream of it for this source, and
-        // the index's is the union of every source.
-        let problems = ordered
-            .iter()
-            .rev()
-            .map(|c| row_of(c.id()))
-            .find(|r| !r.problems.is_empty())
-            .map(|r| r.problems.clone())
-            .unwrap_or_default();
+        let problems = problems::group_chips(
+            &steps
+                .iter()
+                .map(|c| self.snap.record.problems.get(c.id()))
+                .collect::<Vec<_>>(),
+        );
         // Only the render step counts items, so the group shows that one
         // child's cell rather than a sum over children that would double
         // it the day a second step reported one.

@@ -409,9 +409,9 @@ async fn a_finished_run_reaches_the_rows() {
 
 /// The counts after a row's name read the `problems{severity=…}`
 /// metrics a step reported at the end of its last run: a red and a
-/// yellow number on the render step that counted some, nothing on the
-/// index that counted none or the ingest step that never counted — and
-/// the group shows its last counting step's.
+/// yellow number on each step that counted some, nothing on the index
+/// that counted none or a step that never counted — and the group shows
+/// its steps' summed, since each counts only what it found itself.
 #[tokio::test]
 async fn problem_counts_reach_the_rows_from_the_run_store() {
     let tmp = tempfile::tempdir().unwrap();
@@ -436,6 +436,8 @@ async fn problem_counts_reach_the_rows_from_the_run_store() {
         };
         w.metric(metric("slack/render_markdown", "severity=error", 2));
         w.metric(metric("slack/render_markdown", "severity=warning", 5));
+        w.metric(metric("slack/ingest", "severity=error", 0));
+        w.metric(metric("slack/ingest", "severity=warning", 1));
         w.metric(metric("unified_index/grid_index", "severity=error", 0));
         w.metric(metric("unified_index/grid_index", "severity=warning", 0));
     }
@@ -460,11 +462,17 @@ async fn problem_counts_reach_the_rows_from_the_run_store() {
     ];
     assert_eq!(chips("slack/render_markdown"), red_and_yellow);
     assert_eq!(
-        chips("group:slack"),
-        red_and_yellow,
-        "the group shows render's"
+        chips("slack/ingest"),
+        vec![("warning".to_string(), "1".to_string())]
     );
-    assert_eq!(chips("slack/ingest"), vec![], "never counted");
+    assert_eq!(
+        chips("group:slack"),
+        vec![
+            ("error".to_string(), "2".to_string()),
+            ("warning".to_string(), "6".to_string()),
+        ],
+        "the group sums its steps"
+    );
     assert_eq!(
         chips("unified_index/grid_index"),
         vec![],

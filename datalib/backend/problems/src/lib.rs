@@ -233,7 +233,8 @@ pub struct Problem {
     /// lossy rule rather than a defect. Must be stable across runs —
     /// name it for the rule, not for the value it happened to see.
     pub rule: Option<String>,
-    /// First 80 characters of the offending value — see [`sample_of`].
+    /// First 80 characters of the offending value — see [`sample_of`] —
+    /// or, from [`Problem::explained`], the writer's explanation whole.
     pub sample: String,
     /// `None` takes [`Severity::default_for`] the outcome.
     pub severity: Option<Severity>,
@@ -260,6 +261,21 @@ impl Problem {
             path: None,
             rule: None,
             sample: sample_of(sample),
+            severity: None,
+        }
+    }
+
+    /// A problem about something larger than one value — a listing, a
+    /// phase, a configured entry — whose sample is the writer's own
+    /// explanation, kept whole: cut at 80 characters it stops saying
+    /// what happened.
+    pub fn explained(reason: Reason, field: Option<String>, explanation: &str) -> Self {
+        Self {
+            reason,
+            field,
+            path: None,
+            rule: None,
+            sample: explanation.to_string(),
             severity: None,
         }
     }
