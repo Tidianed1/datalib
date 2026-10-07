@@ -404,6 +404,16 @@ fn bounds_of(gap: &Span, now: &str) -> Bounds {
     }
 }
 
+/// `days` before `now`, or `None` when that is before the Unix epoch:
+/// no forge has anything that old, and a year below 1 neither sorts as
+/// a `coverage` bound nor is a date a search accepts.
+fn refresh_floor(now: &IsoOffsetTimestamp, days: u32) -> Option<IsoOffsetTimestamp> {
+    let at = now
+        .inner()
+        .checked_sub_signed(chrono::Duration::days(days.into()))?;
+    (at.timestamp() >= 0).then(|| IsoOffsetTimestamp::from(at))
+}
+
 /// Every scope's searches, each gap of what it has not looked at in
 /// turn, newest first. Each search's results and its span land in one
 /// transaction. Returns the give-up that ended the searches, if one did.
@@ -421,8 +431,9 @@ async fn discover<F: Forge>(
     let floor = if from_the_start {
         String::new()
     } else {
-        let window = chrono::Duration::days(opts.refresh_window_days as i64);
-        forge.stamp(&IsoOffsetTimestamp::from(opts.now.inner() - window))
+        refresh_floor(opts.now, opts.refresh_window_days)
+            .map(|at| forge.stamp(&at))
+            .unwrap_or_default()
     };
     let wanted = Span::new(floor, now.clone());
     for scope in opts.scopes {
@@ -839,6 +850,19 @@ pub fn numeric_id(payload: &Value, what: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A window of 1,000,000 days put the floor in the year -712, which
+    /// went to the search as a date; one of `u32::MAX` days panicked in
+    /// the subtraction.
+    #[test]
+    fn a_refresh_window_reaching_before_the_epoch_has_no_floor() {
+        let now = datalib_time::parse_strict("2369-04-01T00:00:00+00:00").unwrap();
+        for days in [1_000_000, u32::MAX] {
+            assert!(refresh_floor(&now, days).is_none(), "{days}");
+        }
+        let floor = refresh_floor(&now, 30).unwrap();
+        assert_eq!(floor.inner().to_rfc3339(), "2369-03-02T00:00:00+00:00");
+    }
 
     fn listed(number: u32, updated_at: &str) -> Listed {
         Listed {
