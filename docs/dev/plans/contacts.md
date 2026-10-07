@@ -194,6 +194,28 @@ so it is clear why they matched. Like the rest of search, it is as
 fresh as the last sync. The filter is typed by people, so its spelling
 is kept stable once shipped.
 
+## Option: the contact's name in the markdown
+
+Today no render reads the contacts store, so a document carries only
+the name its source showed, and a link changes no stored document
+(the reference's §"Searching for a person"). Writing the contact's
+name into the chip link instead would let a document say who a handle
+is without the app: `grep` finds Riker's mail under "Riker" whatever
+the sender called him, and qmd's free text does too.
+
+What it would take:
+
+- **Render reads the contacts store**, at one pinned commit, the way
+  it reads its own raw store, and reports which commit it used.
+- **A link renders again only the documents that name its handles.**
+  `row_handles` says which those are; re-rendering every source on
+  each link would make linking expensive enough to avoid.
+- **The chip still draws from the live answer**, so a document
+  rendered before the last link never shows a stale name; the stored
+  name is for readers outside the app.
+
+Not decided; nothing built so far rules it out.
+
 ## Prior art: Thunderbird's global search
 
 Thunderbird's global search index (Gloda, `global-messages-db.sqlite`;

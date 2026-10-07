@@ -67,6 +67,8 @@ are not. This page says what the tree does.
 | word | means |
 |---|---|
 | **handle** | one identifier in one namespace, normalized: `email:riker@enterprise.org`, `tel:+12025550101`, `slack:T01/U02`, `signal_aci:<uuid>`. `datalib_handle` makes them; the UI's `chipLinks.js` mirrors its rules by hand. |
+| **render** | the pipeline's render step: it writes a source's documents (markdown files) and grid rows into its render store during a sync, and the index and qmd read them from there. "Renders again" means those stored documents are rewritten. |
+| **draw** | what the UI does with a chip when it is shown: it asks who the handle is and paints the name, photo and mark. Nothing is stored. |
 | **chip link** | how a document names a person: a markdown link whose href is the handle as a URI, `[Will Riker](mailto:riker@enterprise.org "Will Riker <riker@enterprise.org>")`. The viewer draws it as a chip. |
 | **source contact** | a `NormalizedContact` a source wrote: that source's attempt at a neutral, unified record of what it knows about one person, keyed by `source_id` and the source's own `key`. The index stores them in `source_contacts`; the UI holds them as `Who.sourceContacts`. |
 | **contact** | a person's own record in the contacts app, also answered as a `NormalizedContact`, with `source_id = "datalib_contacts"`. |
@@ -149,7 +151,7 @@ or refused, a value normalized another way. Two things hang off it:
 
 - **Every source renders again.** The render step puts the version in
   every source's render params as `_handle_rules`
-  (`datalib_step/src/render.rs`), so a bump re-renders everything the
+  (`datalib_step/src/render.rs`), so a bump renders everything again the
   way any param change does, and no provider bumps its own
   `RENDER_VERSION` for it.
 - **The contacts store respells the links a person made.** Each rules
@@ -427,7 +429,8 @@ covers part of it:
 **Why a link stays cheap.** No render reads the contacts store, so a
 document holds handles and the names its source showed, never a
 contact. Linking, unlinking or marking a handle stopped changes no
-source's markdown: nothing re-renders, qmd re-indexes nothing, and the
+source's stored markdown: no document renders again, qmd re-indexes
+nothing, and the
 `row_handles` rows for messages stay as they are, since a message names
 the same handles before and after. Under the plan, what moves is the
 one contact's own document, which the snapshot renders again and qmd
@@ -435,19 +438,35 @@ indexes again, and its handle list; the join picks up the rest when
 it runs. `row_handles` itself is filled from documents, so it can load
 the way `source_contact_handles` does: `grid_index` already reads only
 the documents a source changed since the last index (`dolt_diff`),
-not every document. Search follows a link one sync later; chips follow
-it at once.
+not every document. Search follows a link one sync later; chips are
+drawn from the live answer at once.
 
-## What re-renders when
+**Keeping the name out of the markdown is a choice, not a rule.**
+Writing a contact's name into each chip link (its text or its title)
+would make a document say who a handle is on its own: readable as a
+plain file, findable by `grep`, and searchable by qmd under the name
+you gave the person. It would cost what the paragraph above saves:
+render would read the contacts store, and a link would render again
+every document naming the handle and send each back through qmd.
+`row_handles` would name exactly those documents, so the cost can stay
+proportional to the link. Nothing in the tree rules it out: chips draw
+from the live answer whatever the link text says.
+[`plans/contacts.md`](plans/contacts.md) §"Option: the contact's name
+in the markdown" keeps it open.
+
+## What renders again when
+
+Which changes make the render step rewrite stored documents. Drawing a
+chip in the UI is separate and always uses the latest answer.
 
 | change | what moves |
 |---|---|
-| the handle rules (`RULES_VERSION`) | every source re-renders; the contacts store takes a ladder rung |
+| the handle rules (`RULES_VERSION`) | every source renders again; the contacts store takes a ladder rung |
 | a new handle kind | nothing stored; the places above |
 | a provider's handles or source contacts | that provider's `RENDER_VERSION` |
-| the header, the recipients line, or what `people.rs` counts | chat-common's `LAYOUT_VERSION`, which re-renders every chat source |
+| the header, the recipients line, or what `people.rs` counts | chat-common's `LAYOUT_VERSION`, which renders every chat source again |
 | what contact-common writes | the `RENDER_VERSION` of each source that uses it (contacts, linkedin, facebook) |
-| a link, an unlink, a handle marked stopped | nothing: chips redraw, no source re-renders |
+| a link, an unlink, a handle marked stopped | no document; open chips are drawn again |
 | the contacts store's shape | a rung on `LADDER`; never a reset |
 
 ## Where it is tested
