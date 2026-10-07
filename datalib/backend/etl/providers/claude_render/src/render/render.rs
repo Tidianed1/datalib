@@ -3,7 +3,7 @@
 //! grid-row plumbing to
 //! [`datalib_etl_chat_common::render::render_all`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context as _, Result};
 use serde_json::Value;
@@ -20,7 +20,9 @@ use datalib_etl_chat_common::types::{
 };
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::html::{escape_md_block, escape_md_inline, escape_text, md_code_block};
+use datalib_etl_render::html::{
+    escape_md_block, escape_md_inline, escape_text, md_code_block, md_code_span, md_link_dest,
+};
 use datalib_etl_render::inputs::Inputs;
 
 use super::ids;
@@ -51,7 +53,10 @@ use datalib_schema::providers::Provider;
 /// v8: every id carries its row's `created_at` in its leading bits
 ///     (`datalib_id`'s v8 layout), so a sync's rows land in adjacent
 ///     leaves of the render store and the index.
-pub const RENDER_VERSION: u32 = 9;
+/// v10: the branch the user last saw rather than every edit; cited
+///     sources listed; pasted text named; `artifacts`, `create_file`,
+///     `bash_tool` and search results readable rather than JSON.
+pub const RENDER_VERSION: u32 = 10;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -211,17 +216,12 @@ fn build_chat(
     for a in &shredded.attachments {
         atts_by_msg.entry(&a.message_uuid).or_default().push(a);
     }
-    let mut msgs: Vec<&MessageRow> = shredded.messages.iter().collect();
-    msgs.sort_by(|a, b| {
-        (
-            a.created_at.as_deref().unwrap_or(""),
-            a.message_uuid.as_str(),
-        )
-            .cmp(&(
-                b.created_at.as_deref().unwrap_or(""),
-                b.message_uuid.as_str(),
-            ))
-    });
+    let leaf = conv
+        .raw_json
+        .get("current_leaf_message_uuid")
+        .and_then(Value::as_str);
+    let msgs =
+        shown_branch(&shredded.messages, leaf).unwrap_or_else(|| by_time(&shredded.messages));
 
     let mut items: Vec<NormalizedChatItem> = Vec::new();
     let mut last_ms = conv.created_at.as_deref().and_then(iso_to_ms);
@@ -257,13 +257,18 @@ fn build_chat(
         // The message item: its `text` blocks, plus any extracted-text
         // attachments folded inline and downloadable files as
         // attachments. Always emitted so the per-message grid row stays.
-        let mut body_parts: Vec<String> = blocks
+        let text_blocks: Vec<&ContentBlockRow> = blocks
             .iter()
+            .copied()
             .filter(|b| b.r#type.as_deref() == Some("text"))
+            .collect();
+        let mut body_parts: Vec<String> = text_blocks
+            .iter()
             .filter_map(|b| b.text.as_deref())
             .filter(|s| !s.is_empty())
             .map(|s| s.trim_end().to_string())
             .collect();
+        body_parts.extend(sources_list(&text_blocks));
 
         let mut atts = atts_by_msg
             .get(m.message_uuid.as_str())
@@ -280,10 +285,7 @@ fn build_chat(
                     .as_object()
                     .and_then(|o| o.get("extracted_content"))
                     .and_then(Value::as_str);
-                body_parts.push(render_extracted_attachment(
-                    name.unwrap_or("(unnamed)"),
-                    extracted,
-                ));
+                body_parts.push(render_extracted_attachment(name.unwrap_or(""), extracted));
             } else if let Some(id) = id {
                 // Downloadable file → chat-common materializes via ref_id.
                 norm_atts.push(NormalizedAttachment {
@@ -636,6 +638,111 @@ fn filter_nonempty(s: String) -> Option<String> {
     (!s.trim().is_empty()).then_some(s)
 }
 
+/// The parent a conversation's first message names.
+const ROOT_PARENT: &str = "00000000-0000-4000-8000-000000000000";
+
+/// The branch the user last saw: `leaf → parent` up to the root, in
+/// order. `None` when there is no leaf, or the chain names a message the
+/// payload lacks or loops, so the caller shows every message instead.
+fn shown_branch<'a>(messages: &'a [MessageRow], leaf: Option<&str>) -> Option<Vec<&'a MessageRow>> {
+    let by_uuid: HashMap<&str, &MessageRow> = messages
+        .iter()
+        .map(|m| (m.message_uuid.as_str(), m))
+        .collect();
+    let mut path: Vec<&MessageRow> = Vec::new();
+    let mut cursor = leaf;
+    while let Some(uuid) = cursor.filter(|u| *u != ROOT_PARENT) {
+        let m = *by_uuid.get(uuid)?;
+        if path.len() == messages.len() {
+            return None;
+        }
+        path.push(m);
+        cursor = m.parent_message_uuid.as_deref();
+    }
+    path.reverse();
+    (!path.is_empty()).then_some(path)
+}
+
+fn by_time(messages: &[MessageRow]) -> Vec<&MessageRow> {
+    let mut msgs: Vec<&MessageRow> = messages.iter().collect();
+    msgs.sort_by(|a, b| {
+        (
+            a.created_at.as_deref().unwrap_or(""),
+            a.message_uuid.as_str(),
+        )
+            .cmp(&(
+                b.created_at.as_deref().unwrap_or(""),
+                b.message_uuid.as_str(),
+            ))
+    });
+    msgs
+}
+
+/// Every page a message's text cites, once each in order of first
+/// citation, as a numbered list after the text. A citation names its
+/// spans by character offset; splicing markers into the text there is
+/// not attempted.
+fn sources_list(text_blocks: &[&ContentBlockRow]) -> Option<String> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut lines: Vec<String> = Vec::new();
+    let citations = text_blocks
+        .iter()
+        .filter_map(|b| b.raw_json.get("citations").and_then(Value::as_array))
+        .flatten()
+        .filter_map(Value::as_object);
+    for c in citations {
+        let site_of_citation = c
+            .get("metadata")
+            .and_then(|m| m.get("site_name"))
+            .and_then(Value::as_str);
+        let sources: Vec<&serde_json::Map<String, Value>> = c
+            .get("sources")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_object).collect())
+            .unwrap_or_default();
+        let entries: Vec<(&str, Option<&str>, Option<&str>)> = if sources.is_empty() {
+            let url = c.get("url").and_then(Value::as_str);
+            url.map(|u| (u, str_of(c, "title"), site_of_citation))
+                .into_iter()
+                .collect()
+        } else {
+            sources
+                .iter()
+                .filter_map(|s| {
+                    let url = str_of(s, "url")?;
+                    let site = str_of(s, "source").or_else(|| {
+                        (c.get("url").and_then(Value::as_str) == Some(url))
+                            .then_some(site_of_citation)
+                            .flatten()
+                    });
+                    Some((url, str_of(s, "title").or_else(|| str_of(c, "title")), site))
+                })
+                .collect()
+        };
+        for (url, title, site) in entries {
+            if url.is_empty() || !seen.insert(url.to_string()) {
+                continue;
+            }
+            let mut line = format!(
+                "{}. [{}]({})",
+                lines.len() + 1,
+                escape_md_inline(title.unwrap_or(url)),
+                md_link_dest(url)
+            );
+            if let Some(site) = site {
+                line.push_str(&format!(" — {}", escape_md_inline(site)));
+            }
+            lines.push(line);
+        }
+    }
+    (!lines.is_empty()).then(|| format!("**Sources**\n\n{}", lines.join("\n")))
+}
+
+/// A string field, `None` when absent or empty.
+fn str_of<'a>(o: &'a serde_json::Map<String, Value>, key: &str) -> Option<&'a str> {
+    o.get(key).and_then(Value::as_str).filter(|s| !s.is_empty())
+}
+
 // Block / attachment rendering (the markdown that becomes item.text).
 
 pub(crate) fn block_identity(
@@ -704,11 +811,7 @@ fn block_body_md(
                 String::new(),
             ];
             if let Some(tool_input) = raw_obj.get("input") {
-                if !json_is_empty(tool_input) {
-                    out.push("```json".into());
-                    out.push(json_pretty_sorted(tool_input));
-                    out.push("```".into());
-                }
+                out.extend(tool_input_md(name, tool_input));
             }
             out.push("</details>".into());
             out
@@ -753,7 +856,16 @@ fn render_tool_result_content(content: Option<&Value>, out: &mut Vec<String>) {
             out.push(md_code_block("", s.trim_end()));
         }
         Some(Value::Array(items)) => {
+            let mut in_list = false;
             for item in items {
+                if let Some(link) = item.as_object().and_then(knowledge_link) {
+                    out.push(link);
+                    in_list = true;
+                    continue;
+                }
+                if std::mem::take(&mut in_list) {
+                    out.push(String::new());
+                }
                 match item {
                     Value::Object(m)
                         if m.get("type").and_then(Value::as_str) == Some("text")
@@ -781,6 +893,9 @@ fn render_tool_result_content(content: Option<&Value>, out: &mut Vec<String>) {
                     }
                 }
             }
+            if in_list {
+                out.push(String::new());
+            }
         }
         Some(v) if !v.is_null() => {
             out.push("```json".into());
@@ -789,6 +904,124 @@ fn render_tool_result_content(content: Option<&Value>, out: &mut Vec<String>) {
         }
         _ => {}
     }
+}
+
+/// A page a search or fetch tool came back with, as a link bullet. Only
+/// a `knowledge` item with a url and no `text` is one; one that carries
+/// text keeps the JSON fallback, which shows it.
+fn knowledge_link(item: &serde_json::Map<String, Value>) -> Option<String> {
+    if item.get("type").and_then(Value::as_str) != Some("knowledge")
+        || str_of(item, "text").is_some()
+    {
+        return None;
+    }
+    let url = str_of(item, "url")?;
+    let mut line = format!(
+        "- [{}]({})",
+        escape_md_inline(str_of(item, "title").unwrap_or(url)),
+        md_link_dest(url)
+    );
+    let site = item
+        .get("metadata")
+        .and_then(Value::as_object)
+        .and_then(|m| str_of(m, "site_name").or_else(|| str_of(m, "site_domain")));
+    if let Some(site) = site {
+        line.push_str(&format!(" — {}", escape_md_inline(site)));
+    }
+    Some(line)
+}
+
+/// A well-known tool's input, readable; any other as JSON.
+fn tool_input_md(name: &str, input: &Value) -> Vec<String> {
+    let readable = input.as_object().and_then(|i| match name {
+        "artifacts" => artifact_md(i),
+        "create_file" => create_file_md(i),
+        "bash_tool" => bash_md(i),
+        _ => None,
+    });
+    match readable {
+        Some(md) => vec![md],
+        None if json_is_empty(input) => Vec::new(),
+        None => vec!["```json".into(), json_pretty_sorted(input), "```".into()],
+    }
+}
+
+fn artifact_md(i: &serde_json::Map<String, Value>) -> Option<String> {
+    let kind = str_of(i, "type");
+    let lang = str_of(i, "language")
+        .or_else(|| kind.and_then(artifact_language))
+        .unwrap_or("");
+    let body = match (
+        str_of(i, "content"),
+        i.get("old_str").and_then(Value::as_str),
+        i.get("new_str").and_then(Value::as_str),
+    ) {
+        (Some(content), _, _) => md_code_block(lang, content.trim_end_matches('\n')),
+        (None, Some(old), Some(new)) => format!(
+            "Replace:\n\n{}\n\nwith:\n\n{}",
+            md_code_block(lang, old),
+            md_code_block(lang, new)
+        ),
+        _ => return None,
+    };
+    let mut head = format!(
+        "{} artifact",
+        capitalize(str_of(i, "command").unwrap_or("create"))
+    );
+    if let Some(title) = str_of(i, "title").or_else(|| str_of(i, "id")) {
+        head.push_str(&format!(": **{}**", escape_md_inline(title)));
+    }
+    if let Some(kind) = kind {
+        head.push_str(&format!(" ({})", md_code_span(kind)));
+    }
+    Some(format!("{head}\n\n{body}"))
+}
+
+/// The fence language for an artifact type that names no `language`.
+fn artifact_language(kind: &str) -> Option<&'static str> {
+    Some(match kind {
+        "text/markdown" => "markdown",
+        "text/html" => "html",
+        "image/svg+xml" => "svg",
+        "application/vnd.ant.mermaid" => "mermaid",
+        "application/vnd.ant.react" => "jsx",
+        _ => return None,
+    })
+}
+
+fn create_file_md(i: &serde_json::Map<String, Value>) -> Option<String> {
+    let path = str_of(i, "path")?;
+    let text = i.get("file_text").and_then(Value::as_str)?;
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let lang = match ext.as_str() {
+        "py" => "python",
+        "md" => "markdown",
+        "rs" => "rust",
+        "js" => "javascript",
+        "ts" => "typescript",
+        "sh" => "bash",
+        other => other,
+    };
+    let mut head = format!("Create {}", md_code_span(path));
+    if let Some(d) = str_of(i, "description") {
+        head.push_str(&format!(" — {}", escape_md_inline(d)));
+    }
+    Some(format!(
+        "{head}\n\n{}",
+        md_code_block(lang, text.trim_end_matches('\n'))
+    ))
+}
+
+fn bash_md(i: &serde_json::Map<String, Value>) -> Option<String> {
+    let block = md_code_block("bash", str_of(i, "command")?);
+    Some(match str_of(i, "description") {
+        Some(d) => format!("{}\n\n{block}", escape_md_inline(d)),
+        None => block,
+    })
 }
 
 fn json_is_empty(v: &Value) -> bool {
@@ -825,8 +1058,9 @@ fn attachment_meta(at: &AttachmentRow) -> (Option<&str>, Option<&str>, bool) {
 /// Render a Claude `attachments[]` text item inline (extracted upload
 /// text; the binary is not retained).
 fn render_extracted_attachment(label: &str, extracted: Option<&str>) -> String {
+    // Pasted text arrives as an attachment with an empty `file_name`.
     let header_label = if label.is_empty() {
-        "(unnamed)".to_string()
+        "Pasted text".to_string()
     } else {
         escape_md_inline(label)
     };
@@ -927,6 +1161,157 @@ mod escaping_tests {
             md,
             "**[attachment: &lt;script&gt;x&lt;/script&gt; &amp; co]**\n\
              > &lt;script&gt;x&lt;/script&gt; &amp; co\n"
+        );
+    }
+}
+
+#[cfg(test)]
+mod branch_tests {
+    use super::*;
+
+    fn msg(uuid: &str, parent: Option<&str>, at: &str) -> MessageRow {
+        MessageRow {
+            conversation_uuid: "c".into(),
+            message_uuid: uuid.into(),
+            parent_message_uuid: parent.map(str::to_string),
+            sender: Some("human".into()),
+            text: None,
+            created_at: Some(at.into()),
+            updated_at: None,
+            raw_json: Value::Null,
+        }
+    }
+
+    fn uuids(msgs: &[&MessageRow]) -> Vec<String> {
+        msgs.iter().map(|m| m.message_uuid.clone()).collect()
+    }
+
+    /// An edited prompt starts a branch; the abandoned edit and its
+    /// answer were shown between the prompt and the edit that replaced it.
+    #[test]
+    fn the_branch_ending_at_the_leaf_is_shown_and_the_edit_left_behind_is_not() {
+        let msgs = [
+            msg("q1", Some(ROOT_PARENT), "1"),
+            msg("a1", Some("q1"), "2"),
+            msg("q2-old", Some("a1"), "3"),
+            msg("a2-old", Some("q2-old"), "4"),
+            msg("q2", Some("a1"), "5"),
+            msg("a2", Some("q2"), "6"),
+        ];
+        let shown = shown_branch(&msgs, Some("a2")).unwrap();
+        assert_eq!(uuids(&shown), ["q1", "a1", "q2", "a2"]);
+    }
+
+    /// An export-shaped payload has no leaf, and a chain can name a
+    /// message the payload lacks or loop: every message, by time.
+    #[test]
+    fn no_leaf_a_broken_chain_or_a_loop_falls_back_to_every_message() {
+        let msgs = [msg("q1", None, "1"), msg("a1", Some("q1"), "2")];
+        assert_eq!(
+            uuids(&shown_branch(&msgs, Some("a1")).unwrap()),
+            ["q1", "a1"]
+        );
+        assert!(shown_branch(&msgs, None).is_none());
+        assert!(shown_branch(&msgs, Some("nope")).is_none());
+        let broken = [msg("q1", Some("gone"), "1"), msg("a1", Some("q1"), "2")];
+        assert!(shown_branch(&broken, Some("a1")).is_none());
+        let looped = [msg("q1", Some("a1"), "1"), msg("a1", Some("q1"), "2")];
+        assert!(shown_branch(&looped, Some("a1")).is_none());
+    }
+}
+
+#[cfg(test)]
+mod readable_tool_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn text_block(citations: Value) -> ContentBlockRow {
+        ContentBlockRow {
+            message_uuid: "m".into(),
+            block_index: 0,
+            r#type: Some("text".into()),
+            text: Some("Shields at 40%.".into()),
+            start_timestamp: None,
+            stop_timestamp: None,
+            raw_json: json!({"type": "text", "citations": citations}),
+        }
+    }
+
+    /// Citations were dropped. Every source is listed once, by url, in
+    /// order of first citation, its title escaped as link text.
+    #[test]
+    fn cited_sources_are_listed_once_each() {
+        let one = text_block(json!([
+            {"url": "https://ma.test/a", "title": "A", "metadata": {"site_name": "MA"},
+             "sources": [{"url": "https://ma.test/a", "title": "Shields [ref]", "source": "Memory Alpha"}]},
+            {"url": "https://ma.test/b", "title": "B", "metadata": {"site_name": "MB"},
+             "sources": [
+                {"url": "https://ma.test/b", "title": "B page"},
+                {"url": "https://ma.test/a", "title": "again"}]},
+            {"url": "https://ma.test/c (x)", "title": "C"},
+            null,
+        ]));
+        let md = sources_list(&[&one]).unwrap();
+        assert_eq!(
+            md,
+            "**Sources**\n\n\
+             1. [Shields \\[ref\\]](https://ma.test/a) — Memory Alpha\n\
+             2. [B page](https://ma.test/b) — MB\n\
+             3. [C](<https://ma.test/c (x)>)"
+        );
+        assert!(sources_list(&[&text_block(json!([]))]).is_none());
+    }
+
+    /// A file the tool wrote may hold backticks of its own; the fence has
+    /// to outlast them.
+    #[test]
+    fn an_artifact_renders_as_its_code_in_a_fence_it_cannot_close() {
+        let input = json!({
+            "command": "create", "title": "Warp <calc>", "type": "application/vnd.ant.code",
+            "language": "python", "content": "doc = '''\n```\n'''",
+        });
+        let md = tool_input_md("artifacts", &input).join("\n");
+        assert_eq!(
+            md,
+            "Create artifact: **Warp &lt;calc&gt;** (`application/vnd.ant.code`)\n\n\
+             ````python\ndoc = '''\n```\n'''\n````"
+        );
+        let update = json!({"command": "update", "id": "warp", "old_str": "9.2", "new_str": "9.6",
+                            "type": "text/markdown"});
+        assert_eq!(
+            tool_input_md("artifacts", &update).join("\n"),
+            "Update artifact: **warp** (`text/markdown`)\n\n\
+             Replace:\n\n```markdown\n9.2\n```\n\nwith:\n\n```markdown\n9.6\n```"
+        );
+    }
+
+    /// A tool this render does not know, or a known one missing what it
+    /// needs, keeps its JSON.
+    #[test]
+    fn anything_else_keeps_its_json() {
+        let md = tool_input_md("bash_tool", &json!({"description": "no command"})).join("\n");
+        assert!(md.starts_with("```json\n"), "{md}");
+        let md = tool_input_md("replicator", &json!({"order": "tea"})).join("\n");
+        assert!(md.starts_with("```json\n"), "{md}");
+        assert!(tool_input_md("replicator", &json!({})).is_empty());
+    }
+
+    #[test]
+    fn search_results_render_as_links() {
+        let mut out = Vec::new();
+        render_tool_result_content(
+            Some(&json!([
+                {"type": "knowledge", "title": "Warp <core>", "url": "https://ma.test/warp",
+                 "metadata": {"site_name": "Memory Alpha"}},
+                {"type": "knowledge", "title": "Dilithium", "url": "https://ma.test/d"},
+                {"type": "text", "text": "done"},
+            ])),
+            &mut out,
+        );
+        assert_eq!(
+            out.join("\n"),
+            "- [Warp &lt;core&gt;](https://ma.test/warp) — Memory Alpha\n\
+             - [Dilithium](https://ma.test/d)\n\n```\ndone\n```\n"
         );
     }
 }

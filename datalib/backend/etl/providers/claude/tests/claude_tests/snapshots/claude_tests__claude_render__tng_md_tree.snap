@@ -185,6 +185,210 @@ Perfect. Make it so.
 </div>
 
 
+=== claude_export/render_markdown/00000000-0000-8731-b6c5-2d66a2c4265c/all.md ===
+---
+title: "Warp Field Recalibration"
+provider: claude
+source_label: "Claude"
+chat_uuid: 00000000-0000-8731-b6c5-2d66a2c4265c
+markdown_uuid: 00000000-0000-8731-b6c5-2d66a2c4265c
+period: all
+display: "Warp Field Recalibration"
+account: "jlpicard@enterprise.starfleet.test"
+external_id: "c0000007-1701-4d00-8000-00000000c007"
+item_count: 4
+---
+
+<h1 class="page-title" data-page-title-uuid="00000000-0000-8731-b6c5-2d66a2c4265c">Warp Field Recalibration <a class="source-link" href="https://claude.ai/chat/c0000007-1701-4d00-8000-00000000c007" target="_blank" rel="noopener noreferrer">↗</a></h1>
+
+<div id="m-0b75c9a3-4680-8f18-9b74-f1de68268d1d" data-section-uuid="0b75c9a3-4680-8f18-9b74-f1de68268d1d" class="msg msg--claude">
+
+## <span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-18T09:00:00+00:00" title="2369-04-18 09:00:00 UTC">Fri Apr 18th, 2369 at 09:00</time>
+
+Geordi, how far can we push the warp field before the nacelles complain?
+
+</div>
+
+<details class="tool-group">
+<summary>🛠 2 tool steps</summary>
+
+<div id="m-0b75c9a3-5a08-8fec-97d8-d163ce521717" data-section-uuid="0b75c9a3-5a08-8fec-97d8-d163ce521717" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:00:05+00:00" title="2369-04-18 09:00:05 UTC">Fri Apr 18th, 2369 at 09:00</time>
+
+<details><summary>Tool use: web_search — Searching the web</summary>
+
+```json
+{
+  "query": "Galaxy class maximum sustainable warp"
+}
+```
+</details>
+
+</div>
+
+<div id="m-0b75c9a3-65c0-88ab-a3e5-89b60c21f729" data-section-uuid="0b75c9a3-65c0-88ab-a3e5-89b60c21f729" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:00:08+00:00" title="2369-04-18 09:00:08 UTC">Fri Apr 18th, 2369 at 09:00</time>
+
+<details><summary>Tool result: web_search</summary>
+
+- [Warp factor](https://memory-alpha.test/wiki/Warp_factor) — Memory Alpha
+- [Galaxy class propulsion](https://tech-manual.test/ncc-1701-d/propulsion) — Starfleet Technical Manual
+
+</details>
+
+</div>
+
+</details>
+
+<div id="m-0b75c9a3-94a0-89c6-b27b-e588f8d0b997" data-section-uuid="0b75c9a3-94a0-89c6-b27b-e588f8d0b997" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:00:20+00:00" title="2369-04-18 09:00:20 UTC">Fri Apr 18th, 2369 at 09:00</time>
+
+Sustained warp 9.2 is the rated ceiling; the nacelles tolerate 9.6 for about twelve hours before the coils need a full recalibration.
+
+**Sources**
+
+1. [Warp factor](https://memory-alpha.test/wiki/Warp_factor) — Memory Alpha
+2. [Galaxy class propulsion](https://tech-manual.test/ncc-1701-d/propulsion) — Starfleet Technical Manual
+3. [Warp coil](https://memory-alpha.test/wiki/Warp_coil) — Memory Alpha
+
+</div>
+
+<div id="m-0b75c9a5-1b40-8e11-8da0-3daa248fd980" data-section-uuid="0b75c9a5-1b40-8e11-8da0-3daa248fd980" class="msg msg--claude">
+
+## <span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-18T09:02:00+00:00" title="2369-04-18 09:02:00 UTC">Fri Apr 18th, 2369 at 09:02</time>
+
+Write me a script that checks these coil readings.
+
+**[attachment: Pasted text]**
+> Coil 1: 98.2%
+> Coil 2: 97.1%
+
+
+</div>
+
+<details class="tool-group">
+<summary>🛠 6 tool steps</summary>
+
+<div id="m-0b75c9a5-2ec8-8b5f-a673-dfcdde1f92c4" data-section-uuid="0b75c9a5-2ec8-8b5f-a673-dfcdde1f92c4" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:02:05+00:00" title="2369-04-18 09:02:05 UTC">Fri Apr 18th, 2369 at 09:02</time>
+
+<details><summary>Tool use: artifacts — Creating the coil check</summary>
+
+Create artifact: **Coil check** (`application/vnd.ant.code`)
+
+````python
+"""Coil check for the Enterprise-D."""
+REPORT = """
+```
+warp 9.6 for 12h
+```
+"""
+
+def ok(efficiency):
+    return efficiency >= 97.5
+````
+</details>
+
+</div>
+
+<div id="m-0b75c9a5-32b0-807a-8fb8-7d339dddae0f" data-section-uuid="0b75c9a5-32b0-807a-8fb8-7d339dddae0f" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:02:06+00:00" title="2369-04-18 09:02:06 UTC">Fri Apr 18th, 2369 at 09:02</time>
+
+<details><summary>Tool result: artifacts</summary>
+
+```
+OK
+```
+
+</details>
+
+</div>
+
+<div id="m-0b75c9a5-4250-8473-95f1-58b02b56f728" data-section-uuid="0b75c9a5-4250-8473-95f1-58b02b56f728" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:02:10+00:00" title="2369-04-18 09:02:10 UTC">Fri Apr 18th, 2369 at 09:02</time>
+
+<details><summary>Tool use: artifacts — Raising the threshold</summary>
+
+Update artifact: **coil_check**
+
+Replace:
+
+```
+97.5
+```
+
+with:
+
+```
+98.0
+```
+</details>
+
+</div>
+
+<div id="m-0b75c9a5-55d8-894e-b80c-32b4e60f024c" data-section-uuid="0b75c9a5-55d8-894e-b80c-32b4e60f024c" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:02:15+00:00" title="2369-04-18 09:02:15 UTC">Fri Apr 18th, 2369 at 09:02</time>
+
+<details><summary>Tool use: create_file — Writing the report</summary>
+
+Create `/mnt/user-data/outputs/coil_report.md` — Coil report for the chief engineer
+
+```markdown
+# Coil report
+
+Coil 2 is below threshold.
+```
+</details>
+
+</div>
+
+<div id="m-0b75c9a5-6960-848b-9646-55c304cdc6b6" data-section-uuid="0b75c9a5-6960-848b-9646-55c304cdc6b6" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:02:20+00:00" title="2369-04-18 09:02:20 UTC">Fri Apr 18th, 2369 at 09:02</time>
+
+<details><summary>Tool use: bash_tool — Running the check</summary>
+
+Check coil 2 against the threshold
+
+```bash
+python3 coil_check.py --coil 2
+```
+</details>
+
+</div>
+
+<div id="m-0b75c9a5-7ce8-84c5-85b2-0f9acb783056" data-section-uuid="0b75c9a5-7ce8-84c5-85b2-0f9acb783056" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:02:25+00:00" title="2369-04-18 09:02:25 UTC">Fri Apr 18th, 2369 at 09:02</time>
+
+<details><summary>Tool result: bash_tool</summary>
+
+```
+coil 2: 97.1% (below 98.0%)
+```
+
+</details>
+
+</div>
+
+</details>
+
+<div id="m-0b75c9a5-9070-8696-9347-ca9d80ad72ef" data-section-uuid="0b75c9a5-9070-8696-9347-ca9d80ad72ef" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:02:30+00:00" title="2369-04-18 09:02:30 UTC">Fri Apr 18th, 2369 at 09:02</time>
+
+Coil 2 is under threshold; schedule it for recalibration.
+
+</div>
+
+
 === claude_export/render_markdown/00000000-0000-882d-b21e-5e54f3f20dbb/all.md ===
 ---
 title: "Borg Encryption Signature Lookup"
