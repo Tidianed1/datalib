@@ -310,7 +310,8 @@ pub(crate) fn config_rows(problems: &[DownloadProblem]) -> Vec<Row> {
             (
                 format!("{CONFIG_PREFIX}{}:{}", p.setting, p.value),
                 Outcome::Dropped,
-                Problem::field(&p.setting, reason, &p.detail).severity(Severity::Warning),
+                Problem::explained(reason, Some(p.setting.clone()), &p.detail)
+                    .severity(Severity::Warning),
             )
         })
         .collect()
@@ -322,9 +323,9 @@ pub(crate) fn run_rows(problems: &[RunProblem]) -> Vec<Row> {
         .iter()
         .map(|p| {
             let problem = if p.forbidden {
-                Problem::record(Reason::Forbidden, &p.detail).severity(Severity::Warning)
+                Problem::explained(Reason::Forbidden, None, &p.detail).severity(Severity::Warning)
             } else {
-                Problem::record(Reason::FetchFailed, &p.detail).severity(Severity::Error)
+                Problem::explained(Reason::FetchFailed, None, &p.detail).severity(Severity::Error)
             };
             (p.key(), Outcome::Dropped, problem)
         })
@@ -382,10 +383,40 @@ pub(crate) fn silent_rows(silent: &[SilentEntry]) -> Vec<Row> {
             (
                 format!("{SILENT_PREFIX}{}", s.name),
                 Outcome::Ok,
-                Problem::record(Reason::Silent, &s.detail).severity(Severity::Warning),
+                Problem::explained(Reason::Silent, None, &s.detail).severity(Severity::Warning),
             )
         })
         .collect()
+}
+
+/// What a download's row is about, in words, read off its sweep key:
+/// the listing, phase, configured entry or record it names. `None` for
+/// a key no download writes.
+pub fn about(scope_key: &str) -> Option<String> {
+    let listing = RunProblemKind::Listing.key_prefix();
+    let phase = RunProblemKind::Phase.key_prefix();
+    if let Some(name) = scope_key.strip_prefix(listing.as_str()) {
+        return Some(format!("listing {name}"));
+    }
+    if let Some(name) = scope_key.strip_prefix(phase.as_str()) {
+        return Some(format!("the {name} phase"));
+    }
+    if let Some(rest) = scope_key.strip_prefix(CONFIG_PREFIX) {
+        let (setting, value) = rest.split_once(':')?;
+        return Some(format!("config {setting}: {value}"));
+    }
+    if let Some(name) = scope_key.strip_prefix(SILENT_PREFIX) {
+        return Some(format!("config entry {name}"));
+    }
+    if let Some(rest) = scope_key.strip_prefix(RECORD_PREFIX) {
+        let (table, id) = rest.split_once(':')?;
+        return Some(format!("{table} record {id}"));
+    }
+    if let Some(rest) = scope_key.strip_prefix(SKIPPED_PREFIX) {
+        let (part, _) = rest.split_once(':')?;
+        return Some(format!("an entry in {part}, skipped"));
+    }
+    None
 }
 
 pub(crate) const CONFIG_SWEEP: &str = CONFIG_PREFIX;
@@ -543,6 +574,36 @@ mod tests {
             assert_eq!(serde, k.as_str(), "{k:?}");
             assert_eq!(RunProblemKind::parse(serde), Some(*k));
         }
+    }
+
+    /// Every kind of row a download writes reads as what it is about,
+    /// and the explanation of a run-level one is stored whole rather
+    /// than cut at a sample's 80 characters.
+    #[test]
+    fn every_download_row_says_what_it_is_about() {
+        let long = "this org refuses the credential's requests (conversations and \
+                    projects); nothing from it is mirrored";
+        let runs = run_rows(&[
+            RunProblem::forbidden("org:Acme", long),
+            RunProblem::phase("devices", "boom"),
+        ]);
+        assert_eq!(about(&runs[0].0).as_deref(), Some("listing org:Acme"));
+        assert_eq!(runs[0].2.sample, long);
+        assert_eq!(about(&runs[1].0).as_deref(), Some("the devices phase"));
+        let config = config_rows(&[DownloadProblem::not_found(
+            "labels",
+            "Work",
+            "no such label",
+        )]);
+        assert_eq!(about(&config[0].0).as_deref(), Some("config labels: Work"));
+        let records = record_rows(&[RecordProblem::new("messages", "m1", "403")]);
+        assert_eq!(about(&records[0].0).as_deref(), Some("messages record m1"));
+        let silent = silent_rows(&[SilentEntry {
+            name: "porch".into(),
+            detail: "nothing since Tuesday".into(),
+        }]);
+        assert_eq!(about(&silent[0].0).as_deref(), Some("config entry porch"));
+        assert_eq!(about("users:u1"), None, "not a download's key");
     }
 
     #[test]

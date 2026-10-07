@@ -1170,16 +1170,21 @@ impl IndexedMarkdownStore {
         })
     }
 
-    /// Whole-store counts by severity: what the step reports at its
-    /// end. A severity this build cannot name is an error — the store
-    /// was written by a newer build and a silent zero would read as
-    /// clean.
-    pub fn problem_counts(&self) -> Result<HashMap<Severity, i64>> {
+    /// Counts by severity of the problems render itself found, over the
+    /// whole store: what the step reports at its end. The fetch-stage
+    /// rows are the download's, copied here so the index can link them
+    /// to a document; the download's own row counts them. A severity
+    /// this build cannot name is an error — the store was written by a
+    /// newer build and a silent zero would read as clean.
+    pub fn own_problem_counts(&self) -> Result<HashMap<Severity, i64>> {
         blocking(async {
-            let rows = sqlx::query("SELECT severity, COUNT(*) FROM problems GROUP BY severity")
-                .fetch_all(&self.pool)
-                .await
-                .context("count problems")?;
+            let rows = sqlx::query(
+                "SELECT severity, COUNT(*) FROM problems WHERE stage <> ? GROUP BY severity",
+            )
+            .bind(Stage::Fetch.as_str())
+            .fetch_all(&self.pool)
+            .await
+            .context("count problems")?;
             let mut out = HashMap::new();
             for r in rows {
                 let word: String = r.try_get(0)?;
@@ -1944,14 +1949,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            s.problem_counts().unwrap().get(&Severity::Warning).copied(),
+            s.own_problem_counts()
+                .unwrap()
+                .get(&Severity::Warning)
+                .copied(),
             Some(2)
         );
 
         // A second run that only reprocesses md-2, and finds it clean.
         s.put_document(root, &doc(root, "md-2", "fp-2")).unwrap();
 
-        let counts = s.problem_counts().unwrap();
+        let counts = s.own_problem_counts().unwrap();
         assert_eq!(
             counts.get(&Severity::Warning).copied(),
             Some(1),
@@ -1998,7 +2006,10 @@ mod tests {
         assert!(!first.md_path.exists(), "the old file is gone");
         assert!(!empty.md_path.exists(), "and so is the one just written");
         assert_eq!(
-            s.problem_counts().unwrap().get(&Severity::Warning).copied(),
+            s.own_problem_counts()
+                .unwrap()
+                .get(&Severity::Warning)
+                .copied(),
             Some(1),
             "the record of why every row went stays"
         );
@@ -2017,13 +2028,16 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            s.problem_counts().unwrap().get(&Severity::Warning).copied(),
+            s.own_problem_counts()
+                .unwrap()
+                .get(&Severity::Warning)
+                .copied(),
             Some(1)
         );
 
         s.put_document(root, &doc(root, "md-1", "fp-2")).unwrap();
         assert!(
-            s.problem_counts().unwrap().is_empty(),
+            s.own_problem_counts().unwrap().is_empty(),
             "reprocessed clean ⇒ no problem rows left"
         );
     }
@@ -2051,7 +2065,10 @@ mod tests {
             .unwrap();
         s.put_document_problems("md-1", &[failed]).unwrap();
         assert_eq!(
-            s.problem_counts().unwrap().get(&Severity::Error).copied(),
+            s.own_problem_counts()
+                .unwrap()
+                .get(&Severity::Error)
+                .copied(),
             Some(1),
             "the same failure twice is one row"
         );
@@ -2062,8 +2079,45 @@ mod tests {
 
         s.put_document(root, &doc(root, "md-1", "fp-1")).unwrap();
         assert!(
-            s.problem_counts().unwrap().is_empty(),
+            s.own_problem_counts().unwrap().is_empty(),
             "the run that produced the document swept its failure"
+        );
+    }
+
+    /// The download's problems, copied in so the index can link them to
+    /// a document, are not render's: its count leaves them out, or the
+    /// Manage screen shows one warning on both the Download and the
+    /// Render row.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn copied_fetch_problems_are_not_counted_as_renders() {
+        let td = tempfile::tempdir().unwrap();
+        let s = store(td.path());
+        let refused = ProblemRow::new(
+            "src",
+            Stage::Fetch,
+            Scope::Entity("listing:org:Acme"),
+            None,
+            Outcome::Dropped,
+            Problem::record(Reason::Forbidden, "this org refuses the credential")
+                .severity(Severity::Warning),
+            None,
+        );
+        s.replace_stage_problems(Stage::Fetch, &[refused]).unwrap();
+        assert!(s.own_problem_counts().unwrap().is_empty());
+
+        let unreadable = ProblemRow::new(
+            "src",
+            Stage::Parse,
+            Scope::Entity("users:u1"),
+            None,
+            Outcome::Dropped,
+            Problem::record(Reason::Undeserializable, "{"),
+            Some(7),
+        );
+        s.put_entity_problems(&["users"], &[unreadable]).unwrap();
+        assert_eq!(
+            s.own_problem_counts().unwrap(),
+            HashMap::from([(Severity::Error, 1)])
         );
     }
 
@@ -2093,14 +2147,20 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            s.problem_counts().unwrap().get(&Severity::Error).copied(),
+            s.own_problem_counts()
+                .unwrap()
+                .get(&Severity::Error)
+                .copied(),
             Some(2)
         );
         // A narrowed run read users whole and no messages: u1 reads
         // cleanly now and goes; m1 was not looked at and stays.
         s.put_entity_problems(&["users"], &[]).unwrap();
         assert_eq!(
-            s.problem_counts().unwrap().get(&Severity::Error).copied(),
+            s.own_problem_counts()
+                .unwrap()
+                .get(&Severity::Error)
+                .copied(),
             Some(1),
             "the table not read keeps its rows"
         );
@@ -2109,11 +2169,14 @@ mod tests {
         s.put_entity_problems(&[], &[unreadable("messages:m1"), unreadable("messages:m2")])
             .unwrap();
         assert_eq!(
-            s.problem_counts().unwrap().get(&Severity::Error).copied(),
+            s.own_problem_counts()
+                .unwrap()
+                .get(&Severity::Error)
+                .copied(),
             Some(2)
         );
         s.put_entity_problems(&["messages"], &[]).unwrap();
-        assert!(s.problem_counts().unwrap().is_empty());
+        assert!(s.own_problem_counts().unwrap().is_empty());
     }
 
     /// A bucket that declared a whole table is stale when any row of it

@@ -8,7 +8,7 @@
 use axum::extract::{Query, State};
 use axum::Json;
 use datalib_columns::{Chip, ChipKind, ColumnSpec, ColumnType, DocumentLink, Identity, RowsSpec};
-use datalib_problems::{Outcome, ProblemRow, ProblemRowColumn, Severity};
+use datalib_problems::{Outcome, ProblemRow, ProblemRowColumn, ScopeKind, Severity};
 use datalib_unified_index::group::Within;
 use datalib_unified_index::problems::{ProblemColumn, ProblemsQuery};
 use datalib_unified_index::repo::LocatedProblem;
@@ -48,6 +48,9 @@ pub struct ProblemView {
     pub stage: &'static str,
     pub outcome: &'static str,
     pub reason: &'static str,
+    /// What a problem with no document is about, in words: the listing,
+    /// configured entry or raw record its scope key names.
+    pub about: Option<String>,
     pub field: Option<String>,
     pub rule: Option<String>,
     pub sample: String,
@@ -74,13 +77,21 @@ impl ProblemView {
             },
             text: row.severity.as_str().to_string(),
             title: format!(
-                "{}: the record was {}",
+                "{}: {}",
                 row.severity.as_str(),
                 match row.outcome {
-                    Outcome::Dropped => "dropped",
-                    Outcome::Nulled => "kept with a field nulled",
-                    Outcome::Ok => "kept intact",
+                    Outcome::Dropped => "it is not in the mirror, or what is there is stale",
+                    Outcome::Nulled => "it is in the mirror with a field left empty",
+                    Outcome::Ok => "nothing was lost",
                 }
+            ),
+        };
+        let about = match row.scope_kind {
+            ScopeKind::Markdown => None,
+            ScopeKind::Entity => Some(
+                datalib_etl::download_problems::about(&row.scope_key)
+                    .or_else(|| datalib_etl_render::grid_index::about(&row.scope_key))
+                    .unwrap_or_else(|| row.scope_key.clone()),
             ),
         };
         ProblemView {
@@ -92,6 +103,7 @@ impl ProblemView {
             stage: row.stage.as_str(),
             outcome: row.outcome.as_str(),
             reason: row.reason.as_str(),
+            about,
             field: row.field,
             rule: row.rule,
             sample: row.sample,
@@ -170,8 +182,9 @@ pub fn rows_spec() -> RowsSpec {
 pub fn columns() -> Vec<ColumnSpec> {
     searchable::<ProblemColumn>(vec![
         ColumnSpec::new("severity_chip", "Severity", ColumnType::Chips).describe(
-            "error: the record was dropped. warning: it was kept with something lost. \
-             info: a finding, nothing lost.",
+            "error: something failed. warning: something is missing or degraded for a reason \
+             you can act on — access, a configured entry, a limit. info: a finding, nothing \
+             lost. Hover a chip for what became of the data.",
         ),
         ColumnSpec::new("source_ref", "Source", ColumnType::Identity),
         ColumnSpec::new("stage", "Stage", ColumnType::Text).describe(
@@ -180,11 +193,20 @@ pub fn columns() -> Vec<ColumnSpec> {
              different place for each.",
         ),
         ColumnSpec::new("reason", "Reason", ColumnType::Text),
+        ColumnSpec::new("about", "About", ColumnType::Text).describe(
+            "What a problem with no document is about: a listing or phase the download \
+             could not do, a configured entry, a raw record, a render store the index could \
+             not read.",
+        ),
         ColumnSpec::new("field", "Field", ColumnType::Text),
-        ColumnSpec::new("sample", "Sample", ColumnType::Text)
-            .describe("The first 80 characters of the offending value."),
-        ColumnSpec::new("markdown_uuid", "Document", ColumnType::MarkdownUuid)
-            .describe("The document the record belongs to. Empty when it has no row there."),
+        ColumnSpec::new("sample", "Detail", ColumnType::Text).describe(
+            "What went wrong: the first 80 characters of the offending value, or, for a \
+             listing, phase or configured entry, the download's explanation whole.",
+        ),
+        ColumnSpec::new("markdown_uuid", "Document", ColumnType::MarkdownUuid).describe(
+            "The document the record belongs to. Empty when there is none: a listing, a \
+             configured entry, or a record that never reached the mirror — About says which.",
+        ),
         ColumnSpec::new("outcome", "Outcome", ColumnType::Text).hidden(),
         ColumnSpec::new("rule", "Rule", ColumnType::Text)
             .describe("The deliberate lossy rule that fired, when one did.")

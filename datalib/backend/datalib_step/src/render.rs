@@ -116,7 +116,9 @@ pub async fn run(
     // everything is fine — and the more dangerous of those two reads as
     // success. These are whole-store counts, not this-run counts: a
     // problem on a document this run skipped is still current, which is
-    // the point of the per-document sweep. The metrics are what the
+    // the point of the per-document sweep. They leave out the
+    // download's rows copied in beside render's own: the download's row
+    // counts those. The metrics are what the
     // Manage row's errors/warnings cell reads, so they are reported
     // every run, zero included: a missing series means "never counted",
     // not "clean".
@@ -200,7 +202,8 @@ pub struct RenderReport {
     /// What the store holds afterwards, storage report excluded — what
     /// the source has, not what this run did.
     pub holdings: Holdings,
-    /// Whole-store problem counts by severity.
+    /// Whole-store counts by severity of the problems render found,
+    /// the download's copied rows left out.
     pub problems: HashMap<Severity, i64>,
     /// The store's HEAD after the final commit. `None` without doltlite.
     pub head: Option<String>,
@@ -470,7 +473,7 @@ pub fn render_source(
     // Read back from the store that just wrote them, before `close`
     // consumes it.
     let versions = store.render_versions()?;
-    let problems = store.problem_counts()?;
+    let problems = store.own_problem_counts()?;
     let holdings = store.holdings(storage_uuid.as_deref())?;
     let head = store.head()?;
     store.close();

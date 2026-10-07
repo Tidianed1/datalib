@@ -261,14 +261,32 @@ pub struct GridIndexSummary {
     pub sources_failed: Vec<(String, String)>,
 }
 
-/// Whole-index counts by severity, for the step's report.
-pub async fn problem_counts(
+/// The scope key of the one problem the index records itself: a
+/// source's render store it could not read. Every other row in the
+/// index is a copy of a source's.
+pub const UNREADABLE_STORE_KEY: &str = "render_store";
+
+/// What a row the index recorded itself is about, in words; `None` for
+/// any other key.
+pub fn about(scope_key: &str) -> Option<String> {
+    (scope_key == UNREADABLE_STORE_KEY).then(|| "this source's render store".to_string())
+}
+
+/// Counts by severity of the problems the index recorded itself, for
+/// the step's report. The copies are counted by the steps that found
+/// them; counting them here too would show each one twice.
+pub async fn own_problem_counts(
     pool: &SqlitePool,
 ) -> Result<HashMap<datalib_schema::problems::Severity, i64>> {
-    let rows = sqlx::query("SELECT severity, COUNT(*) FROM problems GROUP BY severity")
-        .fetch_all(pool)
-        .await
-        .context("count the index's problems")?;
+    let rows = sqlx::query(
+        "SELECT severity, COUNT(*) FROM problems \
+         WHERE scope_kind = ? AND scope_key = ? GROUP BY severity",
+    )
+    .bind(datalib_schema::problems::ScopeKind::Entity.as_str())
+    .bind(UNREADABLE_STORE_KEY)
+    .fetch_all(pool)
+    .await
+    .context("count the index's own problems")?;
     let mut out = HashMap::new();
     for r in rows {
         let word: String = r.try_get(0)?;
@@ -328,7 +346,7 @@ fn unreadable_store_problem(
     let mut row = ProblemRow::new(
         source_id,
         Stage::Render,
-        Scope::Entity("render_store"),
+        Scope::Entity(UNREADABLE_STORE_KEY),
         None,
         Outcome::Dropped,
         Problem::record(Reason::RenderFailed, why).severity(severity),
@@ -2447,6 +2465,11 @@ mod source_cursor_tests {
                 .unwrap();
         assert_eq!(severity, "warning");
         assert!(sample.contains("sync"), "{sample}");
+        assert_eq!(
+            super::own_problem_counts(&pool).await.unwrap(),
+            std::collections::HashMap::from([(datalib_schema::problems::Severity::Warning, 1)]),
+            "the index found this one itself, so its row counts it"
+        );
 
         // Its next render rebuilds the store in the current shape.
         render(root, "stale", &[doc(root, "stale", "md-s", "stale body")]);
@@ -2909,10 +2932,9 @@ mod source_cursor_tests {
             !first_seen.is_empty(),
             "the render store's stamp came through"
         );
-        let counts = super::problem_counts(&pool).await.unwrap();
-        assert_eq!(
-            counts.get(&datalib_schema::problems::Severity::Warning),
-            Some(&1)
+        assert!(
+            super::own_problem_counts(&pool).await.unwrap().is_empty(),
+            "a copy is counted by the source's step, not the index"
         );
 
         // Fixed: the same document renders clean. The index only reads

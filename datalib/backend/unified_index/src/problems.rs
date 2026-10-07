@@ -21,6 +21,9 @@ pub enum ProblemColumn {
     SourceRef,
     Stage,
     Reason,
+    /// What a problem with no document is about — a listing, a
+    /// configured entry, a raw record — in words.
+    About,
     Field,
     Sample,
     MarkdownUuid,
@@ -59,6 +62,8 @@ impl View for ProblemColumn {
             ProblemColumn::SourceRef => same(P::SourceId),
             ProblemColumn::Stage => same(P::Stage),
             ProblemColumn::Reason => same(P::Reason),
+            // Words read off the scope key, so sorted and kept by it.
+            ProblemColumn::About => same(P::ScopeKey),
             ProblemColumn::Field => same(P::Field),
             ProblemColumn::Sample => text(P::Sample),
             // The document a markdown-scoped problem is about is its
