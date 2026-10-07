@@ -58,7 +58,10 @@ pub fn search_stops_at(held: &[Span], full: bool, refresh_floor: Option<&str>) -
 pub fn refresh_floor(held: &[Span], days: u32) -> Option<String> {
     let top = coverage::merged(held.to_vec()).pop()?;
     let hi = DateTime::parse_from_rfc3339(&top.hi).ok()?;
-    let floor = hi.with_timezone(&Utc) - Duration::days(days as i64);
+    let floor = hi
+        .with_timezone(&Utc)
+        .checked_sub_signed(Duration::days(days.into()))
+        .unwrap_or(DateTime::<Utc>::MIN_UTC);
     Some(floor.to_rfc3339_opts(SecondsFormat::Millis, true))
 }
 
@@ -377,6 +380,10 @@ mod tests {
             "in Notion's own spelling"
         );
         assert_eq!(refresh_floor(&[], 2), None);
+        // A window longer than the calendar reaches panicked in the
+        // subtraction; its floor is below every stamp.
+        let floor = refresh_floor(&[s("", T3)], u32::MAX).unwrap();
+        assert!(floor.as_str() < T1, "{floor}");
     }
 
     fn page(id: &str, edited: &str) -> Value {

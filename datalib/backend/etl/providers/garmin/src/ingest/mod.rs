@@ -242,7 +242,8 @@ fn walk_end(today: NaiveDate, until: Option<&str>) -> Result<NaiveDate> {
 /// for again until `refresh` days after it, and never settles while it
 /// is still that day.
 fn settles_on(day: NaiveDate, refresh: Duration) -> NaiveDate {
-    day + refresh.max(Duration::days(1))
+    day.checked_add_signed(refresh.max(Duration::days(1)))
+        .unwrap_or(NaiveDate::MAX)
 }
 
 /// The days of a window as the calendar lists them, oldest first, keyed
@@ -310,7 +311,7 @@ async fn walk_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     }
     let since = date(&since_str)?;
     let end = walk_end(opts.today, api.until.as_deref())?;
-    let refresh = Duration::days(api.refresh_days());
+    let refresh = Duration::try_days(api.refresh_days()).unwrap_or(Duration::MAX);
     let client = GarminClient::new(opts.latchkey);
     let mut s = FetchSummary::default();
     let progress = &opts.progress;
@@ -822,7 +823,11 @@ impl Walk<'_> {
     async fn activities(&self, s: &mut FetchSummary) -> Result<()> {
         let want = Span::new(ymd(self.since), ymd(self.end));
         let held = coverage::held(self.db.pool(), ACTIVITIES_SCOPE).await?;
-        let start = listing_start(&want, &held, self.end - self.refresh)?;
+        let refresh_from = self
+            .end
+            .checked_sub_signed(self.refresh)
+            .unwrap_or(NaiveDate::MIN);
+        let start = listing_start(&want, &held, refresh_from)?;
         let start_date = ymd(start);
         let Listing {
             rows: listed,
@@ -1469,6 +1474,21 @@ mod tests {
             str::to_string,
         );
         assert!(empty.settled.is_empty() && empty.unsettled.is_empty());
+    }
+
+    /// `refresh_days` is unbounded above, and one past the calendar's
+    /// end panicked in the addition: such a day never settles.
+    #[test]
+    fn a_refresh_window_past_the_end_of_the_calendar_never_settles() {
+        let day = date("2369-04-01").unwrap();
+        for days in [99_999_999, i64::MAX] {
+            let refresh = Duration::try_days(days).unwrap_or(Duration::MAX);
+            assert_eq!(settles_on(day, refresh), NaiveDate::MAX, "{days}");
+        }
+        assert_eq!(
+            settles_on(day, Duration::days(3)),
+            date("2369-04-04").unwrap()
+        );
     }
 
     /// The listing starts at the lowest date nobody has listed — a

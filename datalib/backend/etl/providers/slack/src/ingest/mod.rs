@@ -50,9 +50,17 @@ pub const MANIFEST_TTL: chrono::Duration = chrono::Duration::hours(6);
 // Per-method drivers.
 
 fn datetime_to_slack_ts(dt: &DateTime<Utc>) -> String {
-    let secs = dt.timestamp();
-    let nanos = dt.timestamp_subsec_micros();
-    format!("{}.{:06}", secs, nanos)
+    // Slack answers a negative `oldest` with an empty page, and a
+    // negative `ts` does not sort as a `coverage` bound. No message is
+    // older than the epoch, so an earlier instant asks for the same.
+    let dt = (*dt).max(DateTime::UNIX_EPOCH);
+    format!("{}.{:06}", dt.timestamp(), dt.timestamp_subsec_micros())
+}
+
+fn days_before(now: DateTime<Utc>, days: i64) -> DateTime<Utc> {
+    ChronoDuration::try_days(days)
+        .and_then(|window| now.checked_sub_signed(window))
+        .unwrap_or(DateTime::<Utc>::MIN_UTC)
 }
 
 fn empty_params() -> BTreeMap<String, String> {
@@ -1160,9 +1168,10 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
     let since = ts_key(&datetime_to_slack_ts(&since_dt));
     let now = opts.now;
     let refresh_from = (opts.refresh_window_days > 0).then(|| {
-        ts_key(&datetime_to_slack_ts(
-            &(now - ChronoDuration::days(opts.refresh_window_days)),
-        ))
+        ts_key(&datetime_to_slack_ts(&days_before(
+            now,
+            opts.refresh_window_days,
+        )))
     });
 
     let run_config = json!({
@@ -1407,6 +1416,38 @@ mod tests {
         assert!(ts_key("12604000800.000800").as_str() < END_OF_TIME);
         assert_eq!(key_ts(&ts_key(SINCE)), SINCE);
         assert_eq!(key_ts(&ts_key("0.000001")), "0.000001");
+    }
+
+    /// #1048: `since = "0001-01-01"` went out as
+    /// `oldest=-62135596800.000000`, which Slack answers with an empty
+    /// page, so the mirror held no messages.
+    #[test]
+    fn a_since_before_the_epoch_asks_from_the_epoch() {
+        for since in ["0001-01-01", "1969-12-31T23:59:59.5Z"] {
+            let ts = datetime_to_slack_ts(&parse_iso_or_utc_date(since).unwrap());
+            assert_eq!(ts, "0.000000", "{since}");
+            assert_eq!(key_ts(&ts_key(&ts)), "0.000000", "{since}");
+        }
+        let later = parse_iso_or_utc_date("1970-01-02").unwrap();
+        assert_eq!(datetime_to_slack_ts(&later), "86400.000000");
+    }
+
+    /// A refresh window longer than the calendar reaches panicked in
+    /// the subtraction; it is the whole history.
+    #[test]
+    fn a_refresh_window_past_the_start_of_time_reaches_the_epoch() {
+        let now = parse_iso_or_utc_date("2369-04-01").unwrap();
+        for days in [36_500_000, 1_000_000_000, i64::MAX] {
+            assert_eq!(
+                datetime_to_slack_ts(&days_before(now, days)),
+                "0.000000",
+                "{days}"
+            );
+        }
+        assert_eq!(
+            days_before(now, 30),
+            parse_iso_or_utc_date("2369-03-02").unwrap()
+        );
     }
 
     #[test]
