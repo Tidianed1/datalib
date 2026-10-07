@@ -28,9 +28,20 @@ in `render.rs`:
 
 A message's body is its content parts in order: text as prose, `code`
 as a fence with its `language`, `execution_output` as a bare fence,
-`thoughts` / `reasoning_recap` as a blockquote. Attachments are
+`thoughts` / `reasoning_recap` as a blockquote. A `multimodal_text`
+message keeps the words beside its images; a `tether_quote` (the
+model quoting an uploaded file) is the file's title over its text,
+quoted; a `tether_browsing_display` is what it showed. A content type
+none of these covers renders nothing and is an `uncovered_type`
+problem on its message, and a message left with no body and no
+attachment (an empty thought, say) is not drawn at all. Attachments are
 materialized by chat-common from the ingest's `chatgpt_attachments`
 edges; an image is drawn inline.
+
+ChatGPT marks up its text with private-use characters (`U+E200`–`U+E2FF`,
+`src/render/sentinels.rs`): an inline `url` becomes a markdown link, an
+`entity` its name, and every other kind (file and web citations, image
+groups) is dropped.
 
 ## Ids and links
 

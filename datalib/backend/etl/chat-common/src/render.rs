@@ -29,7 +29,9 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// existing root to hold them.
 /// v12: the people baseline counts a reactor to a message not in
 /// the mirror, which moves only the `source_contacts` rows.
-pub const LAYOUT_VERSION: u32 = 12;
+/// v13: an attachment's size comes from its bytes when the provider
+/// gave none, and lost bytes are a `blob_missing` problem.
+pub const LAYOUT_VERSION: u32 = 13;
 
 /// What every chat-common provider declares through
 /// `RenderProcessor::render_params`, merged with its own knobs: the
@@ -341,6 +343,9 @@ fn materialize_attachment_bytes(
             };
             if let Some(fname) = blobs.filename_for(ref_id) {
                 att.rel_path = Some(format!("blobs/{fname}"));
+                if att.byte_len.is_none() {
+                    att.byte_len = blobs.get(ref_id).map(|b| b.bytes.len() as i64);
+                }
             }
         }
     }
@@ -1741,6 +1746,34 @@ mod tests {
         assert_eq!(problems.len(), 1, "{problems:?}");
         assert_eq!(problems[0].reason, Reason::BlobMissing);
         assert_eq!(problems[0].sample, "away-team-scan.png");
+    }
+
+    /// A provider that does not know an attachment's size gets it from
+    /// the bytes, rather than "size unknown" beside a file on disk.
+    #[test]
+    fn a_held_attachment_takes_its_size_from_its_bytes() {
+        let mut chat = mk_chat();
+        chat.buckets[0].items[0].attachments = vec![NormalizedAttachment {
+            rel_path: None,
+            file_name: Some("warp-core-schematic.pdf".to_string()),
+            mime_type: None,
+            byte_len: None,
+            source_url: None,
+            ref_id: Some("schematic".to_string()),
+        }];
+        let mut blobs = BlobBundle::default();
+        blobs.add(
+            "schematic",
+            vec![0; 2048],
+            Some("application/pdf".into()),
+            None,
+        );
+        let dir = tempfile::tempdir().unwrap();
+
+        let doc = materialize_attachment_bytes(&chat.buckets[0], dir.path(), &blobs);
+
+        assert_eq!(doc.items[0].attachments[0].byte_len, Some(2048));
+        assert!(doc.items[0].attachments[0].rel_path.is_some());
     }
 
     #[test]

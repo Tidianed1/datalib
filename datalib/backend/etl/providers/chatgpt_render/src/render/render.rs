@@ -17,13 +17,15 @@ use datalib_etl_chat_common::types::{
 };
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::html::md_code_block;
+use datalib_etl_render::html::{escape_md_block, escape_md_inline, md_code_block};
 
 use super::ids;
 use super::parse::{
     shred, OAAttachmentRef, OAContentPartRow, OAMessageRow, ParsedChatGPTApi, ShreddedConversation,
 };
+use datalib_schema::problems::{Problem, Reason};
 use datalib_schema::providers::Provider;
+use serde_json::Value;
 
 /// Bump when the item-shape / column mapping changes meaningfully.
 /// v4: render via chat-common.
@@ -43,7 +45,9 @@ use datalib_schema::providers::Provider;
 ///     (`datalib_id`'s v8 layout).
 /// v11: the private-use characters around a cited span are dropped
 ///     instead of showing as boxes.
-pub const RENDER_VERSION: u32 = 11;
+/// v12: the words beside an image, quotes of uploaded files and named
+///     entities are kept; empty steps are left out.
+pub const RENDER_VERSION: u32 = 12;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -162,9 +166,14 @@ fn build_chat(
             .unwrap_or_default();
         parts.sort_by_key(|p| p.part_index);
         let body = render_message_body(&parts);
+        problems.extend(uncovered_parts(&parts));
 
         let attachments: Vec<NormalizedAttachment> =
             m.attachments.iter().map(att_to_norm).collect();
+        // An empty thought or a browsing step that showed nothing.
+        if body.is_none() && attachments.is_empty() && problems.is_empty() {
+            continue;
+        }
         let kind = if attachments.is_empty() {
             ItemKind::Text
         } else {
@@ -281,11 +290,35 @@ fn render_message_body(parts: &[&OAContentPartRow]) -> Option<String> {
             "code" => blocks.push(md_code_block(p.language.as_deref().unwrap_or(""), t)),
             "execution_output" => blocks.push(md_code_block("", t)),
             "thoughts" | "reasoning_recap" => blocks.push(format!("> {}", t.replace('\n', "\n> "))),
+            "tether_quote" => {
+                let title = p
+                    .raw_json
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                // A file's own words, not the model's markdown.
+                let quote = format!("> {}", escape_md_block(t).replace('\n', "\n> "));
+                blocks.push(if title.is_empty() {
+                    quote
+                } else {
+                    format!("**{}**\n\n{quote}", escape_md_inline(title))
+                });
+            }
             _ => blocks.push(t.to_string()),
         }
     }
     let body = blocks.join("\n\n");
     (!body.trim().is_empty()).then_some(body)
+}
+
+/// A content type parse has no reading for: the message renders
+/// without it, and says so.
+fn uncovered_parts(parts: &[&OAContentPartRow]) -> Vec<Problem> {
+    parts
+        .iter()
+        .filter(|p| p.text.is_none())
+        .map(|p| Problem::field("content", Reason::UncoveredType, &p.kind))
+        .collect()
 }
 
 fn att_to_norm(a: &OAAttachmentRef) -> NormalizedAttachment {
@@ -356,5 +389,28 @@ mod tests {
             "````python\nprint('```')\n<script>x</script>\n````\n\n\
              ````\n```\n<script>x</script> & co\n````"
         );
+    }
+
+    #[test]
+    fn a_file_quote_is_a_titled_blockquote() {
+        let mut quote = part("tether_quote", None, "Stardate 41153.7\nAll is well.");
+        quote.raw_json = serde_json::json!({"title": "Captains *Log*.pdf"});
+        assert_eq!(
+            render_message_body(&[&quote]).unwrap(),
+            "**Captains \\*Log\\*.pdf**\n\n> Stardate 41153.7\n> All is well."
+        );
+    }
+
+    /// A content type parse cannot read is a problem on its message, not
+    /// a silently empty body.
+    #[test]
+    fn an_unread_content_type_is_reported() {
+        let mut unknown = part("holo_program", None, "");
+        unknown.text = None;
+        let text = part("text", None, "Computer, end program.");
+        let problems = uncovered_parts(&[&unknown, &text]);
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].reason, Reason::UncoveredType);
+        assert_eq!(problems[0].sample, "holo_program");
     }
 }
