@@ -128,7 +128,7 @@ Per-bucket attachment-fetch flow is consolidated into three shared pieces in `da
 
 - **`load_blake3_index(pool, table, ref_id_column)`** — one SQL scan at fetch entry produces the run-scoped `(ref_id → blake3)` map. The per-file dedupe check is a HashMap hit, not a SQL round trip per file.
 - **`CasEdgeAccumulator`** — per-bucket walker. Three add paths: `add_fetched`, `add_known`, `add_failed`. Tracks the `BlobBundle`, the `(owning, ref)` edge list, and per-`ref_id` errors. Dedupes by `(owning, ref)`.
-- **`flush_cas_edges(pool, cas, cas_inserts, rows, errors)`** — the canonical end-of-bucket flush: CAS `put_many` → one transaction that `bulk_upsert_in_tx`s the edge rows and records each failed ref through `record_object_attempt` (or `record_object_skipped`, for a ref deliberately not fetched), which writes the sidecar and the `problems` row → commit. `CasEdgeAccumulator::flush` delegates to it via a provider-supplied row-builder closure; `flush_first_seen` is the same with first-seen sidecar stamps, for a source that reads its whole input every run.
+- **`flush_cas_edges(pool, cas, cas_inserts, rows, errors)`** — the canonical end-of-bucket flush: CAS `put_many` → one transaction that upserts the edge rows with first-seen sidecar stamps and records each failed or deliberately skipped ref through `record_not_fetched_first_seen`, which writes the sidecar and the `problems` row and leaves both alone when the same failure comes again → commit. Every caller reads local files, so an unchanged input commits nothing. `CasEdgeAccumulator::flush` delegates to it via a provider-supplied row-builder closure.
 
 ## [Doltlite](https://github.com/dolthub/doltlite) is our primary raw store
 

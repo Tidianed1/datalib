@@ -338,12 +338,11 @@ fn written_in_another_shape(e: &anyhow::Error) -> bool {
 /// wholesale, which is what clears it.
 fn unreadable_store_problem(
     source_id: &str,
-    now: &datalib_time::StoredStamp,
     why: &str,
     severity: datalib_schema::problems::Severity,
 ) -> ProblemRow {
     use datalib_schema::problems::{Outcome, Problem, Reason, Scope, Stage};
-    let mut row = ProblemRow::new(
+    ProblemRow::new(
         source_id,
         Stage::Render,
         Scope::Entity(UNREADABLE_STORE_KEY),
@@ -351,19 +350,25 @@ fn unreadable_store_problem(
         Outcome::Dropped,
         Problem::record(Reason::RenderFailed, why).severity(severity),
         None,
-    );
-    row.first_seen_at_utc = now.utc.clone();
-    row.last_seen_at_utc = now.utc.clone();
-    row.tz_offset = now.tz_offset.clone();
-    row
+    )
 }
 
 const OLDER_SHAPE: &str = "its render store is in an older shape; sync this source to re-render it";
 
 async fn record_unreadable_store(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
-    row: &ProblemRow,
+    row: ProblemRow,
+    now: &datalib_time::StoredStamp,
 ) -> Result<()> {
+    let earlier = sqlx::query("SELECT * FROM problems WHERE problem_uuid = ?")
+        .bind(&row.problem_uuid)
+        .fetch_optional(&mut **conn)
+        .await
+        .context("read the unreadable-store warning")?
+        .map(|r| ProblemRow::from_row(&r))
+        .transpose()?;
+    let row = row.stamped(earlier.as_ref(), &now.utc, now.tz_offset.as_deref());
+    let row = &row;
     sqlx::query("DELETE FROM problems WHERE problem_uuid = ?")
         .bind(&row.problem_uuid)
         .execute(&mut **conn)
@@ -973,16 +978,16 @@ async fn apply_source(
     let res = async {
         let (docs, removed, problems, head) = match read {
             SourceRead::Unreadable => {
-                let row = unreadable_store_problem(stanza, now, OLDER_SHAPE, Severity::Warning);
+                let row = unreadable_store_problem(stanza, OLDER_SHAPE, Severity::Warning);
                 let mut guard = write_lock.acquire().await?;
-                record_unreadable_store(guard.conn(), &row).await?;
+                record_unreadable_store(guard.conn(), row, now).await?;
                 summary.sources_unreadable.push(stanza.to_string());
                 return Ok(true);
             }
             SourceRead::Failed(why) => {
-                let row = unreadable_store_problem(stanza, now, &why, Severity::Error);
+                let row = unreadable_store_problem(stanza, &why, Severity::Error);
                 let mut guard = write_lock.acquire().await?;
-                record_unreadable_store(guard.conn(), &row).await?;
+                record_unreadable_store(guard.conn(), row, now).await?;
                 summary.sources_failed.push((stanza.to_string(), why));
                 return Ok(true);
             }

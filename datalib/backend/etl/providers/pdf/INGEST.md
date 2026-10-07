@@ -37,9 +37,9 @@ A row's `_bookkeeping` sidecar is stamped the first time a scan writes
 the row and left alone after; a path's survives the truncate and goes
 when the path does (`RawDb::prune_unnamed`). So scanning an unchanged
 tree again commits nothing
-(`a_second_scan_of_an_unchanged_tree_commits_nothing`), unless a file
-in it will not read: its `problems` row is re-recorded, and re-stamped,
-on every scan.
+(`a_second_scan_of_an_unchanged_tree_commits_nothing`), the corrupt
+fixture's `problems` row included: a problem recorded again unchanged
+keeps its stamps.
 
 ## When part of a scan fails
 

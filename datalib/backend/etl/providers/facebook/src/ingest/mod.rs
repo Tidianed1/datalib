@@ -460,7 +460,7 @@ async fn store_media(
 }
 
 async fn flush_media(acc: &CasEdgeAccumulator, db: &RawDb, cas: &BlobCas) -> Result<()> {
-    acc.flush_first_seen(db.pool(), cas, |owning, uri, blake3| MediaBlobRow {
+    acc.flush(db.pool(), cas, |owning, uri, blake3| MediaBlobRow {
         id: MediaBlobRow::pk_recipe(owning, uri),
         owner_id: owning.to_string(),
         uri: uri.to_string(),

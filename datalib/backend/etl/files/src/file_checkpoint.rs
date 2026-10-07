@@ -155,7 +155,7 @@ fn file_problem_key(scope: &str, rel: &str) -> String {
 /// The sweep key's prefix of every row [`record_file_with_problem`] writes.
 pub const FILE_PROBLEM_PREFIX: &str = "file:";
 
-/// Set or clear one file's problem row, keeping when it was first seen.
+/// Set or clear one file's problem row, stamped by `ProblemRow::stamped`.
 async fn replace_file_problem(
     tx: &mut Transaction<'_, Sqlite>,
     scope: &str,
@@ -165,14 +165,14 @@ async fn replace_file_problem(
     use datalib_etl::bulk::BulkUpsertable as _;
     use datalib_problems::{ProblemRow, Scope, ScopeKind, Stage};
     let key = file_problem_key(scope, rel);
-    let first_seen: Option<String> = sqlx::query_scalar(
-        "SELECT first_seen_at_utc FROM problems WHERE scope_kind = ? AND scope_key = ?",
-    )
-    .bind(ScopeKind::Entity.as_str())
-    .bind(&key)
-    .fetch_optional(&mut **tx)
-    .await
-    .with_context(|| format!("read the problem of {key}"))?;
+    let earlier = sqlx::query("SELECT * FROM problems WHERE scope_kind = ? AND scope_key = ?")
+        .bind(ScopeKind::Entity.as_str())
+        .bind(&key)
+        .fetch_optional(&mut **tx)
+        .await
+        .with_context(|| format!("read the problem of {key}"))?
+        .map(|r| ProblemRow::from_row(&r))
+        .transpose()?;
     sqlx::query("DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?")
         .bind(ScopeKind::Entity.as_str())
         .bind(&key)
@@ -183,20 +183,16 @@ async fn replace_file_problem(
         return Ok(());
     };
     let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
-    let row = ProblemRow {
-        first_seen_at_utc: first_seen.unwrap_or_else(|| now.clone()),
-        last_seen_at_utc: now,
-        tz_offset: Some(tz_offset),
-        ..ProblemRow::new(
-            "",
-            Stage::Fetch,
-            Scope::Entity(&key),
-            None,
-            outcome,
-            problem,
-            None,
-        )
-    };
+    let row = ProblemRow::new(
+        "",
+        Stage::Fetch,
+        Scope::Entity(&key),
+        None,
+        outcome,
+        problem,
+        None,
+    )
+    .stamped(earlier.as_ref(), &now, Some(&tz_offset));
     let sql = datalib_etl::bulk::insert_sql::<ProblemRow>();
     // Audited: `sql` is built from `ProblemRow`'s associated consts, never
     // from row data; all values bound.

@@ -113,7 +113,7 @@ impl RawDb {
     /// one that was not is an edge with no bytes and a `problems` row
     /// until a later run reads it.
     pub async fn flush_media_attachments(&self, acc: &CasEdgeAccumulator) -> Result<()> {
-        acc.flush_first_seen(self.pool(), self.cas(), |event_uuid, ref_id, blake3| {
+        acc.flush(self.pool(), self.cas(), |event_uuid, ref_id, blake3| {
             BeeperMediaAttachmentRow {
                 id: BeeperMediaAttachmentRow::pk_recipe(event_uuid, ref_id),
                 event_uuid: event_uuid.to_string(),

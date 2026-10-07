@@ -440,8 +440,9 @@ const KEY_CHUNK: usize = 500;
 
 /// Delete what `sweeps` cover, then write `rows`, in one transaction. A
 /// key that was there before keeps its `first_seen_at_utc`, so the screen
-/// can say how long something has been failing; two rows on one key keep
-/// the first, since the key is the row's identity.
+/// can say how long something has been failing, and one recorded again
+/// unchanged keeps every stamp (`ProblemRow::stamped`); two rows on one
+/// key keep the first, since the key is the row's identity.
 pub(crate) async fn apply(
     pool: &sqlx::SqlitePool,
     sweeps: &[Sweep],
@@ -459,21 +460,21 @@ pub(crate) async fn apply(
         .collect();
 
     let mut tx = pool.begin().await.context("begin")?;
-    let mut first_seen: HashMap<String, String> = HashMap::new();
+    let mut earlier: HashMap<String, ProblemRow> = HashMap::new();
     let mut gone: Vec<String> = Vec::new();
     for sweep in sweeps {
         // `INSTR(x, ?) = 1` rather than `LIKE`: `_` in a value is a
         // wildcard to LIKE.
-        let earlier: Vec<(String, String)> = sqlx::query_as(
-            "SELECT scope_key, first_seen_at_utc FROM problems \
-             WHERE scope_kind = ? AND INSTR(scope_key, ?) = 1",
-        )
-        .bind(ScopeKind::Entity.as_str())
-        .bind(&sweep.prefix)
-        .fetch_all(&mut *tx)
-        .await
-        .with_context(|| format!("read the last run's {} problems", sweep.prefix))?;
-        for (key, first) in earlier {
+        let swept =
+            sqlx::query("SELECT * FROM problems WHERE scope_kind = ? AND INSTR(scope_key, ?) = 1")
+                .bind(ScopeKind::Entity.as_str())
+                .bind(&sweep.prefix)
+                .fetch_all(&mut *tx)
+                .await
+                .with_context(|| format!("read the last run's {} problems", sweep.prefix))?;
+        for r in &swept {
+            let row = ProblemRow::from_row(r)?;
+            let key = row.scope_key.clone();
             let kept = sweep
                 .keep
                 .as_ref()
@@ -481,33 +482,34 @@ pub(crate) async fn apply(
             if !kept {
                 gone.push(key.clone());
             }
-            first_seen.insert(key, first);
+            earlier.entry(key).or_insert(row);
         }
     }
     let unswept: Vec<&str> = rows
         .iter()
         .map(|(key, _, _)| key.as_str())
-        .filter(|key| !first_seen.contains_key(*key))
+        .filter(|key| !earlier.contains_key(*key))
         .collect();
     for chunk in unswept.chunks(KEY_CHUNK) {
         // Audited: only `?` placeholders are built, one per key; every
         // key is bound.
         let sql = format!(
-            "SELECT scope_key, first_seen_at_utc FROM problems \
-             WHERE scope_kind = ? AND scope_key IN ({})",
+            "SELECT * FROM problems WHERE scope_kind = ? AND scope_key IN ({})",
             vec!["?"; chunk.len()].join(",")
         );
-        let mut q = sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(sql))
-            .bind(ScopeKind::Entity.as_str());
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(ScopeKind::Entity.as_str());
         for key in chunk {
             q = q.bind(*key);
         }
-        let earlier = q
+        let found = q
             .fetch_all(&mut *tx)
             .await
             .context("read the rows this run writes again")?;
-        gone.extend(earlier.iter().map(|(key, _)| key.clone()));
-        first_seen.extend(earlier);
+        for r in &found {
+            let row = ProblemRow::from_row(r)?;
+            gone.push(row.scope_key.clone());
+            earlier.entry(row.scope_key.clone()).or_insert(row);
+        }
     }
     for chunk in gone.chunks(KEY_CHUNK) {
         // Audited: as above.
@@ -526,20 +528,16 @@ pub(crate) async fn apply(
     let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
     let mut stored = Vec::with_capacity(rows.len());
     for (key, outcome, problem) in &rows {
-        let row = ProblemRow {
-            first_seen_at_utc: first_seen.get(key).cloned().unwrap_or_else(|| now.clone()),
-            last_seen_at_utc: now.clone(),
-            tz_offset: Some(tz_offset.clone()),
-            ..ProblemRow::new(
-                "",
-                Stage::Fetch,
-                Scope::Entity(key),
-                None,
-                *outcome,
-                problem.clone(),
-                None,
-            )
-        };
+        let row = ProblemRow::new(
+            "",
+            Stage::Fetch,
+            Scope::Entity(key),
+            None,
+            *outcome,
+            problem.clone(),
+            None,
+        )
+        .stamped(earlier.get(key), &now, Some(&tz_offset));
         let sql = crate::bulk::insert_sql::<ProblemRow>();
         // Audited: `sql` is built from `ProblemRow`'s associated consts,
         // never from row data; all values bound.

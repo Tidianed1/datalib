@@ -143,15 +143,11 @@ impl Harness {
 /// the second scan gets a later one. A commit here means a stamp moved:
 /// the store grows on every sync, and a stamp in a content table sends
 /// render, which diffs these tables to decide what to re-convert, back
-/// over every document.
-///
-/// The corrupt fixture is left out: a file that will not read is
-/// recorded as a problem again on every scan, and the problems store
-/// re-stamps that row's `last_seen_at_utc` each time.
+/// over every document. The corrupt fixture stays: a problem recorded
+/// again unchanged changes nothing either.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_second_scan_of_an_unchanged_tree_commits_nothing() -> Result<()> {
-    let h = Harness::on_a_copy();
-    std::fs::remove_file(h.root.join("holodeck/corrupt.pdf"))?;
+    let h = Harness::new();
     h.scan().await?;
     let db = h.db().await;
     let first = datalib_etl::doltlite_raw::head_commit(db.pool()).await?;

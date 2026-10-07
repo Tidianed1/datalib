@@ -762,24 +762,23 @@ impl IndexedMarkdownStore {
     async fn sweep_problems(&self, markdown_uuid: &str, problems: &[ProblemRow]) -> Result<()> {
         let mut guard = self.write_lock.acquire().await?;
         let conn = guard.conn();
-        // Read the prior `first_seen_at_utc` for every uuid about to be
-        // rewritten, *before* the delete. This is the whole reason the
-        // store stamps these rather than the renderer: a renderer that
-        // set both timestamps to "now" every run would make
-        // `first_seen_at_utc` a synonym for `last_seen_at_utc`, and "this has
-        // been broken since Tuesday" would be unanswerable.
-        let seen: HashMap<String, String> = sqlx::query(
-            "SELECT problem_uuid, first_seen_at_utc FROM problems \
-             WHERE scope_kind = ? AND scope_key = ?",
-        )
-        .bind(ScopeKind::Markdown.as_str())
-        .bind(markdown_uuid)
-        .fetch_all(&mut **conn)
-        .await
-        .context("read prior first_seen_at_utc")?
-        .into_iter()
-        .map(|r| Ok((r.try_get::<String, _>(0)?, r.try_get::<String, _>(1)?)))
-        .collect::<Result<_>>()?;
+        // Read the rows about to be rewritten, *before* the delete. This
+        // is the whole reason the store stamps these rather than the
+        // renderer: a renderer that set both timestamps to "now" every
+        // run would make `first_seen_at_utc` a synonym for
+        // `last_seen_at_utc`, and "this has been broken since Tuesday"
+        // would be unanswerable.
+        let mut seen: HashMap<String, ProblemRow> = HashMap::new();
+        for r in sqlx::query("SELECT * FROM problems WHERE scope_kind = ? AND scope_key = ?")
+            .bind(ScopeKind::Markdown.as_str())
+            .bind(markdown_uuid)
+            .fetch_all(&mut **conn)
+            .await
+            .context("read the document's problems")?
+        {
+            let row = ProblemRow::from_row(&r)?;
+            seen.insert(row.problem_uuid.clone(), row);
+        }
         sqlx::query("DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?")
             .bind(ScopeKind::Markdown.as_str())
             .bind(markdown_uuid)
@@ -789,27 +788,21 @@ impl IndexedMarkdownStore {
         self.insert_problems(conn, problems, &seen).await
     }
 
-    /// Insert problem rows, stamping `first_seen_at_utc` / `last_seen_at_utc`.
-    /// `seen` maps a uuid to the `first_seen_at_utc` it already had, which
-    /// is carried forward; anything absent is new and gets `now` for
-    /// both.
+    /// Insert problem rows, each stamped against the row `seen` holds
+    /// under its uuid (`ProblemRow::stamped`).
     async fn insert_problems(
         &self,
         conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
         problems: &[ProblemRow],
-        seen: &HashMap<String, String>,
+        seen: &HashMap<String, ProblemRow>,
     ) -> Result<()> {
         let now = datalib_time::split_stamp(&self.now);
         for p in problems {
-            let stamped = ProblemRow {
-                first_seen_at_utc: seen
-                    .get(&p.problem_uuid)
-                    .cloned()
-                    .unwrap_or_else(|| now.utc.clone()),
-                last_seen_at_utc: now.utc.clone(),
-                tz_offset: now.tz_offset.clone(),
-                ..p.clone()
-            };
+            let stamped = p.clone().stamped(
+                seen.get(&p.problem_uuid),
+                &now.utc,
+                now.tz_offset.as_deref(),
+            );
             // Same generated write path the rows use; see
             // `PortableTable`'s `BulkUpsertable` impl.
             let sql = datalib_etl::bulk::insert_sql::<ProblemRow>();
@@ -921,7 +914,7 @@ impl IndexedMarkdownStore {
         blocking(async {
             let mut guard = self.write_lock.acquire().await?;
             let conn = guard.conn();
-            let mut seen: HashMap<String, String> = HashMap::new();
+            let mut seen: HashMap<String, ProblemRow> = HashMap::new();
             // `INSTR(x, ?) = 1` rather than `LIKE 'table:%'`: a table
             // name may hold `_`, which LIKE reads as a wildcard.
             let prefixes: Vec<String> = whole_tables.iter().map(|t| format!("{t}:")).collect();
@@ -932,14 +925,14 @@ impl IndexedMarkdownStore {
                 .iter()
                 .map(|p| {
                     (
-                        "SELECT problem_uuid, first_seen_at_utc FROM problems \
+                        "SELECT * FROM problems \
                      WHERE scope_kind = ? AND INSTR(scope_key, ?) = 1",
                         p.as_str(),
                     )
                 })
                 .chain(entities.iter().map(|e| {
                     (
-                        "SELECT problem_uuid, first_seen_at_utc FROM problems \
+                        "SELECT * FROM problems \
                      WHERE scope_kind = ? AND scope_key = ?",
                         *e,
                     )
@@ -951,17 +944,15 @@ impl IndexedMarkdownStore {
                 } else {
                     "DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?"
                 };
-                for (uuid, first) in sqlx::query(select)
+                for r in sqlx::query(select)
                     .bind(ScopeKind::Entity.as_str())
                     .bind(key)
                     .fetch_all(&mut **conn)
                     .await
-                    .context("read prior first_seen_at_utc")?
-                    .into_iter()
-                    .map(|r| Ok((r.try_get::<String, _>(0)?, r.try_get::<String, _>(1)?)))
-                    .collect::<Result<Vec<_>>>()?
+                    .context("read the entity problems about to be rewritten")?
                 {
-                    seen.insert(uuid, first);
+                    let row = ProblemRow::from_row(&r)?;
+                    seen.insert(row.problem_uuid.clone(), row);
                 }
                 sqlx::query(delete)
                     .bind(ScopeKind::Entity.as_str())

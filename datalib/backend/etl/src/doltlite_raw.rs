@@ -1871,8 +1871,31 @@ pub async fn record_object_attempt(
     id: &str,
     result: Option<&str>,
 ) -> Result<()> {
-    record_object_bookkeeping(tx, table, id, result).await?;
+    record_object_bookkeeping(tx, table, id, result, OnRepeat::Count).await?;
     record_fetch_problem(tx, table, id, result.map(NotFetched::Failed)).await
+}
+
+/// A failed or declined fetch, for a source that reads its whole input
+/// every run and so tries everything it lacks every run: the same
+/// failure recorded again leaves the sidecar and its `problems` row as
+/// they were, so a standing failure commits nothing.
+pub async fn record_not_fetched_first_seen(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    table: &str,
+    id: &str,
+    not_fetched: NotFetched<'_>,
+) -> Result<()> {
+    record_object_bookkeeping(tx, table, id, Some(not_fetched.detail()), OnRepeat::Leave).await?;
+    record_fetch_problem(tx, table, id, Some(not_fetched)).await
+}
+
+/// What a sidecar does when the same failure is recorded again.
+#[derive(Clone, Copy)]
+enum OnRepeat {
+    /// Counts the attempt and stamps it.
+    Count,
+    /// Stays as it was.
+    Leave,
 }
 
 /// The sidecar half of an attempt, without the `problems` row: the data
@@ -1884,6 +1907,7 @@ async fn record_object_bookkeeping(
     table: &str,
     id: &str,
     result: Option<&str>,
+    on_repeat: OnRepeat,
 ) -> Result<()> {
     // Keep the always-paired invariant: a failure recorded before any
     // successful fetch has no data row yet.
@@ -1914,7 +1938,13 @@ async fn record_object_bookkeeping(
                 attempt_count = {table}_bookkeeping.attempt_count + 1,
                 last_attempt_at_utc = excluded.last_attempt_at_utc,
                 last_error = excluded.last_error,
-                tz_offset = excluded.tz_offset"
+                tz_offset = excluded.tz_offset{}",
+            match on_repeat {
+                OnRepeat::Count => String::new(),
+                OnRepeat::Leave => format!(
+                    " WHERE {table}_bookkeeping.last_error IS NOT excluded.last_error"
+                ),
+            }
         ),
     };
     // Audited: both arms interpolate only `table`; the rest is bound.
@@ -1948,7 +1978,7 @@ pub async fn record_object_skipped(
     reason: datalib_problems::Reason,
     detail: &str,
 ) -> Result<()> {
-    record_object_bookkeeping(tx, table, id, Some(detail)).await?;
+    record_object_bookkeeping(tx, table, id, Some(detail), OnRepeat::Count).await?;
     record_fetch_problem(tx, table, id, Some(NotFetched::Skipped { reason, detail })).await
 }
 
@@ -1964,7 +1994,7 @@ pub async fn record_object_unusable(
     reason: datalib_problems::Reason,
     detail: &str,
 ) -> Result<()> {
-    record_object_bookkeeping(tx, table, id, Some(detail)).await?;
+    record_object_bookkeeping(tx, table, id, Some(detail), OnRepeat::Count).await?;
     record_fetch_problem(tx, table, id, Some(NotFetched::Skipped { reason, detail })).await
 }
 
@@ -2009,16 +2039,16 @@ async fn record_fetch_problem(
         Outcome, Problem, ProblemRow, Reason, Scope, ScopeKind, Severity, Stage,
     };
     let entity_id = format!("{table}:{id}");
-    let first_seen: Option<String> = sqlx::query_scalar(
-        "SELECT first_seen_at_utc FROM problems \
-         WHERE scope_kind = ? AND scope_key = ? AND stage = ?",
-    )
-    .bind(ScopeKind::Entity.as_str())
-    .bind(&entity_id)
-    .bind(Stage::Fetch.as_str())
-    .fetch_optional(&mut **tx)
-    .await
-    .with_context(|| format!("read the fetch problem of {entity_id}"))?;
+    let earlier =
+        sqlx::query("SELECT * FROM problems WHERE scope_kind = ? AND scope_key = ? AND stage = ?")
+            .bind(ScopeKind::Entity.as_str())
+            .bind(&entity_id)
+            .bind(Stage::Fetch.as_str())
+            .fetch_optional(&mut **tx)
+            .await
+            .with_context(|| format!("read the fetch problem of {entity_id}"))?
+            .map(|r| ProblemRow::from_row(&r))
+            .transpose()?;
     sqlx::query("DELETE FROM problems WHERE scope_kind = ? AND scope_key = ? AND stage = ?")
         .bind(ScopeKind::Entity.as_str())
         .bind(&entity_id)
@@ -2052,20 +2082,16 @@ async fn record_fetch_problem(
         NotFetched::Failed(_) => (Outcome::Dropped, Severity::Error, Reason::FetchFailed),
     };
     let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
-    let row = ProblemRow {
-        first_seen_at_utc: first_seen.unwrap_or_else(|| now.clone()),
-        last_seen_at_utc: now,
-        tz_offset: Some(tz_offset),
-        ..ProblemRow::new(
-            "",
-            Stage::Fetch,
-            Scope::Entity(&entity_id),
-            None,
-            outcome,
-            Problem::record(reason, err).severity(severity),
-            None,
-        )
-    };
+    let row = ProblemRow::new(
+        "",
+        Stage::Fetch,
+        Scope::Entity(&entity_id),
+        None,
+        outcome,
+        Problem::record(reason, err).severity(severity),
+        None,
+    )
+    .stamped(earlier.as_ref(), &now, Some(&tz_offset));
     let sql = crate::bulk::insert_sql::<ProblemRow>();
     // Audited: `sql` is built from `ProblemRow`'s associated consts,
     // never from row data; all values bound.

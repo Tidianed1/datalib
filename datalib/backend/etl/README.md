@@ -508,12 +508,16 @@ emits one multi-row statement per chunk, and stamps `<table>_bookkeeping` for
 every id in the same transaction. The caller commits.
 
 A source that reads its whole input every run (a local file or folder)
-calls `bulk_upsert_first_seen_in_tx` instead, and flushes CAS edges with
-`CasEdgeAccumulator::flush_first_seen`: a row's sidecar is stamped the
-first time it is written, or when it so far records only a failure, and
-left alone after. Re-stamping every row would make every run a commit,
-and the store grow, with nothing changed. Each such source has a test
-that reads an unchanged input twice and asserts the second
+calls `bulk_upsert_first_seen_in_tx` instead: a row's sidecar is stamped
+the first time it is written, or when it so far records only a failure,
+and left alone after. Re-stamping every row would make every run a
+commit, and the store grow, with nothing changed. The CAS-edge flush
+(`flush_cas_edges`, `CasEdgeAccumulator::flush`) always works this way,
+since every caller reads local files, and records a failure through
+`record_not_fetched_first_seen`, which leaves a sidecar alone when the
+same failure comes again. A `problems` row recorded again unchanged keeps
+its stamps everywhere (`ProblemRow::stamped`). Each such source has a
+test that reads an unchanged input twice and asserts the second
 `commit_run` returns `None`.
 
 `insert_sql` exists for the one path where upserting would be wrong. In

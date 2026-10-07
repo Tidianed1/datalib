@@ -109,12 +109,11 @@ the file reads. The bytes are held in memory only up to 32 MB between
 flushes, since a real export's media runs to gigabytes.
 
 Every run reads the whole export, so an edge's `_bookkeeping` sidecar
-is stamped the first time it lands and left alone after
-(`CasEdgeAccumulator::flush_first_seen`), and a chunk read again with the
-same bytes keeps its `ingested_files` stamp. Reading an unchanged export
-again commits nothing (`reading_an_unchanged_export_again_commits_nothing`),
-unless a `uri` has no file: its warning is recorded again, and re-stamped,
-on every run.
+is stamped the first time it lands and left alone after, and a chunk
+read again with the same bytes keeps its `ingested_files` stamp. A
+`uri` with no file is tried again every run, and the same warning
+recorded again changes nothing either. Reading an unchanged export
+again commits nothing (`reading_an_unchanged_export_again_commits_nothing`).
 
 An edge follows its record. In the transaction that prunes the records,
 a deleted record's edges go, and so do those of a record read this run,

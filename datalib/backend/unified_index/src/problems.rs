@@ -136,7 +136,7 @@ mod tests {
         assert!(parse("colour:red").refusal().unwrap().contains("`colour:`"));
     }
 
-    /// `before:`/`after:` bound when a problem was last seen; there is no
+    /// `before:`/`after:` bound when a problem last changed; there is no
     /// `is:` and no qmd here.
     #[test]
     fn a_range_is_the_last_seen_stamp() {
