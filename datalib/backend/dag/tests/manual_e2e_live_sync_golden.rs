@@ -15,7 +15,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
+use datalib_contacts::{ContactKind, Store};
 use datalib_dag::RunState;
+use datalib_handle::Handle;
 use insta::{assert_json_snapshot, assert_snapshot};
 use serde_json::Value;
 use walkdir::WalkDir;
@@ -616,6 +618,28 @@ fn manual_e2e_live_sync_golden() {
         assert_json_snapshot!("qmd_collections", qmd_collections_report(&data_root, &cfg_out));
     });
 
+    // ── The contacts app: links a person made, which nothing rebuilds ──
+    //
+    // Made once run 1 has put the handles in the index, and checked after
+    // run 3's reset: no step may write `datalib_curated/`, so the store
+    // must come through runs 2 and 3 row for row, and each handle it links
+    // must still be in the re-downloaded data.
+    let contact_specs = read_contact_specs(&src_config.with_file_name("contacts.toml"));
+    assert_handles_indexed(&data_root, &contact_specs, "run 1");
+    let contacts = make_contacts(&data_root, &contact_specs);
+    let contacts_store = datalib_contacts::store_path(&data_root);
+    let contacts_before = dump_store(&contacts_store);
+    insta::with_settings!({
+        snapshot_path => snap_base().join(datalib_contacts::CURATED_DIR).display().to_string(),
+        prepend_module_to_snapshot => false,
+        description => "datalib_curated/datalib_contacts/contacts.doltlite_db",
+    }, {
+        assert_json_snapshot!(
+            datalib_contacts::APP_DIR,
+            contacts_for_snapshot(contacts_before.clone(), &contacts)
+        );
+    });
+
     // ── Second run: incrementality check ──────────────────────────────
     let now2 = "2026-05-21T18:05:00Z";
     let run2 = run_pipeline(&bin, &cfg_path, &run_root, now2, &[]);
@@ -689,6 +713,15 @@ fn manual_e2e_live_sync_golden() {
         run3.stderr_tail(40)
     );
     assert_step_statuses_ok(&run3.run_summary().expect("run 3 run_summary"));
+
+    assert!(
+        dump_store(&contacts_store) == contacts_before,
+        "the contacts store changed across run 2 and run 3's reset; no step may \
+         write {}",
+        contacts_store.display()
+    );
+    assert_handles_indexed(&data_root, &contact_specs, "run 3's re-download");
+    assert_contacts_resolve(&contacts_store, &contacts);
 
     let drifts: Vec<String> = stores_before
         .iter()
@@ -1303,6 +1336,190 @@ fn index_problems(data_root: &Path) -> Value {
     };
     strip_volatile(&mut rows);
     rows
+}
+
+/// One contact the bake makes, as `contacts.toml` beside the config
+/// writes it. The handles are real, which is why they live in the
+/// private data repo and not here.
+struct ContactSpec {
+    name: String,
+    handles: Vec<Handle>,
+    stopped_working: Vec<(Handle, String)>,
+}
+
+/// A contact the bake made, under the id the store gave it.
+struct MadeContact {
+    name: String,
+    contact_id: String,
+    handles: Vec<Handle>,
+}
+
+fn read_contact_specs(path: &Path) -> Vec<ContactSpec> {
+    let text = std::fs::read_to_string(path).unwrap_or_else(|e| {
+        panic!(
+            "read {}: {e}. The bake links handles in the contacts app from this \
+             file; add it beside the config.",
+            path.display()
+        )
+    });
+    let doc: toml::Table = toml::from_str(&text).expect("contacts.toml parses");
+    let handle = |v: &toml::Value| {
+        let s = v.as_str().expect("a handle is a string");
+        Handle::parse(s).unwrap_or_else(|| panic!("{s:?} is not a handle as datalib spells one"))
+    };
+    let specs: Vec<ContactSpec> = doc
+        .get("contacts")
+        .and_then(toml::Value::as_array)
+        .expect("contacts.toml has [[contacts]]")
+        .iter()
+        .map(|c| ContactSpec {
+            name: c["name"].as_str().expect("a contact's name").to_string(),
+            handles: c["handles"]
+                .as_array()
+                .expect("a contact's handles")
+                .iter()
+                .map(handle)
+                .collect(),
+            stopped_working: c
+                .get("stopped_working")
+                .and_then(toml::Value::as_table)
+                .into_iter()
+                .flatten()
+                .map(|(h, by)| {
+                    let by = by.as_str().expect("stopped_working is a date");
+                    (handle(&toml::Value::String(h.clone())), by.to_string())
+                })
+                .collect(),
+        })
+        .collect();
+    assert!(!specs.is_empty(), "{}: no contacts", path.display());
+    specs
+}
+
+/// Every handle the specs link is an author in the index, so each link
+/// lands on documents rather than on nothing.
+fn assert_handles_indexed(data_root: &Path, specs: &[ContactSpec], after: &str) {
+    let db = data_root.join("unified_index/grid_index/db.doltlite_db");
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime for the index read");
+    let indexed: std::collections::BTreeSet<String> = rt.block_on(async {
+        let pool = open_readonly(&db).await;
+        let handles = sqlx::query_scalar(
+            "SELECT DISTINCT author_handle FROM grid_rows WHERE author_handle IS NOT NULL",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("read the index's author handles");
+        pool.close().await;
+        handles.into_iter().collect()
+    });
+    let missing: Vec<&str> = specs
+        .iter()
+        .flat_map(|s| &s.handles)
+        .map(Handle::as_str)
+        .filter(|h| !indexed.contains(*h))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "after {after}, contacts.toml links handles no document is written by: {missing:?}. \
+         If upstream moved, pick handles that are in the data."
+    );
+}
+
+fn make_contacts(data_root: &Path, specs: &[ContactSpec]) -> Vec<MadeContact> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime for the contacts store");
+    rt.block_on(async {
+        let store = Store::open(&datalib_contacts::store_path(data_root))
+            .await
+            .expect("open the contacts store");
+        let mut made = Vec::new();
+        for spec in specs {
+            let contact_id = store
+                .create(&spec.name, ContactKind::Person, &spec.handles)
+                .await
+                .unwrap_or_else(|e| panic!("make contact {:?}: {e:#}", spec.name));
+            for (handle, by) in &spec.stopped_working {
+                let marked = store
+                    .set_stopped_working(handle, Some(by))
+                    .await
+                    .unwrap_or_else(|e| panic!("mark {handle} stopped working: {e:#}"));
+                assert!(marked, "{handle} is not one of {:?}'s handles", spec.name);
+            }
+            made.push(MadeContact {
+                name: spec.name.clone(),
+                contact_id,
+                handles: spec.handles.clone(),
+            });
+        }
+        store.close().await;
+        made
+    })
+}
+
+/// The store still answers each handle with the contact it was linked to.
+fn assert_contacts_resolve(store_path: &Path, contacts: &[MadeContact]) {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime for the contacts store");
+    rt.block_on(async {
+        let store = Store::open(store_path)
+            .await
+            .expect("open the contacts store");
+        for c in contacts {
+            let resolved = store.resolve(&c.handles).await.expect("resolve handles");
+            for h in &c.handles {
+                assert_eq!(
+                    resolved.get(h.as_str()).map(|n| n.key.as_str()),
+                    Some(c.contact_id.as_str()),
+                    "{h} no longer resolves to {:?}",
+                    c.name
+                );
+            }
+        }
+        store.close().await;
+    });
+}
+
+/// The contacts store's dump with each contact's random id replaced by
+/// its name and the stamps the wall clock wrote redacted, so a bake diffs
+/// only when what the store holds does.
+fn contacts_for_snapshot(mut dump: Value, contacts: &[MadeContact]) -> Value {
+    const STAMPS: &[&str] = &[
+        "created_at_utc",
+        "updated_at_utc",
+        "linked_at_utc",
+        "added_at_utc",
+        "set_at_utc",
+        "tz_offset",
+    ];
+    fn walk(v: &mut Value, contacts: &[MadeContact]) {
+        match v {
+            Value::Object(map) => {
+                for (k, child) in map.iter_mut() {
+                    if STAMPS.contains(&k.as_str()) {
+                        *child = Value::String(REDACTED.into());
+                    } else {
+                        walk(child, contacts);
+                    }
+                }
+            }
+            Value::Array(items) => items.iter_mut().for_each(|i| walk(i, contacts)),
+            Value::String(s) => {
+                for c in contacts {
+                    *s = s.replace(&c.contact_id, &format!("<contact {}>", c.name));
+                }
+            }
+            _ => {}
+        }
+    }
+    walk(&mut dump, contacts);
+    dump
 }
 
 /// Whole-table bookkeeping that legitimately changes across a reset, so it

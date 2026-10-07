@@ -503,7 +503,10 @@ misplaced knob fails here rather than during the live run.
 The test makes three pipeline runs, each asserting something different:
 
 1. **Cold** — snapshots the produced data tree, one `.snap` per file, plus a
-   manifest and the layout invariants.
+   manifest and the layout invariants. Then it makes the contacts listed in
+   `contacts.toml` (beside the config) in the contacts app, asserts every
+   handle they link is an author in the index, and snapshots the contacts
+   store with each minted `contact_id` replaced by the contact's name.
 2. **Incremental** — re-runs against the now-populated `data_root` and
    snapshots each source's `sync_runs.summary`, whose `deltas` prove the run
    didn't re-fetch the world. A broken-incrementality regression shows up as
@@ -513,7 +516,9 @@ The test makes three pipeline runs, each asserting something different:
 3. **`--reset`, then sync** — empties the store and re-downloads it, then
    asserts the content tables come back byte-identical. This is what catches a
    per-fetch field leaking into a content payload (it belongs in the
-   `volatile_payload` sidecar instead).
+   `volatile_payload` sidecar instead). It also asserts that the contacts
+   store came through unchanged, that every linked handle is still in the
+   re-downloaded index, and that each one still resolves to its contact.
 
 The bake leaves its data root behind under `$TMPDIR/datalib-e2e-runs/run-<millis>/data`
 (the newest three runs are kept; the test prints the path as `[test]
