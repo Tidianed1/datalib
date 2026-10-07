@@ -189,7 +189,7 @@ async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummar
 
     opts.progress
         .set_message(&format!("indexing {}", opts.root.display()));
-    db.clear_scan_meta().await?;
+    db.clear_other_scan_meta(&opts.source_id).await?;
 
     let default_stamp_kind = if cfg!(unix) {
         StampKind::Inode

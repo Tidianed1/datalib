@@ -1246,3 +1246,41 @@ async fn a_voice_file_that_is_recognizably_nothing_deletes_nothing() {
         std::fs::write(e.root.join(rel), good).unwrap();
     }
 }
+
+/// Reading an unchanged export again must leave the store as it was: a
+/// re-stamped sidecar is a commit, and a bigger store, on every sync.
+///
+/// The Chat attachment the fixture leaves out is put in place: a missing
+/// file is recorded as a problem again on every run, and the problems
+/// store re-stamps that row's `last_seen_at_utc` each time.
+#[tokio::test(flavor = "multi_thread")]
+async fn reading_an_unchanged_export_again_commits_nothing() {
+    let e = Export::new();
+    std::fs::write(
+        e.root
+            .join("Google Chat/Groups/DM TNG-BRIDGE/risa-shore-leave.png"),
+        b"not really a png",
+    )
+    .unwrap();
+    let mut commits = Vec::new();
+    for _ in 0..2 {
+        let db = RawDb::open(&e.db_path).await.unwrap();
+        ingest::fetch(FetchOptions {
+            input_path: e.root.clone(),
+            ..opts(e.work.path(), &db, SyncFlags::all()).await
+        })
+        .await
+        .unwrap();
+        commits.push(
+            datalib_etl::doltlite_raw::commit_run(db.pool(), "test")
+                .await
+                .unwrap(),
+        );
+        db.close().await;
+    }
+    assert!(commits[0].is_some());
+    assert_eq!(
+        commits[1], None,
+        "reading an unchanged export again changes nothing in the store"
+    );
+}

@@ -86,7 +86,9 @@ pub async fn load_cursor(pool: &SqlitePool, scope: &str) -> Result<FileScanCurso
 /// Per file, not per run, so a crash partway through a directory keeps what
 /// landed and re-reads only the rest. Callers run this in the same transaction
 /// that wrote the file's rows, so a crash between the two cannot leave a stamp
-/// claiming content that never arrived.
+/// claiming content that never arrived. A file recorded again with the same
+/// bytes keeps its stamp, so a source that reads an unchanged file again
+/// commits nothing for it.
 pub async fn record_file(
     tx: &mut Transaction<'_, Sqlite>,
     scope: &str,
@@ -116,7 +118,9 @@ pub async fn record_file_with_problem(
             blake3 = excluded.blake3,
             size_bytes = excluded.size_bytes,
             last_finished_at_utc = excluded.last_finished_at_utc,
-            tz_offset = excluded.tz_offset",
+            tz_offset = excluded.tz_offset
+         WHERE ingested_files.blake3 != excluded.blake3
+            OR ingested_files.size_bytes != excluded.size_bytes",
     )
     .bind(scope)
     .bind(&file.rel)

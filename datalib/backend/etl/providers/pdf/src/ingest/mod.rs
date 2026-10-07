@@ -189,7 +189,7 @@ async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummar
     // no path names is gone from the tree. A file moved within it is named
     // at its new path by now, and keeps its document.
     if scan.errors.is_empty() {
-        summary.documents_removed = opts.db.delete_unnamed_documents().await? as usize;
+        summary.documents_removed = opts.db.prune_unnamed().await? as usize;
     }
     // Every scan retries every document it could not identify, so a row
     // stands only on a path under an entry the walk could not read.

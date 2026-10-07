@@ -128,7 +128,7 @@ Per-bucket attachment-fetch flow is consolidated into three shared pieces in `da
 
 - **`load_blake3_index(pool, table, ref_id_column)`** — one SQL scan at fetch entry produces the run-scoped `(ref_id → blake3)` map. The per-file dedupe check is a HashMap hit, not a SQL round trip per file.
 - **`CasEdgeAccumulator`** — per-bucket walker. Three add paths: `add_fetched`, `add_known`, `add_failed`. Tracks the `BlobBundle`, the `(owning, ref)` edge list, and per-`ref_id` errors. Dedupes by `(owning, ref)`.
-- **`flush_cas_edges(pool, cas, cas_inserts, rows, errors)`** — the canonical end-of-bucket flush: CAS `put_many` → one transaction that `bulk_upsert_in_tx`s the edge rows and records each failed ref through `record_object_attempt` (or `record_object_skipped`, for a ref deliberately not fetched), which writes the sidecar and the `problems` row → commit. `CasEdgeAccumulator::flush` delegates to it via a provider-supplied row-builder closure.
+- **`flush_cas_edges(pool, cas, cas_inserts, rows, errors)`** — the canonical end-of-bucket flush: CAS `put_many` → one transaction that `bulk_upsert_in_tx`s the edge rows and records each failed ref through `record_object_attempt` (or `record_object_skipped`, for a ref deliberately not fetched), which writes the sidecar and the `problems` row → commit. `CasEdgeAccumulator::flush` delegates to it via a provider-supplied row-builder closure; `flush_first_seen` is the same with first-seen sidecar stamps, for a source that reads its whole input every run.
 
 ## [Doltlite](https://github.com/dolthub/doltlite) is our primary raw store
 
@@ -330,11 +330,13 @@ the summary reports only the final batch — silently, since a smaller
 number looks like a smaller run. `deltas_span_a_mid_run_commit` in
 `download_run.rs` is the guard.
 
-**Only 9 of the 28 providers with a download side use `DownloadRun`**
-(beeper, calendar, chatgpt, claude, email, github and gitlab through
-`forge-ingest-common`, notion, slack). The other nineteen write no
-`sync_runs` row and no deltas — their history is still in the commits,
-but nothing precomputes it.
+**Only 8 of the 28 providers with a download side use `DownloadRun`**
+(calendar, chatgpt, claude's `api` method, email's JMAP and Gmail paths,
+github and gitlab through `forge-ingest-common`, notion, slack). The
+others write no `sync_runs` row and no deltas — their history is still
+in the commits, but nothing precomputes it. A source that reads a local
+input whole keeps none on purpose: a row per run would make every run a
+commit.
 
 One thing `removed` does *not* mean: it counts rows **our downloader
 deleted**, not rows the provider stopped serving. Those coincide only
@@ -543,6 +545,7 @@ Because those statements are built at runtime, they go through `sqlx::AssertSqlS
 - **`bulk::bulk_upsert_in_tx(tx, rows, now)`** — the generic write, for any `T: BulkUpsertable` (which the table derives emit); [`etl/README.md` §"Writes: one UPSERT shape, everywhere"](/datalib/backend/etl/README.md).
 - **`bulk::SQL_CHUNK` + `bulk::push_placeholders` / `bulk::push_placeholder_list`** — chunking utilities for a provider's own multi-row `INSERT` builders.
 - **`bulk::bulk_upsert_bookkeeping(tx, table, ids, now)`** — the `<t>_bookkeeping` UPSERT alone, for a hand-built entity write.
+- **`bulk::bulk_upsert_first_seen_in_tx` / `bulk::bulk_stamp_first_seen`** — the same, for a source that reads its whole input every run: a sidecar is stamped the first time its row is written and left alone after, so an unchanged input commits nothing ([`etl/README.md` §"Writes: one UPSERT shape, everywhere"](/datalib/backend/etl/README.md)).
 - **`bulk::EventBatch<'a>`** — the per-table `(table, &[(id, &payload)])` shape the tape primitives share.
 - **`blob_cas::BlobCas::put_many`** — chunked multi-row `INSERT OR IGNORE` over `cas_objects`, one tx per call. The per-doc `blob_cas::BlobBundle` accumulates a document's attachments during download (`add` / `add_error`) and exports its `cas_inserts()` and edge rows for these writes; the same bundle is reloaded at parse and consumed at render.
 - **`doltlite_raw::bulk_upsert_events(tx, tape, &[EventBatch], now)`** and **`doltlite_raw::bulk_upsert_with_tape(pool, tape, rows, payloads)`** — the same writes plus the [wire-event tape](#wire-event-tape-jsonl): the caller's entity UPSERTs (or `bulk_upsert_in_tx`), the sidecar stamp, the commit, then one JSONL line per row via `EventTape::append_batch` when a tape is attached. Tape errors log but don't fail the upsert — doltlite is the source of truth.

@@ -5,9 +5,8 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use datalib_etl::bulk::bulk_upsert_in_tx;
+use datalib_etl::bulk::bulk_upsert_first_seen_in_tx;
 use datalib_etl::doltlite_raw::WirePayload;
-use datalib_etl::download_run::DownloadRun;
 use datalib_etl::run_problems::{self, RunProblems};
 use serde::Serialize;
 use serde_json::Value;
@@ -61,12 +60,8 @@ pub async fn ingest(opts: IngestOptions) -> Result<IngestSummary> {
 async fn read_export(opts: IngestOptions, found: RunProblems) -> Result<IngestSummary> {
     let db = opts.db.clone();
 
-    let run_config = serde_json::json!({ "input_path": opts.input_path });
-    let run = DownloadRun::start(db.pool(), &run_config).await?;
     let mut summary = IngestSummary::default();
-    let result = ingest_all(&db, &opts, &mut summary, &found).await;
-    run.finish(&result, &summary).await;
-    result?;
+    ingest_all(&db, &opts, &mut summary, &found).await?;
     Ok(summary)
 }
 
@@ -267,7 +262,7 @@ async fn upsert_users(
             full_name: str_field(u, "full_name"),
         });
     }
-    bulk_upsert_in_tx(tx, &rows, now).await?;
+    bulk_upsert_first_seen_in_tx(tx, &rows, now).await?;
     Ok(rows.len())
 }
 
@@ -295,11 +290,11 @@ async fn upsert_conversations(
             updated_at: str_field(c, "updated_at"),
         });
     }
-    bulk_upsert_in_tx(tx, &rows, now).await?;
+    bulk_upsert_first_seen_in_tx(tx, &rows, now).await?;
     // Held at the `updated_at` the export carries, so an API walk over
     // an export-seeded store fetches only what moved since.
     for r in &rows {
-        datalib_etl_web::owed::hold(
+        datalib_etl_web::owed::set_held_version(
             tx,
             super::schema_raw::CONVERSATIONS,
             &r.id_and_payload.id,
@@ -361,8 +356,8 @@ async fn upsert_projects(
             updated_at: str_field(p, "updated_at"),
         });
     }
-    bulk_upsert_in_tx(tx, &project_rows, now).await?;
-    bulk_upsert_in_tx(tx, &doc_rows, now).await?;
+    bulk_upsert_first_seen_in_tx(tx, &project_rows, now).await?;
+    bulk_upsert_first_seen_in_tx(tx, &doc_rows, now).await?;
     Ok((project_rows.len(), doc_rows.len()))
 }
 
@@ -524,6 +519,55 @@ mod tests {
         let convs = db.load_conversations().await.unwrap();
         assert!(convs.iter().all(|c| c.org_uuid.is_none()));
         db.close().await;
+    }
+
+    /// Every run reads the whole export, so reading an unchanged one
+    /// again, later, must leave the store as it was: a re-stamped
+    /// sidecar is a commit, and a bigger store, on every sync.
+    #[tokio::test]
+    async fn reading_an_unchanged_export_again_commits_nothing() {
+        let ex = tempfile::tempdir().unwrap();
+        let raw = tempfile::tempdir().unwrap();
+        write(
+            ex.path(),
+            "users.json",
+            &json!([{"uuid": "acct-1", "email_address": "picard@enterprise", "full_name": "JLP"}]),
+        );
+        write(
+            ex.path(),
+            "conversations.json",
+            &json!([conv("c1", "First"), conv("c2", "Second")]),
+        );
+        write(
+            ex.path(),
+            "projects/bridge.json",
+            &json!({
+                "uuid": "p1",
+                "name": "Bridge Ops",
+                "docs": [{"uuid": "d1", "file_name": "notes.md", "content": "hello"}],
+            }),
+        );
+        let db = open_raw(raw.path()).await;
+        let mut commits = Vec::new();
+        for now in [NOW, "2026-09-04T00:05:00-07:00"] {
+            ingest(IngestOptions {
+                now: now.to_string(),
+                ..opts(&db, ex.path())
+            })
+            .await
+            .unwrap();
+            commits.push(
+                datalib_etl::doltlite_raw::commit_run(db.pool(), "test")
+                    .await
+                    .unwrap(),
+            );
+        }
+        db.close().await;
+        assert!(commits[0].is_some());
+        assert_eq!(
+            commits[1], None,
+            "reading an unchanged export again changes nothing in the store"
+        );
     }
 
     /// A bulk export is a complete snapshot, so an id it stops

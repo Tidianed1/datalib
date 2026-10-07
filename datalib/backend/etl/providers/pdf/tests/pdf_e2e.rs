@@ -137,34 +137,34 @@ impl Harness {
     }
 }
 
-/// Scanning an unchanged tree again, five minutes later, changes no
-/// content row. Under one `now` this holds trivially — the same stamp
-/// is written twice — so the second scan gets a later one. A table
-/// named here carries a stamp the store mints, and the render step,
-/// which diffs these tables to decide what to re-convert, converted
-/// every document on every run for as long as `pdf_scan_meta` did.
+/// Scanning an unchanged tree again, five minutes later, changes
+/// nothing in the store, its sidecars included. Under one `now` a
+/// re-stamped sidecar would hide — the same stamp is written twice — so
+/// the second scan gets a later one. A commit here means a stamp moved:
+/// the store grows on every sync, and a stamp in a content table sends
+/// render, which diffs these tables to decide what to re-convert, back
+/// over every document.
+///
+/// The corrupt fixture is left out: a file that will not read is
+/// recorded as a problem again on every scan, and the problems store
+/// re-stamps that row's `last_seen_at_utc` each time.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_second_scan_of_an_unchanged_tree_moves_no_content_row() -> Result<()> {
-    let h = Harness::new();
+async fn a_second_scan_of_an_unchanged_tree_commits_nothing() -> Result<()> {
+    let h = Harness::on_a_copy();
+    std::fs::remove_file(h.root.join("holodeck/corrupt.pdf"))?;
     h.scan().await?;
     let db = h.db().await;
-    let first = datalib_etl::doltlite_raw::head_commit(db.pool())
-        .await?
-        .expect("the first scan committed");
+    let first = datalib_etl::doltlite_raw::head_commit(db.pool()).await?;
     db.close().await;
 
     h.scan_at("2364-04-13T08:50:00-07:00").await?;
     let db = h.db().await;
-    let second = datalib_etl::doltlite_raw::head_commit(db.pool())
-        .await?
-        .expect("the second scan committed");
-    let changed =
-        datalib_etl::doltlite_raw::content_tables_changed(db.pool(), &first, &second).await?;
+    let second = datalib_etl::doltlite_raw::head_commit(db.pool()).await?;
     db.close().await;
+    assert!(first.is_some());
     assert_eq!(
-        changed,
-        Vec::<String>::new(),
-        "a content table moved between two scans of the same tree"
+        second, first,
+        "scanning an unchanged tree again changes nothing in the store"
     );
     Ok(())
 }

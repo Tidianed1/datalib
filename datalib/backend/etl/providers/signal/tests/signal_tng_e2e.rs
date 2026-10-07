@@ -453,15 +453,18 @@ fn chat_item(
 }
 
 async fn fetch_once(snapshot_root: &Path, store: &Path, cache: &Path) -> Result<()> {
-    fetch_with(snapshot_root, store, cache, DownloadControl::default()).await
+    fetch_with(snapshot_root, store, cache, DownloadControl::default())
+        .await
+        .map(|_| ())
 }
 
+/// One fetch and its commit: `None` when the run changed nothing.
 async fn fetch_with(
     snapshot_root: &Path,
     store: &Path,
     cache: &Path,
     control: DownloadControl,
-) -> Result<()> {
+) -> Result<Option<String>> {
     unsafe {
         std::env::set_var("SIGNAL_BACKUP_PASSPHRASE", FIXTURE_AEP);
     }
@@ -476,9 +479,10 @@ async fn fetch_with(
         control,
     })
     .await;
-    datalib_etl::store_handle::RawStoreHandle::commit_all(&db, "test download").await?;
+    // The CAS beside it is plain SQLite and commits as it writes.
+    let committed = datalib_etl::doltlite_raw::commit_run(db.pool(), "test download").await?;
     db.close().await;
-    summary.map(|_| ())
+    summary.map(|_| committed)
 }
 
 async fn problems(store: &Path) -> Result<Vec<(String, String)>> {
@@ -849,5 +853,36 @@ async fn no_backup_to_read_deletes_nothing() -> Result<()> {
     assert!(fetch_once(&snapshots, &store, &cache).await.is_err());
     assert_eq!(ids(&store, "chat_items").await?.len(), 1);
     assert_eq!(ids(&store, "recipients").await?, ["1", "2"]);
+    Ok(())
+}
+
+/// Reading an unchanged backup again must leave the store as it was: a
+/// re-stamped sidecar is a commit, and a bigger store, on every sync.
+#[tokio::test(flavor = "multi_thread")]
+async fn reading_an_unchanged_backup_again_commits_nothing() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let snapshots = tmp.path().join("snapshots");
+    let store = tmp.path().join("raw").join("signal");
+    let cache = tmp.path().join("fingerprints.sqlite");
+    let (_, plaintext_hash) = write_test_attachment(&snapshots.join("files"))?;
+    let frames = [
+        recipient_self(1, "Jean-Luc Picard"),
+        recipient_contact(2, "Will Riker", 17015550101),
+        chat_frame(100, 2),
+        chat_item(100, 2, 12442118460000, "All decks at green status.", false),
+        with_attachment(
+            chat_item(100, 1, 12442118940000, "Make it so.", true),
+            png_attachment(&plaintext_hash),
+        ),
+    ];
+    write_frames(&snapshots, "signal-backup-2364-04-09-12-00-00", &frames)?;
+
+    let first = fetch_with(&snapshots, &store, &cache, DownloadControl::default()).await?;
+    let second = fetch_with(&snapshots, &store, &cache, DownloadControl::default()).await?;
+    assert!(first.is_some());
+    assert_eq!(
+        second, None,
+        "reading an unchanged backup again changes nothing in the store"
+    );
     Ok(())
 }

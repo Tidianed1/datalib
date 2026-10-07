@@ -118,7 +118,10 @@ pub async fn hold(
     set_held_version(tx, table, key, version).await
 }
 
-async fn set_held_version(
+/// [`hold`] for a record whose sidecar its writer has already stamped,
+/// first-seen: only the version moves, so an unchanged record changes
+/// nothing.
+pub async fn set_held_version(
     tx: &mut Transaction<'_, Sqlite>,
     table: &str,
     key: &str,
