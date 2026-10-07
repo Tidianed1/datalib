@@ -978,9 +978,11 @@ impl Mirror<'_> {
     }
 
     /// The channel's edges without bytes, [`FILE_BATCH`] to a request.
+    /// Every one is owed, whatever its sidecar says: only a landed file
+    /// is held, and it lands with its hash. A store an older build wrote
+    /// stamps some failed fetches as fetched.
     async fn fetch_owed_files(&self, channel_id: &str, totals: &mut ChannelTotals) -> Result<()> {
-        let listed = self.db.files_listed(self.team_id, channel_id).await?;
-        let owed = owed::owed(self.db.pool(), SlackAttachmentRow::TABLE, listed).await?;
+        let owed = self.db.files_listed(self.team_id, channel_id).await?;
         self.bar.expect(owed.len() as u64);
         let l = owed::Loop {
             pool: self.db.pool(),
