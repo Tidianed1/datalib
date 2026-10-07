@@ -407,6 +407,21 @@ pub fn extension_for_content_type(ct: Option<&str>) -> Option<String> {
     Some(ext.to_string())
 }
 
+/// For bytes whose type upstream left vague (ChatGPT labels a generated
+/// image `image/*`): a file served with no extension is not shown as
+/// an image everywhere.
+fn extension_from_magic(bytes: &[u8]) -> Option<String> {
+    let ext = match bytes {
+        [0x89, b'P', b'N', b'G', ..] => "png",
+        [0xFF, 0xD8, 0xFF, ..] => "jpg",
+        [b'G', b'I', b'F', b'8', ..] => "gif",
+        [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => "webp",
+        [b'%', b'P', b'D', b'F', ..] => "pdf",
+        _ => return None,
+    };
+    Some(ext.to_string())
+}
+
 pub fn extension_from_upstream_name(name: Option<&str>) -> Option<String> {
     let name = name?;
     let (_, ext) = name.rsplit_once('.')?;
@@ -441,7 +456,8 @@ pub struct Blob {
 impl Blob {
     pub fn rendered_filename(&self) -> String {
         let ext = extension_for_content_type(self.content_type.as_deref())
-            .or_else(|| extension_from_upstream_name(self.upstream_name.as_deref()));
+            .or_else(|| extension_from_upstream_name(self.upstream_name.as_deref()))
+            .or_else(|| extension_from_magic(&self.bytes));
         let short = &self.blake3[..16.min(self.blake3.len())];
         match ext {
             Some(e) => format!("{short}.{e}"),
@@ -1379,6 +1395,23 @@ mod tests {
         let s = b.markdown_link("img-1", Some("kitten.png"), true);
         assert!(s.starts_with("![kitten.png](blobs/"));
         assert!(s.ends_with(".png)"));
+    }
+
+    /// A generated ChatGPT image arrives as `image/*` with no name; its
+    /// file had no extension.
+    #[test]
+    fn bytes_of_a_vague_type_are_named_by_their_magic() {
+        let blob = |bytes: &[u8]| Blob {
+            blake3: "ab".repeat(32),
+            bytes: bytes.to_vec(),
+            content_type: Some("image/*".into()),
+            upstream_name: None,
+        };
+        assert!(blob(b"\x89PNG\r\n").rendered_filename().ends_with(".png"));
+        assert!(blob(b"RIFF0000WEBPVP8")
+            .rendered_filename()
+            .ends_with(".webp"));
+        assert!(!blob(b"plain").rendered_filename().contains('.'));
     }
 
     /// `text/calendar` was simply missing from the extension table, so

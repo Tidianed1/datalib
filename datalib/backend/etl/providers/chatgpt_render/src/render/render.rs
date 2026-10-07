@@ -18,6 +18,7 @@ use datalib_etl_chat_common::types::{
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{escape_md_block, escape_md_inline, md_code_block};
+use datalib_etl_render::sources::{sources_list, Source};
 
 use super::ids;
 use super::parse::{
@@ -46,7 +47,8 @@ use serde_json::Value;
 /// v11: the private-use characters around a cited span are dropped
 ///     instead of showing as boxes.
 /// v12: the words beside an image, quotes of uploaded files and named
-///     entities are kept; empty steps are left out.
+///     entities are kept; empty steps are left out; cited pages are
+///     listed after the text.
 pub const RENDER_VERSION: u32 = 12;
 
 fn profile() -> RenderProfile {
@@ -165,7 +167,7 @@ fn build_chat(
             .cloned()
             .unwrap_or_default();
         parts.sort_by_key(|p| p.part_index);
-        let body = render_message_body(&parts);
+        let body = with_sources(render_message_body(&parts), &m.raw_json);
         problems.extend(uncovered_parts(&parts));
 
         let attachments: Vec<NormalizedAttachment> =
@@ -311,6 +313,54 @@ fn render_message_body(parts: &[&OAContentPartRow]) -> Option<String> {
     (!body.trim().is_empty()).then_some(body)
 }
 
+/// The pages a message's citations point at, listed after its text:
+/// the `cite` markers in the text are dropped, and these are where
+/// their urls live.
+fn with_sources(body: Option<String>, message: &Value) -> Option<String> {
+    let refs = message
+        .pointer("/metadata/content_references")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let list = sources_list(refs.iter().flat_map(cited_pages));
+    match (body, list) {
+        (Some(body), Some(list)) => Some(format!("{body}\n\n{list}")),
+        (body, list) => body.or(list),
+    }
+}
+
+/// A reference's pages: its own url, a `grouped_webpages` group's items
+/// and the sites supporting them, a `sources_footnote`'s sources.
+fn cited_pages(reference: &Value) -> Vec<Source<'_>> {
+    let mut out: Vec<Source<'_>> = cited_page(reference).into_iter().collect();
+    for item in array_at(reference, "items") {
+        out.extend(cited_page(item));
+        out.extend(
+            array_at(item, "supporting_websites")
+                .iter()
+                .filter_map(cited_page),
+        );
+    }
+    out.extend(array_at(reference, "sources").iter().filter_map(cited_page));
+    out
+}
+
+fn cited_page(v: &Value) -> Option<Source<'_>> {
+    let str_at = |k: &str| v.get(k).and_then(Value::as_str).filter(|s| !s.is_empty());
+    Some(Source {
+        url: str_at("url")?,
+        title: str_at("title"),
+        site: str_at("attribution"),
+    })
+}
+
+fn array_at<'a>(v: &'a Value, key: &str) -> &'a [Value] {
+    v.get(key)
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+}
+
 /// A content type parse has no reading for: the message renders
 /// without it, and says so.
 fn uncovered_parts(parts: &[&OAContentPartRow]) -> Vec<Problem> {
@@ -398,6 +448,33 @@ mod tests {
         assert_eq!(
             render_message_body(&[&quote]).unwrap(),
             "**Captains \\*Log\\*.pdf**\n\n> Stardate 41153.7\n> All is well."
+        );
+    }
+
+    /// ChatGPT's `cite` markers are dropped from the text; the pages
+    /// they point at were dropped with them.
+    #[test]
+    fn cited_pages_are_listed_after_the_text() {
+        let message = serde_json::json!({"metadata": {"content_references": [
+            {"type": "grouped_webpages", "items": [{
+                "url": "https://memory-alpha.example/Risa", "title": "Risa",
+                "attribution": "Memory Alpha",
+                "supporting_websites": [{"url": "https://example.com/risa", "title": "Visit Risa"}]
+            }]},
+            {"type": "sources_footnote", "sources": [
+                {"url": "https://memory-alpha.example/Risa", "title": "Risa"}
+            ]},
+            {"type": "entity", "name": "Risa"}
+        ]}});
+        assert_eq!(
+            with_sources(Some("Risa is warm.".into()), &message).unwrap(),
+            "Risa is warm.\n\n**Sources**\n\n\
+             1. [Risa](https://memory-alpha.example/Risa) — Memory Alpha\n\
+             2. [Visit Risa](https://example.com/risa)"
+        );
+        assert_eq!(
+            with_sources(Some("x".into()), &serde_json::json!({})).unwrap(),
+            "x"
         );
     }
 

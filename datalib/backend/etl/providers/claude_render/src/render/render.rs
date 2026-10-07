@@ -24,6 +24,7 @@ use datalib_etl_render::html::{
     escape_md_block, escape_md_inline, escape_text, md_code_block, md_code_span, md_link_dest,
 };
 use datalib_etl_render::inputs::Inputs;
+use datalib_etl_render::sources::Source;
 
 use super::ids;
 use super::parse::{
@@ -683,13 +684,12 @@ fn by_time(messages: &[MessageRow]) -> Vec<&MessageRow> {
 /// spans by character offset; splicing markers into the text there is
 /// not attempted.
 fn sources_list(text_blocks: &[&ContentBlockRow]) -> Option<String> {
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut lines: Vec<String> = Vec::new();
     let citations = text_blocks
         .iter()
         .filter_map(|b| b.raw_json.get("citations").and_then(Value::as_array))
         .flatten()
         .filter_map(Value::as_object);
+    let mut cited: Vec<Source<'_>> = Vec::new();
     for c in citations {
         let site_of_citation = c
             .get("metadata")
@@ -700,42 +700,31 @@ fn sources_list(text_blocks: &[&ContentBlockRow]) -> Option<String> {
             .and_then(Value::as_array)
             .map(|a| a.iter().filter_map(Value::as_object).collect())
             .unwrap_or_default();
-        let entries: Vec<(&str, Option<&str>, Option<&str>)> = if sources.is_empty() {
-            let url = c.get("url").and_then(Value::as_str);
-            url.map(|u| (u, str_of(c, "title"), site_of_citation))
-                .into_iter()
-                .collect()
-        } else {
-            sources
-                .iter()
-                .filter_map(|s| {
-                    let url = str_of(s, "url")?;
-                    let site = str_of(s, "source").or_else(|| {
-                        (c.get("url").and_then(Value::as_str) == Some(url))
-                            .then_some(site_of_citation)
-                            .flatten()
-                    });
-                    Some((url, str_of(s, "title").or_else(|| str_of(c, "title")), site))
-                })
-                .collect()
-        };
-        for (url, title, site) in entries {
-            if url.is_empty() || !seen.insert(url.to_string()) {
-                continue;
+        if sources.is_empty() {
+            if let Some(url) = c.get("url").and_then(Value::as_str) {
+                cited.push(Source {
+                    url,
+                    title: str_of(c, "title"),
+                    site: site_of_citation,
+                });
             }
-            let mut line = format!(
-                "{}. [{}]({})",
-                lines.len() + 1,
-                escape_md_inline(title.unwrap_or(url)),
-                md_link_dest(url)
-            );
-            if let Some(site) = site {
-                line.push_str(&format!(" — {}", escape_md_inline(site)));
-            }
-            lines.push(line);
+            continue;
         }
+        cited.extend(sources.iter().filter_map(|s| {
+            let url = str_of(s, "url")?;
+            let site = str_of(s, "source").or_else(|| {
+                (c.get("url").and_then(Value::as_str) == Some(url))
+                    .then_some(site_of_citation)
+                    .flatten()
+            });
+            Some(Source {
+                url,
+                title: str_of(s, "title").or_else(|| str_of(c, "title")),
+                site,
+            })
+        }));
     }
-    (!lines.is_empty()).then(|| format!("**Sources**\n\n{}", lines.join("\n")))
+    datalib_etl_render::sources::sources_list(cited)
 }
 
 /// A string field, `None` when absent or empty.
