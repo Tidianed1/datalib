@@ -761,7 +761,17 @@ fn fetch_problems_of(
     };
     let pool = reader.pool().clone();
     let result = blocking(async {
-        let rows = match sqlx::query("SELECT * FROM problems WHERE stage = ?")
+        // A render can run before the download that owns the store has
+        // migrated it, and a reader cannot: its rows still carry the
+        // stamp under its old name.
+        let sql = if datalib_etl::doltlite_raw::column_exists(&pool, "problems", "last_seen_at_utc")
+            .await?
+        {
+            "SELECT *, last_seen_at_utc AS changed_at_utc FROM problems WHERE stage = ?"
+        } else {
+            "SELECT * FROM problems WHERE stage = ?"
+        };
+        let rows = match sqlx::query(sql)
             .bind(Stage::Fetch.as_str())
             .fetch_all(&pool)
             .await
@@ -1085,6 +1095,46 @@ mod plan_tests {
             Problem::record(Reason::FetchFailed, "curl: (22) 403"),
             None,
         )
+    }
+
+    /// A render that runs before the download has migrated its store
+    /// reads the download's problems under the stamp's old name, rather
+    /// than failing the step on every source with a problem.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_downloads_problems_are_read_before_its_store_is_migrated() {
+        let td = tempfile::tempdir().unwrap();
+        let raw = td.path().join("entities.doltlite_db");
+        let things = datalib_etl::doltlite_raw::bookkeeping_ddl_for("things");
+        let pool = datalib_etl::doltlite_raw::open(
+            &raw,
+            &[
+                "CREATE TABLE IF NOT EXISTS things (id TEXT PRIMARY KEY, payload TEXT)",
+                things.as_str(),
+            ],
+        )
+        .await
+        .unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        datalib_etl::doltlite_raw::record_object_error(&mut tx, "things", "t1", "HTTP 403")
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        sqlx::query("ALTER TABLE problems RENAME COLUMN changed_at_utc TO last_seen_at_utc")
+            .execute(&pool)
+            .await
+            .unwrap();
+        datalib_etl::doltlite_raw::commit_run(&pool, "an older build's store")
+            .await
+            .unwrap();
+        pool.close().await;
+
+        let rows = tokio::task::spawn_blocking(move || fetch_problems_of(&raw, None, "src"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].scope_key, "things:t1");
+        assert!(!rows[0].changed_at_utc.is_empty());
     }
 
     /// A fetch problem names its grid row only when the store holds
