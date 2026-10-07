@@ -361,5 +361,352 @@
         "files": []
       }
     ]
+  },
+  {
+    "uuid": "c0000007-1701-4d00-8000-00000000c007",
+    "name": "Warp Field Recalibration",
+    "summary": "How hard the warp field can be pushed, and a script to check the coils.",
+    "model": "claude-opus-4-7",
+    "created_at": "2369-04-18T09:00:00.000000+00:00",
+    "updated_at": "2369-04-18T09:03:00.000000+00:00",
+    "settings": {
+      "enabled_web_search": true
+    },
+    "is_starred": false,
+    "is_temporary": false,
+    "platform": "CLAUDE_AI",
+    "current_leaf_message_uuid": "7a000006-1701-4d00-8000-00000007a006",
+    "account": {
+      "uuid": "00000001-1701-4d00-8000-000000000001"
+    },
+    "_source": {
+      "via": "claude.ai/api",
+      "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
+      "org_name": "USS Enterprise"
+    },
+    "chat_messages": [
+      {
+        "uuid": "7a000001-1701-4d00-8000-00000007a001",
+        "text": "Geordi, how far can we push the warp field before the nacelles complain?",
+        "sender": "human",
+        "index": 0,
+        "created_at": "2369-04-18T09:00:00.000000+00:00",
+        "updated_at": "2369-04-18T09:00:00.000000+00:00",
+        "parent_message_uuid": "00000000-0000-4000-8000-000000000000",
+        "truncated": false,
+        "content": [
+          {
+            "start_timestamp": "2369-04-18T09:00:00.000000+00:00",
+            "stop_timestamp": "2369-04-18T09:00:00.000000+00:00",
+            "type": "text",
+            "text": "Geordi, how far can we push the warp field before the nacelles complain?",
+            "citations": []
+          }
+        ],
+        "attachments": [],
+        "files": []
+      },
+      {
+        "uuid": "7a000002-1701-4d00-8000-00000007a002",
+        "text": "Sustained warp 9.2 is the rated ceiling; the nacelles tolerate 9.6 for about twelve hours before the coils need a full recalibration.",
+        "sender": "assistant",
+        "index": 1,
+        "created_at": "2369-04-18T09:00:20.000000+00:00",
+        "updated_at": "2369-04-18T09:00:20.000000+00:00",
+        "parent_message_uuid": "7a000001-1701-4d00-8000-00000007a001",
+        "truncated": false,
+        "content": [
+          {
+            "start_timestamp": "2369-04-18T09:00:05.000000+00:00",
+            "stop_timestamp": "2369-04-18T09:00:05.000000+00:00",
+            "type": "tool_use",
+            "id": "toolu_warp_search",
+            "name": "web_search",
+            "message": "Searching the web",
+            "input": {
+              "query": "Galaxy class maximum sustainable warp"
+            }
+          },
+          {
+            "start_timestamp": "2369-04-18T09:00:08.000000+00:00",
+            "stop_timestamp": "2369-04-18T09:00:08.000000+00:00",
+            "type": "tool_result",
+            "tool_use_id": "toolu_warp_search",
+            "name": "web_search",
+            "is_error": false,
+            "content": [
+              {
+                "type": "knowledge",
+                "title": "Warp factor",
+                "url": "https://memory-alpha.test/wiki/Warp_factor",
+                "is_missing": false,
+                "metadata": {
+                  "type": "webpage_metadata",
+                  "site_domain": "memory-alpha.test",
+                  "site_name": "Memory Alpha"
+                }
+              },
+              {
+                "type": "knowledge",
+                "title": "Galaxy class propulsion",
+                "url": "https://tech-manual.test/ncc-1701-d/propulsion",
+                "is_missing": false,
+                "metadata": {
+                  "type": "webpage_metadata",
+                  "site_domain": "tech-manual.test",
+                  "site_name": "Starfleet Technical Manual"
+                }
+              }
+            ]
+          },
+          {
+            "start_timestamp": "2369-04-18T09:00:20.000000+00:00",
+            "stop_timestamp": "2369-04-18T09:00:20.000000+00:00",
+            "type": "text",
+            "text": "Sustained warp 9.2 is the rated ceiling; the nacelles tolerate 9.6 for about twelve hours before the coils need a full recalibration.",
+            "citations": [
+              {
+                "uuid": "cite-0",
+                "start_index": 0,
+                "end_index": 40,
+                "title": "Warp factor",
+                "url": "https://memory-alpha.test/wiki/Warp_factor",
+                "origin_tool_name": "web_search",
+                "metadata": {
+                  "type": "webpage_metadata",
+                  "site_domain": "memory-alpha.test",
+                  "site_name": "Memory Alpha"
+                },
+                "sources": [
+                  {
+                    "uuid": "src-0-0",
+                    "source": "Memory Alpha",
+                    "title": "Warp factor",
+                    "url": "https://memory-alpha.test/wiki/Warp_factor",
+                    "icon_url": "https://memory-alpha.test/icon.png"
+                  }
+                ]
+              },
+              {
+                "uuid": "cite-41",
+                "start_index": 41,
+                "end_index": 120,
+                "title": "Galaxy class propulsion",
+                "url": "https://tech-manual.test/ncc-1701-d/propulsion",
+                "origin_tool_name": "web_search",
+                "metadata": {
+                  "type": "webpage_metadata",
+                  "site_domain": "tech-manual.test",
+                  "site_name": "Starfleet Technical Manual"
+                },
+                "sources": [
+                  {
+                    "uuid": "src-41-0",
+                    "source": "Starfleet Technical Manual",
+                    "title": "Galaxy class propulsion",
+                    "url": "https://tech-manual.test/ncc-1701-d/propulsion",
+                    "icon_url": "https://tech-manual.test/icon.png"
+                  },
+                  {
+                    "uuid": "src-41-1",
+                    "source": "Memory Alpha",
+                    "title": "Warp coil",
+                    "url": "https://memory-alpha.test/wiki/Warp_coil",
+                    "icon_url": "https://memory-alpha.test/icon.png"
+                  },
+                  {
+                    "uuid": "src-41-2",
+                    "source": "Memory Alpha",
+                    "title": "Warp factor",
+                    "url": "https://memory-alpha.test/wiki/Warp_factor",
+                    "icon_url": "https://memory-alpha.test/icon.png"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "attachments": [],
+        "files": []
+      },
+      {
+        "uuid": "7a000003-1701-4d00-8000-00000007a003",
+        "text": "Give me the coil efficiencies as a table.",
+        "sender": "human",
+        "index": 2,
+        "created_at": "2369-04-18T09:01:00.000000+00:00",
+        "updated_at": "2369-04-18T09:01:00.000000+00:00",
+        "parent_message_uuid": "7a000002-1701-4d00-8000-00000007a002",
+        "truncated": false,
+        "content": [
+          {
+            "start_timestamp": "2369-04-18T09:01:00.000000+00:00",
+            "stop_timestamp": "2369-04-18T09:01:00.000000+00:00",
+            "type": "text",
+            "text": "Give me the coil efficiencies as a table.",
+            "citations": []
+          }
+        ],
+        "attachments": [],
+        "files": []
+      },
+      {
+        "uuid": "7a000004-1701-4d00-8000-00000007a004",
+        "text": "This answer was left behind when the question was edited.",
+        "sender": "assistant",
+        "index": 3,
+        "created_at": "2369-04-18T09:01:10.000000+00:00",
+        "updated_at": "2369-04-18T09:01:10.000000+00:00",
+        "parent_message_uuid": "7a000003-1701-4d00-8000-00000007a003",
+        "truncated": false,
+        "content": [
+          {
+            "start_timestamp": "2369-04-18T09:01:10.000000+00:00",
+            "stop_timestamp": "2369-04-18T09:01:10.000000+00:00",
+            "type": "text",
+            "text": "This answer was left behind when the question was edited.",
+            "citations": []
+          }
+        ],
+        "attachments": [],
+        "files": []
+      },
+      {
+        "uuid": "7a000005-1701-4d00-8000-00000007a005",
+        "text": "Write me a script that checks these coil readings.",
+        "sender": "human",
+        "index": 4,
+        "created_at": "2369-04-18T09:02:00.000000+00:00",
+        "updated_at": "2369-04-18T09:02:00.000000+00:00",
+        "parent_message_uuid": "7a000002-1701-4d00-8000-00000007a002",
+        "truncated": false,
+        "content": [
+          {
+            "start_timestamp": "2369-04-18T09:02:00.000000+00:00",
+            "stop_timestamp": "2369-04-18T09:02:00.000000+00:00",
+            "type": "text",
+            "text": "Write me a script that checks these coil readings.",
+            "citations": []
+          }
+        ],
+        "attachments": [
+          {
+            "id": "paste-7a005",
+            "file_name": "",
+            "file_type": "txt",
+            "file_size": 30,
+            "extracted_content": "Coil 1: 98.2%\nCoil 2: 97.1%",
+            "created_at": "2369-04-18T09:02:00.000000+00:00"
+          }
+        ],
+        "files": []
+      },
+      {
+        "uuid": "7a000006-1701-4d00-8000-00000007a006",
+        "text": "Coil 2 is under threshold; schedule it for recalibration.",
+        "sender": "assistant",
+        "index": 5,
+        "created_at": "2369-04-18T09:02:30.000000+00:00",
+        "updated_at": "2369-04-18T09:02:30.000000+00:00",
+        "parent_message_uuid": "7a000005-1701-4d00-8000-00000007a005",
+        "truncated": false,
+        "content": [
+          {
+            "start_timestamp": "2369-04-18T09:02:05.000000+00:00",
+            "stop_timestamp": "2369-04-18T09:02:05.000000+00:00",
+            "type": "tool_use",
+            "id": "toolu_warp_artifact",
+            "name": "artifacts",
+            "message": "Creating the coil check",
+            "input": {
+              "id": "coil_check",
+              "command": "create",
+              "title": "Coil check",
+              "type": "application/vnd.ant.code",
+              "language": "python",
+              "content": "\"\"\"Coil check for the Enterprise-D.\"\"\"\nREPORT = \"\"\"\n```\nwarp 9.6 for 12h\n```\n\"\"\"\n\ndef ok(efficiency):\n    return efficiency >= 97.5\n",
+              "version_uuid": "v-7a006-1"
+            }
+          },
+          {
+            "start_timestamp": "2369-04-18T09:02:06.000000+00:00",
+            "stop_timestamp": "2369-04-18T09:02:06.000000+00:00",
+            "type": "tool_result",
+            "tool_use_id": "toolu_warp_artifact",
+            "name": "artifacts",
+            "is_error": false,
+            "content": [
+              {
+                "type": "text",
+                "text": "OK"
+              }
+            ]
+          },
+          {
+            "start_timestamp": "2369-04-18T09:02:10.000000+00:00",
+            "stop_timestamp": "2369-04-18T09:02:10.000000+00:00",
+            "type": "tool_use",
+            "id": "toolu_warp_update",
+            "name": "artifacts",
+            "message": "Raising the threshold",
+            "input": {
+              "id": "coil_check",
+              "command": "update",
+              "old_str": "97.5",
+              "new_str": "98.0",
+              "version_uuid": "v-7a006-2"
+            }
+          },
+          {
+            "start_timestamp": "2369-04-18T09:02:15.000000+00:00",
+            "stop_timestamp": "2369-04-18T09:02:15.000000+00:00",
+            "type": "tool_use",
+            "id": "toolu_warp_file",
+            "name": "create_file",
+            "message": "Writing the report",
+            "input": {
+              "path": "/mnt/user-data/outputs/coil_report.md",
+              "description": "Coil report for the chief engineer",
+              "file_text": "# Coil report\n\nCoil 2 is below threshold.\n"
+            }
+          },
+          {
+            "start_timestamp": "2369-04-18T09:02:20.000000+00:00",
+            "stop_timestamp": "2369-04-18T09:02:20.000000+00:00",
+            "type": "tool_use",
+            "id": "toolu_warp_bash",
+            "name": "bash_tool",
+            "message": "Running the check",
+            "input": {
+              "command": "python3 coil_check.py --coil 2",
+              "description": "Check coil 2 against the threshold"
+            }
+          },
+          {
+            "start_timestamp": "2369-04-18T09:02:25.000000+00:00",
+            "stop_timestamp": "2369-04-18T09:02:25.000000+00:00",
+            "type": "tool_result",
+            "tool_use_id": "toolu_warp_bash",
+            "name": "bash_tool",
+            "is_error": false,
+            "content": [
+              {
+                "type": "text",
+                "text": "coil 2: 97.1% (below 98.0%)"
+              }
+            ]
+          },
+          {
+            "start_timestamp": "2369-04-18T09:02:30.000000+00:00",
+            "stop_timestamp": "2369-04-18T09:02:30.000000+00:00",
+            "type": "text",
+            "text": "Coil 2 is under threshold; schedule it for recalibration.",
+            "citations": []
+          }
+        ],
+        "attachments": [],
+        "files": []
+      }
+    ]
   }
 ]
