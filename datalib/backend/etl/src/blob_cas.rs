@@ -17,6 +17,8 @@ use anyhow::{Context, Result};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow, SqliteSynchronous};
 use sqlx::{Row, SqlitePool};
 
+use crate::doltlite_raw::NotFetched;
+
 // Schema
 
 /// Sole table in the per-source blobs database. Pure content-addressed
@@ -956,37 +958,6 @@ impl CasEdgeAccumulator {
         T: crate::bulk::BulkUpsertable,
         F: Fn(&str, &str, Option<&str>) -> T,
     {
-        self.flush_stamped(pool, cas, build_row, EdgeStamp::EveryWrite)
-            .await
-    }
-
-    /// [`Self::flush`] for a source that reads its whole input every run:
-    /// see [`crate::bulk::bulk_stamp_first_seen`].
-    pub async fn flush_first_seen<T, F>(
-        &self,
-        pool: &sqlx::SqlitePool,
-        cas: &BlobCas,
-        build_row: F,
-    ) -> Result<()>
-    where
-        T: crate::bulk::BulkUpsertable,
-        F: Fn(&str, &str, Option<&str>) -> T,
-    {
-        self.flush_stamped(pool, cas, build_row, EdgeStamp::FirstSeen)
-            .await
-    }
-
-    async fn flush_stamped<T, F>(
-        &self,
-        pool: &sqlx::SqlitePool,
-        cas: &BlobCas,
-        build_row: F,
-        stamp: EdgeStamp,
-    ) -> Result<()>
-    where
-        T: crate::bulk::BulkUpsertable,
-        F: Fn(&str, &str, Option<&str>) -> T,
-    {
         let mut blake3_by_ref: HashMap<&str, &str> = HashMap::new();
         for f in self.bundle.fetched_refs() {
             blake3_by_ref.insert(f.ref_id, f.blake3);
@@ -1028,23 +999,8 @@ impl CasEdgeAccumulator {
             }
         }
 
-        flush_cas_edges_stamped(
-            pool,
-            cas,
-            &self.bundle.cas_inserts(),
-            rows,
-            &error_stamps,
-            stamp,
-        )
-        .await
+        flush_cas_edges(pool, cas, &self.bundle.cas_inserts(), rows, &error_stamps).await
     }
-}
-
-/// Which bulk stamp an edge flush gives the edges that landed.
-#[derive(Clone, Copy)]
-enum EdgeStamp {
-    EveryWrite,
-    FirstSeen,
 }
 
 impl Default for CasEdgeAccumulator {
@@ -1055,27 +1011,18 @@ impl Default for CasEdgeAccumulator {
 
 // CAS-edge flush primitive
 
-/// End-of-bucket CAS-edge flush. The shape every per-provider CAS
-/// edge table (chatgpt_attachments, claude_attachments,
-/// slack_attachments, chat_item_attachments) used to hand-roll
-/// individually:
+/// End-of-bucket CAS-edge flush. Every caller reads local files, whole or
+/// by what changed, so an edge's sidecar is stamped the first time it
+/// lands, and the same failure recorded again changes nothing
+/// ([`crate::bulk::bulk_stamp_first_seen`],
+/// [`crate::doltlite_raw::record_not_fetched_first_seen`]): an unchanged
+/// input commits nothing, a standing failure included.
 pub async fn flush_cas_edges<T: crate::bulk::BulkUpsertable>(
     pool: &SqlitePool,
     cas: &BlobCas,
     cas_inserts: &[CasInsert<'_>],
     rows: Vec<T>,
     errors: &[BlobNotFetched],
-) -> Result<()> {
-    flush_cas_edges_stamped(pool, cas, cas_inserts, rows, errors, EdgeStamp::EveryWrite).await
-}
-
-async fn flush_cas_edges_stamped<T: crate::bulk::BulkUpsertable>(
-    pool: &SqlitePool,
-    cas: &BlobCas,
-    cas_inserts: &[CasInsert<'_>],
-    rows: Vec<T>,
-    errors: &[BlobNotFetched],
-    stamp: EdgeStamp,
 ) -> Result<()> {
     if rows.is_empty() && cas_inserts.is_empty() && errors.is_empty() {
         return Ok(());
@@ -1106,36 +1053,22 @@ async fn flush_cas_edges_stamped<T: crate::bulk::BulkUpsertable>(
         .iter()
         .map(|r| r.id())
         .filter(|id| !not_fetched.contains(id));
-    match stamp {
-        EdgeStamp::EveryWrite => {
-            crate::bulk::bulk_upsert_bookkeeping(&mut tx, T::TABLE, landed, &now).await?
-        }
-        EdgeStamp::FirstSeen => {
-            crate::bulk::bulk_stamp_first_seen(&mut tx, T::TABLE, landed, &now).await?
-        }
-    }
+    crate::bulk::bulk_stamp_first_seen(&mut tx, T::TABLE, landed, &now).await?;
     for problem in errors {
-        match problem.reason {
-            datalib_problems::Reason::FetchFailed => {
-                crate::doltlite_raw::record_object_attempt(
-                    &mut tx,
-                    T::TABLE,
-                    &problem.ref_id,
-                    Some(&problem.detail),
-                )
-                .await?
-            }
-            reason => {
-                crate::doltlite_raw::record_object_skipped(
-                    &mut tx,
-                    T::TABLE,
-                    &problem.ref_id,
-                    reason,
-                    &problem.detail,
-                )
-                .await?
-            }
-        }
+        let not_fetched = match problem.reason {
+            datalib_problems::Reason::FetchFailed => NotFetched::Failed(&problem.detail),
+            reason => NotFetched::Skipped {
+                reason,
+                detail: &problem.detail,
+            },
+        };
+        crate::doltlite_raw::record_not_fetched_first_seen(
+            &mut tx,
+            T::TABLE,
+            &problem.ref_id,
+            not_fetched,
+        )
+        .await?;
     }
     tx.commit()
         .await

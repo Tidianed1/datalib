@@ -193,7 +193,7 @@ pub fn columns() -> Vec<ColumnSpec> {
             .describe("The grid row the record has, or would have had.")
             .hidden(),
         ColumnSpec::new("first_seen_at_utc", "First seen", ColumnType::Timestamp),
-        ColumnSpec::new("last_seen_at_utc", "Last seen", ColumnType::Timestamp),
+        ColumnSpec::new("last_seen_at_utc", "Last changed", ColumnType::Timestamp),
         ColumnSpec::new("scope_kind", "Scope", ColumnType::Text)
             .describe("What clears this row when reprocessed: the document, or the raw entity.")
             .hidden(),
@@ -446,7 +446,7 @@ mod tests {
         row
     }
 
-    /// Three problems, last seen newest first in this order: a warning
+    /// Three problems, last changed newest first in this order: a warning
     /// on the Enterprise's log, and two dropped records, one each.
     fn three() -> [ProblemRow; 3] {
         let problem = |source: &str, stage, doc, outcome, p| {
@@ -552,7 +552,7 @@ mod tests {
         assert_eq!(
             ids(&first),
             [warning.problem_uuid.as_str()],
-            "last seen first"
+            "last changed first"
         );
         assert_eq!((first.total, first.next_offset), (3, Some(1)));
         assert!(first.at.is_some());

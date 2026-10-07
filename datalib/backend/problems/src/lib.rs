@@ -354,8 +354,10 @@ pub struct ProblemRow {
     /// every copy downstream.
     #[col(sql = "VARCHAR(40)")]
     pub first_seen_at_utc: String,
-    /// When it was last re-recorded. Equal to `first_seen_at_utc` on a
-    /// problem seen once. Also stamped by the store.
+    /// When it last changed: first recorded, or recorded again with a
+    /// different severity, outcome, reason or sample. A problem recorded
+    /// again unchanged keeps this stamp, so a standing problem changes
+    /// nothing in the store. Also stamped by the store.
     #[col(sql = "VARCHAR(40)")]
     pub last_seen_at_utc: String,
     /// The offset the store's clock was in at `last_seen_at_utc`.
@@ -413,6 +415,39 @@ impl ProblemRow {
         }
     }
 
+    /// This row as the store keeps it, given the row the store already
+    /// holds for the same record, if any: recorded again unchanged, it
+    /// keeps every stamp; changed, it keeps when it was first seen and
+    /// is stamped `now`.
+    pub fn stamped(
+        self,
+        earlier: Option<&ProblemRow>,
+        now_utc: &str,
+        tz_offset: Option<&str>,
+    ) -> Self {
+        let unstamped = |r: &ProblemRow| ProblemRow {
+            first_seen_at_utc: String::new(),
+            last_seen_at_utc: String::new(),
+            tz_offset: None,
+            ..r.clone()
+        };
+        match earlier {
+            Some(e) if unstamped(e) == unstamped(&self) => ProblemRow {
+                first_seen_at_utc: e.first_seen_at_utc.clone(),
+                last_seen_at_utc: e.last_seen_at_utc.clone(),
+                tz_offset: e.tz_offset.clone(),
+                ..self
+            },
+            _ => ProblemRow {
+                first_seen_at_utc: earlier
+                    .map_or_else(|| now_utc.to_string(), |e| e.first_seen_at_utc.clone()),
+                last_seen_at_utc: now_utc.to_string(),
+                tz_offset: tz_offset.map(str::to_string),
+                ..self
+            },
+        }
+    }
+
     /// Every column, by name, off a `SELECT *`. A vocabulary word this
     /// build does not know is an error, not a guess: the store was
     /// written by a newer build and the caller decides what that means.
@@ -451,6 +486,44 @@ impl ProblemRow {
 mod tests {
     use super::*;
     use strum::VariantArray;
+
+    fn missing(sample: &str) -> ProblemRow {
+        ProblemRow::new(
+            "",
+            Stage::Fetch,
+            Scope::Entity("media_blobs:p1#a.mp4"),
+            None,
+            Outcome::Ok,
+            Problem::record(Reason::NotFound, sample),
+            None,
+        )
+    }
+
+    /// A standing problem re-stamped on every run made a commit, and
+    /// re-ran every step downstream, on every sync.
+    #[test]
+    fn a_problem_recorded_again_unchanged_keeps_its_stamps() {
+        let first = missing("not in the export").stamped(None, "t1", Some("+02:00"));
+        assert_eq!(
+            (
+                first.first_seen_at_utc.as_str(),
+                first.last_seen_at_utc.as_str()
+            ),
+            ("t1", "t1")
+        );
+        let again = missing("not in the export").stamped(Some(&first), "t2", Some("-07:00"));
+        assert_eq!(again, first);
+
+        let changed = missing("would not read").stamped(Some(&first), "t3", Some("-07:00"));
+        assert_eq!(
+            (
+                changed.first_seen_at_utc.as_str(),
+                changed.last_seen_at_utc.as_str(),
+                changed.tz_offset.as_deref()
+            ),
+            ("t1", "t3", Some("-07:00"))
+        );
+    }
 
     #[test]
     fn sample_truncates_on_a_char_boundary_and_marks_the_cut() {

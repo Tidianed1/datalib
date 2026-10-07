@@ -582,3 +582,32 @@ async fn attachments_that_cannot_be_copied_are_problems() -> Result<()> {
     );
     Ok(())
 }
+
+/// The desktop app evicts files from its cache. One evicted after we
+/// copied it keeps its bytes, and the failure to read it again, recorded
+/// unchanged on every run, changes nothing in the store.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_file_evicted_after_its_copy_keeps_its_bytes_and_commits_nothing() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let beeper_dir = tmp.path().join("BeeperTexts");
+    materialize_fixture(&beeper_dir)?;
+    let out_db = tmp.path().join("out.doltlite_db");
+    let sources = || vec!["signal", "googlechat"];
+
+    extract_and_commit(out_db.clone(), beeper_dir.clone(), sources()).await?;
+    std::fs::remove_file(beeper_dir.join("media/localhostlocal-signal/TNGART01"))?;
+    let (_, evicted) = extract_and_commit(out_db.clone(), beeper_dir.clone(), sources()).await?;
+    let (_, again) = extract_and_commit(out_db.clone(), beeper_dir, sources()).await?;
+    assert!(evicted.is_some(), "the first failed read is news");
+    assert_eq!(again, None, "the same failed read again is not");
+
+    let db = ingest::RawDb::open(&ingest::db_path_for(&out_db)).await?;
+    let held: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM beeper_media_attachments WHERE blake3 IS NOT NULL",
+    )
+    .fetch_one(db.pool())
+    .await?;
+    db.close().await;
+    assert_eq!(held, 2, "the evicted file's bytes are still held");
+    Ok(())
+}

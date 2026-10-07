@@ -78,8 +78,10 @@ remote endpoint to checkpoint against, and what a run changed is its
 commit. A row's `_bookkeeping` sidecar is stamped the first time a run
 reads the row and left alone after, so reading an unchanged cache again
 commits nothing (`reading_an_unchanged_cache_again_commits_nothing`).
-A file the desktop app evicted after we copied it is the exception: it
-is an error row again on every run, so the run commits.
+A file the desktop app evicted after we copied it keeps its bytes; its
+failed read is a warning, and the same warning recorded again on later
+runs changes nothing
+(`a_file_evicted_after_its_copy_keeps_its_bytes_and_commits_nothing`).
 
 ## The megabridge pass
 
