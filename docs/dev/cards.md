@@ -308,12 +308,12 @@ holds for everything inside it too. When a card opens cards
 (`openCards`), they land in the nearest container above the opener that
 is not solidified, and that container's layout decides where: Columns
 drop what was right of the opener's column and add the chain; a Split or
-Page insert it after the opener's child; Tabs take it as one new
-tab — a Columns container holding the chain, under the opener's tab —
-so what those cards open lands beside them. The outermost container is
-never solidified, so an open always lands somewhere. A link or the
-toolbar (Logs, Data sources, a search) opens its cards the same way, in
-a new tab holding a Columns container.
+Page insert it after the opener's child; Tabs give each card a tab of
+its own, filling it, under the tab of the card before. The outermost
+container is never solidified, so an open always lands somewhere. A
+card opened from the toolbar (Logs, Data sources, a search) is a tab of
+its own. A link opens its cards as one tab holding a Columns container,
+so what they open lands beside them.
 
 **What shows.** Outside edit mode a solidified subtree shows no card
 chrome, so a composite such as the Dashboard (a Page of its five
