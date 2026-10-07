@@ -237,7 +237,10 @@ pieces of phase 1 above: `row_handles`, and mentions outside Slack.
    automatic reaches `main` without a person accepting it; Lightroom
    face tags; a distinguished "Me" contact seeded from each source's
    `account`; a validity range on a link, for a handle reassigned to
-   someone else (`stopped_working_by` is already its end).
+   someone else (`stopped_working_by` is already its end); a stop
+   scoped to some sources, for a number that stopped working for texts
+   but still works on WhatsApp (`tel:` is one handle across apps, so
+   today a stop applies to all of them).
 
 ## The code name
 

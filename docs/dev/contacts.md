@@ -90,11 +90,16 @@ number. What that costs:
 - **The handle does not say which app.** The row it sits on does
   (`source_id`, `provider`), so `author_handle:tel:…` finds a number's
   messages in every app, and a source filter narrows it.
-- **A number's state is one state across apps.** `stopped_working_by`
-  is on the handle, so a person who keeps WhatsApp on a number their
-  carrier has since given away cannot be marked "stopped for texts,
-  still works on WhatsApp". A number reassigned to someone else is
-  attributed to its first owner everywhere (§"The contacts app").
+- **A number's state is one state across apps. This is the cost to
+  watch.** `stopped_working_by` is on the handle, so a person who keeps
+  WhatsApp on a number their carrier has since given away cannot be
+  marked "stopped for texts, still works on WhatsApp": marking it
+  stopped marks it stopped everywhere. A number reassigned to someone
+  else is attributed to its first owner everywhere (§"The contacts
+  app"), and sharing one namespace spreads that mistake across every
+  app. If either matters, the fix goes on the link (a stop scoped to
+  some sources, or a validity range), not into a `tel:` per app, which
+  would undo the one link that covers them all.
 - **A chip's URI is `tel:`**, which a browser hands to the phone
   dialler, whichever app the message came from.
 - **It depends on every source spelling numbers alike.** Only numbers
@@ -326,6 +331,9 @@ is a partial date (`2019`, `2019-06`, `2019-06-14`), a date a person
 remembers rather than an instant anything measured, so it is not an
 `_at_utc` stamp. A number *reassigned* to someone else is not covered:
 the key is the handle alone, so a handle has one owner for all time.
+Nor is a number that stopped working in some apps and not others: a
+stop is on the handle, and `tel:` is one handle across every app
+(§"Handles").
 
 The routes, each behind the gateway's secret
 ([`applets.md`](applets.md)). A refusal the store explains (a handle
@@ -453,7 +461,8 @@ one sync later, while chips follow it at once.
 
 The contact card, merge, groups and members, undo, the triage grid of
 unresolved handles, `row_handles`, the `contact:` search filter, a
-handle for a number without its country code, mentions outside Slack
+handle for a number without its country code, a handle that stopped
+working in some apps but not others, mentions outside Slack
 (an email's @-mention or +-mention is drawn as a chip from its
 `mailto:` link but recorded nowhere), and a handle for a Beeper
 (Matrix) user: [`plans/contacts.md`](plans/contacts.md) §"Order of
