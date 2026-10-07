@@ -172,7 +172,7 @@ async fn load_blobs(
     }
     BlobBundle::load_many(
         db.pool(),
-        db.cas().pool(),
+        Some(db.cas().pool()),
         SMS_BLOB_PROJECTION,
         refs_by_chat,
     )

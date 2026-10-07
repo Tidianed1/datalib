@@ -185,6 +185,7 @@ export type ProblemReason =
   | "deliberate_loss"
   | "render_failed"
   | "fetch_failed"
+  | "blob_missing"
   | "over_size_limit"
   | "not_found"
   | "forbidden"

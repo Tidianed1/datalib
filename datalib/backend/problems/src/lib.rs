@@ -112,6 +112,10 @@ closed_vocabulary! {
         /// The download could not fetch this record. → the record is
         /// missing, or — when an earlier fetch left a payload — stale.
         FetchFailed,
+        /// The download stored this attachment's bytes once, but the
+        /// blob store no longer holds them. → it renders without them;
+        /// a reset of the download fetches them again.
+        BlobMissing,
         /// The download declined to fetch this record, because a limit
         /// in the config said not to. → a warning: nothing failed, but
         /// the record is not in the mirror. A provider that retries its

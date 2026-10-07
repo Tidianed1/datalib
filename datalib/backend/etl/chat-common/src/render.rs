@@ -58,7 +58,7 @@ use datalib_etl_render::message::{chip_link, timestamp_html, MessageHeader};
 use datalib_etl_render::section::{join, msg_div_open_with, Section};
 use datalib_etl_render::title::Title;
 use datalib_schema::grid_rows::GridRow;
-use datalib_schema::problems::{Outcome, ProblemRow, Scope, Stage};
+use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
 use datalib_schema::providers::Provider;
 
 use crate::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
@@ -322,6 +322,7 @@ fn materialize_attachment_bytes(
     blobs: &BlobBundle,
 ) -> NormalizedDoc {
     let mut out = doc.clone();
+    report_missing_bytes(&mut out, blobs);
     if blobs.is_empty() {
         return out;
     }
@@ -344,6 +345,26 @@ fn materialize_attachment_bytes(
         }
     }
     out
+}
+
+/// An attachment the download stored but the blob store has lost would
+/// otherwise read as merely not fetched yet.
+fn report_missing_bytes(doc: &mut NormalizedDoc, blobs: &BlobBundle) {
+    if !blobs.has_missing() {
+        return;
+    }
+    for item in &mut doc.items {
+        for att in &item.attachments {
+            let Some(ref_id) = att.ref_id.as_deref() else {
+                continue;
+            };
+            if blobs.is_missing(ref_id) {
+                let name = att.file_name.as_deref().unwrap_or(ref_id);
+                item.problems
+                    .push(Problem::field("attachment", Reason::BlobMissing, name));
+            }
+        }
+    }
 }
 
 /// `<out>/<stanza>/render_markdown/<chat_uuid>/<period>.md` plus the matching
@@ -1696,6 +1717,30 @@ mod tests {
         let md = join(&render_markdown(&profile, &chat, &chat.buckets[0], "Test"));
         assert!(md.contains("not yet fetched"));
         assert!(md.contains("https://example/vscapture"));
+    }
+
+    /// An attachment whose stored bytes the blob store has lost is a
+    /// problem on its message, not a silent "(not yet fetched)".
+    #[test]
+    fn an_attachment_the_blob_store_lost_is_reported() {
+        let mut chat = mk_chat();
+        chat.buckets[0].items[0].attachments = vec![NormalizedAttachment {
+            rel_path: None,
+            file_name: Some("away-team-scan.png".to_string()),
+            mime_type: Some("image/png".to_string()),
+            byte_len: None,
+            source_url: None,
+            ref_id: Some("scan-1".to_string()),
+        }];
+        let mut blobs = BlobBundle::default();
+        blobs.mark_missing("scan-1");
+        // No bytes to write, so nothing touches the page directory.
+        let doc = materialize_attachment_bytes(&chat.buckets[0], Path::new("/nonexistent"), &blobs);
+
+        let problems = &doc.items[0].problems;
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert_eq!(problems[0].reason, Reason::BlobMissing);
+        assert_eq!(problems[0].sample, "away-team-scan.png");
     }
 
     #[test]

@@ -249,7 +249,7 @@ async fn load_voice_blobs(
     }
     BlobBundle::load_many(
         db.pool(),
-        db.cas().pool(),
+        Some(db.cas().pool()),
         VOICE_BLOB_PROJECTION,
         refs_by_chat,
     )

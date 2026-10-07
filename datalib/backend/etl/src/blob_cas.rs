@@ -9,7 +9,7 @@
 //! filenames dedupe on the content hash rather than on the derived name.
 
 use std::collections::btree_map::Entry;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
 
@@ -80,6 +80,31 @@ pub async fn open_cas_reader(cas_path: &Path) -> Result<SqlitePool> {
     connect(cas_path, true).await
 }
 
+/// The blob store beside the raw store at `entity_db_path`, read-only,
+/// or `None` when the source has never had one. Every render opens its
+/// CAS here, never by testing for the file itself: an older build's
+/// doltlite CAS is read in place until the source's next download
+/// converts it, since a render may not write the raw directory and an
+/// attachment it cannot find renders as missing until its page changes.
+pub async fn open_cas_for_render(entity_db_path: &Path) -> Result<Option<SqlitePool>> {
+    let cas_path = cas_path_for(entity_db_path);
+    if cas_path.is_file() {
+        return open_cas_reader(&cas_path).await.map(Some);
+    }
+    let old = cas_path.with_file_name(DOLTLITE_CAS);
+    if !old.is_file() {
+        return Ok(None);
+    }
+    tracing::warn!(
+        store = %old.display(),
+        "reading a blob store in the doltlite format; the source's next download converts it"
+    );
+    let reader = crate::doltlite_raw::open_reader(&old, None)
+        .await
+        .with_context(|| format!("open blob cas {}", old.display()))?;
+    Ok(reader.map(|r| r.pool().clone()))
+}
+
 /// The CAS is plain SQLite rather than a doltlite store: it is its own
 /// history, since a hash is present or not and a row never changes, so a
 /// doltlite commit log would only keep every page it ever rewrote.
@@ -102,7 +127,8 @@ async fn connect(cas_path: &Path, read_only: bool) -> Result<SqlitePool> {
 }
 
 /// Where the CAS lived while it was a doltlite store. Temporary: remove
-/// it, [`convert_a_doltlite_cas`] and their tests in 0.41.
+/// it, [`convert_a_doltlite_cas`], the doltlite branch of
+/// [`open_cas_for_render`] and their tests in 0.41.
 const DOLTLITE_CAS: &str = "blobs.doltlite_db";
 
 /// Moves a CAS an older build left in doltlite's format into the plain
@@ -232,6 +258,13 @@ impl BlobCas {
         Ok(Self {
             pool: open_cas_reader(cas_path).await?,
         })
+    }
+
+    /// [`open_cas_for_render`], as a handle.
+    pub async fn open_for_render(entity_db_path: &Path) -> Result<Option<Self>> {
+        Ok(open_cas_for_render(entity_db_path)
+            .await?
+            .map(|pool| Self { pool }))
     }
 
     pub fn pool(&self) -> &SqlitePool {
@@ -434,6 +467,9 @@ pub struct FetchedRef<'a> {
 pub struct BlobBundle {
     by_ref: HashMap<String, Blob>,
     errors: Vec<(String, String)>,
+    /// Refs whose edge names bytes the CAS does not hold: fetched once,
+    /// and lost or never readable since.
+    missing: BTreeSet<String>,
 }
 
 impl BlobBundle {
@@ -510,13 +546,30 @@ impl BlobBundle {
         &self.errors
     }
 
+    /// Whether `ref_id`'s edge says its bytes were stored, though the
+    /// CAS does not hold them.
+    pub fn is_missing(&self, ref_id: &str) -> bool {
+        self.missing.contains(ref_id)
+    }
+
+    pub fn has_missing(&self) -> bool {
+        !self.missing.is_empty()
+    }
+
+    /// For a loader of its own: `ref_id`'s edge holds a hash the CAS
+    /// does not.
+    pub fn mark_missing(&mut self, ref_id: impl Into<String>) {
+        self.missing.insert(ref_id.into());
+    }
+
     // ── parse side ───────────────────────────────────────────────────
 
     /// A bundle for each key that names at least one ref, from one query
-    /// over every key's refs rather than one per key.
+    /// over every key's refs rather than one per key. With no CAS
+    /// (`cas_pool` `None`), every ref an edge holds a hash for is missing.
     pub async fn load_many<K, R>(
         refs_pool: &SqlitePool,
-        cas_pool: &SqlitePool,
+        cas_pool: Option<&SqlitePool>,
         projection_sql_template: &str,
         refs_by_key: impl IntoIterator<Item = (K, R)>,
     ) -> Result<HashMap<K, Self>>
@@ -587,7 +640,11 @@ impl BlobBundle {
         // next is read. `blake3` is `cas_objects`' key, so a chunk is an
         // index lookup, not a scan.
         let hashes: Vec<String> = pending_by_blake3.keys().cloned().collect();
-        for chunk in hashes.chunks(crate::bulk::SQL_CHUNK) {
+        let chunks = cas_pool
+            .map(|cas| hashes.chunks(crate::bulk::SQL_CHUNK).map(move |c| (cas, c)))
+            .into_iter()
+            .flatten();
+        for (cas_pool, chunk) in chunks {
             let cas_rows = sqlx::query(
                 "SELECT blake3, bytes, content_type FROM cas_objects \
                   WHERE blake3 IN (SELECT value FROM json_each(?))",
@@ -618,6 +675,16 @@ impl BlobBundle {
                         );
                     }
                 }
+            }
+        }
+        // What the CAS did not answer for: an edge holding a hash is
+        // written only after its bytes commit, so these were lost since.
+        for entry in pending_by_blake3.into_values().flatten() {
+            for key in &keys_by_ref[&entry.ref_id] {
+                out.entry(key.clone())
+                    .or_default()
+                    .missing
+                    .insert(entry.ref_id.clone());
             }
         }
         Ok(out)
@@ -1172,6 +1239,39 @@ mod tests {
         assert_eq!(&head[..16], b"SQLite format 3\0");
     }
 
+    /// A render after an upgrade, before the source's next download has
+    /// converted its doltlite CAS, still finds the bytes, and leaves the
+    /// old store for the download to convert. Without this every page it
+    /// rendered said "(not yet fetched)" for bytes the store held.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_render_reads_a_doltlite_cas_without_converting_it() {
+        let d = tempdir().unwrap();
+        let hash = doltlite_cas_with(d.path(), b"kept").await;
+        let entities = d.path().join("entities.doltlite_db");
+
+        let pool = open_cas_for_render(&entities)
+            .await
+            .unwrap()
+            .expect("the old store is read");
+        let bytes: Vec<u8> = sqlx::query_scalar("SELECT bytes FROM cas_objects WHERE blake3 = ?")
+            .bind(&hash)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(bytes, b"kept");
+        pool.close().await;
+        assert!(d.path().join(DOLTLITE_CAS).exists());
+        assert!(!d.path().join(crate::raw_layout::BLOBS_DB).exists());
+
+        let empty = tempdir().unwrap();
+        assert!(
+            open_cas_for_render(&empty.path().join("entities.doltlite_db"))
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
     /// A conversion killed part-way leaves a temporary copy and maybe its
     /// journal; the next open throws both away and copies again.
     #[tokio::test]
@@ -1437,9 +1537,11 @@ mod tests {
         .execute(&refs_pool)
         .await
         .unwrap();
+        let gone = blake3_hex(b"gone");
         for (ref_id, blake3, name) in [
             ("a", h1.as_str(), Some("alpha.png")),
             ("b", h2.as_str(), Some("beta.pdf")),
+            ("lost", gone.as_str(), None),
         ] {
             sqlx::query(
                 "INSERT INTO attachments (file_id, blake3, upstream_name) VALUES (?, ?, ?)",
@@ -1454,16 +1556,17 @@ mod tests {
 
         // `{placeholders}` twice, as email's UNION ALL has it: each gets
         // the whole list.
-        let bundles = BlobBundle::load_many(
-            &refs_pool,
-            cas.pool(),
-            "SELECT file_id AS ref_id, blake3, NULL AS content_type, upstream_name \
+        let projection = "SELECT file_id AS ref_id, blake3, NULL AS content_type, upstream_name \
                FROM attachments WHERE file_id IN ({placeholders}) AND file_id = 'a' \
              UNION ALL \
              SELECT file_id AS ref_id, blake3, NULL AS content_type, upstream_name \
-               FROM attachments WHERE file_id IN ({placeholders}) AND file_id <> 'a'",
+               FROM attachments WHERE file_id IN ({placeholders}) AND file_id <> 'a'";
+        let bundles = BlobBundle::load_many(
+            &refs_pool,
+            Some(cas.pool()),
+            projection,
             [
-                ("one", vec!["a", "b", "missing"]),
+                ("one", vec!["a", "b", "missing", "lost"]),
                 ("two", vec!["b"]),
                 ("absent", vec!["missing"]),
                 ("none", vec![]),
@@ -1479,6 +1582,12 @@ mod tests {
         assert_eq!(a.content_type.as_deref(), Some("image/png"));
         assert_eq!(a.upstream_name.as_deref(), Some("alpha.png"));
         assert!(one.get("missing").is_none());
+        assert!(
+            !one.is_missing("missing"),
+            "no edge: never fetched, not lost"
+        );
+        assert!(one.is_missing("lost"), "an edge naming bytes the CAS lacks");
+        assert!(!one.is_missing("a"));
         assert_eq!(
             bundles["two"].get("b").map(|b| b.bytes.as_slice()),
             Some(&b"beta"[..]),
@@ -1489,6 +1598,16 @@ mod tests {
             !bundles.contains_key("none"),
             "a key that names no ref gets no bundle"
         );
+
+        let no_cas = BlobBundle::load_many(&refs_pool, None, projection, [("one", vec!["a"])])
+            .await
+            .unwrap();
+        assert!(
+            no_cas["one"].is_missing("a"),
+            "no CAS at all: every held ref is lost"
+        );
+        refs_pool.close().await;
+        cas.close().await;
     }
 
     struct WidgetBlob {

@@ -193,16 +193,9 @@ async fn parse_async(
     let pin = reader.pin().clone();
 
     // Sibling CAS file holds attachment bytes.
-    let cas_path = blob_cas::cas_path_for(db_path);
-    let cas_pool: Option<SqlitePool> = if cas_path.is_file() {
-        Some(
-            datalib_etl::blob_cas::open_cas_reader(&cas_path)
-                .await
-                .with_context(|| format!("open CAS for render at {}", cas_path.display()))?,
-        )
-    } else {
-        None
-    };
+    let cas_pool = blob_cas::open_cas_for_render(db_path)
+        .await
+        .with_context(|| format!("open the blob store beside {}", db_path.display()))?;
 
     let (recipients, aci_unreadable) = load_recipients(&pool).await?;
     let chats = load_chats(&pool).await?;
@@ -238,20 +231,22 @@ async fn parse_async(
     // Per-bucket BlobBundle: each bucket gets its own bag of
     // attachment bytes, all of them loaded together. Render walks them
     // synchronously.
-    if let Some(cas_pool) = cas_pool.as_ref() {
-        let refs = docs.iter().enumerate().map(|(i, bucket)| {
-            let refs = bucket
-                .items
-                .iter()
-                .flat_map(|item| item.attachments.iter().map(|att| att.ref_id.as_str()));
-            (i, refs)
-        });
-        let mut blobs =
-            BlobBundle::load_many(&pool, cas_pool, ATTACHMENTS_PROJECTION_SQL, refs).await?;
-        for (i, bucket) in docs.iter_mut().enumerate() {
-            if let Some(b) = blobs.remove(&i) {
-                bucket.blobs = b;
-            }
+    let refs = docs.iter().enumerate().map(|(i, bucket)| {
+        let refs = bucket
+            .items
+            .iter()
+            .flat_map(|item| item.attachments.iter().map(|att| att.ref_id.as_str()));
+        (i, refs)
+    });
+    let loaded =
+        BlobBundle::load_many(&pool, cas_pool.as_ref(), ATTACHMENTS_PROJECTION_SQL, refs).await;
+    if let Some(cas) = cas_pool {
+        cas.close().await;
+    }
+    let mut blobs = loaded?;
+    for (i, bucket) in docs.iter_mut().enumerate() {
+        if let Some(b) = blobs.remove(&i) {
+            bucket.blobs = b;
         }
     }
 
