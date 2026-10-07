@@ -28,7 +28,7 @@ import { parseTOML, getStaticTOMLValue } from "toml-eslint-parser";
 import { NAME_IT_HELP } from "./accountNaming";
 import { formatBytes, parseByteSize } from "./byteSize";
 import { catalogForStep } from "./catalog";
-import type { CatalogEntry, Field, FieldPhase, Preset } from "./catalog";
+import type { Answer, CatalogEntry, Field, FieldPhase, Preset } from "./catalog";
 import { editStringArray, quote } from "./tomlText";
 
 /// Which wave a step belongs to, for display and for picking the right
@@ -601,6 +601,96 @@ function paramsToml(entry: CatalogEntry, values: FieldValues, phase: FieldPhase)
     .sort(([a], [b]) => a.split(".").length - b.split(".").length || a.localeCompare(b))
     .map(([table, lines]) => `[steps.params${table ? `.${table}` : ""}]\n${lines.join("\n")}`)
     .join("\n\n");
+}
+
+// Laying the form out
+
+/// One heading of the form and what is drawn under it: a question's
+/// answers, each with the fields it shows while chosen, or fields as
+/// they are. `solo` is an advanced field no section names, whose own
+/// label is the heading.
+export type Row = {
+  heading: string;
+  help?: string;
+  answers?: { answer: Answer; fields: Field[] }[];
+  fields: Field[];
+  solo?: boolean;
+};
+
+export type Layout = { basic: Row[]; advanced: Row[] };
+
+/// The form for one source: its sections in order, split into the
+/// basic part and Advanced options, with every field no section names
+/// appended to the advanced part. The latchkey account of a source that
+/// signs in is drawn with the sign-in, so it is left out here.
+export function layoutOf(entry: CatalogEntry, renders: boolean): Layout {
+  const fields = [
+    ...fieldsFor(entry, "download").filter(
+      (f) => !(entry.credentialService && f.kind === "text" && f.latchkey),
+    ),
+    ...(renders ? fieldsFor(entry, "render") : []),
+  ];
+  const at = (targets: string[] | undefined) =>
+    (targets ?? []).flatMap((t) => fields.filter((f) => f.target === t));
+  const placed = new Set<string>();
+  const layout: Layout = { basic: [], advanced: [] };
+  for (const section of entry.sections ?? []) {
+    const row: Row = {
+      heading: section.heading,
+      help: section.help,
+      answers: section.answers?.map((answer) => ({ answer, fields: at(answer.fields) })),
+      fields: at(section.fields),
+    };
+    for (const f of row.fields) placed.add(f.target);
+    for (const a of section.answers ?? []) {
+      for (const t of [...(a.fields ?? []), ...Object.keys(a.sets ?? {})]) placed.add(t);
+    }
+    if (row.fields.length || row.answers) layout[section.advanced ? "advanced" : "basic"].push(row);
+  }
+  for (const f of fields) {
+    if (!placed.has(f.target)) layout.advanced.push({ heading: f.label, fields: [f], solo: true });
+  }
+  return layout;
+}
+
+/// Which answer the values amount to. An answer that shows fields is
+/// the one only while one of them holds something; otherwise the first
+/// plain answer whose `sets` agree, and the first answer when none do.
+export function chosenAnswer(
+  answers: { answer: Answer; fields: Field[] }[],
+  values: FieldValues,
+): number {
+  const agrees = (a: Answer) => Object.entries(a.sets ?? {}).every(([t, v]) => !!values[t] === v);
+  const filled = answers.findIndex(
+    ({ answer, fields }) =>
+      fields.length > 0 && agrees(answer) && fields.some((f) => isSet(f, values[f.target])),
+  );
+  if (filled >= 0) return filled;
+  const plain = answers.findIndex(({ answer, fields }) => fields.length === 0 && agrees(answer));
+  return Math.max(plain, 0);
+}
+
+/// The values after choosing one answer: what it sets, and the fields
+/// of every other answer emptied, so no setting outlives the answer
+/// that showed it.
+export function applyAnswer(
+  answers: { answer: Answer; fields: Field[] }[],
+  index: number,
+  values: FieldValues,
+): FieldValues {
+  const next = { ...values };
+  answers.forEach(({ fields }, i) => {
+    if (i === index) return;
+    for (const f of fields) next[f.target] = f.kind === "string_list" ? [] : "";
+  });
+  Object.assign(next, answers[index]?.answer.sets ?? {});
+  return next;
+}
+
+/// Is every field of this answer still empty? A chosen answer that
+/// shows fields is not answered until one of them is filled.
+export function answerIsEmpty(fields: Field[], values: FieldValues): boolean {
+  return fields.length > 0 && !fields.some((f) => isSet(f, values[f.target]));
 }
 
 /// Is this field's gate open? A field with no `requires` always is.
