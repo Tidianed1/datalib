@@ -84,6 +84,14 @@ export function entityFromUri(href) {
   return { kind: /** @type {"group" | "step"} */ (m[1]), id: m[2] };
 }
 
+/** The URI a group or step is named by; `entityFromUri` reads it back.
+ *  @param {"group" | "step"} kind
+ *  @param {string} id
+ *  @returns {string} */
+export function uriFromEntity(kind, id) {
+  return `datalib:${kind}/${id}`;
+}
+
 /** The markdown-it plugin: an explicit link whose href names a handle
  *  gets `class="chip"` and `data-handle`; one naming a group or a step,
  *  `class="chip"` and `data-entity` (its URI). A link linkify made from a bare

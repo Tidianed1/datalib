@@ -22,6 +22,7 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { rmSync, writeFileSync } from "node:fs";
 import {
+  cardOf,
   expandGroup,
   groupRow,
   LAST_UPDATE_AT,
@@ -674,6 +675,20 @@ command = "/bin/sh -c 'echo walking page 1 >&2; echo listing failed: 429 too man
       '.rl-grid .slick-row:not(.slick-group) .slick-cell[col-id="msg"]',
     );
     await expect(messages.filter({ hasText: /^walking page 1$/ })).toBeVisible();
+
+    // The line's Group and Step are chips: the group resolves to its
+    // failed status, and a double-click opens its dashboard.
+    const line = dialog.locator(".rl-grid .slick-row:has(.rl-jumped)");
+    await expect(line.locator('[col-id="step"] a.chip')).toHaveAttribute(
+      "data-entity",
+      "datalib:step/flaky/ingest",
+    );
+    const groupChip = line.locator('[col-id="group_id"] a.chip[data-entity="datalib:group/flaky"]');
+    await expect(groupChip).toHaveClass(/entity-failed/, { timeout: 10_000 });
+    await groupChip.dblclick();
+    await expect(cardOf(page, 'syncDashboardView({"group":"flaky"})')).toBeVisible({
+      timeout: 10_000,
+    });
   });
 
   // A source that syncs once and fails from then on: Last synced
