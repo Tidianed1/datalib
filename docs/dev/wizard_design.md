@@ -62,9 +62,8 @@ when they are important.
 
 ## Keeping a form honest
 
-- **Nothing the old form could do is dropped.** Moving a field to
-  Advanced options is fine; removing it is a change to the config
-  model, not to the wizard.
+- **Every field an entry declares is drawn.** A setting not worth a
+  question goes in Advanced options; it is never left off the form.
 - **No control that cannot work.** A check the backend cannot make, or
   a sign-in the service does not offer, is not drawn.
 - **Editing reopens the same form.** An answer is read back from the

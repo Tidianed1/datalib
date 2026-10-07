@@ -321,7 +321,7 @@ copy_to_bin(
         "package.json",
         "playwright.auth.config.ts",
         "tsconfig.json",
-    ] + glob(["tests/e2e_auth/**/*"], allow_empty = False),
+    ] + glob(["tests/e2e_auth/**/*"], allow_empty = False) + ["tests/e2e/wizard-helpers.ts"],
 )
 
 _E2E_AUTH_DATA = [

@@ -172,7 +172,7 @@ export type CatalogEntry = {
   /// puts it in the grid.
   renderStep?: boolean;
   /// The latchkey service name, when the source needs credentials. The
-  /// wizard shows its Connection section only while the params the form
+  /// wizard shows its account row only while the params the form
   /// would write reach an origin (`ingestReach`): an import has nothing
   /// to log in to.
   credentialService?: string;
@@ -305,7 +305,7 @@ export const CATALOG: CatalogEntry[] = [
       {
         kind: "date",
         target: "api.since",
-        label: "Since",
+        label: "Start date",
         help: "Choosing an earlier date later brings in the older messages on the next sync.",
       },
       {
@@ -433,7 +433,7 @@ export const CATALOG: CatalogEntry[] = [
       {
         kind: "date",
         target: "api.since",
-        label: "Since",
+        label: "Start date",
       },
       {
         kind: "bool",
@@ -514,7 +514,7 @@ export const CATALOG: CatalogEntry[] = [
       {
         kind: "date",
         target: "api.since",
-        label: "Since",
+        label: "Start date",
       },
       {
         kind: "string_list",
@@ -800,7 +800,7 @@ export const CATALOG: CatalogEntry[] = [
       {
         kind: "date",
         target: "google.since",
-        label: "From",
+        label: "First day",
         help:
           "Only events with some part in the range are copied, and a series keeps only its " +
           "changed dates inside it.",
@@ -808,7 +808,7 @@ export const CATALOG: CatalogEntry[] = [
       {
         kind: "date",
         target: "google.until",
-        label: "Until",
+        label: "Last day",
         help: "The last day, included. Leave empty for no end.",
       },
     ],
@@ -875,7 +875,7 @@ export const CATALOG: CatalogEntry[] = [
       {
         kind: "date",
         target: "fastmail.since",
-        label: "From",
+        label: "First day",
         help:
           "Only events with some part in the range are copied, and a series keeps only its " +
           "changed dates inside it.",
@@ -883,7 +883,7 @@ export const CATALOG: CatalogEntry[] = [
       {
         kind: "date",
         target: "fastmail.until",
-        label: "Until",
+        label: "Last day",
         help: "The last day, included. Leave empty for no end.",
       },
     ],
@@ -954,7 +954,7 @@ export const CATALOG: CatalogEntry[] = [
       {
         kind: "date",
         target: "caldav.since",
-        label: "From",
+        label: "First day",
         help:
           "Only events with some part in the range are copied, and a series keeps only its " +
           "changed dates inside it.",
@@ -962,7 +962,7 @@ export const CATALOG: CatalogEntry[] = [
       {
         kind: "date",
         target: "caldav.until",
-        label: "Until",
+        label: "Last day",
         help: "The last day, included. Leave empty for no end.",
       },
     ],
@@ -1178,7 +1178,7 @@ export const CATALOG: CatalogEntry[] = [
       {
         kind: "date",
         target: "api.since",
-        label: "From",
+        label: "First day",
         help: "Choose an earlier date later to bring in older data.",
       },
       {
@@ -1862,9 +1862,8 @@ export const CATALOG: CatalogEntry[] = [
         label: "Messages folder",
         guarded: "Let Datalib read your Messages folder",
         help:
-          "macOS keeps this folder private. Click the button and confirm the folder in the " +
-          "window that opens: it opens in the right place, ~/Library/Messages. Choosing it " +
-          "there is what lets Datalib read it. A copied chat.db file, typed in, works too.",
+          "The folder the Messages app keeps its database in, ~/Library/Messages. A copied " +
+          "chat.db file, typed in, works too.",
       },
       {
         kind: "bool",
@@ -1928,9 +1927,8 @@ export const CATALOG: CatalogEntry[] = [
         label: "Photos library",
         guarded: "Let Datalib read your Photos library",
         help:
-          "macOS keeps the library private. Click the button and choose the library in the " +
-          "window that opens: it opens in ~/Pictures, where Photos Library.photoslibrary " +
-          "usually is. Choosing it there is what lets Datalib read it.",
+          "The library bundle, usually Photos Library.photoslibrary in ~/Pictures. Its " +
+          "database/Photos.sqlite is what gets copied.",
       },
       {
         kind: "bool",

@@ -610,7 +610,7 @@ const probeParams = computed<Record<string, unknown> | null>(() =>
 /// The latchkey service this source authenticates against — and only
 /// while the params the form would write reach an origin. An import
 /// (`ingestReach` says `local`) has nothing to log in to, however the
-/// descriptor is labelled, so it gets no Connection section.
+/// descriptor is labelled, so it gets no account row.
 const service = computed(() => {
   const entry = chosen.value;
   if (!entry?.credentialService) return null;
@@ -643,7 +643,7 @@ const latchkeyCli = ref("latchkey");
 /// the login button would run — so the button is not offered at all.
 const gateway = ref<string | null>(null);
 /// Why latchkey could not be asked, when it could not — shown at the
-/// top of the Connection section for every source, since without the
+/// top of the account row for every source, since without the
 /// answer it offers no way to sign in at all.
 const accountsFailure = ref<Failure | null>(null);
 /// Where signing in will install the latchkey plugin this service comes
@@ -1035,6 +1035,10 @@ function resetProbes() {
 /// over a check that passed, until the next one does.
 const switching = ref(false);
 const connected = computed(() => check.value.state === "ok" && !switching.value);
+/// While latchkey is asked what it holds, and the check made of it on
+/// opening runs. The sign-in controls wait for both, so they never
+/// fold away mid-click.
+const autoChecking = ref(false);
 
 /// Can "Check connection" and the pickers' "Load" be offered here?
 const canProbe = computed(() => !!chosen.value?.canProbe && !!probeParams.value);
@@ -1208,12 +1212,16 @@ watch(
     switching.value = false;
     if (!name) return;
     // An account latchkey already holds is checked at once, so the row
-    // can say who it reaches instead of asking for a click.
-    void loadAccounts().then(() => {
-      if (accounts.value?.length && canProbe.value && check.value.state === "idle") {
-        void checkConnection();
-      }
-    });
+    // can say who it reaches instead of asking for a click. Not while
+    // it holds several and the form names none: which one is the
+    // person's to say.
+    autoChecking.value = true;
+    void loadAccounts()
+      .then(async () => {
+        const known = accounts.value?.length === 1 || accountValue.value !== "";
+        if (known && canProbe.value && check.value.state === "idle") await checkConnection();
+      })
+      .finally(() => (autoChecking.value = false));
   },
   { immediate: true },
 );
@@ -1261,6 +1269,7 @@ function submit() {
                 : "Add a data source"
           }}
         </h2>
+        <span v-if="isEdit && chosen" class="wiz-kind">{{ chosen.label }}</span>
         <button
           v-if="mode === 'create' && stage === 'configure'"
           class="btn ghost"
@@ -1373,7 +1382,11 @@ function submit() {
               :where="signInWhere"
             />
 
-            <div v-if="connected && check.report" class="wiz-ok wiz-probe-ok">
+            <p v-if="autoChecking && accounts !== null" class="wiz-help" role="status">
+              Checking the connection…
+            </p>
+            <template v-if="autoChecking" />
+            <div v-else-if="connected && check.report" class="wiz-ok wiz-probe-ok">
               <svg class="wiz-probe-mark" viewBox="0 0 24 24" role="img" aria-label="Connected">
                 <path :d="STATUS_GLYPHS.succeeded" fill="currentColor" />
               </svg>
@@ -1787,6 +1800,10 @@ function submit() {
                       <template v-else-if="f.kind === 'path'">
                         <div v-if="canPick && f.guarded && !values[f.target]" class="wiz-guard">
                           <b>{{ f.guarded }}</b>
+                          <span class="wiz-help">
+                            macOS keeps this private. Click the button and confirm it in the window
+                            that opens: choosing it there is what lets Datalib read it.
+                          </span>
                           <button type="button" class="btn primary wiz-browse" @click="browse(f)">
                             Choose {{ f.label }}…
                           </button>
@@ -2330,7 +2347,10 @@ function submit() {
   padding: 12px;
 }
 .wiz-tabpanel > p,
-.wiz-tabpanel > .wiz-req {
+.wiz-tabpanel > .wiz-conn-actions {
+  margin: 0;
+}
+.wiz-req {
   font-style: normal;
   font-weight: 400;
   font-size: 10.5px;
@@ -2386,12 +2406,6 @@ function submit() {
   color: var(--datalib-muted);
 }
 
-.wiz-conn-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-bottom: 10px;
-}
 .wiz-review summary {
   cursor: pointer;
   font-size: var(--datalib-font-size);
@@ -2406,12 +2420,12 @@ function submit() {
   font-size: var(--datalib-font-size-small);
 }
 
+.wiz-kind {
+  color: var(--datalib-muted);
+}
+
 /* The form: a heading in the left column, its controls in the right,
    and a line between one heading's group and the next. */
-.wiz-form {
-  display: flex;
-  flex-direction: column;
-}
 .wiz-basic {
   display: contents;
 }
