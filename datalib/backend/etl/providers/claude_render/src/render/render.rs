@@ -10,6 +10,7 @@ use serde_json::Value;
 
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
+use datalib_etl_chat_common::branches::{reading_order, TreeNode};
 use datalib_etl_chat_common::normalize::{capitalize, iso_to_ms, json_pretty_sorted};
 use datalib_etl_chat_common::render::{
     render_all as cc_render_all, Buckets, RenderProfile, ENTITY_KIND_CONVERSATION,
@@ -221,12 +222,11 @@ fn build_chat(
         .raw_json
         .get("current_leaf_message_uuid")
         .and_then(Value::as_str);
-    let msgs =
-        shown_branch(&shredded.messages, leaf).unwrap_or_else(|| by_time(&shredded.messages));
+    let msgs = in_reading_order(&shredded.messages, leaf);
 
     let mut items: Vec<NormalizedChatItem> = Vec::new();
     let mut last_ms = conv.created_at.as_deref().and_then(iso_to_ms);
-    for m in &msgs {
+    for (m, branch) in &msgs {
         // Own stamp, else the previous item's + 1ms (§6's sanctioned
         // inheritance, which keeps ordering stable across re-runs),
         // else nothing — a conversation whose own `created_at` is
@@ -350,6 +350,7 @@ fn build_chat(
                     block_id.natural_key.clone(),
                 )),
                 is_aside: matches!(btype, "tool_use" | "tool_result"),
+                branch: branch.clone(),
                 unread: false,
                 recipients: Vec::new(),
                 problems: block_problems,
@@ -384,6 +385,7 @@ fn build_chat(
                 msg_id.natural_key.clone(),
             )),
             is_aside: false,
+            branch: branch.clone(),
             unread: false,
             recipients: Vec::new(),
             problems: msg_problems,
@@ -521,6 +523,7 @@ fn build_project_page(
                 doc_id.natural_key.clone(),
             )),
             is_aside: false,
+            branch: Vec::new(),
             unread: false,
             recipients: Vec::new(),
             problems: Vec::new(),
@@ -613,6 +616,7 @@ fn project_item(
         kind_label: Some(kind_label.to_string()),
         source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
         is_aside: false,
+        branch: Vec::new(),
         unread: false,
         recipients: Vec::new(),
         problems: Vec::new(),
@@ -639,34 +643,16 @@ fn filter_nonempty(s: String) -> Option<String> {
     (!s.trim().is_empty()).then_some(s)
 }
 
-/// The parent a conversation's first message names.
-const ROOT_PARENT: &str = "00000000-0000-4000-8000-000000000000";
-
-/// The branch the user last saw: `leaf → parent` up to the root, in
-/// order. `None` when there is no leaf, or the chain names a message the
-/// payload lacks or loops, so the caller shows every message instead.
-fn shown_branch<'a>(messages: &'a [MessageRow], leaf: Option<&str>) -> Option<Vec<&'a MessageRow>> {
-    let by_uuid: HashMap<&str, &MessageRow> = messages
-        .iter()
-        .map(|m| (m.message_uuid.as_str(), m))
-        .collect();
-    let mut path: Vec<&MessageRow> = Vec::new();
-    let mut cursor = leaf;
-    while let Some(uuid) = cursor.filter(|u| *u != ROOT_PARENT) {
-        let m = *by_uuid.get(uuid)?;
-        if path.len() == messages.len() {
-            return None;
-        }
-        path.push(m);
-        cursor = m.parent_message_uuid.as_deref();
-    }
-    path.reverse();
-    (!path.is_empty()).then_some(path)
-}
-
-fn by_time(messages: &[MessageRow]) -> Vec<&MessageRow> {
-    let mut msgs: Vec<&MessageRow> = messages.iter().collect();
-    msgs.sort_by(|a, b| {
+/// Every message in reading order with the branches it sits in: the
+/// branch ending at the leaf the user last saw, every other version
+/// folded in where it forked. With no usable leaf (an export-shaped
+/// payload has none), every message by time on one branch.
+fn in_reading_order<'a>(
+    messages: &'a [MessageRow],
+    leaf: Option<&str>,
+) -> Vec<(&'a MessageRow, Vec<String>)> {
+    let mut by_time: Vec<&MessageRow> = messages.iter().collect();
+    by_time.sort_by(|a, b| {
         (
             a.created_at.as_deref().unwrap_or(""),
             a.message_uuid.as_str(),
@@ -676,7 +662,29 @@ fn by_time(messages: &[MessageRow]) -> Vec<&MessageRow> {
                 b.message_uuid.as_str(),
             ))
     });
-    msgs
+    let nodes: Vec<TreeNode<'_>> = by_time
+        .iter()
+        .map(|m| TreeNode {
+            id: &m.message_uuid,
+            parent: m.parent_message_uuid.as_deref(),
+        })
+        .collect();
+    let Some(order) = leaf.and_then(|leaf| reading_order(&nodes, leaf)) else {
+        return by_time.into_iter().map(|m| (m, Vec::new())).collect();
+    };
+    let by_uuid: HashMap<&str, &MessageRow> = by_time
+        .iter()
+        .map(|m| (m.message_uuid.as_str(), *m))
+        .collect();
+    order
+        .into_iter()
+        .map(|p| {
+            (
+                by_uuid[p.id],
+                p.branch.iter().map(|b| b.to_string()).collect(),
+            )
+        })
+        .collect()
 }
 
 /// Every page a message's text cites, once each in order of first
@@ -1171,41 +1179,53 @@ mod branch_tests {
         }
     }
 
-    fn uuids(msgs: &[&MessageRow]) -> Vec<String> {
-        msgs.iter().map(|m| m.message_uuid.clone()).collect()
+    fn placed(msgs: &[MessageRow], leaf: Option<&str>) -> Vec<(String, String)> {
+        in_reading_order(msgs, leaf)
+            .into_iter()
+            .map(|(m, branch)| (m.message_uuid.clone(), branch.join("/")))
+            .collect()
     }
 
-    /// An edited prompt starts a branch; the abandoned edit and its
-    /// answer were shown between the prompt and the edit that replaced it.
+    /// An edited prompt starts a branch. The edit left behind, and its
+    /// answer, are kept on their own branch just before the edit that
+    /// replaced them, where they used to read as if sent in turn.
     #[test]
-    fn the_branch_ending_at_the_leaf_is_shown_and_the_edit_left_behind_is_not() {
+    fn the_edit_left_behind_is_kept_on_its_own_branch() {
         let msgs = [
-            msg("q1", Some(ROOT_PARENT), "1"),
+            msg("q1", Some("00000000-0000-4000-8000-000000000000"), "1"),
             msg("a1", Some("q1"), "2"),
             msg("q2-old", Some("a1"), "3"),
             msg("a2-old", Some("q2-old"), "4"),
             msg("q2", Some("a1"), "5"),
             msg("a2", Some("q2"), "6"),
         ];
-        let shown = shown_branch(&msgs, Some("a2")).unwrap();
-        assert_eq!(uuids(&shown), ["q1", "a1", "q2", "a2"]);
+        let on = |id: &str, b: &str| (id.to_string(), b.to_string());
+        assert_eq!(
+            placed(&msgs, Some("a2")),
+            [
+                on("q1", ""),
+                on("a1", ""),
+                on("q2-old", "q2-old"),
+                on("a2-old", "q2-old"),
+                on("q2", ""),
+                on("a2", ""),
+            ]
+        );
     }
 
-    /// An export-shaped payload has no leaf, and a chain can name a
-    /// message the payload lacks or loop: every message, by time.
+    /// An export-shaped payload has no leaf, and a chain can loop: every
+    /// message, by time, on one branch.
     #[test]
-    fn no_leaf_a_broken_chain_or_a_loop_falls_back_to_every_message() {
+    fn no_leaf_or_a_loop_reads_every_message_by_time() {
         let msgs = [msg("q1", None, "1"), msg("a1", Some("q1"), "2")];
-        assert_eq!(
-            uuids(&shown_branch(&msgs, Some("a1")).unwrap()),
-            ["q1", "a1"]
-        );
-        assert!(shown_branch(&msgs, None).is_none());
-        assert!(shown_branch(&msgs, Some("nope")).is_none());
-        let broken = [msg("q1", Some("gone"), "1"), msg("a1", Some("q1"), "2")];
-        assert!(shown_branch(&broken, Some("a1")).is_none());
+        let flat = [
+            ("q1".to_string(), String::new()),
+            ("a1".to_string(), String::new()),
+        ];
+        assert_eq!(placed(&msgs, None), flat);
+        assert_eq!(placed(&msgs, Some("nope")), flat);
         let looped = [msg("q1", Some("a1"), "1"), msg("a1", Some("q1"), "2")];
-        assert!(shown_branch(&looped, Some("a1")).is_none());
+        assert_eq!(placed(&looped, Some("a1")).len(), 2);
     }
 }
 

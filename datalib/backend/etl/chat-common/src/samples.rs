@@ -84,6 +84,7 @@ fn text(uuid: &str, author: &str, at: i64, body: &str) -> NormalizedChatItem {
         kind_label: None,
         source_ref: None,
         is_aside: false,
+        branch: Vec::new(),
         unread: false,
         recipients: Vec::new(),
         problems: Vec::new(),
@@ -94,6 +95,7 @@ fn aside(uuid: &str, at: i64, body: &str) -> NormalizedChatItem {
     NormalizedChatItem {
         kind_label: Some("Tool Call".to_string()),
         is_aside: true,
+        branch: Vec::new(),
         ..text(uuid, "claude-opus-5", at, body)
     }
 }

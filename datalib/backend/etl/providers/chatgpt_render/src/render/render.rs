@@ -2,11 +2,12 @@
 //! `chat-common` normalized model and delegate markdown / grid-row /
 //! grid-row plumbing to [`datalib_etl_chat_common::render::render_all`].
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use anyhow::{Context as _, Result};
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
+use datalib_etl_chat_common::branches::{reading_order, TreeNode};
 use datalib_etl_chat_common::normalize::{capitalize, iso_to_ms};
 use datalib_etl_chat_common::render::{
     render_all as cc_render_all, Buckets, RenderProfile, ENTITY_KIND_CONVERSATION,
@@ -135,7 +136,7 @@ fn build_chat(
     // Mirror the renderer's timestamp bump: a message with no create_time
     // inherits the previous item's time + 1ms so ordering stays stable.
     let mut last_ms = conv.create_time.as_deref().and_then(iso_to_ms);
-    for m in &path {
+    for (m, branch) in &path {
         // Own stamp, else the previous item's + 1ms (§6's sanctioned
         // inheritance), else nothing: a conversation with no
         // `create_time` of its own whose messages carry none either
@@ -176,6 +177,7 @@ fn build_chat(
         if body.is_none() && attachments.is_empty() && problems.is_empty() {
             continue;
         }
+        let is_aside = is_aside(m.role.as_deref(), !attachments.is_empty());
         let kind = if attachments.is_empty() {
             ItemKind::Text
         } else {
@@ -200,7 +202,8 @@ fn build_chat(
                 msg_id.entity_kind,
                 msg_id.natural_key.clone(),
             )),
-            is_aside: is_tool_role(m.role.as_deref()),
+            is_aside,
+            branch: branch.clone(),
             unread: false,
             recipients: Vec::new(),
             problems,
@@ -244,39 +247,44 @@ fn build_chat(
     }
 }
 
-/// Walk `current_node → root` via `parent_id`; fall back to a
-/// `create_time` sort when the tree is missing/broken.
-fn ordered_messages(shredded: &ShreddedConversation) -> Vec<&OAMessageRow> {
-    let msg_by_id: HashMap<&str, &OAMessageRow> = shredded
-        .messages
+/// Every message in reading order with the branches it sits in: the
+/// branch ending at `current_node`, the one last seen, with every other
+/// version folded in where it forked. With no usable `current_node`,
+/// everything by `create_time` on one branch.
+fn ordered_messages(shredded: &ShreddedConversation) -> Vec<(&OAMessageRow, Vec<String>)> {
+    let mut by_time: Vec<&OAMessageRow> = shredded.messages.iter().collect();
+    by_time.sort_by(|a, b| {
+        a.create_time
+            .as_deref()
+            .unwrap_or("")
+            .cmp(b.create_time.as_deref().unwrap_or(""))
+    });
+    let nodes: Vec<TreeNode<'_>> = by_time
         .iter()
-        .map(|m| (m.message_id.as_str(), m))
+        .map(|m| TreeNode {
+            id: &m.message_id,
+            parent: m.parent_id.as_deref(),
+        })
         .collect();
-    let mut path: Vec<&OAMessageRow> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut cursor = shredded.conv.current_node.clone();
-    while let Some(cid) = cursor {
-        if !seen.insert(cid.clone()) {
-            break;
-        }
-        let Some(m) = msg_by_id.get(cid.as_str()) else {
-            break;
-        };
-        path.push(*m);
-        cursor = m.parent_id.clone();
-    }
-    path.reverse();
-    if path.is_empty() {
-        let mut sorted: Vec<&OAMessageRow> = shredded.messages.iter().collect();
-        sorted.sort_by(|a, b| {
-            a.create_time
-                .as_deref()
-                .unwrap_or("")
-                .cmp(b.create_time.as_deref().unwrap_or(""))
-        });
-        path = sorted;
-    }
-    path
+    let order = shredded
+        .conv
+        .current_node
+        .as_deref()
+        .and_then(|leaf| reading_order(&nodes, leaf));
+    let Some(order) = order else {
+        return by_time.into_iter().map(|m| (m, Vec::new())).collect();
+    };
+    let by_id: HashMap<&str, &OAMessageRow> = by_time
+        .iter()
+        .map(|m| (m.message_id.as_str(), *m))
+        .collect();
+    order
+        .into_iter()
+        .map(|p| {
+            let branch = p.branch.iter().map(|b| b.to_string()).collect();
+            (by_id[p.id], branch)
+        })
+        .collect()
 }
 
 fn render_message_body(parts: &[&OAContentPartRow]) -> Option<String> {
@@ -384,6 +392,12 @@ fn att_to_norm(a: &OAAttachmentRef) -> NormalizedAttachment {
     }
 }
 
+/// Tool traffic folds away; a tool message carrying a file (a generated
+/// image) is what was asked for, and stays in the reading flow.
+fn is_aside(role: Option<&str>, carries_a_file: bool) -> bool {
+    is_tool_role(role) && !carries_a_file
+}
+
 /// Whether a message is tool traffic, and so belongs in a collapsed
 /// aside rather than in the reading flow.
 ///
@@ -449,6 +463,15 @@ mod tests {
             render_message_body(&[&quote]).unwrap(),
             "**Captains \\*Log\\*.pdf**\n\n> Stardate 41153.7\n> All is well."
         );
+    }
+
+    /// A generated image arrives as a tool message, and was folded away
+    /// with the plumbing.
+    #[test]
+    fn a_tool_message_with_a_file_stays_in_the_flow() {
+        assert!(is_aside(Some("tool"), false));
+        assert!(!is_aside(Some("tool"), true));
+        assert!(!is_aside(Some("system"), false));
     }
 
     /// ChatGPT's `cite` markers are dropped from the text; the pages

@@ -30,7 +30,8 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// v12: the people baseline counts a reactor to a message not in
 /// the mirror, which moves only the `source_contacts` rows.
 /// v13: an attachment's size comes from its bytes when the provider
-/// gave none, and lost bytes are a `blob_missing` problem.
+/// gave none, lost bytes are a `blob_missing` problem, and the versions
+/// a conversation left fold in as `<details class="branch">`.
 pub const LAYOUT_VERSION: u32 = 13;
 
 /// What every chat-common provider declares through
@@ -457,11 +458,31 @@ fn render_markdown(
 
     let first_unread = doc.items.iter().position(|it| it.unread);
     let mut sections = vec![Section::unkeyed(s)];
+    let mut open_branches: Vec<&str> = Vec::new();
     let mut i = 0;
     while i < doc.items.len() {
+        let item = &doc.items[i];
+        let shared = open_branches
+            .iter()
+            .zip(&item.branch)
+            .take_while(|(open, b)| **open == b.as_str())
+            .count();
+        while open_branches.len() > shared {
+            open_branches.pop();
+            sections.push(Section::unkeyed("</details>\n\n".to_string()));
+        }
+        while open_branches.len() < item.branch.len() {
+            let depth = open_branches.len();
+            let inside = doc.items[i..]
+                .iter()
+                .take_while(|it| it.branch.get(..=depth) == item.branch.get(..=depth))
+                .count();
+            sections.push(Section::unkeyed(branch_opener(inside)));
+            open_branches.push(&item.branch[depth]);
+        }
         let run_end = doc.items[i..]
             .iter()
-            .position(|it| !it.is_aside)
+            .position(|it| !it.is_aside || it.branch != item.branch)
             .map_or(doc.items.len(), |n| i + n);
         if run_end > i {
             render_aside_run(
@@ -476,10 +497,23 @@ fn render_markdown(
             i += 1;
         }
     }
+    for _ in open_branches {
+        sections.push(Section::unkeyed("</details>\n\n".to_string()));
+    }
     if let Some(orphans) = render_orphan_reactions(doc) {
         sections.push(Section::unkeyed(orphans));
     }
     sections
+}
+
+/// A version of the conversation the account left, folded like a run of
+/// tool steps: outside the messages' own `<div>`s, so every anchor in it
+/// still works.
+fn branch_opener(messages: usize) -> String {
+    let plural = if messages == 1 { "" } else { "s" };
+    format!(
+        "<details class=\"branch\">\n<summary>✎ Another version · {messages} message{plural}</summary>\n\n"
+    )
 }
 
 /// Who reacted: a chip link where the provider has their handle, so the
@@ -831,14 +865,16 @@ fn build_grid_rows(
             .conversation_name(conversation_name.clone())
             .conversation_uuid(chat.chat_uuid.clone())
             .entire_chat(entire_chat.clone())
-            // What was said: no system events, and none of the asides — a
-            // tool call, a harness's injected preamble — that the page
-            // folds away.
+            // What was said: no system events, none of the asides — a
+            // tool call, a harness's injected preamble — and no version of
+            // the conversation the account left; the page folds those away.
             .body(
                 doc.items
                     .iter()
                     .zip(&bodies)
-                    .filter(|(i, _)| !matches!(i.kind, ItemKind::System) && !i.is_aside)
+                    .filter(|(i, _)| {
+                        !matches!(i.kind, ItemKind::System) && !i.is_aside && i.branch.is_empty()
+                    })
                     .map(|(_, body)| body.as_str())
                     .filter(|body| !body.is_empty())
                     .collect::<Vec<_>>()
@@ -1127,6 +1163,7 @@ mod tests {
                     kind_label: None,
                     source_ref: None,
                     is_aside: false,
+                    branch: Vec::new(),
                     unread: false,
                     recipients: Vec::new(),
                     problems: Vec::new(),
@@ -1300,6 +1337,7 @@ mod tests {
             kind_label: None,
             source_ref: None,
             is_aside: false,
+            branch: Vec::new(),
             unread: false,
             recipients: Vec::new(),
             problems: Vec::new(),
@@ -1553,6 +1591,7 @@ mod tests {
             kind_label: Some("Tool Call".to_string()),
             source_ref: None,
             is_aside: true,
+            branch: Vec::new(),
             unread: false,
             recipients: Vec::new(),
             problems: Vec::new(),
@@ -1746,6 +1785,58 @@ mod tests {
         assert_eq!(problems.len(), 1, "{problems:?}");
         assert_eq!(problems[0].reason, Reason::BlobMissing);
         assert_eq!(problems[0].sample, "away-team-scan.png");
+    }
+
+    /// A version of the conversation the account left is kept, folded
+    /// in where it forked; a version left inside it folds inside it.
+    #[test]
+    fn another_version_folds_where_it_forked() {
+        let mut chat = mk_chat();
+        let base = chat.buckets[0].items[0].clone();
+        let item = |id: &str, branch: &[&str]| NormalizedChatItem {
+            message_uuid: id.to_string(),
+            text: Some(format!("text of {id}")),
+            branch: branch.iter().map(|b| b.to_string()).collect(),
+            reactions: Vec::new(),
+            ..base.clone()
+        };
+        chat.buckets[0].items = vec![
+            item("q-original", &["q-original"]),
+            item("a-first", &["q-original", "a-first"]),
+            item("a-retried", &["q-original"]),
+            item("q-edited", &[]),
+            item("a-edited", &[]),
+        ];
+        let md = join(&render_markdown(
+            &test_profile(),
+            &chat,
+            &chat.buckets[0],
+            "Test",
+        ));
+        let at = |needle: &str| {
+            md.find(needle)
+                .unwrap_or_else(|| panic!("{needle} in {md}"))
+        };
+        assert!(md.contains("Another version · 3 messages"));
+        assert!(md.contains("Another version · 1 message<"));
+        assert!(at("Another version · 3") < at("text of q-original"));
+        assert!(at("text of a-first") < at("text of a-retried"));
+        assert!(at("text of a-retried") < at("text of q-edited"));
+        assert_eq!(md.matches("<details class=\"branch\">").count(), 2);
+        assert_eq!(md.matches("</details>").count(), 2);
+        let between = &md[at("text of a-retried")..at("text of q-edited")];
+        assert!(
+            between.contains("</details>"),
+            "the outer version closes before the edit"
+        );
+
+        let rows = rows_of(&test_profile(), &chat);
+        assert_eq!(rows.len(), 6, "every version keeps its own grid row");
+        assert!(
+            rows[0].preview.starts_with("text of q-edited"),
+            "the document's text is the version shown: {}",
+            rows[0].preview
+        );
     }
 
     /// A provider that does not know an attachment's size gets it from

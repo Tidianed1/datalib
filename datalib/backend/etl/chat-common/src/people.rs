@@ -178,6 +178,7 @@ mod tests {
             kind_label: None,
             source_ref: None,
             is_aside: false,
+            branch: Vec::new(),
             unread: false,
             recipients: Vec::new(),
             problems: Vec::new(),

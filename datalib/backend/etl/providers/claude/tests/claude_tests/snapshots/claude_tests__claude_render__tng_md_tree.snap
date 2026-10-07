@@ -196,7 +196,7 @@ period: all
 display: "Warp Field Recalibration"
 account: "jlpicard@enterprise.starfleet.test"
 external_id: "c0000007-1701-4d00-8000-00000000c007"
-item_count: 4
+item_count: 6
 ---
 
 <h1 class="page-title" data-page-title-uuid="00000000-0000-8731-b6c5-2d66a2c4265c">Warp Field Recalibration <a class="source-link" href="https://claude.ai/chat/c0000007-1701-4d00-8000-00000000c007" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -255,6 +255,27 @@ Sustained warp 9.2 is the rated ceiling; the nacelles tolerate 9.6 for about twe
 3. [Warp coil](https://memory-alpha.test/wiki/Warp_coil) — Memory Alpha
 
 </div>
+
+<details class="branch">
+<summary>✎ Another version · 2 messages</summary>
+
+<div id="m-0b75c9a4-30e0-8bd1-a2ad-d47516561b38" data-section-uuid="0b75c9a4-30e0-8bd1-a2ad-d47516561b38" class="msg msg--claude">
+
+## <span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-18T09:01:00+00:00" title="2369-04-18 09:01:00 UTC">Fri Apr 18th, 2369 at 09:01</time>
+
+Give me the coil efficiencies as a table.
+
+</div>
+
+<div id="m-0b75c9a4-57f0-882c-9555-81a83be27d89" data-section-uuid="0b75c9a4-57f0-882c-9555-81a83be27d89" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:01:10+00:00" title="2369-04-18 09:01:10 UTC">Fri Apr 18th, 2369 at 09:01</time>
+
+This answer was left behind when the question was edited.
+
+</div>
+
+</details>
 
 <div id="m-0b75c9a5-1b40-8e11-8da0-3daa248fd980" data-section-uuid="0b75c9a5-1b40-8e11-8da0-3daa248fd980" class="msg msg--claude">
 

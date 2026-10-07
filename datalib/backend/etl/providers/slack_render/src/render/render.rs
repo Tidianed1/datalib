@@ -303,6 +303,7 @@ fn build_item(
             msg_id.natural_key.clone(),
         )),
         is_aside: false,
+        branch: Vec::new(),
         unread,
         recipients: Vec::new(),
         problems,

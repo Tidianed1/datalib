@@ -709,6 +709,24 @@ code.hljs {
   /* The full instant is in `title`; say so with the cursor. */
   cursor: help;
 }
+/* A version of the conversation the account left (an edited prompt, a
+   regenerated answer), folded in where it forked. Dashed, so it reads as
+   beside the conversation rather than part of it. */
+.chat-body details.branch {
+  margin: 0.4rem 0;
+  border: 1px dashed var(--datalib-border, #d8d8d8);
+  border-radius: calc(var(--datalib-radius) + 2px);
+}
+.chat-body details.branch > summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--datalib-muted, #94a3b8);
+  padding: 0.35rem 0.6rem;
+}
+.chat-body details.branch[open] {
+  padding: 0 0.5rem 0.25rem;
+}
+
 /* A run of adjacent tool steps, folded into one line until asked for. */
 .chat-body details.tool-group {
   margin: 0.35rem 0;
@@ -1612,6 +1630,17 @@ coeffs = np.polyfit(x, y, <span class="hljs-number">2</span>)
 <li><a href="https://memory-alpha.test/wiki/Warp_coil">Warp coil</a> — Memory Alpha</li>
 </ol>
 </div>
+<details class="branch">
+<summary>✎ Another version · 2 messages</summary>
+<div id="m-0b75c9a4-30e0-8afe-869a-f421df2f8c6a" data-section-uuid="0b75c9a4-30e0-8afe-869a-f421df2f8c6a" class="msg msg--claude">
+<h2><span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-18T09:01:00+00:00" title="2369-04-18 09:01:00 UTC">Fri Apr 18th, 2369 at 09:01</time></h2>
+<p>Give me the coil efficiencies as a table.</p>
+</div>
+<div id="m-0b75c9a4-57f0-800d-b41c-fc03ecd89b29" data-section-uuid="0b75c9a4-57f0-800d-b41c-fc03ecd89b29" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:01:10+00:00" title="2369-04-18 09:01:10 UTC">Fri Apr 18th, 2369 at 09:01</time></h2>
+<p>This answer was left behind when the question was edited.</p>
+</div>
+</details>
 <div id="m-0b75c9a5-1b40-816e-a33e-acede3e6771e" data-section-uuid="0b75c9a5-1b40-816e-a33e-acede3e6771e" class="msg msg--claude">
 <h2><span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-18T09:02:00+00:00" title="2369-04-18 09:02:00 UTC">Fri Apr 18th, 2369 at 09:02</time></h2>
 <p>Write me a script that checks these coil readings.</p>

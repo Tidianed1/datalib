@@ -14,13 +14,13 @@ An API-fetched payload goes through
 out of the store; an export-ingested one is already that shape. Either
 way one parser reads it (`src/render/parse.rs`).
 
-A conversation's messages are a tree, because an edited prompt starts
-a branch: each names its `parent_message_uuid`. Render walks
-`current_leaf_message_uuid → parent` from the leaf to the root, so the
-page shows the branch the user last saw; a conversation with no usable
-chain — a bulk export may carry no leaf, and a parent the payload lacks
-breaks it — falls back to every message in `(created_at,
-message_uuid)` order.
+A conversation's messages are a tree, because an edited prompt or a
+retried answer starts a branch: each names its `parent_message_uuid`.
+The page reads the branch ending at `current_leaf_message_uuid`, the
+one the user last saw, and every other version is folded in, collapsed,
+where it forked (chat-common's `branches::reading_order`; see its
+README). A conversation with no usable leaf (a bulk export may carry
+none) reads every message in `(created_at, message_uuid)` order.
 
 Each message becomes one item whose `kind` comes from its sender: `User
 Input` for `human`, `LLM Response` for `assistant` (authored by the
