@@ -641,6 +641,26 @@ fn manual_e2e_live_sync_golden() {
     });
 
     // ── Second run: incrementality check ──────────────────────────────
+    let ingest_steps: Vec<String> = stanzas
+        .iter()
+        .filter(|s| data_root.join(s).join("ingest").is_dir())
+        .map(|s| format!("{s}/ingest"))
+        .collect();
+    assert!(
+        !ingest_steps.is_empty(),
+        "no <group>/ingest under {}",
+        data_root.display()
+    );
+    let ingest_stores_at = |data_root: &Path| -> Vec<StoreAtCommit> {
+        ingest_steps
+            .iter()
+            .map(|step| data_root.join(step).join("entities.doltlite_db"))
+            .filter(|p| p.is_file())
+            .map(|p| StoreAtCommit::head(data_root, &p))
+            .collect()
+    };
+    let stores_before_run2 = ingest_stores_at(&data_root);
+
     let now2 = "2026-05-21T18:05:00Z";
     let run2 = run_pipeline(&bin, &cfg_path, &run_root, now2, &[]);
     assert!(
@@ -652,6 +672,21 @@ fn manual_e2e_live_sync_golden() {
     let summary2 = run2.run_summary().expect("run 2 run_summary");
     assert_step_statuses_ok(&summary2);
     assert_qmd_steps_follow_their_render(&summary2);
+
+    // Run 1's problems are all still standing minutes later, and a problem
+    // recorded again unchanged keeps its row, stamps and all, so run 2
+    // must leave every store's `problems` table as it found it. A row
+    // here is either a stamp moving on every sync again or an upstream
+    // that changed what the problem says; the scope key says which one.
+    let problems_moved: Vec<String> = stores_before_run2
+        .iter()
+        .filter_map(StoreAtCommit::problems_moved_to_head)
+        .collect();
+    assert!(
+        problems_moved.is_empty(),
+        "run 2 changed problems that were standing since run 1:\n{}",
+        problems_moved.join("\n")
+    );
 
     // The incrementality signal comes from each stanza's own `sync_runs`
     // table, not the runner's summary. `strip_volatile_for_incrementality`
@@ -679,22 +714,7 @@ fn manual_e2e_live_sync_golden() {
     // every content table. Re-fetching an unchanged upstream object
     // must land identical bytes at the same key, so a row that differs
     // is per-fetch bookkeeping leaking into a content payload.
-    let ingest_steps: Vec<String> = stanzas
-        .iter()
-        .filter(|s| data_root.join(s).join("ingest").is_dir())
-        .map(|s| format!("{s}/ingest"))
-        .collect();
-    assert!(
-        !ingest_steps.is_empty(),
-        "no <group>/ingest under {}",
-        data_root.display()
-    );
-    let stores_before: Vec<StoreAtCommit> = ingest_steps
-        .iter()
-        .map(|step| data_root.join(step).join("entities.doltlite_db"))
-        .filter(|p| p.is_file())
-        .map(|p| StoreAtCommit::head(&data_root, &p))
-        .collect();
+    let stores_before = ingest_stores_at(&data_root);
 
     let now3 = "2026-05-21T18:10:00Z";
     let reset_all = ingest_steps.join(",");
@@ -740,9 +760,9 @@ fn manual_e2e_live_sync_golden() {
     );
 }
 
-/// One raw store and the commit it was at before run 3's reset; what
-/// the store's own diff says moved between then and `HEAD` is the
-/// content-stability finding.
+/// One raw store and the commit it was at before a run; what the store's
+/// own diff says moved between then and `HEAD` is the finding — its
+/// problems across run 2, its content across run 3's reset.
 struct StoreAtCommit {
     name: String,
     path: PathBuf,
@@ -780,6 +800,49 @@ impl StoreAtCommit {
             commit,
             tables,
         }
+    }
+
+    /// The `problems` rows that changed between this commit and `HEAD`,
+    /// by scope key; `None` when none did.
+    fn problems_moved_to_head(&self) -> Option<String> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime for store diff");
+        rt.block_on(async {
+            use sqlx::Row;
+
+            let pool = open_readonly(&self.path).await;
+            let has_problems: Option<i64> = sqlx::query_scalar(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='problems'",
+            )
+            .fetch_optional(&pool)
+            .await
+            .expect("read sqlite_master");
+            if has_problems.is_none() {
+                pool.close().await;
+                return None;
+            }
+            let rows = sqlx::query(
+                "SELECT diff_type, COALESCE(to_scope_key, from_scope_key) AS scope_key \
+                   FROM dolt_diff_problems WHERE from_ref = ? AND to_ref = 'HEAD' \
+                  ORDER BY scope_key",
+            )
+            .bind(&self.commit)
+            .fetch_all(&pool)
+            .await
+            .unwrap_or_else(|e| panic!("{}#problems: dolt_diff_problems: {e}", self.name));
+            pool.close().await;
+            let moved: Vec<String> = rows
+                .iter()
+                .map(|r| {
+                    let kind: String = r.get("diff_type");
+                    let key: Option<String> = r.get("scope_key");
+                    format!("{kind} {}", key.unwrap_or_default())
+                })
+                .collect();
+            (!moved.is_empty()).then(|| format!("{}#problems: {}", self.name, moved.join(", ")))
+        })
     }
 
     fn content_drift_to_head(&self) -> Vec<String> {
@@ -1519,6 +1582,13 @@ fn contacts_for_snapshot(mut dump: Value, contacts: &[MadeContact]) -> Value {
         }
     }
     walk(&mut dump, contacts);
+    // These tables are keyed by the random id, so the store's order is
+    // random too; re-sort on the names that replaced it.
+    for table in ["contacts", "members", "photos"] {
+        if let Some(Value::Array(rows)) = dump.get_mut(table) {
+            rows.sort_by_cached_key(|r| r.to_string());
+        }
+    }
     dump
 }
 
