@@ -157,6 +157,9 @@ pub struct FetchSummary {
     /// configured `since`. Not counted in `skipped` (which means
     /// "in scope and already up to date") or `total`.
     pub out_of_scope: usize,
+    /// Orgs whose `capabilities` leave out `chat` (an API-console org):
+    /// not asked for anything.
+    pub non_chat_orgs: usize,
     pub forbidden_orgs: usize,
     /// Conversations an org's complete listing did not name — deleted on
     /// claude.ai. Never counts rows a `claude_export` ingest wrote (those
@@ -335,23 +338,41 @@ impl Ctx<'_> {
         );
     }
 
-    /// One row per org this credential cannot read, keyed
-    /// `listing:org:<name>`, so the Manage row says why a whole org is
-    /// missing.
+    /// One row per org this credential cannot read, so the Manage row
+    /// says why a whole org is missing. Keyed by the org's uuid, since
+    /// two orgs of one account can share a name.
     fn refused_orgs(&self) -> Vec<RunProblem> {
-        let org = |name: &String| {
+        let org = |(uuid, name): (&String, &String)| {
             RunProblem::forbidden(
-                &format!("org:{name}"),
-                "this org refuses the credential's requests (conversations and projects); \
-                 nothing from it is mirrored",
+                &format!("org:{uuid}"),
+                format!(
+                    "the org {name:?} refuses the credential's requests (conversations and \
+                     projects); nothing from it is mirrored"
+                ),
             )
         };
         self.forbidden_orgs
             .lock()
             .unwrap()
-            .values()
+            .iter()
             .map(org)
             .collect()
+    }
+
+    /// The orgs worth walking: every one but those whose capabilities
+    /// say they have no chat.
+    fn chat_orgs(&self, orgs: Vec<Value>, s: &mut FetchSummary) -> Vec<Value> {
+        let (skipped, walked): (Vec<Value>, Vec<Value>) = orgs.into_iter().partition(lacks_chat);
+        for org in &skipped {
+            info!(
+                event = "claude_org_not_chat",
+                org = %org_identity(org).map(|(_, name)| name).unwrap_or_default(),
+                capabilities = %org.get("capabilities").cloned().unwrap_or_default(),
+                "this org has no chat (an API-console org); not walking it"
+            );
+        }
+        s.non_chat_orgs = skipped.len();
+        walked
     }
 
     async fn drain<T: Send>(
@@ -514,8 +535,10 @@ impl Ctx<'_> {
                     continue;
                 }
                 Err(e) => {
-                    self.found
-                        .listing(&format!("projects org:{org_name}"), e.to_string());
+                    self.found.listing(
+                        &format!("projects org:{org_uuid}"),
+                        format!("org {org_name:?}: {e}"),
+                    );
                     s.errors += 1;
                     unlisted_orgs += 1;
                     continue;
@@ -821,8 +844,10 @@ impl Ctx<'_> {
                 }
                 // Not pruned: it never reaches `listings_by_org`.
                 Err(e) => {
-                    self.found
-                        .listing(&format!("conversations org:{org_name}"), e.to_string());
+                    self.found.listing(
+                        &format!("conversations org:{org_uuid}"),
+                        format!("org {org_name:?}: {e}"),
+                    );
                     every_org_listed = false;
                     failed = Some(e.to_string());
                     continue;
@@ -978,6 +1003,7 @@ async fn phases(ctx: &Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
         .transpose()
         .with_context(|| format!("sync.since {:?}", ctx.opts.since))?;
     let orgs = ctx.orgs().await?;
+    let orgs = ctx.chat_orgs(orgs, s);
     ctx.users().await?;
     // Projects come before the conversation walk — the `conv_uuids` one
     // too — so a rename lands in the same run as the conversations that
@@ -1264,6 +1290,15 @@ pub(crate) fn parse_conversation(
     })
 }
 
+/// An org whose `capabilities` list is there and leaves out `chat` — an
+/// API-console org — answers 403 to every chat and project request. One
+/// with no list, or something other than a list, is walked as before.
+fn lacks_chat(org: &Value) -> bool {
+    org.get("capabilities")
+        .and_then(Value::as_array)
+        .is_some_and(|caps| !caps.iter().any(|c| c.as_str() == Some("chat")))
+}
+
 fn org_identity(org: &Value) -> Option<(&str, String)> {
     let uuid = org.get("uuid").and_then(Value::as_str)?;
     let name = match org.get("name").and_then(Value::as_str) {
@@ -1485,6 +1520,20 @@ mod tests {
         let ids: Vec<&str> = write.iter().map(|p| p.uuid.as_str()).collect();
         assert_eq!(ids, ["p-2", "p-3"]);
         assert_eq!(skipped, 1);
+    }
+
+    /// An API-console org 403s every chat listing; it read as a refused
+    /// work org. Only a capabilities list that is there and lacks `chat`
+    /// skips an org: one with no list, or a malformed one, is walked.
+    #[test]
+    fn only_an_org_whose_capabilities_lack_chat_is_skipped() {
+        let caps = |v: Value| json!({"uuid": "o1", "name": "Starfleet", "capabilities": v});
+        assert!(lacks_chat(&caps(json!(["api", "customer_terms:standard"]))));
+        assert!(lacks_chat(&caps(json!([]))));
+        assert!(!lacks_chat(&caps(json!(["chat", "raven"]))));
+        assert!(!lacks_chat(&json!({"uuid": "o1", "name": "Starfleet"})));
+        assert!(!lacks_chat(&caps(json!("api"))));
+        assert!(!lacks_chat(&caps(Value::Null)));
     }
 
     // ── unordered bags from the API ──────────────────────────────────
