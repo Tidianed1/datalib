@@ -766,7 +766,7 @@ impl IndexedMarkdownStore {
         // is the whole reason the store stamps these rather than the
         // renderer: a renderer that set both timestamps to "now" every
         // run would make `first_seen_at_utc` a synonym for
-        // `last_seen_at_utc`, and "this has been broken since Tuesday"
+        // `changed_at_utc`, and "this has been broken since Tuesday"
         // would be unanswerable.
         let mut seen: HashMap<String, ProblemRow> = HashMap::new();
         for r in sqlx::query("SELECT * FROM problems WHERE scope_kind = ? AND scope_key = ?")

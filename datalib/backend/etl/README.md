@@ -441,6 +441,17 @@ made, and its test fails until one is added. The app stores' rungs
 (`core/src/app_store_migrate.rs`) are applied by `AppStore::open`
 itself rather than through `open_migrating`.
 
+**The shared ladder.** A table every store holds rather than one an
+owner declares — `problems`, in every raw and render store — climbs
+the framework's ladder, `doltlite_raw::SHARED_LADDER`, counted by
+`_datalib_meta.shared_schema_version`. Every store `doltlite_raw` opens
+climbs it, before its owner's ladder, each rung committed as
+`migrate shared v<n>: <name>`. A rung checks the shape it changes,
+since a store may not hold the table; a new store is created at the
+top. Its first rung renamed `problems.last_seen_at_utc` to
+`changed_at_utc`. The test is the owner ladder's shape, once per kind
+of store (`the_shared_ladder_carries_problems_across_its_rename`).
+
 A rung that adds a table the download fills from upstream creates the
 table itself and fills it from what the store already holds (contacts'
 `contact_group_members`). Left to the DDL, the new table would clear

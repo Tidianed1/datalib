@@ -475,7 +475,13 @@ pub async fn open_index(db_path: &Path) -> Result<SqlitePool> {
         .await
         .with_context(|| format!("open the grid index at {}", db_path.display()))?;
     init_schema(&pool).await?;
-    datalib_store_meta::write(&pool, StoreKind::GridIndex, &schema_hash(), 0)
+    // Its `problems` is built in this shape, so it starts at the shared
+    // ladder's top.
+    let versions = datalib_store_meta::Versions {
+        schema: 0,
+        shared: datalib_store_meta::ladder::top(datalib_etl::doltlite_raw::SHARED_LADDER),
+    };
+    datalib_store_meta::write(&pool, StoreKind::GridIndex, &schema_hash(), versions)
         .await
         .context("write _datalib_meta for the grid index")?;
     datalib_etl::doltlite_raw::commit_run(&pool, "schema: grid index")

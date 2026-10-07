@@ -31,7 +31,10 @@ pub enum ProblemColumn {
     Rule,
     ItemUuid,
     FirstSeenAtUtc,
-    LastSeenAtUtc,
+    /// Still read as `last_seen_at_utc`, the column's old name, which a
+    /// saved sort may hold.
+    #[strum(to_string = "changed_at_utc", serialize = "last_seen_at_utc")]
+    ChangedAtUtc,
     ScopeKind,
     ScopeKey,
     Path,
@@ -73,7 +76,7 @@ impl View for ProblemColumn {
             ProblemColumn::Rule => same(P::Rule),
             ProblemColumn::ItemUuid => same(P::ItemUuid),
             ProblemColumn::FirstSeenAtUtc => text(P::FirstSeenAtUtc),
-            ProblemColumn::LastSeenAtUtc => text(P::LastSeenAtUtc),
+            ProblemColumn::ChangedAtUtc => text(P::ChangedAtUtc),
             ProblemColumn::ScopeKind => same(P::ScopeKind),
             ProblemColumn::ScopeKey => same(P::ScopeKey),
             ProblemColumn::Path => text(P::Path),
@@ -139,9 +142,9 @@ mod tests {
     /// `before:`/`after:` bound when a problem last changed; there is no
     /// `is:` and no qmd here.
     #[test]
-    fn a_range_is_the_last_seen_stamp() {
+    fn a_range_is_the_changed_stamp() {
         let (sql, _) = build_where(&parse("after:2025-01-01T00:00:00Z"));
-        assert_eq!(sql, " WHERE last_seen_at_utc > ?");
+        assert_eq!(sql, " WHERE changed_at_utc > ?");
         assert!(parse("is:document").refusal().is_some());
         assert!(parse("qmd:tea").refusal().is_some());
     }

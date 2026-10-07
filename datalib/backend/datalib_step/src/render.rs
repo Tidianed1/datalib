@@ -775,7 +775,7 @@ fn fetch_problems_of(
                 let raw = ProblemRow::from_row(r)?;
                 Ok(ProblemRow {
                     first_seen_at_utc: raw.first_seen_at_utc.clone(),
-                    last_seen_at_utc: raw.last_seen_at_utc.clone(),
+                    changed_at_utc: raw.changed_at_utc.clone(),
                     tz_offset: raw.tz_offset.clone(),
                     ..ProblemRow::new(
                         source_id,

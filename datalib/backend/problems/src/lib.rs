@@ -311,8 +311,8 @@ impl Problem {
     primary_key = "problem_uuid",
     // The search bar's keys are on the columns they filter.
     search(
-        order = "last_seen_at_utc desc, problem_uuid asc",
-        range = "last_seen_at_utc"
+        order = "changed_at_utc desc, problem_uuid asc",
+        range = "changed_at_utc"
     )
 )]
 pub struct ProblemRow {
@@ -375,8 +375,8 @@ pub struct ProblemRow {
     /// again unchanged keeps this stamp, so a standing problem changes
     /// nothing in the store. Also stamped by the store.
     #[col(sql = "VARCHAR(40)")]
-    pub last_seen_at_utc: String,
-    /// The offset the store's clock was in at `last_seen_at_utc`.
+    pub changed_at_utc: String,
+    /// The offset the store's clock was in at `changed_at_utc`.
     #[col(sql = "VARCHAR(8)")]
     pub tz_offset: Option<String>,
     /// The `RENDER_VERSION` of the renderer that recorded it, so a row
@@ -425,7 +425,7 @@ impl ProblemRow {
             rule: problem.rule,
             sample: problem.sample,
             first_seen_at_utc: String::new(),
-            last_seen_at_utc: String::new(),
+            changed_at_utc: String::new(),
             tz_offset: None,
             render_version: render_version.map(i64::from),
         }
@@ -443,21 +443,21 @@ impl ProblemRow {
     ) -> Self {
         let unstamped = |r: &ProblemRow| ProblemRow {
             first_seen_at_utc: String::new(),
-            last_seen_at_utc: String::new(),
+            changed_at_utc: String::new(),
             tz_offset: None,
             ..r.clone()
         };
         match earlier {
             Some(e) if unstamped(e) == unstamped(&self) => ProblemRow {
                 first_seen_at_utc: e.first_seen_at_utc.clone(),
-                last_seen_at_utc: e.last_seen_at_utc.clone(),
+                changed_at_utc: e.changed_at_utc.clone(),
                 tz_offset: e.tz_offset.clone(),
                 ..self
             },
             _ => ProblemRow {
                 first_seen_at_utc: earlier
                     .map_or_else(|| now_utc.to_string(), |e| e.first_seen_at_utc.clone()),
-                last_seen_at_utc: now_utc.to_string(),
+                changed_at_utc: now_utc.to_string(),
                 tz_offset: tz_offset.map(str::to_string),
                 ..self
             },
@@ -491,7 +491,7 @@ impl ProblemRow {
             rule: r.try_get("rule")?,
             sample: r.try_get("sample")?,
             first_seen_at_utc: r.try_get("first_seen_at_utc")?,
-            last_seen_at_utc: r.try_get("last_seen_at_utc")?,
+            changed_at_utc: r.try_get("changed_at_utc")?,
             tz_offset: r.try_get("tz_offset")?,
             render_version: r.try_get("render_version")?,
         })
@@ -523,7 +523,7 @@ mod tests {
         assert_eq!(
             (
                 first.first_seen_at_utc.as_str(),
-                first.last_seen_at_utc.as_str()
+                first.changed_at_utc.as_str()
             ),
             ("t1", "t1")
         );
@@ -534,7 +534,7 @@ mod tests {
         assert_eq!(
             (
                 changed.first_seen_at_utc.as_str(),
-                changed.last_seen_at_utc.as_str(),
+                changed.changed_at_utc.as_str(),
                 changed.tz_offset.as_deref()
             ),
             ("t1", "t3", Some("-07:00"))

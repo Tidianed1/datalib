@@ -453,7 +453,7 @@ impl At {
         limit: usize,
     ) -> Result<Vec<ProblemRow>, RepoError> {
         let sql = format!(
-            "SELECT * FROM {}{where_sql} ORDER BY last_seen_at_utc DESC, problem_uuid LIMIT ?",
+            "SELECT * FROM {}{where_sql} ORDER BY changed_at_utc DESC, problem_uuid LIMIT ?",
             self.problems
         );
         // Audited: the table name is a literal; `where_sql` splices only

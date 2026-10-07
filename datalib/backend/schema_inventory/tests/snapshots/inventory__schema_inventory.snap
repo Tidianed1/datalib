@@ -25,7 +25,7 @@ problems
     rule
     sample
     first_seen_at_utc
-    last_seen_at_utc
+    changed_at_utc
     tz_offset
     render_version
 sync_runs
@@ -1877,7 +1877,7 @@ problems
     rule
     sample
     first_seen_at_utc
-    last_seen_at_utc
+    changed_at_utc
     tz_offset
     render_version
 render_cursor
