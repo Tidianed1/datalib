@@ -1,5 +1,6 @@
 // The source catalog the "+ Data Source" picker renders, and the form
 // descriptors the wizard fills in. Before adding a source here, read
+// docs/dev/wizard_design.md (how a form is laid out and worded),
 // docs/dev/config_model.md (what the form writes) and
 // docs/dev/wizard_file_pickers.md (a path field offers a native picker).
 
@@ -1124,7 +1125,7 @@ export const CATALOG: CatalogEntry[] = [
         target: "vcf.path",
         label: "Contacts folder",
         help:
-          "A folder of .vcf files, from Google Contacts, iCloud or a phone. Folders inside it " +
+          "A folder of .vcf files, from Google Contacts, iCloud or a phone: ~/Downloads/contacts, say. Folders inside it " +
           "are read too. A file may hold one contact or a whole address book.",
       },
     ],
@@ -1232,7 +1233,7 @@ export const CATALOG: CatalogEntry[] = [
         target: "export.path",
         label: "Export folder",
         help:
-          "The folder you unpacked the Claude export into: the one holding conversations.json. " +
+          "The folder you unpacked the Claude export into: the one holding conversations.json, ~/Downloads/claude-export say. " +
           "The export is a complete snapshot: a conversation it no longer mentions is dropped " +
           "from the copy.",
       },
@@ -1352,7 +1353,7 @@ export const CATALOG: CatalogEntry[] = [
         label: "Takeout folder",
         help:
           "The unzipped export: the Takeout folder holding Google Chat, Voice, YouTube and " +
-          "YouTube Music and the rest. Gmail is not read here: its .mbox is an email source of " +
+          "YouTube Music and the rest, ~/Downloads/Takeout say. Gmail is not read here: its .mbox is an email source of " +
           "its own.",
       },
       {
@@ -1464,7 +1465,7 @@ export const CATALOG: CatalogEntry[] = [
         target: "export.path",
         label: "Export folder",
         help:
-          'The unzipped "Get a copy of your data" export: the folder of CSV files. Every CSV in' +
+          'The unzipped "Get a copy of your data" export: the folder of CSV files, ~/Downloads/LinkedInDataExport say. Every CSV in' +
           " it is read.",
       },
       {
@@ -1597,7 +1598,7 @@ export const CATALOG: CatalogEntry[] = [
         label: "Backup folder",
         help:
           "The folder the Android app SMS Backup & Restore writes its sms-*.xml and calls-*.xml" +
-          " files to, copied off the phone. The path of a single .xml file, typed in, works " +
+          " files to, copied off the phone: ~/Documents/SMSBackupRestore, say. The path of a single .xml file, typed in, works " +
           "too.",
       },
     ],

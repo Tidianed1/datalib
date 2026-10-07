@@ -6,7 +6,7 @@ that keeps credentials encrypted on the machine and puts them on
 requests for us. A downloader never sees a token: it runs
 `latchkey curl <url>`, and latchkey adds the header or cookie that
 service needs. This page is what you need to know before touching a
-sign-in, the wizard's Connection section, or a provider's HTTP client.
+sign-in, the wizard's account row, or a provider's HTTP client.
 
 ## How datalib runs it
 
@@ -100,7 +100,7 @@ Three more rules follow from that:
 
 ### What the wizard does with this
 
-The Connection section has one account box per source, and it behaves
+The account row has one account box per source, and it behaves
 the way the service names accounts (`ServiceInfo.account_naming`, read
 off latchkey's `type` and whether the service has a browser login):
 
