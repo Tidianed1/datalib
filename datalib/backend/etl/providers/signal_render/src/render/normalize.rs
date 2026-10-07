@@ -5,7 +5,7 @@
 //! its parse output into the normalized types instead, so one renderer
 //! serves it and the seven other chat sources alike.
 
-use datalib_contact_schema::{ContactHandle, ContactKind, DatalibContact};
+use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact};
 use datalib_handle::Handle;
 use std::collections::HashMap;
 
@@ -197,7 +197,7 @@ fn contacts_of(
     recipients: Lookup<'_, HashMap<String, ParsedRecipient>>,
     items: &[ParsedChatItem],
     source_id: &str,
-) -> Vec<DatalibContact> {
+) -> Vec<NormalizedContact> {
     let mut seen = std::collections::HashSet::new();
     items
         .iter()
@@ -207,7 +207,7 @@ fn contacts_of(
         .filter_map(|r| {
             let handles = handles_of(r);
             let first = handles.first()?;
-            let mut c = DatalibContact::new(source_id, first.as_str(), ContactKind::Person);
+            let mut c = NormalizedContact::new(source_id, first.as_str(), ContactKind::Person);
             c.names = r.display_name.iter().cloned().collect();
             c.handles = handles.into_iter().map(ContactHandle::of).collect();
             Some(c)

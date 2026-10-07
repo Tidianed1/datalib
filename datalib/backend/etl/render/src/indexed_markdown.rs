@@ -1389,11 +1389,11 @@ mod tests {
     /// they had, and a re-render that no longer names someone drops them —
     /// rows and handles both — the way a re-render drops stale edges.
     fn source_contacts_travel_with_their_document() {
-        use datalib_contact_schema::{ContactHandle, ContactKind, DatalibContact, Seen};
+        use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact, Seen};
         let td = tempfile::tempdir().unwrap();
         let st = store(td.path());
         let mut riker =
-            DatalibContact::new("src", "email:riker@enterprise.org", ContactKind::Person);
+            NormalizedContact::new("src", "email:riker@enterprise.org", ContactKind::Person);
         riker.names = vec!["Will Riker".into()];
         riker.handles = vec![
             ContactHandle::email(None, "riker@enterprise.org"),

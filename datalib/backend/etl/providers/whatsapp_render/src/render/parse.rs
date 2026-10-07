@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use datalib_contact_schema::{ContactHandle, ContactKind, DatalibContact};
+use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact};
 use datalib_etl::blob_cas::{self, BlobBundle};
 use datalib_etl::doltlite_raw::table_exists;
 use datalib_etl::periodize::Period;
@@ -686,7 +686,7 @@ impl JidNames {
     /// entry gives, the name they gave themselves, their company and
     /// title, keyed by their number. `None` for a jid with no handle
     /// or no entry. The reads are the ones [`JidNames::label`] declares.
-    fn contact(&self, jid: &str, source_id: &str) -> Option<DatalibContact> {
+    fn contact(&self, jid: &str, source_id: &str) -> Option<NormalizedContact> {
         let handle = self.handle(jid)?;
         // Under the jid and, for a linked id, its number, as `label` reads.
         let phone = self.phone_jid.get(jid).map(String::as_str);
@@ -706,7 +706,7 @@ impl JidNames {
                 .filter(|v| !v.is_empty())
                 .map(String::from)
         };
-        let mut c = DatalibContact::new(source_id, handle.as_str(), ContactKind::Person);
+        let mut c = NormalizedContact::new(source_id, handle.as_str(), ContactKind::Person);
         let mut push_name = |name: Option<String>| {
             if let Some(name) = name {
                 if !c.names.contains(&name) {

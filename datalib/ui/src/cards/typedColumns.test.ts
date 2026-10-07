@@ -67,7 +67,10 @@ describe("an identity cell that names a person", () => {
       title: null,
       seen: null,
     };
-    const resolved = draw({ who: () => ({ mine, accounts: [] }), canLink: () => true }, riker);
+    const resolved = draw(
+      { who: () => ({ mine, sourceContacts: [] }), canLink: () => true },
+      riker,
+    );
     expect(resolved.classList.contains("handle-resolved")).toBe(true);
     expect(resolved.textContent).toBe("WWilliam T. Riker");
     expect(resolved.querySelector(".handle-initial")?.textContent).toBe("W");

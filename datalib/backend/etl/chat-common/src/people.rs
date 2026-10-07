@@ -2,11 +2,11 @@
 //! them: each author handle, the names the provider showed it under, and
 //! how much it wrote; whom a message went to and who reacted, having
 //! written nothing. Every chat provider gets this with no code of its
-//! own; a provider that knows more says so in its own `DatalibContact`s.
+//! own; a provider that knows more says so in its own `NormalizedContact`s.
 
 use std::collections::BTreeMap;
 
-use datalib_contact_schema::{ContactHandle, ContactKind, DatalibContact, Seen};
+use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact, Seen};
 use datalib_time::IsoOffsetTimestamp;
 
 use crate::types::{NormalizedChatItem, OrphanReactions};
@@ -15,7 +15,7 @@ pub fn baseline_contacts(
     source_id: &str,
     items: &[NormalizedChatItem],
     orphans: &[OrphanReactions],
-) -> Vec<DatalibContact> {
+) -> Vec<NormalizedContact> {
     struct Tally {
         names: Vec<(String, u64)>,
         items: u64,
@@ -80,7 +80,7 @@ pub fn baseline_contacts(
             tally
                 .names
                 .sort_by_key(|(_, count)| std::cmp::Reverse(*count));
-            let mut c = DatalibContact::new(source_id, handle.as_str(), ContactKind::Person);
+            let mut c = NormalizedContact::new(source_id, handle.as_str(), ContactKind::Person);
             c.names = tally.names.into_iter().map(|(n, _)| n).collect();
             c.handles = vec![ContactHandle::of(handle.clone())];
             c.seen = Some(Seen {
@@ -96,17 +96,17 @@ pub fn baseline_contacts(
 }
 
 /// The people a document carries: chat-common's baseline for each author
-/// handle, and where the provider gave its own account of the person
-/// behind one, that account instead — keeping what the baseline counted
-/// and every name it saw. One provider account reached through two
+/// handle, and where the provider gave its own source contact for the person
+/// behind one, that instead — keeping what the baseline counted
+/// and every name it saw. One provider source contact reached through two
 /// handles is one person.
 pub fn document_contacts(
     source_id: &str,
     items: &[NormalizedChatItem],
     orphans: &[OrphanReactions],
-    provider: &[DatalibContact],
-) -> Vec<DatalibContact> {
-    let mut out: BTreeMap<String, DatalibContact> = BTreeMap::new();
+    provider: &[NormalizedContact],
+) -> Vec<NormalizedContact> {
+    let mut out: BTreeMap<String, NormalizedContact> = BTreeMap::new();
     for seen in baseline_contacts(source_id, items, orphans) {
         let theirs = provider.iter().find(|p| {
             p.handles
@@ -196,7 +196,7 @@ mod tests {
             by(None, "Me", 5_000),
         ];
         let got = baseline_contacts("mail", &items, &[]);
-        assert_eq!(got.len(), 2, "the account's own items have no handle");
+        assert_eq!(got.len(), 2, "the owner's own items have no handle");
         let r = &got[0];
         assert_eq!(r.key, "email:riker@enterprise.org");
         assert_eq!(r.source_id, "mail");
@@ -229,7 +229,8 @@ mod tests {
     fn a_providers_account_replaces_the_baseline_and_keeps_its_count() {
         let picard = Handle::slack("T1", "U_PICARD").unwrap();
         let riker = Handle::slack("T1", "U_RIKER").unwrap();
-        let mut profile = DatalibContact::new("ignored", "slack:T1/U_PICARD", ContactKind::Person);
+        let mut profile =
+            NormalizedContact::new("ignored", "slack:T1/U_PICARD", ContactKind::Person);
         profile.names = vec!["Jean-Luc Picard".into()];
         profile.title = Some("Captain".into());
         profile.handles = vec![

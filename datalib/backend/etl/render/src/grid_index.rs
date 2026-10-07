@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use datalib_contact_schema::DatalibContact;
+use datalib_contact_schema::NormalizedContact;
 use datalib_etl::bulk::BulkUpsertable;
 use datalib_etl::doltlite_raw::StoreKind;
 use datalib_etl::stop::StopFlag;
@@ -581,7 +581,7 @@ pub struct RenderedMarkdown {
     pub edges: Vec<EdgeRow>,
     /// The people this document describes or mentions, as its source
     /// describes them; owned by the document like its edges.
-    pub contacts: Vec<DatalibContact>,
+    pub contacts: Vec<NormalizedContact>,
     /// What render could not do while producing this document: records
     /// dropped, fields nulled, lossy rules that fired. Travels with the
     /// document so the rows and the record of what was lost commit together.
@@ -1365,7 +1365,7 @@ async fn upsert_markdown(
 async fn insert_source_contact(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
     markdown_uuid: &str,
-    contact: &DatalibContact,
+    contact: &NormalizedContact,
 ) -> Result<()> {
     let json = serde_json::to_string(contact).context("serialize a source contact")?;
     let seen = contact.seen.as_ref();

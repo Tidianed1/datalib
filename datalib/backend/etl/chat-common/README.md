@@ -56,12 +56,12 @@ because markdown is not parsed inside a block:
 `<span class="msg-recipients">To [Will Riker](mailto:… "…"), <span
 class="msg-recipient">Deanna Troi</span>; Cc …</span>`.
 
-Each document also carries a `DatalibContact` per handle in it
+Each document also carries a `NormalizedContact` per handle in it
 (`src/people.rs`): authors with what they wrote, recipients and
-reactors with nothing, merged with any account the provider gives in
+reactors with nothing, merged with any source contact the provider gives in
 `NormalizedChat::contacts`. A provider needs no code for the baseline.
-What the accounts are and who reads them is `docs/dev/contacts.md`
-§"Accounts".
+What source contacts are and who reads them is `docs/dev/contacts.md`
+§"Source contacts: `NormalizedContact`".
 
 ## Asides: runs of tool steps fold into one `<details>`
 

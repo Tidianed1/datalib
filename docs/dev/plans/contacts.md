@@ -2,7 +2,7 @@
 
 *Proposal (2026-10-01). Phases 1 to 3 are built, and what the tree
 does is [`../contacts.md`](../contacts.md): handles, each source's
-account of a person, the contacts app's store and routes, chips. This
+record of a person, the contacts app's store and routes, chips. This
 plan keeps only what is not built yet. Facts about the tree it cites
 were read when each section was written; check one before relying on
 it.*
@@ -20,7 +20,7 @@ hold here. One more:
 
 | word | means |
 |---|---|
-| **address-book card** | a record the `contacts` *provider* mirrors from CardDAV or a `.vcf`: upstream data, like a Slack profile, and so an account, not a contact. See [The code name](#the-code-name). |
+| **address-book card** | a record the `contacts` *provider* mirrors from CardDAV or a `.vcf`: upstream data, like a Slack profile, and so a source contact, not a contact. See [The code name](#the-code-name). |
 
 ## Handle kinds not made yet
 
@@ -30,7 +30,7 @@ hold here. One more:
 | `linkedin` | the profile URL | LinkedIn |
 | `lightroom-face` | the face tag's name | later |
 
-A new kind is not a rules change; the reference lists the six places
+A new kind is not a rules change; the reference lists the places
 one touches (§"Changing the rules"). Phone numbers written without a
 country code have no handle today; giving them one needs a default
 region, a setting of the applet that the render reads through the
@@ -194,6 +194,28 @@ so it is clear why they matched. Like the rest of search, it is as
 fresh as the last sync. The filter is typed by people, so its spelling
 is kept stable once shipped.
 
+## Option: the contact's name in the markdown
+
+Today no render reads the contacts store, so a document carries only
+the name its source showed, and a link changes no stored document
+(the reference's §"Searching for a person"). Writing the contact's
+name into the chip link instead would let a document say who a handle
+is without the app: `grep` finds Riker's mail under "Riker" whatever
+the sender called him, and qmd's free text does too.
+
+What it would take:
+
+- **Render reads the contacts store**, at one pinned commit, the way
+  it reads its own raw store, and reports which commit it used.
+- **A link renders again only the documents that name its handles.**
+  `row_handles` says which those are; re-rendering every source on
+  each link would make linking expensive enough to avoid.
+- **The chip still draws from the live answer**, so a document
+  rendered before the last link never shows a stale name; the stored
+  name is for readers outside the app.
+
+Not decided; nothing built so far rules it out.
+
 ## Prior art: Thunderbird's global search
 
 Thunderbird's global search index (Gloda, `global-messages-db.sqlite`;
@@ -226,7 +248,7 @@ measurement to ask for.
 ## Order of work
 
 Phases 1 to 3 (handles end to end, the store and its applet and chips,
-`DatalibContact` and each source's account) are built, but for the two
+`NormalizedContact` and the source contacts) are built, but for the two
 pieces of phase 1 above: `row_handles`, and mentions outside Slack.
 
 4. **Managing contacts.** The contact card, merge, undo, groups and
@@ -237,7 +259,10 @@ pieces of phase 1 above: `row_handles`, and mentions outside Slack.
    automatic reaches `main` without a person accepting it; Lightroom
    face tags; a distinguished "Me" contact seeded from each source's
    `account`; a validity range on a link, for a handle reassigned to
-   someone else (`stopped_working_by` is already its end).
+   someone else (`stopped_working_by` is already its end); a stop
+   scoped to some sources, for a number that stopped working for texts
+   but still works on WhatsApp (`tel:` is one handle across apps, so
+   today a stop applies to all of them).
 
 ## The code name
 

@@ -354,7 +354,7 @@ pub struct NormalizedChat {
     /// document carries the ones whose handles its authors wrote under,
     /// merged with what chat-common saw (`people::document_contacts`).
     #[serde(skip)]
-    pub contacts: Vec<datalib_contact_schema::DatalibContact>,
+    pub contacts: Vec<datalib_contact_schema::NormalizedContact>,
     /// Every raw row this chat was built from, found or not — what the
     /// processor declares through `RenderCtx::declare_bucket` so a
     /// change to any of them renders this chat again. Empty only for a

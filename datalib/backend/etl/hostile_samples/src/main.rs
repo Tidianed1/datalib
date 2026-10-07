@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use datalib_contact_schema::{ContactKind, DatalibContact, Detail};
+use datalib_contact_schema::{ContactKind, Detail, NormalizedContact};
 use datalib_etl::progress::Progress;
 use datalib_etl_calendar_common::types::{
     Attendee, EventLink, EventShape, NormalizedEvent, OccurrenceRef, Person,
@@ -438,7 +438,8 @@ fn calendar(scratch: &Path) -> Result<Vec<Document>> {
 
 fn contacts(scratch: &Path) -> Result<Vec<Document>> {
     let mut f = Fields::default();
-    let mut contact = DatalibContact::new("hostile", f.hostile("contact key"), ContactKind::Person);
+    let mut contact =
+        NormalizedContact::new("hostile", f.hostile("contact key"), ContactKind::Person);
     contact.names = vec![f.hostile("contact name")];
     contact.org = Some(f.hostile("contact org"));
     contact.title = Some(f.hostile("contact title"));

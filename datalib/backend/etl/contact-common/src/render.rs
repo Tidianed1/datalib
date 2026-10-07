@@ -18,7 +18,7 @@ use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
 
-use datalib_contact_schema::{is_drawable_photo, ContactHandle, DatalibContact, Medium, Photo};
+use datalib_contact_schema::{is_drawable_photo, ContactHandle, Medium, NormalizedContact, Photo};
 
 use crate::types::ContactDoc;
 
@@ -165,10 +165,10 @@ fn render_one(
 /// image a browser draws. The index's asset route takes
 /// `<markdown_uuid>/<path relative to the page>`.
 fn with_photo_url(
-    contact: &DatalibContact,
+    contact: &NormalizedContact,
     doc_uuid: &str,
     photo_rel: Option<&str>,
-) -> DatalibContact {
+) -> NormalizedContact {
     let drawable = matches!(
         &contact.photo,
         Some(Photo::Inline { content_type, .. }) if is_drawable_photo(content_type)
@@ -201,7 +201,7 @@ fn display_or_id(doc: &ContactDoc) -> &str {
 /// The page's field table and the grid row's text, in one order for
 /// every source: where the person is filed, who they are, how to reach
 /// them, then whatever else the source says.
-pub fn table_rows(contact: &DatalibContact) -> Vec<(String, String)> {
+pub fn table_rows(contact: &NormalizedContact) -> Vec<(String, String)> {
     let mut rows: Vec<(String, String)> = Vec::new();
     rows.extend(
         contact
@@ -430,7 +430,7 @@ mod tests {
     use datalib_contact_schema::{ContactKind, Detail};
 
     fn mk_contact() -> ContactDoc {
-        let mut contact = DatalibContact::new(
+        let mut contact = NormalizedContact::new(
             "linkedin",
             "https://www.linkedin.com/in/jlp",
             ContactKind::Person,
@@ -456,7 +456,7 @@ mod tests {
     /// number with no country code is still on it.
     #[test]
     fn the_table_is_one_order_for_every_source() {
-        let mut c = DatalibContact::new("s", "k", ContactKind::Person);
+        let mut c = NormalizedContact::new("s", "k", ContactKind::Person);
         c.note = Some("two\nlines".into());
         c.details = vec![Detail::new("Address (home)", "1 Main St")];
         c.handles = vec![

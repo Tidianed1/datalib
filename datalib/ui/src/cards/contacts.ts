@@ -1,7 +1,7 @@
 // Who a handle in a document is. A renderer writes a person as a chip
 // link, `[Name](mailto:…)`, which `chipLinks.js` marks as it renders
 // (`a.chip[data-handle]`); this asks the index (`unified_index`'s
-// `/people`: each source's account of the person) and the contacts app
+// `/people`: each source's record of the person) and the contacts app
 // (`datalib_contacts`: the contact a person made, ranked first) and
 // draws the link as a chip. The contacts app is an app of its own
 // (docs/dev/contacts.md): without it chips still say what the
@@ -18,9 +18,9 @@ import { UNIFIED_INDEX } from "@/api";
 
 export const CONTACTS_APPLET = "/applet/datalib_contacts";
 
-/** `datalib_contact_schema::DatalibContact`, hand-kept: a person as one
+/** `datalib_contact_schema::NormalizedContact`, hand-kept: a person as one
  *  source describes them. */
-export type DatalibContact = {
+export type NormalizedContact = {
   source_id: string;
   key: string;
   kind: "person" | "group";
@@ -43,8 +43,8 @@ export type DatalibContact = {
 export type ContactSummary = { contact_id: string; name: string; kind: string };
 
 /** For one handle: the contact a person made, if any, and every source's
- *  account of whoever holds it, ranked. */
-export type Who = { mine: DatalibContact | null; accounts: DatalibContact[] };
+ *  record of whoever holds it, ranked. */
+export type Who = { mine: NormalizedContact | null; sourceContacts: NormalizedContact[] };
 
 // ── Pure rules ─────────────────────────────────────────────────────────
 
@@ -96,12 +96,12 @@ export function sourceLabel(shownAs: string, handle: string): string {
   return suggestedName(shownAs, handle) || shownAs.trim() || handleValue(handle);
 }
 
-export function nameOf(c: DatalibContact): string {
+export function nameOf(c: NormalizedContact): string {
   return c.names[0] ?? c.key;
 }
 
 /** A partial date by which `handle` had stopped working, as `c` records it. */
-export function stoppedBy(c: DatalibContact | null, handle: string): string | null {
+export function stoppedBy(c: NormalizedContact | null, handle: string): string | null {
   return c?.handles.find((h) => h.handle === handle)?.stopped_working_by ?? null;
 }
 
@@ -122,14 +122,14 @@ export type ChipLook = {
 
 /** The photo to lead with: your contact's, else the first source's. */
 function photoOf(who: Who): string | null {
-  return who.mine?.photo_url ?? who.accounts.find((a) => a.photo_url)?.photo_url ?? null;
+  return who.mine?.photo_url ?? who.sourceContacts.find((a) => a.photo_url)?.photo_url ?? null;
 }
 
 /** `canLink` is whether a contacts app is there to link the handle with. */
 export function chipLook(handle: string, shownAs: string, who: Who, canLink: boolean): ChipLook {
-  const { mine, accounts } = who;
+  const { mine, sourceContacts } = who;
   if (!mine) {
-    const text = accounts[0] ? nameOf(accounts[0]) : sourceLabel(shownAs, handle);
+    const text = sourceContacts[0] ? nameOf(sourceContacts[0]) : sourceLabel(shownAs, handle);
     return {
       text,
       ariaLabel: `${text}, ${handleValue(handle)}, not linked to a contact`,
@@ -197,28 +197,28 @@ export function searchQueryFor(handle: string, shownAs: string, who: Who): strin
   return filterToken("author", chipLook(handle, shownAs, who, false).text, false);
 }
 
-const MAX_ACCOUNTS = 4;
+const MAX_SOURCE_CONTACTS = 4;
 const MAX_OTHER_HANDLES = 4;
 
 export function chipTooltip(handle: string, shownAs: string, who: Who, canLink: boolean): string {
-  const { mine, accounts } = who;
+  const { mine, sourceContacts } = who;
   const name = mine
     ? nameOf(mine)
-    : accounts[0]
-      ? nameOf(accounts[0])
+    : sourceContacts[0]
+      ? nameOf(sourceContacts[0])
       : sourceLabel(shownAs, handle);
   const value = handleValue(handle);
   const lines: string[] = value === name ? [name] : [name, value];
   const stopped = stoppedBy(mine, handle);
   if (stopped) lines.push(`Stopped working by ${stopped}`);
   if (shownAs.trim() && shownAs.trim() !== name) lines.push(`Shown here as “${shownAs.trim()}”`);
-  for (const a of accounts.slice(0, MAX_ACCOUNTS)) {
+  for (const a of sourceContacts.slice(0, MAX_SOURCE_CONTACTS)) {
     const items = a.seen ? ` · ${a.seen.items} ${a.seen.items === 1 ? "item" : "items"}` : "";
     lines.push(`${nameOf(a)} in ${a.source_id}${items}`);
   }
   const others = [
     ...new Set(
-      [mine, ...accounts]
+      [mine, ...sourceContacts]
         .flatMap((c) => c?.handles ?? [])
         .filter((h) => h.handle !== handle)
         // An address or a number reads as itself; a Slack user's
@@ -326,7 +326,7 @@ const post = <T>(path: string, body: unknown) =>
 /** `null` when no contacts app is configured. */
 export async function resolveHandles(
   handles: string[],
-): Promise<Record<string, DatalibContact> | null> {
+): Promise<Record<string, NormalizedContact> | null> {
   const r = await fetch(`${CONTACTS_APPLET}/resolve`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -335,19 +335,19 @@ export async function resolveHandles(
   const text = await r.text();
   if (isAbsent(r.status, text)) return null;
   if (!r.ok) throw new Error(`resolve → ${r.status}: ${text}`);
-  return (JSON.parse(text) as { resolved: Record<string, DatalibContact> }).resolved;
+  return (JSON.parse(text) as { resolved: Record<string, NormalizedContact> }).resolved;
 }
 
-/** Every source's account of whoever holds each handle, ranked; a handle
+/** Every source's record of whoever holds each handle, ranked; a handle
  *  no source mentions is absent. */
-export async function peopleFor(handles: string[]): Promise<Record<string, DatalibContact[]>> {
+export async function peopleFor(handles: string[]): Promise<Record<string, NormalizedContact[]>> {
   const r = await fetch(`${UNIFIED_INDEX}/people`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ handles }),
   });
   if (!r.ok) throw new Error(`people → ${r.status}: ${await r.text()}`);
-  return ((await r.json()) as { people: Record<string, DatalibContact[]> }).people;
+  return ((await r.json()) as { people: Record<string, NormalizedContact[]> }).people;
 }
 
 export async function searchContacts(q: string): Promise<ContactSummary[]> {
@@ -381,19 +381,19 @@ export async function setStoppedWorking(handle: string, by: string | null): Prom
 
 // ── Who a handle is, for the whole app ────────────────────────────────
 
-export const NOBODY: Who = { mine: null, accounts: [] };
+export const NOBODY: Who = { mine: null, sourceContacts: [] };
 
 let contactsApp = false;
 
 /** Who each handle is: the contact a person made, if any, and every
- *  source's account of them. One resolver for every document and grid
+ *  source's record of them. One resolver for every document and grid
  *  (`resolver.ts`). */
 export const people = new Resolver<Who>(
   async (handles) => {
-    const [mine, accounts] = await Promise.all([resolveHandles(handles), peopleFor(handles)]);
+    const [mine, sourceContacts] = await Promise.all([resolveHandles(handles), peopleFor(handles)]);
     contactsApp = mine !== null;
     return new Map(
-      handles.map((h) => [h, { mine: mine?.[h] ?? null, accounts: accounts[h] ?? [] }]),
+      handles.map((h) => [h, { mine: mine?.[h] ?? null, sourceContacts: sourceContacts[h] ?? [] }]),
     );
   },
   // The toast dedupes itself, so a page of chips failing says so once.
@@ -503,7 +503,7 @@ export function chipCell(
   if (uri) a.href = uri;
   a.dataset.handle = handle;
   a.dataset.shownAs = shownAs;
-  drawChip(a, chipLook(handle, shownAs, who ?? { mine: null, accounts: [] }, canLink));
+  drawChip(a, chipLook(handle, shownAs, who ?? { mine: null, sourceContacts: [] }, canLink));
   return a;
 }
 
