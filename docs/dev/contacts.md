@@ -4,6 +4,24 @@ How datalib knows that the `riker@enterprise.org` in a mail, the
 `+1 202 555 0101` in a WhatsApp chat and the `U_RIKER` in a Slack
 thread are the same person, and draws them as one chip.
 
+Three things to know before the rest:
+
+- **One shape for a person, made at render time.** Every source keeps
+  its own raw records as it downloaded them. When it renders, it
+  translates what it knows about each person into one shared shape,
+  `NormalizedContact`. Nothing is stored in that shape on the download
+  side.
+- **Your own contacts use the same shape.** A contact you curate in the
+  contacts app is answered as a `NormalizedContact` too, so everything
+  that reads a source's record of a person reads yours the same way.
+- **Linking is after the fact, optional, and sits over the view.** No
+  source and no render knows about your contacts. A document names a
+  person only by a handle (an email address, a phone number, a Slack
+  id). Linking handles to a contact happens later, in the contacts app,
+  and changes how a chip is drawn: its name, photo and menu. Documents,
+  the index and search are untouched by a link (see
+  [Searching for a person](#searching-for-a-person)).
+
 ## The same move chat-common makes
 
 Fourteen chat-like sources (email, Slack, WhatsApp, Signal, Messages,
@@ -20,9 +38,9 @@ entry, and the bare fact that someone wrote in a chat under some name
 all describe a person, each in their source's own shape. Every one of
 them is translated into one neutral shape, `NormalizedContact`
 (`datalib_contact_schema`): what one source knows about one person, in
-terms no source owns. `contact-common` is the
-counterpart of chat-common for the sources that are *about* people: it
-turns a `NormalizedContact` into a document.
+terms no source owns. `contact-common` is the counterpart of
+chat-common for the sources that are *about* people: it turns a
+`NormalizedContact` into a document.
 
 On top of that sit three layers, each of which works without the one
 above it:
@@ -31,8 +49,9 @@ above it:
    normalized identifier, a *handle*, inside the document. The index
    knows handles and never contacts.
 2. **Source contacts.** Every source that knows something about a
-   person says so as a `NormalizedContact`, and the index keeps those rows
-   so it can answer "who holds this handle?" from the sources alone.
+   person says so as a `NormalizedContact`, and the index keeps those
+   rows so it can answer "who holds this handle?" from the sources
+   alone.
 3. **Contacts.** A person links handles to a contact of their own in
    the contacts app, the one store under a data root that nothing can
    rebuild. Its answer ranks above every source's.
@@ -63,6 +82,26 @@ applets and the contacts store all share one definition. A handle is
 email address or a phone number, the handle is `email:` or `tel:`, not a
 per-app kind**, so one link covers every app that reaches a person that
 way. Only an id that is opaque by nature gets a kind of its own.
+
+So WhatsApp, Signal, Messages, SMS backups, Google Voice and an
+address-book card all write the same `tel:+12025550101` for one
+number. What that costs:
+
+- **The handle does not say which app.** The row it sits on does
+  (`source_id`, `provider`), so `author_handle:tel:…` finds a number's
+  messages in every app, and a source filter narrows it.
+- **A number's state is one state across apps.** `stopped_working_by`
+  is on the handle, so a person who keeps WhatsApp on a number their
+  carrier has since given away cannot be marked "stopped for texts,
+  still works on WhatsApp". A number reassigned to someone else is
+  attributed to its first owner everywhere (§"The contacts app").
+- **A chip's URI is `tel:`**, which a browser hands to the phone
+  dialler, whichever app the message came from.
+- **It depends on every source spelling numbers alike.** Only numbers
+  written in international form get a `tel:` handle at all (below).
+  WhatsApp writes a linked id (`…@lid`) as a number only where the
+  backup maps it to one, and Signal writes the account id where it has
+  no number, so the same person can arrive under a second handle.
 
 | kind | value | made by | URI (`Handle::to_uri`) |
 |---|---|---|---|
@@ -349,6 +388,33 @@ Everything is in `datalib/ui/src/cards/`:
 
 A chip ranks what it hears: your contact first, then the source
 contacts as `/people` ranked them, then the text the source showed.
+
+## Searching for a person
+
+Because links sit over the view, search does not see them yet. The
+index knows handles and source contacts; it has never heard of a
+contact. So today there is no way to ask "everything Riker wrote,
+whatever handle he wrote it under". What exists:
+
+- **`author_handle:<handle>`** matches rows whose author is exactly
+  that one handle. A grid's Author chip offers it. One handle is one
+  namespace, so `author_handle:email:riker@enterprise.org` misses his
+  Slack messages. The grammar has no OR, so two handles cannot be
+  asked for at once.
+- **`author:<name>`** is a substring match on the author's name as the
+  source showed it. A document's chip offers it ("Everything from
+  <name>"), with the name the chip shows. It reaches across sources, but
+  only where each one spelled the name the same way, and it also finds
+  anyone else whose name contains it.
+
+The plan, [`plans/contacts.md`](plans/contacts.md) §"Search", puts the
+join in the index rather than the view. A snapshot step renders each
+contact as an ordinary document listing its handles; `grid_index`
+fills `row_handles` (which rows name which handle, as author,
+recipient, reactor or mention); and a `contact:` filter joins a
+contact's document to its handles and those to rows. That join runs at
+query time over tables the last sync built, so search follows a link
+one sync later, while chips follow it at once.
 
 ## What re-renders when
 
