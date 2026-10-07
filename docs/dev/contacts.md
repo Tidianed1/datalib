@@ -399,10 +399,10 @@ contacts as `/people` ranked them, then the text the source showed.
 
 ## Searching for a person
 
-Because links sit over the view, search does not see them yet. The
-index knows handles and source contacts; it has never heard of a
-contact. So today there is no way to ask "everything Riker wrote,
-whatever handle he wrote it under". What exists:
+**Search cannot yet ask "everything from Riker, whatever handle he
+used".** Links sit over the view, so the index knows handles and
+source contacts and has never heard of a contact. What exists today
+covers part of it:
 
 - **`author_handle:<handle>`** matches rows whose author is exactly
   that one handle. A grid's Author chip offers it. One handle is one
@@ -415,14 +415,28 @@ whatever handle he wrote it under". What exists:
   only where each one spelled the name the same way, and it also finds
   anyone else whose name contains it.
 
-The plan, [`plans/contacts.md`](plans/contacts.md) §"Search", puts the
-join in the index rather than the view. A snapshot step renders each
-contact as an ordinary document listing its handles; `grid_index`
-fills `row_handles` (which rows name which handle, as author,
-recipient, reactor or mention); and a `contact:` filter joins a
-contact's document to its handles and those to rows. That join runs at
-query time over tables the last sync built, so search follows a link
-one sync later, while chips follow it at once.
+**The planned join happens in the index, at query time**
+([`plans/contacts.md`](plans/contacts.md) §"Search"):
+
+1. A snapshot step renders each contact as an ordinary document
+   listing its handles.
+2. `grid_index` fills `row_handles`: which rows name which handle, as
+   author, recipient, reactor or mention.
+3. A `contact:` filter joins contact → handles → rows.
+
+**Why a link stays cheap.** No render reads the contacts store, so a
+document holds handles and the names its source showed, never a
+contact. Linking, unlinking or marking a handle stopped changes no
+source's markdown: nothing re-renders, qmd re-indexes nothing, and the
+`row_handles` rows for messages stay as they are, since a message names
+the same handles before and after. Under the plan, what moves is the
+one contact's own document, which the snapshot renders again and qmd
+indexes again, and its handle list; the join picks up the rest when
+it runs. `row_handles` itself is filled from documents, so it can load
+the way `source_contact_handles` does: `grid_index` already reads only
+the documents a source changed since the last index (`dolt_diff`),
+not every document. Search follows a link one sync later; chips follow
+it at once.
 
 ## What re-renders when
 
@@ -433,6 +447,7 @@ one sync later, while chips follow it at once.
 | a provider's handles or source contacts | that provider's `RENDER_VERSION` |
 | the header, the recipients line, or what `people.rs` counts | chat-common's `LAYOUT_VERSION`, which re-renders every chat source |
 | what contact-common writes | the `RENDER_VERSION` of each source that uses it (contacts, linkedin, facebook) |
+| a link, an unlink, a handle marked stopped | nothing: chips redraw, no source re-renders |
 | the contacts store's shape | a rung on `LADDER`; never a reset |
 
 ## Where it is tested
