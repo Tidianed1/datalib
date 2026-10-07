@@ -161,10 +161,10 @@ onBeforeUnmount(() => {
   flush();
 });
 
-// The cards a URL names (a link, a popped-out card), as one tab. A
-// single card with no width (what ↗ writes) fills the tab; several
-// cards, or any width, are a Columns container. The tree, not the URL,
-// is what this layout keeps, so once opened the address goes back to "/".
+// The cards a URL names (a link, a popped-out card), in a Columns
+// container of their own, so what they open lands beside them as it
+// did when the URL was the whole layout. The tree, not the URL, is
+// what this layout keeps, so once opened the address goes back to "/".
 function routeNode(): TreeNode | null {
   const specs = decodeColumns(route.path);
   if (specs.length === 0) return null;
@@ -172,8 +172,7 @@ function routeNode(): TreeNode | null {
     ...makeCard(newCardId(), s.code, s.state),
     basis: s.size != null ? s.size * DEFAULT_COLUMN : null,
   }));
-  const alone = specs.length === 1 && specs[0].size == null;
-  return alone ? nodes[0] : makeBox(newCardId(), "columns", nodes);
+  return makeBox(newCardId(), "columns", nodes);
 }
 
 function openRoute() {

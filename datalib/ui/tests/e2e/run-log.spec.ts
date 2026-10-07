@@ -55,10 +55,10 @@ async function scrollLogToStart(dialog: Locator) {
   await expect(dialog.locator(`${ROWS}[data-row="0"]`)).toBeVisible();
 }
 
-// In a Columns container (the width asks for one), so a line opens
-// beside the log.
+// By a link, which opens the log in a Columns container, so a line
+// opens beside it. (The toolbar's Logs gives the log a tab to itself.)
 async function openServerLog(page: Page) {
-  await page.goto("/logView():1");
+  await page.goto("/logView()");
   const dialog = shownCards(page).filter({ has: page.locator(".rl-panel") });
   await expect(dialog).toBeVisible();
   const scope = dialog.getByLabel("Which run or launch");

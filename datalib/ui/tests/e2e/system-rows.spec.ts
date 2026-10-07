@@ -11,7 +11,6 @@ import {
   pipelineRow,
   rowMenuEntry,
   shownCards,
-  shownTabName,
 } from "./grid-helpers";
 
 test("System and its Logs child: sizes, a Browse that opens the log, no Sync", async ({ page }) => {
@@ -38,5 +37,5 @@ test("System and its Logs child: sizes, a Browse that opens the log, no Sync", a
   await logs.getByRole("button", { name: "Browse the log" }).click();
   const col = shownCards(page).filter({ has: page.locator(".rl-panel") });
   await expect(col).toBeVisible({ timeout: 10_000 });
-  await expect(shownTabName(page)).toHaveText("Log · everything");
+  await expect(col.locator(".ct-card-title")).toHaveText("Log · everything");
 });

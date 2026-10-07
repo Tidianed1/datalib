@@ -31,15 +31,13 @@ export const shownTabName = (page: Page) => page.locator(".ct-tab.is-selected .c
 
 export const SEARCH_ROWS = ".grid-box .slick-row";
 
-/// The search grid on its default query, documents only, in a Columns
-/// container (the width asks for one), so a row's document opens beside
-/// it. `/` opens on the Dashboard card, so a spec about the grid goes here.
-export const GRID = "/gridView():1";
+/// The search grid on its default query, documents only. `/` opens on
+/// the Dashboard card now, so a spec about the grid goes here.
+export const GRID = "/gridView()";
 
 /// The search grid with its query cleared: every row, the messages
-/// inside a document included, in a Columns container as `GRID` is.
-/// `GRID` opens on documents only.
-export const EVERY_ROW = "/gridView():1:q%3D";
+/// inside a document included. `GRID` opens on documents only.
+export const EVERY_ROW = "/gridView()::q%3D";
 
 /// The Manage header's sync button, whichever way it faces: Sync
 /// everything, or Stop everything while anything syncs.

@@ -13,7 +13,6 @@ import {
   nameCell,
   pipelineRow,
   shownCards,
-  shownTabName,
   TABLE_ROWS,
 } from "./grid-helpers";
 
@@ -30,7 +29,7 @@ test("a group's commit history opens from the context menu as a card", async ({ 
 
   const card = shownCards(page).filter({ has: page.locator(".hc") });
   await expect(card).toBeVisible({ timeout: 10_000 });
-  await expect(shownTabName(page)).toHaveText("History · Unified Index");
+  await expect(card.locator(".ct-card-title")).toHaveText("History · Unified Index");
   // Not a source, so nothing here to compare.
   await expect(card.getByText(/right-click to compare/)).toHaveCount(0);
 
@@ -69,11 +68,11 @@ test("a group's commit history opens from the context menu as a card", async ({ 
   ).toBeVisible();
   await page.unroute("**/api/pipeline/history**");
 
-  // The run link opens a log in a tab under the history. Which lines it
-  // shows depends on whether the run store knows the fixture's run, so
-  // only the card is pinned.
+  // The run link opens a log beside the history. Which lines it shows
+  // depends on whether the run store knows the fixture's run, so only
+  // the card is pinned.
   await commit.locator(".hc-run").click();
-  await expect(shownTabName(page)).toHaveText(/^Log/);
+  await expect(page.locator(".ct-main .ct-card-title").last()).toHaveText(/^Log/);
 });
 
 test("an applet row leaves out what an applet cannot do", async ({ page }) => {

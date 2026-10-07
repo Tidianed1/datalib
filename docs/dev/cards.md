@@ -311,10 +311,9 @@ drop what was right of the opener's column and add the chain; a Split or
 Page insert it after the opener's child; Tabs give each card a tab of
 its own, filling it, under the tab of the card before. The outermost
 container is never solidified, so an open always lands somewhere. A
-card opened from the toolbar (Logs, Data sources, a search), or a link
-naming one card, is a tab of its own; a link naming several cards, or
-giving a width (`/gridView():1`), opens them as one tab holding a
-Columns container.
+card opened from the toolbar (Logs, Data sources, a search) is a tab of
+its own. A link opens its cards as one tab holding a Columns container,
+so what they open lands beside them.
 
 **What shows.** Outside edit mode a solidified subtree shows no card
 chrome, so a composite such as the Dashboard (a Page of its five
