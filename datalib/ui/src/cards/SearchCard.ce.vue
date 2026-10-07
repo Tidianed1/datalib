@@ -74,9 +74,11 @@ async function run(keepPick = false) {
     nextOffset.value = page.next_offset;
     sources.value = groups.groups;
     const echo = page.query_echo;
-    notice.value = echo?.qmd_index_missing
-      ? "Nothing has been indexed for search yet, so there is nothing to match your words against. Sync a source first."
-      : (echo?.qmd_error ?? null);
+    notice.value =
+      page.refused?.[0] ??
+      (echo?.qmd_index_missing
+        ? "Nothing has been indexed for search yet, so there is nothing to match your words against. Sync a source first."
+        : (echo?.qmd_error ?? null));
     if (!keepPick || !results.value.some((r) => r.uuid === picked.value?.uuid)) {
       picked.value = results.value[0] ?? null;
     }

@@ -145,6 +145,9 @@ export type RowsResponse<Row> = RowsSpec & {
   // surface a 500. `api.ts` raises each as a toast so the user sees
   // them; the field is omitted when empty (serde `skip_serializing_if`).
   errors?: string[];
+  // Why the query cannot be read as typed (the search's alone). Not an
+  // error: mid-keystroke it is usually a filter not finished yet.
+  refused?: string[];
 };
 
 export type SearchResponse = RowsResponse<SearchRow> & { query_echo: QueryEcho };
@@ -559,6 +562,7 @@ export type GroupsResponse<Row = SearchRow> = {
   qmd_error?: string | null;
   qmd_index_missing?: boolean;
   errors: string[];
+  refused?: string[];
 };
 
 /// The groups the rows of `url` (the search's, by default) fall into by
