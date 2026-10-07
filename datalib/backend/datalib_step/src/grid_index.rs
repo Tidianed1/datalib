@@ -82,9 +82,9 @@ pub async fn run(
     ] {
         progress.metric(name, &[], n as i64);
     }
-    // The index's whole-store counts, the way every render step reports
-    // its own: what the Manage row for the index shows.
-    let counts = datalib_etl_render::grid_index::problem_counts(&pool).await?;
+    // The problems the index recorded itself, the way every step reports
+    // what it found: what the Manage row for the index shows.
+    let counts = datalib_etl_render::grid_index::own_problem_counts(&pool).await?;
     for severity in [Severity::Error, Severity::Warning] {
         progress.metric(
             METRIC,
@@ -102,6 +102,21 @@ pub async fn run(
         .await
         .context("grid_index head")?;
     pool.close().await;
+
+    // Every other source is sealed by now; this one is still a failure,
+    // and the Manage row should say so.
+    if !summary.sources_failed.is_empty() {
+        let failed: Vec<String> = summary
+            .sources_failed
+            .iter()
+            .map(|(source, why)| format!("{source}: {why}"))
+            .collect();
+        anyhow::bail!(
+            "indexed every other source, but could not read {}:\n{}",
+            summary.sources_failed.len(),
+            failed.join("\n")
+        );
+    }
 
     // The dolt commit hash is a faithful content version: HEAD only
     // advances when rows actually changed. Without doltlite

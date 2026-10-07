@@ -36,7 +36,8 @@ use datalib_schema::providers::Provider;
 ///     bits (`datalib_id`'s v8 layout). Every uuid moved, `chat_uuid`
 ///     among them.
 /// v5: the author span carries the author's handle as `data-handle`.
-pub const RENDER_VERSION: u32 = 5;
+/// v6: a `+1` number without ten digits after the 1 has no handle.
+pub const RENDER_VERSION: u32 = 6;
 
 /// Projection for [`BlobBundle::load_many`] over the Voice CAS edge: the
 /// `ref_name` (attachment filename) is the bundle key; `content_type`

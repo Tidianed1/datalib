@@ -509,8 +509,8 @@ impl FailureKind {
 
 /// A step failure. Because steps are incremental, a failed step may
 /// still have committed partial output — `outputs` reports that, so
-/// the scheduler records the new versions even though the step failed
-/// (dependents stay blocked this run; next run sees changed inputs).
+/// the scheduler records the new versions even though the step failed,
+/// and its dependents read them this run.
 #[derive(Debug)]
 pub struct StepError {
     pub kind: FailureKind,

@@ -7,8 +7,9 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use datalib_etl::title::Title;
+use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::html::{escape_md_inline, md_code_span, md_link_dest};
+use datalib_etl_render::title::Title;
 
 use crate::{ordered, ChangeRequest, Comment, ForgeProfile};
 
@@ -168,21 +169,6 @@ fn quote_body(body: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-fn yaml_scalar(s: &str) -> String {
-    if s.is_empty() {
-        return "\"\"".into();
-    }
-    let needs_quote = s
-        .chars()
-        .any(|c| matches!(c, ':' | '#' | '\n' | '"' | '\''))
-        || s != s.trim();
-    if needs_quote {
-        serde_json::to_string(s).unwrap_or_else(|_| s.into())
-    } else {
-        s.into()
-    }
 }
 
 fn yaml_opt(s: Option<&str>) -> String {

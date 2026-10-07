@@ -20,7 +20,7 @@ use axum::{
     Router,
 };
 use datalib_core::repo::{DynAppRepo, RepoError};
-use datalib_dag::config::{owner_only_options, replace_config};
+use datalib_dag::config::owner_only_options;
 use datalib_dag::supervisor::store::RequestRow;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -41,6 +41,8 @@ pub mod lock;
 pub mod logging;
 pub mod loop_guard;
 pub mod manage;
+pub mod plugins;
+pub mod probe;
 pub mod prometheus;
 pub mod remote_media;
 pub mod request_log;
@@ -175,9 +177,11 @@ pub fn router(state: AppState) -> Router {
             "/api/latchkey/connect/{id}/status",
             get(connect::connect_status),
         )
-        .route("/api/probe", post(connect::probe))
+        .route("/api/probe", post(probe::start_probe))
+        .route("/api/probe/{id}", get(probe::probe_status))
         .route("/api/dag", get(get_dag))
         .route("/api/manage/rows", get(manage::get_manage_rows))
+        .route("/api/entities", post(manage::post_entities))
         // Prometheus's own path, so a scrape config needs nothing but the
         // address and the token.
         .route("/metrics", get(prometheus::get_metrics))
@@ -957,7 +961,7 @@ async fn put_config(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
     }
-    if let Err(e) = replace_config(&path, &req.text) {
+    if let Err(e) = datalib_runtime::atomic::write_owner_only(&path, req.text.as_bytes()) {
         tracing::error!("put_config: write {}: {e}", path.display());
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }

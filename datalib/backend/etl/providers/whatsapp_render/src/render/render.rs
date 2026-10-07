@@ -27,7 +27,12 @@ use datalib_schema::providers::Provider;
 /// id carries its stamp in its leading bits (`datalib_id`'s v8 layout).
 /// Every uuid moved, `chat_uuid` among them.
 /// v11: the author span carries the author's handle as `data-handle`.
-pub const RENDER_VERSION: u32 = 11;
+/// v12: a `+1` number without ten digits after the 1 has no handle.
+/// v13: each chat carries its authors' address-book entries as contacts.
+/// v14: a reaction follows the author's rule (the account's own names
+///      nobody; an empty sender is the chat's person), and a reactor gets
+///      their address-book account.
+pub const RENDER_VERSION: u32 = 14;
 
 const SOURCE_LABEL: &str = "WhatsApp";
 

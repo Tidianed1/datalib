@@ -25,6 +25,7 @@
 
 import { parseTOML, getStaticTOMLValue } from "toml-eslint-parser";
 
+import { NAME_IT_HELP } from "./accountNaming";
 import { formatBytes, parseByteSize } from "./byteSize";
 import { catalogForStep } from "./catalog";
 import type { CatalogEntry, Field, FieldPhase, Preset } from "./catalog";
@@ -351,9 +352,14 @@ export function paramsAreRepresentable(
     ...fieldsFor(entry, phase).map((f) => f.target),
     ...presetsFor(entry, phase).map((p) => p.target),
   ]);
-  const unknown = leafPaths(step.params).filter((path) => !known.has(path));
+  const unknown = leafPaths(step.params).filter((path) => !known.has(path) && !INERT.has(path));
   return unknown.length === 0 ? { ok: true } : { ok: false, unknown };
 }
+
+/// Keys a hand-written config may still carry that no longer do anything
+/// (`datalib-dag --check` warns at each). Saving the form drops them,
+/// which is what the warning asks for, so they do not block an edit.
+const INERT = new Set(["common.always_clear_before_ingest"]);
 
 /// A descriptor's presets for one phase. Same default as a field's:
 /// absent means `download`.
@@ -412,8 +418,27 @@ export function fieldPhaseOf(step: ConfiguredStep): FieldPhase {
 /// and defaults to `download`, which is where all but one sit — only
 /// `signal` declares a render knob today, so a render step's form is
 /// usually a name and nothing else.
+///
+/// Every source that signs in through latchkey gets an account field,
+/// whether or not its descriptor declares one: picking a stored login,
+/// or naming a new one, is the same for every service. A descriptor
+/// declares its own only to word it (Gmail's is "Google account").
 export function fieldsFor(entry: CatalogEntry, phase: FieldPhase): Field[] {
-  return (entry.fields ?? []).filter((f) => (f.phase ?? "download") === phase);
+  const fields = (entry.fields ?? []).filter((f) => (f.phase ?? "download") === phase);
+  const declaresAccount = fields.some((f) => f.kind === "text" && f.latchkey);
+  if (phase !== "download" || !entry.credentialService || declaresAccount) return fields;
+  return [accountFieldFor(entry), ...fields];
+}
+
+/// The account field a latchkey source gets when it declares none.
+export function accountFieldFor(entry: CatalogEntry): Field {
+  return {
+    kind: "text",
+    latchkey: true,
+    target: "latchkey_settings.account",
+    label: `${entry.label} account`,
+    help: NAME_IT_HELP,
+  };
 }
 
 export type FieldValues = Record<string, unknown>;

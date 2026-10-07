@@ -656,6 +656,10 @@ async fn ranked(
     if let Some(list) = s.results.get(&key) {
         return Ok((list, key.at));
     }
+    let _turn = s.results.turn(&key).await;
+    if let Some(list) = s.results.get(&key) {
+        return Ok((list, key.at));
+    }
     if !datalib_unified_index::qmd::qmd_index_path(&s.root).exists() {
         return Err(SearchFailure::NoIndex);
     }
@@ -1079,18 +1083,21 @@ fn document_kind(rel: &std::path::Path, mime: &str) -> Option<&'static str> {
     (first.as_os_str() == "plots" && mime == "text/html").then_some("plot")
 }
 
-/// Strip a leading `---\n…\n---\n` YAML frontmatter block. This is text
-/// trimming, not parsing — we don't look at the YAML contents and we don't
-/// care if it's malformed; the body is whatever's after the closing `---`.
+/// Strip a leading YAML front-matter block: a `---` line, then everything
+/// up to the next line that is `---` by itself. Text trimming, not
+/// parsing; a line that only starts with `---` closes nothing.
 fn strip_frontmatter(text: &str) -> &str {
     let Some(rest) = text.strip_prefix("---\n") else {
         return text;
     };
-    let Some(end) = rest.find("\n---") else {
-        return text;
-    };
-    let after = &rest[end + 4..];
-    after.strip_prefix('\n').unwrap_or(after)
+    let mut at = 0;
+    for line in rest.split_inclusive('\n') {
+        at += line.len();
+        if line.trim_end_matches(['\n', '\r']) == "---" {
+            return &rest[at..];
+        }
+    }
+    text
 }
 
 #[cfg(test)]
@@ -1127,6 +1134,18 @@ mod tests {
         assert_eq!(
             strip_frontmatter("---\nunterminated\n"),
             "---\nunterminated\n"
+        );
+        assert_eq!(strip_frontmatter("---\n---\n\nbody"), "\nbody");
+    }
+
+    /// Only a `---` line by itself closes the block; one that starts a
+    /// value used to, and the rest of the front matter became body
+    /// (#992).
+    #[test]
+    fn a_dash_run_inside_the_front_matter_closes_nothing() {
+        assert_eq!(
+            strip_frontmatter("---\ntitle: a\n---b\n---x: y\n---\n\nbody\n"),
+            "\nbody\n"
         );
     }
 

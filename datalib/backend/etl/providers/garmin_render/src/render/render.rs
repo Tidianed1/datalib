@@ -6,11 +6,12 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
-use datalib_etl::title::Title;
+use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::escape_md_inline;
+use datalib_etl_render::title::Title;
 use datalib_etl_timeseries_render::page::write_page;
-use datalib_etl_timeseries_render::text::{iso, short_ts, yaml_safe};
+use datalib_etl_timeseries_render::text::{iso, short_ts};
 use datalib_id::{entity_id_str, IdNamespace};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
@@ -124,9 +125,9 @@ fn render_markdown(
     let _ = writeln!(out, "markdown_uuid: {m_uuid}");
     let _ = writeln!(out, "source_id: {source_id}");
     out.push_str("provider: garmin\n");
-    let _ = writeln!(out, "title: {}", yaml_safe(&title));
+    let _ = writeln!(out, "title: {}", yaml_scalar(&title));
     if let Some(ts) = &created_at {
-        let _ = writeln!(out, "created_at: {}", yaml_safe(ts));
+        let _ = writeln!(out, "created_at: {}", yaml_scalar(ts));
     }
     out.push_str("---\n\n");
     out.push_str(

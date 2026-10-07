@@ -7,6 +7,7 @@
 // Read-only: every write is routed to a stub, so it runs against the
 // shared fixture root rather than a sandbox of its own.
 import { test, expect, type Page } from "@playwright/test";
+import { probeDone } from "./probe-stub";
 
 const wizard = (page: Page) => page.getByRole("dialog");
 const pasteForm = (page: Page) => wizard(page).locator(".wiz-paste");
@@ -76,7 +77,7 @@ test("an app password is pasted, stored and then tested", async ({ page }) => {
   });
   await page.route("**/api/probe", (route) => {
     probes += 1;
-    return route.fulfill({ json: REPORT });
+    return route.fulfill(probeDone(REPORT));
   });
   await openTile(
     page,
@@ -115,7 +116,7 @@ test("a read-only token does not silently replace the browser login", async ({ p
     sent = route.request().postDataJSON();
     return route.fulfill({ json: { ok: true } });
   });
-  await page.route("**/api/probe", (route) => route.fulfill({ json: REPORT }));
+  await page.route("**/api/probe", (route) => route.fulfill(probeDone(REPORT)));
   await openTile(page, FASTMAIL_JMAP, "fastmail", "Mirror a Fastmail mailbox over JMAP.");
 
   // Both ways in, the browser login first; the paste tab says how to get less.

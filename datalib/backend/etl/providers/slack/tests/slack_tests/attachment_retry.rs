@@ -1,15 +1,15 @@
-//! Two-run tests for the attachment retry pass: a file that did not land
-//! on one run is tried again on the next from the stored message, which
-//! the second run never lists again.
+//! Two-run tests for owed files: a file is an edge without bytes from the
+//! moment its message is stored, and every run fetches the edges without
+//! bytes from the stored message, which the second run never lists again.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use datalib_etl::blob_cas::blake3_hex;
-use datalib_etl::http::{HttpRequest, HttpResponse, HttpService};
-use datalib_etl::synthesize::write_fixture;
 use datalib_etl_slack::ingest::{db_path_for, FetchOptions, RawDb};
 use datalib_etl_slack::recorded::{record_call, History};
+use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService};
+use datalib_etl_web::synthesize::write_fixture;
 use serde_json::{json, Value};
 
 use crate::support::{fetch_into, record_general, Tree};
@@ -157,7 +157,7 @@ async fn run(out: &Path, limit: Option<u64>) -> usize {
 }
 
 /// A file whose download failed is fetched on the next run, although
-/// the resume cursor has passed its message.
+/// no walk lists its message again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_failed_download_is_retried_without_relisting_its_message() {
     let t = first_world(500);
@@ -219,10 +219,9 @@ async fn a_failed_file_over_todays_limit_is_reclassified_as_a_skip() {
     );
 }
 
-/// A channel whose walk fails partway still writes the attachments of
-/// the messages it stored, so the retry pass can find them. It used to
-/// return before its flush: the messages were stored, their files had
-/// no row, and the resume cursor had passed them for good.
+/// A channel whose walk fails partway still fetches the files of the
+/// messages it stored, on that run and on the next, whose walk of what
+/// is under the first page fails too.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_channel_that_fails_partway_still_records_its_attachments() {
     let t = first_world_failing_after_the_first_page(500);
@@ -236,4 +235,41 @@ async fn a_channel_that_fails_partway_still_records_its_attachments() {
     let _second = second_world();
     run(&t.out, None).await;
     assert_eq!(attachment(&t.out).await, landed());
+}
+
+async fn history_problems(out: &Path) -> i64 {
+    let db = RawDb::open(&db_path_for(out)).await.unwrap();
+    let n = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM problems WHERE scope_key LIKE 'listing:%history%'",
+    )
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+    db.close().await;
+    n
+}
+
+/// Turning `media` on fetches the files of the messages already stored,
+/// from the store: no channel is walked again. It used to take a walk of
+/// every channel from `since`, repeated on every run until one had no
+/// failed channel. The second world serves no such walk, so one would be
+/// a `listing:` row.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turning_media_on_fetches_the_files_of_stored_messages_without_a_rewalk() {
+    let t = first_world(200);
+    fetch_into(&t.out, |o| o).await.unwrap();
+    assert_eq!(
+        attachment(&t.out).await,
+        Attachment {
+            blake3: None,
+            problem: None,
+            bytes: None,
+        },
+        "with media off the file is listed, not fetched, and that is no problem"
+    );
+
+    let _second = second_world();
+    assert_eq!(run(&t.out, None).await, 0);
+    assert_eq!(attachment(&t.out).await, landed());
+    assert_eq!(history_problems(&t.out).await, 0);
 }

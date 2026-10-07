@@ -222,8 +222,6 @@ pub fn normalize_thread_id(gmail_thread_id: &str) -> String {
 pub struct Ingested {
     pub row: EmailRow,
     pub email_id: String,
-    pub thread_id: String,
-    pub received_at: String,
     pub blob_id: String,
     pub raw: Vec<u8>,
     /// Canonical label paths, for the extract-time label filter.
@@ -281,8 +279,6 @@ pub fn ingest(account_id: &str, index: &LabelIndex, msg: &GmailMessage) -> Resul
     Ok(Ingested {
         row,
         email_id,
-        thread_id,
-        received_at,
         blob_id,
         raw: msg.raw.clone(),
         label_paths: index.label_paths(&msg.label_ids),

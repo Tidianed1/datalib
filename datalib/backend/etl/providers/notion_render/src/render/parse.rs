@@ -253,7 +253,7 @@ mod tests {
         db.upsert_pages(&[PageUpsert {
             id: "p1".into(),
             last_edited_time: Some("2026-05-21T19:37:00Z".into()),
-            payload: Some(serde_json::to_string(&json!({"id": "p1", "object": "page"})).unwrap()),
+            payload: json!({"id": "p1", "object": "page"}).to_string(),
             ..Default::default()
         }])
         .await
@@ -284,7 +284,7 @@ mod tests {
         db.upsert_pages(&[PageUpsert {
             id: "row1".into(),
             parent_type: Some("data_source_id".into()),
-            payload: Some(serde_json::to_string(&json!({"id": "row1"})).unwrap()),
+            payload: json!({"id": "row1"}).to_string(),
             ..Default::default()
         }])
         .await

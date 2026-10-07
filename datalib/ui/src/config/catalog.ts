@@ -3,6 +3,8 @@
 // docs/dev/config_model.md (what the form writes) and
 // docs/dev/wizard_file_pickers.md (a path field offers a native picker).
 
+import { NAME_IT_HELP } from "./accountNaming";
+
 /// A form field, mapped onto a dotted path into a step's `params` tree
 /// (`api.channels` → `[steps.params.api] channels`).
 export type FieldPhase = "download" | "render";
@@ -79,17 +81,18 @@ export type Field =
   /// count zeros. The label should therefore not say "(bytes)".
   | ({ kind: "bytes" } & FieldBase & { default?: number })
   | ({ kind: "string_list" } & FieldBase & {
-        /// Offer a picker built from `POST /api/probe`, alongside the
-        /// comma-separated box. Names *which* of the probe's items this
-        /// field takes: every label, only the ones a render filter can
-        /// match, an account's conversations (a Claude chat, a Slack
-        /// DM), or a workspace's channels.
+        /// Offer a picker, alongside the comma-separated box, that a
+        /// "Load" button fills from `POST /api/probe` with this list:
+        /// every label, only the ones a render filter can match, an
+        /// account's conversations (a Claude chat, a Slack DM), or a
+        /// workspace's channels.
         probe?: ProbeNoun;
       });
 
-/// What a `probe:` field is a picker *of*: which of the probe's items
-/// it takes. The wizard says `labels` and `mailboxes` in the source's
-/// own word for them (`CatalogEntry.mailboxNoun`), the rest as written.
+/// What a `probe:` field is a picker *of*: the list its "Load" asks the
+/// provider for. Mirrors `ProbeList` in datalib/backend/probe/src/lib.rs.
+/// The wizard says `labels` and `mailboxes` in the source's own word for
+/// them (`CatalogEntry.mailboxNoun`), the rest as written.
 export type ProbeNoun =
   "labels" | "mailboxes" | "conversations" | "channels" | "calendars" | "addressbooks";
 
@@ -174,9 +177,9 @@ export type CatalogEntry = {
   requiresOneOf?: string[];
   /// Params this entry always writes, with no field to edit them.
   preset?: Preset[];
-  /// Offer "Check account", and populate any `probe:` field from
-  /// what comes back. Requires a `datalib-step probe <type>` on the
-  /// backend side; see `datalib/backend/datalib_step/src/probe.rs`.
+  /// Offer "Check connection", and a "Load" on every `probe:` field.
+  /// Requires a `datalib-step probe <type>` on the backend side; see
+  /// `datalib/backend/datalib_step/src/probe.rs`.
   canProbe?: boolean;
   fields?: Field[];
 };
@@ -287,7 +290,8 @@ export const CATALOG: CatalogEntry[] = [
         label: "Edit-catcher window (days)",
         help:
           "Re-query the trailing N days of channels that already have history, to pick up " +
-          "edits and reactions. NOT a range bound — it only adds work. Leave empty for none.",
+          "edits, reactions and deletions. NOT a range bound — it only adds work. Leave empty " +
+          "for 30; 0 turns it off.",
       },
     ],
   },
@@ -331,9 +335,7 @@ export const CATALOG: CatalogEntry[] = [
         latchkey: true,
         target: "latchkey_settings.account",
         label: "Claude account",
-        help:
-          "Which stored claude.ai login to mirror. Leave it empty if latchkey holds only " +
-          "one — naming the wrong one mirrors someone else's conversations.",
+        help: NAME_IT_HELP,
       },
       {
         kind: "date",
@@ -399,9 +401,7 @@ export const CATALOG: CatalogEntry[] = [
         latchkey: true,
         target: "latchkey_settings.account",
         label: "ChatGPT account",
-        help:
-          "Which stored chatgpt.com login to mirror. Leave it empty if latchkey holds only " +
-          "one — naming the wrong one mirrors someone else's conversations.",
+        help: NAME_IT_HELP,
       },
       {
         kind: "date",
@@ -944,15 +944,6 @@ export const CATALOG: CatalogEntry[] = [
           "A folder of .vcf files, read recursively — ~/Downloads/contacts say. A file may " +
           "hold one contact or a whole address book.",
       },
-      {
-        kind: "bool",
-        target: "common.always_clear_before_ingest",
-        label: "Treat the folder as the whole address book",
-        default: true,
-        help:
-          "Each sync rewrites the mirror from the files in the folder now, so a contact " +
-          "whose file is gone drops out (the store's history keeps it).",
-      },
     ],
   },
   {
@@ -976,6 +967,15 @@ export const CATALOG: CatalogEntry[] = [
     defaultName: "garmin",
     nameHint: "My Garmin",
     wizard: true,
+    // From latchkey's Garmin plugin, which datalib ships and installs
+    // on the first sign-in (datalib/backend/http/src/plugins.rs).
+    credentialService: "garmin",
+    credentialPaste: {
+      help:
+        "A folder holding oauth1_token.json, as garth or python-garminconnect write it. " +
+        "latchkey keeps a copy; the folder is not read again.",
+    },
+    canProbe: true,
     fields: [
       {
         kind: "date",
@@ -1000,15 +1000,6 @@ export const CATALOG: CatalogEntry[] = [
         help:
           "All-day heart rate, stress, steps, body battery and sleep at sensor resolution, " +
           "one zip per day. The per-day metrics already carry the same series at chart resolution.",
-      },
-      {
-        kind: "text",
-        required: false,
-        target: "api.token_dir",
-        label: "Token folder",
-        help:
-          "Where `datalib-step login garmin` (or garth) put oauth1_token.json. " +
-          "Leave empty for ~/.garth.",
       },
     ],
   },
@@ -1197,17 +1188,6 @@ export const CATALOG: CatalogEntry[] = [
         label: "Gemini activity",
         default: false,
       },
-      {
-        kind: "bool",
-        target: "common.always_clear_before_ingest",
-        label: "Empty the mirror before each sync",
-        default: false,
-        help:
-          "Not needed: every feed already drops what a newer export no longer holds " +
-          "(the store's history keeps it). Turned on, each sync empties the mirror and " +
-          "rewrites it from the export, so an export requested without some product " +
-          "loses that product's records.",
-      },
     ],
   },
   {
@@ -1267,17 +1247,6 @@ export const CATALOG: CatalogEntry[] = [
           "The export has no photos. On, each connection's public profile photo is fetched " +
           "from linkedin.com, once per connection — the one part of this source that goes " +
           "online. No login is needed.",
-      },
-      {
-        kind: "bool",
-        target: "common.always_clear_before_ingest",
-        label: "Treat each export as complete",
-        default: true,
-        help:
-          "Each sync rewrites the mirror from the export as it is now, so a message or " +
-          "connection a newer export no longer holds drops out (the store's history keeps " +
-          "it). Off, a CSV LinkedIn stops including keeps its rows from the last export " +
-          "that had it.",
       },
     ],
   },
@@ -1382,16 +1351,6 @@ export const CATALOG: CatalogEntry[] = [
           "The folder the Android app SMS Backup & Restore writes its sms-*.xml and " +
           "calls-*.xml files to, copied off the phone — ~/Documents/SMSBackupRestore say. " +
           "A single .xml file typed in here works too.",
-      },
-      {
-        kind: "bool",
-        target: "common.always_clear_before_ingest",
-        label: "Treat the folder as the whole archive",
-        default: true,
-        help:
-          "Each sync rewrites the mirror from the backups in the folder now, so a message " +
-          "no longer in any of them drops out (the store's history keeps it). Leave it off " +
-          "if old backups get pruned from the folder.",
       },
     ],
   },

@@ -75,7 +75,8 @@ The loop runs what open **requests** want. A request is a row in
 `system/supervisor.sqlite` naming its **roots** — the steps a Sync was
 pressed on, or every step with no inputs for `datalib-dag` with no
 `--sync` — and who opened it (`opened_by`). Its **scope** is the roots and everything
-downstream of them. Anyone may open one, or ask one to stop, or turn a
+downstream of them, plus any writer of a store in an old shape that a step
+in it reads (below). Anyone may open one, or ask one to stop, or turn a
 step off: that is a row too. Only the process holding `runner-lock` runs the
 loop, and it hears of new rows because whoever writes one announces it
 (below, "What wakes the loop"). A **run** is one busy period of the loop — from taking a
@@ -117,8 +118,9 @@ starts** in a tick, visited in topological order, iff:
 
 1. **it is not running**: one instance of a step at a time;
 2. **it is not turned off**;
-3. **an open request wants it**: some request's scope (its roots and
-   everything downstream) holds it;
+3. **an open request wants it**: some request's scope (its roots,
+   everything downstream, and the writers of old-shape stores those
+   read) holds it;
 4. **it has not failed for every request that wants it**: its last run
    failed, after that request opened, on the inputs and definition it has
    now. A run the loop asked to stop, and that stopped, is neither a
@@ -131,7 +133,8 @@ starts** in a tick, visited in topological order, iff:
    writes — differs from the one recorded then), or it declares no inputs and has not run since the
    request opened, since a source's real input is outside the graph;
 6. **no producer it reads holds it**: none is running without streaming
-   (or with this step reading its files, below), and none is about to
+   (or with this step reading its files, or writing a store in an old
+   shape, below), and none is about to
    run, held only by a lock or a reader, since that one would
    rewrite what this step reads. A producer waiting on its own upstream
    holds nobody back, so a fan-in never waits for its slowest source;
@@ -146,6 +149,24 @@ a render store in the old shape, and the grid index cannot read it.
 `BUILTIN_STORE_SHAPES` in `src/config.rs` names the shape of each
 built-in function's store; a test in `datalib_step` keeps it equal to the
 real DDL.
+
+Being stale is not enough on its own, because a step runs only when a
+request reaches it (rule 3): a sync of one source would run the grid
+index over every other source's render store in whatever shape the
+build before left it. So **a store in an old shape is pulled into the
+scope of any request that reaches a step reading it.** A store is in an
+old shape when its writer last succeeded under another definition and
+the record (`steps.store_shape`) says that definition wrote another
+shape, or says nothing. Only the writer is pulled in, not its own inputs
+or its other readers, and a reader that is turned off pulls nothing.
+Rule 6 then holds the reader until that writer has finished, streaming
+or not, since what it has sealed so far may still be in the old shape.
+A writer stale for any other reason — its download moved, a params edit
+that kept the shape — still waits for a request of its own. When the
+reader runs over an old store anyway (its writer failed, or is turned
+off), the reader is the backstop: `grid_index` compares a render store's
+`_datalib_meta.schema_hash` with the shape it reads, and leaves a store
+in another shape as the index had it, with a warning.
 
 A step that waits says why, in its row's `state_detail`: `waiting for
 a`, `waiting for c, which reads what this writes`, `waiting for lock
@@ -363,10 +384,14 @@ them would be the cheaper code and the worse error message.
 
 A group whose id is bad costs the group *and* every step under it, and
 those steps are `Blocked`, not `Rejected`: nothing is wrong with them,
-and the fix is on the group's line. The four warnings: a group nothing
+and the fix is on the group's line. The five warnings: a group nothing
 is filed under; a `name` written on a grouped step, whose label comes
-from the group; an applet filed under a group that does not exist; and
-a `keyword_index` that `qmd_aggregator` does not read. The retired
+from the group; an applet filed under a group that does not exist; a
+`keyword_index` that `qmd_aggregator` does not read; and a built-in
+step's `common.always_clear_before_ingest`, which no longer does
+anything (`datalib-step` drops it before parsing, so the step still
+runs). The Manage screen's System row counts the warnings and shows
+their words on hover. The retired
 shapes — `datalib-step download|render|grid_index|qmd_index` on a
 command line, and a built-in `qmd_index` step — are `Rejected`, because
 they no longer run, and the diagnostic names `datalib-migrate-config`.

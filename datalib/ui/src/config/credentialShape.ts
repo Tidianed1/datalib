@@ -1,6 +1,7 @@
 // What a credential pasted into the wizard looks like for one latchkey
 // service: a username and password (an app password, over HTTP Basic),
-// or one or more headers with the pasted secret in one of them. Read
+// one or more headers with the pasted secret in one of them, or a folder
+// a plugin reads the credential from (`auth set-nocurl`). Read
 // off latchkey's own `auth set` example for the service, unless the
 // catalog says the example is wrong — a service registered by hand gets
 // latchkey's generic Bearer example whatever it really takes.
@@ -12,7 +13,8 @@ export const SECRET = "{secret}";
 
 export type CredentialShape =
   | { kind: "basic"; userHint: string; secretLabel: string }
-  | { kind: "headers"; headers: string[]; secretLabel: string };
+  | { kind: "headers"; headers: string[]; secretLabel: string }
+  | { kind: "directory"; placeholder: string; secretLabel: string };
 
 /// The last resort: the person types the whole header line.
 const WHOLE_HEADER: CredentialShape = { kind: "headers", headers: [SECRET], secretLabel: "header" };
@@ -20,6 +22,10 @@ const WHOLE_HEADER: CredentialShape = { kind: "headers", headers: [SECRET], secr
 export function credentialShape(example: string | null, override?: string[]): CredentialShape {
   if (override?.length) return { kind: "headers", headers: override, secretLabel: "token" };
   if (!example) return WHOLE_HEADER;
+
+  const folder = /\sauth\s+set-nocurl\s+\S+\s+(\S+)/.exec(example);
+  if (folder)
+    return { kind: "directory", placeholder: folder[1] ?? "", secretLabel: "token folder" };
 
   const basic = /\s-u\s+"([^":]*):([^"]*)"/.exec(example);
   if (basic) {
@@ -61,6 +67,7 @@ export function pastedCredential(
 ): PastedCredential | null {
   const s = secret.trim();
   if (!s) return null;
+  if (shape.kind === "directory") return { kind: "directory", path: s };
   if (shape.kind === "basic") {
     const u = username.trim();
     return u ? { kind: "basic", username: u, password: s } : null;

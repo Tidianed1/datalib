@@ -10,9 +10,9 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
-use datalib_etl::fingerprint_cache::{self, FingerprintCache};
-use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
+use datalib_etl_files::fingerprint_cache::{self, FingerprintCache};
+use datalib_etl_web::http::LatchkeySettings;
 
 use datalib_etl_contacts_config::{ContactsConfig, ContactsMethod};
 
@@ -83,65 +83,61 @@ impl DataProcessor for ContactsIngest {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        // The source owns the store: open it, hand the orchestrator only an
-        // opaque interrupt-commit hook, do the work, commit, close.
-        let entity_db = ingest::db_path_for(&self.raw_path);
-        let db = ingest::RawDb::open(&entity_db).await?;
-        let session = ctx.open_store(db.pool().clone(), entity_db).await;
-
-        let summary = match &self.mode {
-            DownloadMode::Server {
-                server_url,
-                addressbooks,
-            } => {
-                let s = ingest::fetch(ingest::FetchOptions {
-                    db,
-                    server_url: server_url.clone(),
-                    addressbooks: addressbooks.clone(),
-                    latchkey: self.latchkey.clone(),
-                    progress: ctx.progress.clone(),
-                    control: ctx.control.clone(),
-                })
-                .await?;
-                format!(
-                    "addressbooks={} new={} updated={} deleted={} errors={} requests={}",
-                    s.addressbooks,
-                    s.contacts_new,
-                    s.contacts_updated,
-                    s.contacts_deleted,
-                    s.errors,
-                    s.requests,
-                )
-            }
-            DownloadMode::File {
-                input_path,
-                account_id_override,
-            } => {
-                let s = ingest::vcf_dir::fetch(ingest::vcf_dir::FetchOptions {
-                    db,
-                    input_path: input_path.clone(),
-                    cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?)
-                        .await?,
-                    account_id_override: account_id_override.clone(),
-                    progress: ctx.progress.clone(),
-                    control: ctx.control.clone(),
-                })
-                .await?;
-                format!(
-                    "addressbooks={} new={} updated={} deleted={} files_skipped={} files_removed={} errors={}",
-                    s.addressbooks,
-                    s.contacts_new,
-                    s.contacts_updated,
-                    s.contacts_deleted,
-                    s.files_skipped,
-                    s.files_removed,
-                    s.errors,
-                )
-            }
-        };
-
-        // The source's post-download commit + pool close (uniform across
-        // providers); keeps the old `{stats} commit={h}` summary suffix.
-        session.finish(ctx, summary).await
+        let db = ingest::RawDb::open(&ingest::db_path_for(&self.raw_path)).await?;
+        let pool = db.pool().clone();
+        ctx.run_store(pool, None, |sealer| async {
+            Ok(match &self.mode {
+                DownloadMode::Server {
+                    server_url,
+                    addressbooks,
+                } => {
+                    let s = ingest::fetch(ingest::FetchOptions {
+                        db,
+                        server_url: server_url.clone(),
+                        addressbooks: addressbooks.clone(),
+                        latchkey: self.latchkey.clone(),
+                        progress: ctx.progress.clone(),
+                        control: ctx.control.clone(),
+                        sealer: Some(sealer),
+                    })
+                    .await?;
+                    format!(
+                        "addressbooks={} new={} updated={} deleted={} errors={} requests={}",
+                        s.addressbooks,
+                        s.contacts_new,
+                        s.contacts_updated,
+                        s.contacts_deleted,
+                        s.errors,
+                        s.requests,
+                    )
+                }
+                DownloadMode::File {
+                    input_path,
+                    account_id_override,
+                } => {
+                    let s = ingest::vcf_dir::fetch(ingest::vcf_dir::FetchOptions {
+                        db,
+                        input_path: input_path.clone(),
+                        cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?)
+                            .await?,
+                        account_id_override: account_id_override.clone(),
+                        progress: ctx.progress.clone(),
+                        control: ctx.control.clone(),
+                    })
+                    .await?;
+                    format!(
+                        "addressbooks={} new={} updated={} deleted={} files_skipped={} files_removed={} errors={}",
+                        s.addressbooks,
+                        s.contacts_new,
+                        s.contacts_updated,
+                        s.contacts_deleted,
+                        s.files_skipped,
+                        s.files_removed,
+                        s.errors,
+                    )
+                }
+            })
+        })
+        .await
     }
 }

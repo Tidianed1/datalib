@@ -75,7 +75,7 @@ database per source, at
   - `edges` — its outgoing links.
   - `source_contacts` and `source_contact_handles` — the people it
     describes or mentions, each as its source describes them (a
-    `DatalibContact`, `contact_schema/`), and the handles that reach
+    `NormalizedContact`, `contact_schema/`), and the handles that reach
     them. chat-common adds one per author handle with no provider code;
     contact-common adds a card's own. Like edges they belong to the
     document, and the index answers "who is this handle" from them
@@ -185,6 +185,31 @@ character; the grid's search text keeps the text as typed, and
 `plain_text` (the Contents cell) reads the escapes back. A renderer's
 test of this feeds a field `<script>x</script> & co` and checks it
 renders escaped.
+
+The trap is text between tags on a markdown line — the message
+header's `## <span class="msg-author">…</span>`: markdown-it parses it
+as markdown, so it needs `escape_md_inline`, not the HTML-only
+`escape_text`. `escape_text` is for text inside an HTML block, and it
+writes a line break as `&#10;`, since a blank line would end the block.
+
+`datalib/ui/tests/hostile_text.test.ts` is the check across renderers.
+`//datalib/backend/etl/hostile_samples` puts a string of HTML and
+markdown (a tag, a link, an image, a `|`, a code span, an entity, a
+blank line, a `---` line) into every plain-text field the shared
+renderers take — chat-common, calendar-common, contact-common,
+forge-render-common, Slack's mrkdwn, `MessageHeader`, `Title` — and
+the test renders each document through the app's own markdown-it and
+sanitizer and asserts every field reads exactly as typed and makes no
+element of its own. It runs the escape helpers the same way over a few
+hundred generated strings. A provider's private text paths (Facebook
+posts, Claude's tool results, the time-series facts) are not reached
+by it and keep their own tests.
+
+Front matter is YAML, and a value from upstream goes through
+`datalib_etl_render::front_matter::yaml_scalar`, which JSON-quotes it,
+so a line break, a quote or a `---` inside cannot end the line or the
+block. The applet strips front matter at the first line that is `---`
+by itself.
 
 ## 3. The projection
 
@@ -466,8 +491,8 @@ document. How it is wired at each stage:
 | stage | how a problem gets in | swept by |
 | --- | --- | --- |
 | fetch, one record | `record_object_attempt`'s failure arm (`record_object_error`), in the raw store, `Reason::FetchFailed` | the next attempt on that record, success or failure |
-| fetch, a configured entry upstream does not have | `download_problems::report`, in the raw store, keyed `config:<setting>:<value>` | the next run's report, which replaces the last one's whole |
-| fetch, a listing or phase the run could not do | `download_problems::report_run`, in the raw store, keyed `listing:<name>` / `phase:<name>` | likewise, every run |
+| fetch, a configured entry upstream does not have | `RunProblems::config`, in the raw store, keyed `config:<setting>:<value>` | the next run that looked every entry up, whose set replaces the last one's whole |
+| fetch, a listing or phase the run could not do | `RunProblems::listing` / `phase`, in the raw store, keyed `listing:<name>` / `phase:<name>` | the next run that reached every listing and phase; one that was stopped or cut short clears none (`data_architecture_ingestion.md` §"Error handling") |
 | fetch, carried into render | the render step reads the raw store's rows at the commit it rendered from and replaces its own fetch-stage rows with them, re-minted under the source's id, with `item_uuid` set where the provider's `item_of_entity` names a row the store holds (`render.rs`, `carry_fetch_problems`) | every render |
 | grid row | `GridRowBuilder::build_or_record` | the document, when re-rendered |
 | parse, in a document | `NormalizedChatItem::problems` (`own_stamp_ms` for a stamp) | the document |
@@ -638,9 +663,13 @@ Two tables in the render store, both written by the driver
 - **`render_cursor`** — one row: the raw store's commit the last run
   consumed, and the render params (a period, a label filter — whatever
   each processor declares through `RenderProcessor::render_params`)
-  the documents were rendered with. The driver writes it in the same
-  transaction as the run's last work, so it can never claim a range the
-  store's rows do not reflect, and rewrites it only when it moves.
+  the documents were rendered with. Beside the processors' own, the
+  driver adds two of every source's: the render store's DDL hash and
+  `datalib_handle::RULES_VERSION`, so a new `grid_rows` column or a
+  change to what a handle normalizes to renders every source again
+  without anyone bumping a `RENDER_VERSION`. The driver writes it in the
+  same transaction as the run's last work, so it can never claim a range
+  the store's rows do not reflect, and rewrites it only when it moves.
 - **`render_inputs`** — `(bucket_key, input_table, input_id)`, one row
   per raw row a bucket's render **asked for, found or not**. A thread
   rendered while its author's `users` row had not been fetched yet

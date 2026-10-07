@@ -64,6 +64,11 @@ pub struct NormalizedReaction {
     /// anchor on the reaction's rendered span and as the PK of its
     /// own grid_row.
     pub reaction_uuid: String,
+    /// Who reacted, as an identifier a contact can be linked to; `None`
+    /// where the provider has none for them, or the reactor is the
+    /// account itself. Not written into the bullet by the provider:
+    /// chat-common draws the reactor from it.
+    pub reactor_handle: Option<datalib_handle::Handle>,
     /// Human-readable label for the reactor ("Me" / "Will Riker" / …).
     pub reactor_display: String,
     /// The emoji or short string (`🫡`, `🔥`, …).
@@ -119,7 +124,7 @@ pub struct NormalizedChatItem {
     /// provider has no such identifier for the author (yet), or the
     /// author is the account itself.
     pub author_handle: Option<datalib_handle::Handle>,
-    /// Pre-resolved author label ("Me", "Will Riker", "+15551234"). The
+    /// Pre-resolved author label ("Me", "Will Riker", "+12025550123"). The
     /// provider owns the outgoing/incoming rule and any name lookup.
     pub author_display: String,
     /// Unix milliseconds for the item's effective timestamp, or `None`
@@ -349,7 +354,7 @@ pub struct NormalizedChat {
     /// document carries the ones whose handles its authors wrote under,
     /// merged with what chat-common saw (`people::document_contacts`).
     #[serde(skip)]
-    pub contacts: Vec<datalib_contact_schema::DatalibContact>,
+    pub contacts: Vec<datalib_contact_schema::NormalizedContact>,
     /// Every raw row this chat was built from, found or not — what the
     /// processor declares through `RenderCtx::declare_bucket` so a
     /// change to any of them renders this chat again. Empty only for a

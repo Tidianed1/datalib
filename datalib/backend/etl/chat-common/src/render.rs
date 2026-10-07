@@ -22,7 +22,14 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// `datalib_step`'s render step checks that every version stored on
 /// disk is one its processors declare, so this must not be mixed into
 /// the stored value.
-pub const LAYOUT_VERSION: u32 = 7;
+///
+/// It also covers what `render_markdown` writes beside the markdown:
+/// v10 moved only the `source_contacts` rows (`people.rs` counts
+/// reactors), and every document had to be rendered again for an
+/// existing root to hold them.
+/// v12: the people baseline counts a reactor to a message not in
+/// the mirror, which moves only the `source_contacts` rows.
+pub const LAYOUT_VERSION: u32 = 12;
 
 /// What every chat-common provider declares through
 /// `RenderProcessor::render_params`, merged with its own knobs: the
@@ -46,17 +53,18 @@ use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::periodize::Period;
 use datalib_etl::progress::Progress;
-use datalib_etl::title::Title;
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::message::{timestamp_html, MessageHeader};
+use datalib_etl_render::message::{chip_link, timestamp_html, MessageHeader};
 use datalib_etl_render::section::{join, msg_div_open_with, Section};
+use datalib_etl_render::title::Title;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::{Outcome, ProblemRow, Scope, Stage};
 use datalib_schema::providers::Provider;
 
 use crate::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
+use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::html::{
-    escape_attr, escape_md_block, escape_md_inline, escape_text, md_code_span,
+    escape_attr, escape_md_block, escape_md_inline, md_code_span, md_link_dest,
 };
 
 /// What a provider's [`NormalizedChatItem::text`] is: what a person
@@ -289,7 +297,12 @@ fn render_one(
         rows,
         sections,
         edges: Vec::new(),
-        contacts: crate::people::document_contacts(source_id, &doc.items, &chat.contacts),
+        contacts: crate::people::document_contacts(
+            source_id,
+            &doc.items,
+            &doc.orphan_reactions,
+            &chat.contacts,
+        ),
         problems,
     })
     .with_context(|| format!("on_doc_complete {}", doc.markdown_uuid))?;
@@ -374,24 +387,24 @@ fn render_markdown(
     };
     let mut s = String::with_capacity(1024);
     s.push_str("---\n");
-    s.push_str(&format!("title: \"{}\"\n", title.replace('"', "\\\"")));
+    s.push_str(&format!("title: {}\n", yaml_scalar(&title)));
     s.push_str(&format!("provider: {}\n", profile.provider));
-    s.push_str(&format!("source_label: \"{}\"\n", profile.source_label));
+    s.push_str(&format!(
+        "source_label: {}\n",
+        yaml_scalar(&profile.source_label)
+    ));
     s.push_str(&format!("chat_uuid: {}\n", chat.chat_uuid));
     s.push_str(&format!("markdown_uuid: {}\n", doc.markdown_uuid));
     s.push_str(&format!("period: {}\n", doc.period_key));
-    s.push_str(&format!(
-        "display: \"{}\"\n",
-        chat.display.replace('"', "\\\"")
-    ));
+    s.push_str(&format!("display: {}\n", yaml_scalar(&chat.display)));
     if let Some(a) = &chat.account {
-        s.push_str(&format!("account: {a}\n"));
+        s.push_str(&format!("account: {}\n", yaml_scalar(a)));
     }
     if let Some(p) = &chat.project {
-        s.push_str(&format!("project: {p}\n"));
+        s.push_str(&format!("project: {}\n", yaml_scalar(p)));
     }
     if let Some(e) = &chat.external_id {
-        s.push_str(&format!("external_id: {e}\n"));
+        s.push_str(&format!("external_id: {}\n", yaml_scalar(e)));
     }
     s.push_str(&format!("item_count: {}\n", message_count(doc)));
     s.push_str("---\n\n");
@@ -443,6 +456,16 @@ fn render_markdown(
     sections
 }
 
+/// Who reacted: a chip link where the provider has their handle, so the
+/// reactor resolves to a contact as an author does
+/// (docs/dev/plans/chips.md); the name as shown otherwise.
+fn reactor(r: &crate::types::NormalizedReaction) -> String {
+    match &r.reactor_handle {
+        Some(h) => chip_link(&r.reactor_display, h),
+        None => escape_md_inline(&r.reactor_display),
+    }
+}
+
 /// Reactions the provider could not place on any message in this
 /// document, listed at the end under the upstream id they name.
 fn render_orphan_reactions(doc: &NormalizedDoc) -> Option<String> {
@@ -461,7 +484,7 @@ fn render_orphan_reactions(doc: &NormalizedDoc) -> Option<String> {
                 "  - <span id=\"m-{uuid}\" data-section-uuid=\"{uuid}\">{emoji} {who}</span> ({ts})\n",
                 uuid = r.reaction_uuid,
                 emoji = escape_md_inline(&r.emoji),
-                who = escape_md_inline(&r.reactor_display),
+                who = reactor(r),
                 ts = timestamp_html(r.date_ms),
             ));
         }
@@ -540,7 +563,7 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
             if let Some(line) = recipients_line(&item.recipients) {
                 s.push('\n');
                 s.push_str(&line);
-                s.push('\n');
+                s.push_str("\n\n");
             }
         }
     }
@@ -598,7 +621,7 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
                 "- <span id=\"m-{uuid}\" data-section-uuid=\"{uuid}\">{emoji} {who}</span>\n",
                 uuid = r.reaction_uuid,
                 emoji = escape_md_inline(&r.emoji),
-                who = escape_md_inline(&r.reactor_display),
+                who = reactor(r),
             ));
         }
     }
@@ -607,10 +630,11 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
     Section::keyed(&item.message_uuid, s)
 }
 
-/// Who an item was addressed to, one line straight under its header:
-/// `To <span data-handle="email:…">Will Riker</span>, …; Cc …`. The UI
-/// trusts a `data-handle` here only because nothing a sender wrote can
-/// come between the header and this line.
+/// Who an item was addressed to, one paragraph straight under its
+/// header: `To [Will Riker](mailto:…), …; Cc …`, each recipient with a
+/// handle a chip link and each without a plain span. It is a paragraph
+/// with inline HTML, not an HTML block, because markdown is not parsed
+/// inside a block and the links have to be.
 fn recipients_line(recipients: &[crate::types::Recipient]) -> Option<String> {
     use crate::types::RecipientRole;
     let mut groups: Vec<String> = Vec::new();
@@ -618,14 +642,12 @@ fn recipients_line(recipients: &[crate::types::Recipient]) -> Option<String> {
         let names: Vec<String> = recipients
             .iter()
             .filter(|r| r.role == role)
-            .map(|r| {
-                let handle = r.handle.as_ref().map_or(String::new(), |h| {
-                    format!(" data-handle=\"{}\"", escape_attr(h.as_str()))
-                });
-                format!(
-                    "<span class=\"msg-recipient\"{handle}>{}</span>",
-                    escape_text(&r.display)
-                )
+            .map(|r| match &r.handle {
+                Some(h) => chip_link(&r.display, h),
+                None => format!(
+                    "<span class=\"msg-recipient\">{}</span>",
+                    escape_md_inline(&r.display)
+                ),
             })
             .collect();
         if !names.is_empty() {
@@ -636,8 +658,12 @@ fn recipients_line(recipients: &[crate::types::Recipient]) -> Option<String> {
             ));
         }
     }
-    (!groups.is_empty())
-        .then(|| format!("<div class=\"msg-recipients\">{}</div>", groups.join("; ")))
+    (!groups.is_empty()).then(|| {
+        format!(
+            "<span class=\"msg-recipients\">{}</span>",
+            groups.join("; ")
+        )
+    })
 }
 
 fn render_attachment(s: &mut String, att: &crate::types::NormalizedAttachment) {
@@ -686,7 +712,7 @@ fn render_attachment(s: &mut String, att: &crate::types::NormalizedAttachment) {
     s.push('\n');
     match &att.rel_path {
         Some(rel) if att.is_image() => {
-            s.push_str(&format!("![{label}]({rel})\n"));
+            s.push_str(&format!("![{label}]({})\n", md_link_dest(rel)));
         }
         // Inline HTML5 players so audio/video attachments play straight
         // from the markdown viewer (which already passes raw HTML through
@@ -694,18 +720,23 @@ fn render_attachment(s: &mut String, att: &crate::types::NormalizedAttachment) {
         // underneath is a fallback for renderers that strip media tags.
         Some(rel) if is_audio => {
             s.push_str(&format!(
-                "<audio controls src=\"{src}\"></audio>\n\n{kind_marker} [{label}]({rel}) — {size}\n",
+                "<audio controls src=\"{src}\"></audio>\n\n{kind_marker} [{label}]({dest}) — {size}\n",
                 src = escape_attr(rel),
+                dest = md_link_dest(rel),
             ));
         }
         Some(rel) if is_video => {
             s.push_str(&format!(
-                "<video controls src=\"{src}\"></video>\n\n{kind_marker} [{label}]({rel}) — {size}\n",
+                "<video controls src=\"{src}\"></video>\n\n{kind_marker} [{label}]({dest}) — {size}\n",
                 src = escape_attr(rel),
+                dest = md_link_dest(rel),
             ));
         }
         Some(rel) => {
-            s.push_str(&format!("{kind_marker} [{label}]({rel}) — {size}\n"));
+            s.push_str(&format!(
+                "{kind_marker} [{label}]({dest}) — {size}\n",
+                dest = md_link_dest(rel)
+            ));
         }
         None => {
             s.push_str(&format!("{kind_marker} *[{label} (not yet fetched)]*\n",));
@@ -848,6 +879,7 @@ fn build_grid_rows(
                 // null — never a row whose author is the empty string,
                 // and never a stand-in like "unknown".
                 .author(non_empty(&item.author_display))
+                .author_handle(item.author_handle.as_ref().map(|h| h.as_str().to_string()))
                 .account(chat.account.clone())
                 .org_uuid(chat.org_uuid.clone())
                 .org_name(chat.org_name.clone())
@@ -927,6 +959,7 @@ fn reaction_row(
         .upstream_account(chat.upstream_account.clone())
         .created_at(stamp_from_ms(r.date_ms, profile.stamp_precision))
         .author(non_empty(&r.reactor_display))
+        .author_handle(r.reactor_handle.as_ref().map(|h| h.as_str().to_string()))
         .account(chat.account.clone())
         .org_uuid(chat.org_uuid.clone())
         .org_name(chat.org_name.clone())
@@ -1056,6 +1089,7 @@ mod tests {
                     attachments: vec![],
                     reactions: vec![NormalizedReaction {
                         reaction_uuid: "44444444-4444-4444-4444-444444444444".to_string(),
+                        reactor_handle: None,
                         reactor_display: "Will Riker".to_string(),
                         emoji: "🫡".to_string(),
                         date_ms: Some(12442118410000),
@@ -1130,7 +1164,7 @@ mod tests {
         assert_eq!(p.reason, Reason::NoIdentity);
         assert_eq!(p.field.as_deref(), Some("uuid"));
         // Stamping is the store's job, not the renderer's.
-        assert!(p.first_seen_at_utc.is_empty() && p.last_seen_at_utc.is_empty());
+        assert!(p.first_seen_at_utc.is_empty() && p.changed_at_utc.is_empty());
     }
 
     /// A problem the provider found while normalizing an item — a
@@ -1447,6 +1481,7 @@ mod tests {
             target_native_id: "gone-upstream".to_string(),
             reactions: vec![NormalizedReaction {
                 reaction_uuid: "55555555-5555-5555-5555-555555555555".to_string(),
+                reactor_handle: None,
                 reactor_display: "Will Riker".to_string(),
                 emoji: "\u{1fae1}".to_string(),
                 // Ten seconds after the message, which only the long
@@ -1952,6 +1987,29 @@ mod tests {
         }
     }
 
+    /// A reactor with a handle resolves to a contact as an author does,
+    /// so the bullet carries a chip link; one without stays the name.
+    #[test]
+    fn a_reactor_with_a_handle_is_a_chip_link() {
+        use crate::types::NormalizedReaction;
+        let r = |handle, display: &str| NormalizedReaction {
+            reaction_uuid: "r".into(),
+            reactor_handle: handle,
+            reactor_display: display.into(),
+            emoji: "🖖".into(),
+            date_ms: None,
+            source_ref: None,
+        };
+        assert_eq!(
+            reactor(&r(
+                datalib_handle::Handle::email("riker@enterprise.org"),
+                "Will Riker"
+            )),
+            "[Will Riker](mailto:riker@enterprise.org \"Will Riker <riker@enterprise.org>\")"
+        );
+        assert_eq!(reactor(&r(None, "[Me]")), "\\[Me\\]");
+    }
+
     #[test]
     fn recipients_line_names_each_with_its_handle_and_escapes_what_it_shows() {
         use crate::types::{Recipient, RecipientRole};
@@ -1968,12 +2026,52 @@ mod tests {
         .unwrap();
         assert_eq!(
             line,
-            "<div class=\"msg-recipients\"><span class=\"msg-recipients-role\">To</span> \
-             <span class=\"msg-recipient\" data-handle=\"email:riker@enterprise.org\">Will Riker</span>, \
+            "<span class=\"msg-recipients\"><span class=\"msg-recipients-role\">To</span> \
+             [Will Riker](mailto:riker@enterprise.org \"Will Riker <riker@enterprise.org>\"), \
              <span class=\"msg-recipient\">Deanna Troi</span>; \
              <span class=\"msg-recipients-role\">Cc</span> \
-             <span class=\"msg-recipient\" data-handle=\"email:q@continuum.org\">&lt;Q&gt;</span></div>"
+             [&lt;Q&gt;](mailto:q@continuum.org \"<Q> <q@continuum.org>\")</span>"
         );
         assert_eq!(recipients_line(&[]), None);
+    }
+
+    /// A blank line in a name once ended the recipients line and
+    /// markdown read the rest of the name (#992); the line is a
+    /// paragraph now, which a blank line would end just the same.
+    #[test]
+    fn a_recipient_with_a_blank_line_in_the_name_stays_in_the_line() {
+        use crate::types::{Recipient, RecipientRole};
+        let line = recipients_line(&[Recipient {
+            role: RecipientRole::To,
+            display: "Worf\n\n[x](https://e.test)".to_string(),
+            handle: None,
+        }])
+        .unwrap();
+        assert!(!line.contains('\n'), "{line}");
+    }
+
+    /// A front-matter value from upstream cannot end its line, or the
+    /// block, whatever it holds (#992).
+    #[test]
+    fn front_matter_values_stay_on_their_lines() {
+        let mut chat = mk_chat();
+        chat.display = "a\n---\nb".into();
+        chat.account = Some("acct\ntitle: forged".into());
+        chat.project = Some("p: q".into());
+        chat.external_id = Some("e\n\n".into());
+        let sections = render_markdown(&test_profile(), &chat, &chat.buckets[0], "t\n---");
+        let front = &sections[0].md;
+        let lines: Vec<&str> = front.lines().collect();
+        let close = lines[1..].iter().position(|l| *l == "---").expect("closes") + 1;
+        for line in &lines[1..close] {
+            assert!(
+                line.split_once(": ").is_some_and(|(k, _)| !k.contains(' ')),
+                "{front}"
+            );
+        }
+        assert!(
+            lines[close + 1..].iter().all(|l| !l.starts_with("title:")),
+            "{front}"
+        );
     }
 }

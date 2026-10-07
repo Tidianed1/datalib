@@ -116,7 +116,9 @@ pub async fn run(
     // everything is fine — and the more dangerous of those two reads as
     // success. These are whole-store counts, not this-run counts: a
     // problem on a document this run skipped is still current, which is
-    // the point of the per-document sweep. The metrics are what the
+    // the point of the per-document sweep. They leave out the
+    // download's rows copied in beside render's own: the download's row
+    // counts those. The metrics are what the
     // Manage row's errors/warnings cell reads, so they are reported
     // every run, zero included: a missing series means "never counted",
     // not "clean".
@@ -200,7 +202,8 @@ pub struct RenderReport {
     /// What the store holds afterwards, storage report excluded — what
     /// the source has, not what this run did.
     pub holdings: Holdings,
-    /// Whole-store problem counts by severity.
+    /// Whole-store counts by severity of the problems render found,
+    /// the download's copied rows left out.
     pub problems: HashMap<Severity, i64>,
     /// The store's HEAD after the final commit. `None` without doltlite.
     pub head: Option<String>,
@@ -470,7 +473,7 @@ pub fn render_source(
     // Read back from the store that just wrote them, before `close`
     // consumes it.
     let versions = store.render_versions()?;
-    let problems = store.problem_counts()?;
+    let problems = store.own_problem_counts()?;
     let holdings = store.holdings(storage_uuid.as_deref())?;
     let head = store.head()?;
     store.close();
@@ -652,7 +655,15 @@ fn carry_fetch_problems(
     source_id: &str,
     rows: Vec<ProblemRow>,
 ) -> Result<()> {
-    let items = items_of_entities(processors, source_id, &rows);
+    let mut items = items_of_entities(processors, source_id, &rows);
+    let upstream = upstream_of_entities(processors, &rows, &items);
+    let keys: Vec<(&str, String)> = upstream.iter().flatten().cloned().collect();
+    let found = store.grid_rows_by_upstream(&keys)?;
+    for (item, key) in items.iter_mut().zip(upstream) {
+        if let Some((kind, id)) = key {
+            *item = found.get(&(kind.to_string(), id)).cloned();
+        }
+    }
     let wanted: Vec<String> = items.iter().flatten().cloned().collect();
     let held = store.grid_rows_among(&wanted)?;
     store.replace_stage_problems(Stage::Fetch, &with_items(rows, items, &held))
@@ -678,6 +689,27 @@ fn items_of_entities(
             processors
                 .iter()
                 .find_map(|p| p.item_of_entity(source_id, table, id))
+        })
+        .collect()
+}
+
+/// For each problem no processor could mint a uuid for, the upstream
+/// key of its row, by the first processor that knows one.
+fn upstream_of_entities(
+    processors: &[Box<dyn RenderProcessor>],
+    rows: &[ProblemRow],
+    items: &[Option<String>],
+) -> Vec<Option<(&'static str, String)>> {
+    rows.iter()
+        .zip(items)
+        .map(|(row, item)| {
+            if item.is_some() || row.scope_kind != ScopeKind::Entity {
+                return None;
+            }
+            let (table, id) = raw_entity(&row.scope_key)?;
+            processors
+                .iter()
+                .find_map(|p| p.upstream_of_entity(table, id))
         })
         .collect()
 }
@@ -743,7 +775,7 @@ fn fetch_problems_of(
                 let raw = ProblemRow::from_row(r)?;
                 Ok(ProblemRow {
                     first_seen_at_utc: raw.first_seen_at_utc.clone(),
-                    last_seen_at_utc: raw.last_seen_at_utc.clone(),
+                    changed_at_utc: raw.changed_at_utc.clone(),
                     tz_offset: raw.tz_offset.clone(),
                     ..ProblemRow::new(
                         source_id,
@@ -809,18 +841,30 @@ impl RenderPlan {
 /// processor id, which is a group's function name.
 const STORE_SCHEMA_PARAM: &str = "_store_schema";
 
+/// The key `datalib_handle::RULES_VERSION` sits under. Every source
+/// carries it, not only the ones that mint handles today: a provider
+/// that starts writing them cannot forget to declare it, and a rules
+/// change is rare enough that re-rendering the rest costs little.
+const HANDLE_RULES_PARAM: &str = "_handle_rules";
+
 /// Every processor's params under its id, plus the render store's DDL
-/// hash, so one source's cursor carries all of them and a change to any
-/// one — a processor's knob, or the shape of the store — re-renders the
-/// source.
+/// hash and the handle rules, so one source's cursor carries all of them
+/// and a change to any one — a processor's knob, the shape of the store,
+/// what a handle normalizes to — re-renders the source.
 pub(crate) fn declared_render_params(processors: &[Box<dyn RenderProcessor>]) -> serde_json::Value {
     processors
         .iter()
         .map(|p| (p.id().to_string(), p.render_params()))
-        .chain(std::iter::once((
-            STORE_SCHEMA_PARAM.to_string(),
-            serde_json::Value::String(datalib_etl_render::indexed_markdown::schema_hash()),
-        )))
+        .chain([
+            (
+                STORE_SCHEMA_PARAM.to_string(),
+                serde_json::Value::String(datalib_etl_render::indexed_markdown::schema_hash()),
+            ),
+            (
+                HANDLE_RULES_PARAM.to_string(),
+                serde_json::Value::from(datalib_handle::RULES_VERSION),
+            ),
+        ])
         .collect::<serde_json::Map<String, serde_json::Value>>()
         .into()
 }
@@ -1201,7 +1245,8 @@ mod stale_tree_tests {
 
     use super::{
         declared_render_params, declared_render_versions, every_stored_version_must_be_declared,
-        tree_is_from_an_older_renderer, STORE_SCHEMA_PARAM,
+        tree_is_from_an_older_renderer, RenderCursorRow, RenderPlan, HANDLE_RULES_PARAM,
+        STORE_SCHEMA_PARAM,
     };
     use datalib_schema::providers::Provider;
 
@@ -1452,6 +1497,32 @@ mod stale_tree_tests {
             serde_json::Value::String(datalib_etl_render::indexed_markdown::schema_hash())
         );
         assert!(params["stub"].is_object() || params["stub"].is_null());
-        assert_eq!(params.as_object().unwrap().len(), 2);
+        assert_eq!(params.as_object().unwrap().len(), 3);
+    }
+
+    /// A stored handle is only as current as the rules that minted it
+    /// (#980 had to bump six renderers by hand). The rules version rides
+    /// in every source's params, so moving it renders every source again.
+    #[test]
+    fn a_handle_rules_change_renders_everything() {
+        let procs: Vec<Box<dyn RenderProcessor>> = vec![Box::new(Stub(Some(1)))];
+        let params = declared_render_params(&procs);
+        assert_eq!(
+            params[HANDLE_RULES_PARAM],
+            serde_json::Value::from(datalib_handle::RULES_VERSION)
+        );
+        let mut older = params.clone();
+        older[HANDLE_RULES_PARAM] = serde_json::Value::from(datalib_handle::RULES_VERSION - 1);
+        let stored = RenderCursorRow {
+            source_id: "src".into(),
+            raw_commit: "commit-a".into(),
+            params: older.to_string(),
+            rendered_at_utc: "2026-01-01T00:00:00.000000Z".into(),
+            tz_offset: Some("+00:00".into()),
+        };
+        assert_eq!(
+            RenderPlan::decide(Some(&stored), &params, false),
+            RenderPlan::Everything("render params changed")
+        );
     }
 }
