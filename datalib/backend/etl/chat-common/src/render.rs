@@ -1164,7 +1164,7 @@ mod tests {
         assert_eq!(p.reason, Reason::NoIdentity);
         assert_eq!(p.field.as_deref(), Some("uuid"));
         // Stamping is the store's job, not the renderer's.
-        assert!(p.first_seen_at_utc.is_empty() && p.last_seen_at_utc.is_empty());
+        assert!(p.first_seen_at_utc.is_empty() && p.changed_at_utc.is_empty());
     }
 
     /// A problem the provider found while normalizing an item — a

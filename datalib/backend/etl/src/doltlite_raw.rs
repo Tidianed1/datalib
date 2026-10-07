@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use datalib_flock::{FileLock, LockError};
+use datalib_store_meta::Ladder;
 pub use datalib_store_meta::{Migration, StoreKind};
 use serde_json::Value;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
@@ -201,6 +202,34 @@ pub const SYNC_SCOPE_STATE_DDL: &str = "CREATE TABLE IF NOT EXISTS sync_scope_st
 pub const PROBLEMS_DDL: &str = datalib_problems::DDL[0].1;
 
 pub const SHARED_DDL: &[&str] = &[SYNC_RUNS_DDL, SYNC_SCOPE_STATE_DDL, PROBLEMS_DDL];
+
+/// The framework's ladder, for the tables stores share rather than own:
+/// `problems`, which every raw and render store holds. Every store this
+/// module opens climbs it, before its owner's ladder, and records where
+/// it stands in `_datalib_meta.shared_schema_version`. A rung checks the
+/// shape it changes, since a store may not hold the table.
+pub const SHARED_LADDER: &[Migration] = &[Migration {
+    version: 1,
+    name: "problems.last_seen_at_utc becomes changed_at_utc",
+    apply: |conn| {
+        Box::pin(async move {
+            let old: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('problems') \
+                 WHERE name = 'last_seen_at_utc')",
+            )
+            .fetch_one(&mut *conn)
+            .await?;
+            if old {
+                sqlx::query(
+                    "ALTER TABLE problems RENAME COLUMN last_seen_at_utc TO changed_at_utc",
+                )
+                .execute(&mut *conn)
+                .await?;
+            }
+            Ok(())
+        })
+    },
+}];
 
 /// Shared tables no build declares any more. A store that still has one
 /// drops it on open, after its ladder (a rung may read it one last time),
@@ -824,34 +853,47 @@ async fn open_inner(
     // does no schema work at all, the ladder included.
     let shared: &[&str] = if include_shared { SHARED_DDL } else { &[] };
     let bare = extra_ddl.is_empty() && shared.is_empty();
-    let stored_version = datalib_store_meta::ladder::stored_version(&pool).await?;
-    let top = datalib_store_meta::ladder::top(ladder);
-    let rungs = if bare || user_tables(&pool).await?.is_empty() {
-        Vec::new()
-    } else {
-        datalib_store_meta::ladder::pending(ladder, stored_version)?
-    };
-    if stored_version > top && !bare {
-        pool.close().await;
-        return Err(
-            anyhow::Error::new(datalib_store_meta::ladder::AheadOfLadder {
-                stored: stored_version,
-                top,
-            })
-            .context(format!("open {}", db_path.display())),
-        );
-    }
-    for rung in rungs {
-        // The meta table has to exist for the rung to bump the version;
-        // a store from before the table is at version 0 and gets it here.
-        sqlx::query(datalib_store_meta::DDL)
-            .execute(&pool)
-            .await
-            .context("create _datalib_meta before migrating")?;
-        datalib_store_meta::ladder::apply(&pool, rung).await?;
-        commit_run(&pool, &format!("migrate v{}: {}", rung.version, rung.name))
-            .await
-            .with_context(|| format!("commit migration v{}", rung.version))?;
+    let has_tables = !user_tables(&pool).await?.is_empty();
+    let mut tops = datalib_store_meta::Versions::default();
+    // The shared ladder first: the framework's tables are below the
+    // owner's, and an owner's rung may read them.
+    for (which, rungs_of) in [(Ladder::Shared, SHARED_LADDER), (Ladder::Own, ladder)] {
+        let stored = datalib_store_meta::ladder::stored_version(&pool, which).await?;
+        let top = datalib_store_meta::ladder::top(rungs_of);
+        match which {
+            Ladder::Shared => tops.shared = top,
+            Ladder::Own => tops.schema = top,
+        }
+        if bare {
+            continue;
+        }
+        if stored > top {
+            pool.close().await;
+            return Err(
+                anyhow::Error::new(datalib_store_meta::ladder::AheadOfLadder { stored, top })
+                    .context(format!("open {}", db_path.display())),
+            );
+        }
+        if !has_tables {
+            continue;
+        }
+        for rung in datalib_store_meta::ladder::pending(rungs_of, stored)? {
+            // The meta table has to exist for the rung to bump the
+            // version; a store from before the table is at version 0 and
+            // gets it here.
+            sqlx::query(datalib_store_meta::DDL)
+                .execute(&pool)
+                .await
+                .context("create _datalib_meta before migrating")?;
+            datalib_store_meta::ladder::apply(&pool, rung, which).await?;
+            let label = match which {
+                Ladder::Shared => "migrate shared",
+                Ladder::Own => "migrate",
+            };
+            commit_run(&pool, &format!("{label} v{}: {}", rung.version, rung.name))
+                .await
+                .with_context(|| format!("commit migration v{}", rung.version))?;
+        }
     }
     if include_shared {
         for table in RETIRED_SHARED_TABLES {
@@ -943,7 +985,7 @@ async fn open_inner(
         &pool,
         kind,
         &recorded_shape(extra_ddl.iter().chain(shared).copied()),
-        top,
+        tops,
     )
     .await
     .with_context(|| format!("write _datalib_meta for {}", db_path.display()))?;
@@ -3348,6 +3390,68 @@ mod tests {
         pool.close().await;
     }
 
+    /// A store from before the shared ladder holds `problems` with
+    /// `last_seen_at_utc`. Without the rung a raw store would refuse to
+    /// open and a render store would rebuild the table empty; with it,
+    /// both keep their rows under `changed_at_utc` and record the rung.
+    #[tokio::test]
+    async fn the_shared_ladder_carries_problems_across_its_rename() {
+        let old_ddl = PROBLEMS_DDL.replace("changed_at_utc", "last_seen_at_utc");
+        let d = tempdir().unwrap();
+        for (name, kind) in [("raw", StoreKind::Raw), ("render", StoreKind::Render)] {
+            let p = d.path().join(format!("{name}.doltlite_db"));
+            {
+                let pool = open_curated(&p, &[old_ddl.as_str()], kind, &[])
+                    .await
+                    .unwrap();
+                sqlx::query(
+                    "INSERT INTO problems (problem_uuid, source_id, stage, severity, outcome, \
+                     reason, scope_kind, scope_key, sample, first_seen_at_utc, last_seen_at_utc) \
+                     VALUES ('p1', 'tng', 'fetch', 'warning', 'ok', 'not_found', 'entity', \
+                     'media_blobs:a#b.mp4', 'gone', '2364-04-01T00:00:00Z', \
+                     '2364-04-02T00:00:00Z')",
+                )
+                .execute(&pool)
+                .await
+                .unwrap();
+                // A build before the shared ladder recorded no position on it.
+                sqlx::query("DELETE FROM _datalib_meta WHERE key = 'shared_schema_version'")
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                commit_run(&pool, "rows").await.unwrap();
+                pool.close().await;
+            }
+
+            let pool = match kind {
+                StoreKind::Raw => open(&p, &[]).await,
+                _ => open_derived(&p, &[PROBLEMS_DDL], kind).await,
+            }
+            .unwrap_or_else(|e| panic!("{name}: {e:#}"));
+            let changed: String =
+                sqlx::query_scalar("SELECT changed_at_utc FROM problems WHERE problem_uuid = 'p1'")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap_or_else(|e| panic!("{name}: {e:#}"));
+            assert_eq!(changed, "2364-04-02T00:00:00Z", "{name}");
+            let meta = datalib_store_meta::read(&pool).await.unwrap().unwrap();
+            assert_eq!(meta.shared_schema_version, 1, "{name}");
+            let messages: Vec<String> = sqlx::query_scalar("SELECT message FROM dolt_log()")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+            assert!(
+                messages.iter().any(|m| {
+                    m.starts_with(
+                        "migrate shared v1: problems.last_seen_at_utc becomes changed_at_utc",
+                    )
+                }),
+                "{name}: {messages:?}"
+            );
+            pool.close().await;
+        }
+    }
+
     /// A rename the reconcile would refuse goes through when the owner
     /// declares it as a rung: the rung runs against the old shape, the
     /// rows survive, the store records the version and the commit, the
@@ -4416,7 +4520,7 @@ mod tests {
             .fetch_one(reader.pool())
             .await
             .unwrap();
-        assert_eq!(pinned, 6, "every meta row is at HEAD");
+        assert_eq!(pinned, 7, "every meta row is at HEAD");
         reader.close().await;
 
         // The shape moves: the hash moves with it, and the commit says so.

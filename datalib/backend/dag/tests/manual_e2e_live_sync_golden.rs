@@ -148,7 +148,9 @@ const VOLATILE_KEYS: &[&str] = &[
 
     // CAS blob "first stored" wall-clock stamp. Identical bytes land at the
     // same PK, but the timestamp is whenever this run first wrote them.
+    // A problem's two stamps are wall-clock too.
     "first_seen_at_utc",
+    "changed_at_utc",
     // Resume-cursor / bookkeeping wall-clock stamps: `sync_scope_state`'s
     // `last_finished_at_utc` + `after` (real now when the scope ran, not the
     // `--now` arg), and `last_seen_at_utc` (when a row was last fetched). The
@@ -1871,6 +1873,7 @@ fn strip_volatile_for_incrementality(v: &mut Value) {
         "qmd_status",
         "last_attempt_at_utc",
         "first_seen_at_utc",
+        "changed_at_utc",
         "last_finished_at_utc",
         "last_seen_at_utc",
         "local_time",

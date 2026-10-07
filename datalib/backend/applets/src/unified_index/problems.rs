@@ -25,7 +25,7 @@ pub struct Params {
     pub q: Option<String>,
     pub offset: Option<usize>,
     pub limit: Option<usize>,
-    /// `last_seen_at_utc:desc,severity_chip`, by the columns' ids.
+    /// `changed_at_utc:desc,severity_chip`, by the columns' ids.
     pub sort: Option<String>,
     /// Stretch the page to reach this problem.
     pub through: Option<String>,
@@ -59,7 +59,7 @@ pub struct ProblemView {
     pub scope_key: String,
     pub path: Option<String>,
     pub first_seen_at_utc: String,
-    pub last_seen_at_utc: String,
+    pub changed_at_utc: String,
     pub render_version: Option<i64>,
 }
 
@@ -101,7 +101,7 @@ impl ProblemView {
             scope_key: row.scope_key,
             path: row.path,
             first_seen_at_utc: row.first_seen_at_utc,
-            last_seen_at_utc: row.last_seen_at_utc,
+            changed_at_utc: row.changed_at_utc,
             render_version: row.render_version,
         }
     }
@@ -193,7 +193,7 @@ pub fn columns() -> Vec<ColumnSpec> {
             .describe("The grid row the record has, or would have had.")
             .hidden(),
         ColumnSpec::new("first_seen_at_utc", "First seen", ColumnType::Timestamp),
-        ColumnSpec::new("last_seen_at_utc", "Last changed", ColumnType::Timestamp),
+        ColumnSpec::new("changed_at_utc", "Last changed", ColumnType::Timestamp),
         ColumnSpec::new("scope_kind", "Scope", ColumnType::Text)
             .describe("What clears this row when reprocessed: the document, or the raw entity.")
             .hidden(),
@@ -442,7 +442,7 @@ mod tests {
 
     fn seen(mut row: ProblemRow, at: &str) -> ProblemRow {
         row.first_seen_at_utc = at.to_string();
-        row.last_seen_at_utc = at.to_string();
+        row.changed_at_utc = at.to_string();
         row
     }
 
