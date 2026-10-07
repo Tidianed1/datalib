@@ -932,8 +932,11 @@ fn knowledge_link(item: &serde_json::Map<String, Value>) -> Option<String> {
 fn tool_input_md(name: &str, input: &Value) -> Vec<String> {
     let readable = input.as_object().and_then(|i| match name {
         "artifacts" => artifact_md(i),
-        "create_file" => create_file_md(i),
-        "bash_tool" => bash_md(i),
+        "create_file" => file_md(i, "path", "file_text"),
+        "Write" => file_md(i, "file_path", "content"),
+        "Edit" => edit_md(i),
+        "Read" => str_of(i, "file_path").map(|p| format!("Read {}", md_code_span(p))),
+        "bash_tool" | "Bash" => bash_md(i),
         _ => None,
     });
     match readable {
@@ -986,23 +989,12 @@ fn artifact_language(kind: &str) -> Option<&'static str> {
     })
 }
 
-fn create_file_md(i: &serde_json::Map<String, Value>) -> Option<String> {
-    let path = str_of(i, "path")?;
-    let text = i.get("file_text").and_then(Value::as_str)?;
-    let ext = std::path::Path::new(path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    let lang = match ext.as_str() {
-        "py" => "python",
-        "md" => "markdown",
-        "rs" => "rust",
-        "js" => "javascript",
-        "ts" => "typescript",
-        "sh" => "bash",
-        other => other,
-    };
+/// A file written whole: `create_file` names its fields `path` and
+/// `file_text`, the sandbox's `Write` `file_path` and `content`.
+fn file_md(i: &serde_json::Map<String, Value>, path_key: &str, text_key: &str) -> Option<String> {
+    let path = str_of(i, path_key)?;
+    let text = i.get(text_key).and_then(Value::as_str)?;
+    let lang = language_of(path);
     let mut head = format!("Create {}", md_code_span(path));
     if let Some(d) = str_of(i, "description") {
         head.push_str(&format!(" — {}", escape_md_inline(d)));
@@ -1011,6 +1003,37 @@ fn create_file_md(i: &serde_json::Map<String, Value>) -> Option<String> {
         "{head}\n\n{}",
         md_code_block(lang, text.trim_end_matches('\n'))
     ))
+}
+
+fn edit_md(i: &serde_json::Map<String, Value>) -> Option<String> {
+    let path = str_of(i, "file_path")?;
+    let old = i.get("old_string").and_then(Value::as_str)?;
+    let new = i.get("new_string").and_then(Value::as_str)?;
+    let lang = language_of(path);
+    Some(format!(
+        "Edit {}\n\nReplace:\n\n{}\n\nwith:\n\n{}",
+        md_code_span(path),
+        md_code_block(lang, old),
+        md_code_block(lang, new)
+    ))
+}
+
+/// A fence language from a path's extension, the extension itself when
+/// it names none of these.
+fn language_of(path: &str) -> &str {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    match ext.to_ascii_lowercase().as_str() {
+        "py" => "python",
+        "md" => "markdown",
+        "rs" => "rust",
+        "js" => "javascript",
+        "ts" => "typescript",
+        "sh" => "bash",
+        _ => ext,
+    }
 }
 
 fn bash_md(i: &serde_json::Map<String, Value>) -> Option<String> {
@@ -1291,6 +1314,31 @@ mod readable_tool_tests {
             tool_input_md("artifacts", &update).join("\n"),
             "Update artifact: **warp** (`text/markdown`)\n\n\
              Replace:\n\n```markdown\n9.2\n```\n\nwith:\n\n```markdown\n9.6\n```"
+        );
+    }
+
+    /// The sandbox's file tools name their fields differently from the
+    /// older `create_file` and `bash_tool`, and were left as JSON.
+    #[test]
+    fn the_sandbox_file_tools_read_as_code() {
+        let write = json!({"file_path": "warp.py", "content": "print(9.6)\n"});
+        assert_eq!(
+            tool_input_md("Write", &write).join("\n"),
+            "Create `warp.py`\n\n```python\nprint(9.6)\n```"
+        );
+        let edit = json!({"file_path": "/home/claude/coil.svg", "old_string": "red",
+                          "new_string": "blue", "replace_all": false});
+        assert_eq!(
+            tool_input_md("Edit", &edit).join("\n"),
+            "Edit `/home/claude/coil.svg`\n\nReplace:\n\n```svg\nred\n```\n\nwith:\n\n```svg\nblue\n```"
+        );
+        assert_eq!(
+            tool_input_md("Read", &json!({"file_path": "/home/claude/log.txt"})).join("\n"),
+            "Read `/home/claude/log.txt`"
+        );
+        assert_eq!(
+            tool_input_md("Bash", &json!({"command": "ls"})).join("\n"),
+            "```bash\nls\n```"
         );
     }
 

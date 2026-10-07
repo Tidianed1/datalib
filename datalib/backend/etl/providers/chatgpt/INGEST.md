@@ -294,8 +294,10 @@ latchkey auth set chatgpt -H "Cookie: cf_clearance=$(pbpaste)"
 
 A TNG-themed fixture of the API's shapes lives at
 `tests/fixtures/chatgpt_api/` (`me.json`, `conversations.json`, one
-`conversations/<id>.json` per conversation), exposed as the Bazel
-`tng_fixture` filegroup. Every hermetic test is a module of
+`conversations/<id>.json` per conversation, and `files/<file_id>.<ext>`
+for the attachment bytes the synthesizer serves behind each file's
+metadata call and signed URL), exposed as the Bazel `tng_fixture`
+filegroup. Every hermetic test is a module of
 `:chatgpt_tests`: `chatgpt_render` renders the fixture, and
 `incremental_skip`, `playback_roundtrip`, `run_problems` (what a
 partial failure records, and when it clears), `interrupt` (a run cut

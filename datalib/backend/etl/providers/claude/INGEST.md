@@ -400,4 +400,7 @@ requests; see the table above.
 ## Sample data
 
 A curated TNG-themed fixture lives at `tests/fixtures/claude_export/`
-and is exposed through the Bazel `tng_fixture` filegroup.
+and is exposed through the Bazel `tng_fixture` filegroup. Its
+`files/<file_uuid>.<ext>` hold the bytes the synthesizer serves where a
+download asks for them: an image's `preview_url`, a document's
+`document_asset.url`.

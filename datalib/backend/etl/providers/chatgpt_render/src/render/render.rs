@@ -297,7 +297,14 @@ fn render_message_body(parts: &[&OAContentPartRow]) -> Option<String> {
         let t = p.text.as_deref().unwrap_or("").trim_end();
         match p.kind.as_str() {
             "text" => blocks.push(t.to_string()),
-            "code" => blocks.push(md_code_block(p.language.as_deref().unwrap_or(""), t)),
+            // Code the interpreter ran comes labelled `unknown`.
+            "code" => blocks.push(md_code_block(
+                p.language
+                    .as_deref()
+                    .filter(|l| *l != "unknown")
+                    .unwrap_or(""),
+                t,
+            )),
             "execution_output" => blocks.push(md_code_block("", t)),
             "thoughts" | "reasoning_recap" => blocks.push(format!("> {}", t.replace('\n', "\n> "))),
             "tether_quote" => {
@@ -453,6 +460,12 @@ mod tests {
             "````python\nprint('```')\n<script>x</script>\n````\n\n\
              ````\n```\n<script>x</script> & co\n````"
         );
+    }
+
+    #[test]
+    fn code_labelled_unknown_gets_a_bare_fence() {
+        let code = part("code", Some("unknown"), "print(1)");
+        assert_eq!(render_message_body(&[&code]).unwrap(), "```\nprint(1)\n```");
     }
 
     #[test]
