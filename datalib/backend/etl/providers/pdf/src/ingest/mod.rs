@@ -112,7 +112,7 @@ async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummar
     )
     .await?;
     summary.errors += scan.errors.len();
-    found.extend(scan.walk_problems());
+    scan.report_problems(&found, "files");
     // A walk that could not read part of the tree may only have failed to
     // see a path, so the table is not truncated and nothing falls out:
     // what the walk did see is upserted over what was there.

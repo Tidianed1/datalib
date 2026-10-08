@@ -1,12 +1,15 @@
 # Chips: a link the app can resolve, drawn as the thing it names
 
-*Decided 2026-10-06. For people it is built, and what the tree does
-is [`../contacts.md`](../contacts.md), whose §"Not built" says what is
-left. Groups and steps are chips in the search and problems grids'
-Source column (§"In a grid"), in a source's storage report (its group
-in the heading, each store's step in a column) and in the run log's
-Group and Step columns. Not built here: system events. The facts about the tree were read on
-2026-10-06 and are cited by path; check one before relying on it.*
+**Status: landed (2026-10-06 to 2026-10-08), kept as the record.** A
+person, a group and a step are chips in documents, grids and the run
+log, resolved live. The reference is [`../../chips.md`](../../chips.md);
+for people, [`../../contacts.md`](../../contacts.md). The PRs: #1020
+(this plan), #1022, #1026, #1028, #1029, #1034, #1040, #1041, #1043,
+#1045, #1060, and the contacts work's #1023, #1024, #1027, #1030. Two
+things the design below says that the tree does differently: a group
+or step cell carries its URI in `Identity.entity` beside a bare `id`,
+not in `id`; and the hover card is a tooltip (#1046). Not built: system
+events as chips.
 
 A **chip** is how datalib shows an entity inline: a person, a source
 group, a step, later a channel or a document. It has a name, a mark

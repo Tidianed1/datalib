@@ -1,4 +1,4 @@
-// A chip is a link the app can resolve (docs/dev/plans/chips.md). The
+// A chip is a link the app can resolve (docs/dev/chips.md). The
 // renderers write `[Name](mailto:… "Name <addr>")`; this marks such a
 // link as it is rendered, so the decorate pass can find it and ask who
 // it is. Plain JavaScript, like chatSections.js, so the render preview

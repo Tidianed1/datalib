@@ -213,7 +213,7 @@ pub async fn read_changed(
             p.extension().is_some_and(|e| e == "jsonl")
         })
         .await?;
-        found.extend(scan.walk_problems_as(&tree.scope));
+        scan.report_problems(found, &tree.scope);
         if !scan.errors.is_empty() {
             unseen.push((tree.rel_prefix.clone(), Box::new(scan.unseen())));
         }

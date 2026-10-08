@@ -254,9 +254,8 @@ function onHandleChipClick(ev: MouseEvent) {
   openPopover(chip, at.x + ev.clientX, at.y + ev.clientY);
 }
 
-/// Double-click opens the person: the contact card once there is one
-/// (docs/dev/plans/contact_editing.md); until then, everything from
-/// them, as a search.
+/// Double-click opens the chip's card: a person's, led by this
+/// document's source, or a group's or a step's (docs/dev/chips.md § Clicks).
 function onChipDblClick(ev: MouseEvent) {
   const entity = entityChipAt(ev);
   if (entity) {

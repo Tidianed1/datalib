@@ -340,7 +340,7 @@ pub struct EntityView {
 }
 
 /// `POST /api/entities`: who each `datalib:group/…` or `datalib:step/…`
-/// URI names now, by URI (docs/dev/plans/chips.md § "One resolver"). A
+/// URI names now, by URI (docs/dev/chips.md § Resolving). A
 /// URI that names nothing in the config is absent from the answer.
 pub async fn post_entities(
     State(s): State<AppState>,

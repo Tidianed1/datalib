@@ -233,7 +233,7 @@ function refreshQmdState() {
 }
 
 // Who the Author chips are comes from `people`, the one resolver every
-// document and grid asks (docs/dev/plans/chips.md § "One resolver"): a
+// document and grid asks (docs/dev/chips.md § Resolving): a
 // cell that draws a handle asks as it draws, and when an answer changes —
 // it lands, or a link made anywhere forgets it — the cells are drawn again.
 // The Source cells are group chips, answered by `entities` the same way.
@@ -1959,7 +1959,7 @@ function onClick(e: SlickEventData, args: OnClickEventArgs) {
 function onDblClick(e: SlickEventData, args: OnDblClickEventArgs) {
   // Double-click on a chip opens its card: a person's, led by this
   // row's source, or a group's dashboard or a step's log
-  // (docs/dev/plans/chips.md § Clicks).
+  // (docs/dev/chips.md § Clicks).
   const chip = chipAt(e);
   if (chip?.dataset.entity) {
     openEntity(chip.dataset.entity);

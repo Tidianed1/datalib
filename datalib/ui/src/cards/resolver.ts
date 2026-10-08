@@ -1,5 +1,5 @@
-// What a chip names, asked once for the whole app (docs/dev/plans/chips.md
-// § "One resolver"). Every surface that draws chips — a document, a grid
+// What a chip names, asked once for the whole app (docs/dev/chips.md
+// § Resolving). Every surface that draws chips — a document, a grid
 // cell — asks here: questions drawn in the same pass go out as one
 // request, answers are kept, and a change a person makes forgets the
 // keys it touched and tells every surface to draw them again.

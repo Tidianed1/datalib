@@ -146,11 +146,14 @@ pub async fn ingest(
     // sidecar here carries is gone — read as "not exported" when the
     // folder is missing, and as nothing when the walk could not see it all.
     let removed = if super::product_exported(scan, DIR_REL) && changes.walk_errors == 0 {
+        // A sidecar there and unread is there.
         let present: HashSet<String> = scan
             .files
             .iter()
-            .filter(|f| is_sidecar(&f.rel))
-            .filter_map(|f| stem(&f.rel))
+            .map(|f| f.rel.as_str())
+            .chain(scan.present_unread.iter().map(String::as_str))
+            .filter(|rel| is_sidecar(rel))
+            .filter_map(stem)
             .map(str::to_string)
             .collect();
         prune::prune_scope(db.pool(), TABLE, &[], &present)

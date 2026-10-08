@@ -336,7 +336,7 @@ impl Measured {
 
 fn report_body(source_id: &str, subjects: &[Subject], now: &str) -> String {
     // The group and each store's step are chips: the app shows the name
-    // the config gives them now, and opens them (docs/dev/plans/chips.md).
+    // the config gives them now, and opens them (docs/dev/chips.md).
     let group = entity_link(source_id, &Entity::Group(source_id).uri(), source_id);
     let mut out = format!(
         "---\ntitle: {source_id} storage\nsource: {source_id}\nmeasured_at: {now}\n---\n\n\
@@ -1089,7 +1089,7 @@ mod tests {
             "{body}"
         );
         // The group and each row's step are chips the app resolves and
-        // opens (docs/dev/plans/chips.md).
+        // opens (docs/dev/chips.md).
         assert!(
             body.contains("# [s](datalib:group/s \"s\") — storage"),
             "{body}"

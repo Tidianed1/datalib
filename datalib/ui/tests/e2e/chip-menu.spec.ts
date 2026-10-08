@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { EVERY_ROW, selectRowByUuid, inDocFrame, stubClipboard } from "./grid-helpers";
 
-// A person in a document is a chip (docs/dev/plans/chips.md). Right-click
+// A person in a document is a chip (docs/dev/chips.md). Right-click
 // on one opens the chip's own menu rather than the document's; its
 // entries copy the name or the identifier and open a search for
 // everything from that person; a double-click opens the person's card,

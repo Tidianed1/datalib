@@ -95,9 +95,11 @@ or stamped with its problem. Each kind is a `problems` row:
   `skipped:google_voice:<hash>` row on the file naming it, which is
   left unstamped: a Voice message names only the attachments it read, so
   reading the file again is the only way to add one.
+- **A file that will not open** is `record:files:<path>`. It is there,
+  so a Maps photo whose sidecar will not open keeps its row.
 - **Deletions are held back** when a walk had errors (`listing:files`)
   or, for Voice, when files were removed or rewritten but one could not
-  be read (`listing:removed_records`). A rewritten Voice file keeps its
+  be read or would not open (`listing:removed_records`). A rewritten Voice file keeps its
   old stamp on such a run, so the next one still reads every file and
   deletes what the rewrite dropped.
 

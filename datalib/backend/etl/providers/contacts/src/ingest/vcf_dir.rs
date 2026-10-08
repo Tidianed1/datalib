@@ -95,7 +95,7 @@ async fn read_folder(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
     opts.progress.inc(changes.unchanged as u64);
 
     let mut read: BTreeSet<&str> = BTreeSet::new();
-    found.extend(scan.walk_problems());
+    scan.report_problems(&found, "files");
     for f in changes.needs_reading_by_path() {
         opts.progress
             .set_message(&format!("ingesting {}", f.path.display()));
