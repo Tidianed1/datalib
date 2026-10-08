@@ -128,6 +128,11 @@ closed_vocabulary! {
         /// A configured entry that exists but this credential cannot
         /// read. → the same.
         Forbidden,
+        /// A bucket a render looked at produced no document, though the
+        /// rows it was last built from are still upstream. → the
+        /// document an earlier run rendered is kept, possibly stale,
+        /// until the bucket renders again.
+        NoDocument,
         /// A configured entry upstream has sent nothing new for a while:
         /// a sensor unplugged, out of range or out of battery. → what
         /// came before is kept; nothing new is arriving.

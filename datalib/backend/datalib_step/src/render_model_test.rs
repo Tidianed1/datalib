@@ -175,6 +175,19 @@ struct SynthRender {
     /// deserialize. The store must carry them while they are reported
     /// and drop them the run they stop.
     unparsed: Mutex<Vec<Unparsed>>,
+    /// Parents whose build fails, and how the renderer ends each one.
+    broken: Mutex<BTreeMap<String, Broken>>,
+}
+
+/// How a renderer ends a bucket it built nothing for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Broken {
+    /// Declared with no inputs, as most renderers do when a build fails.
+    DeclaredEmpty,
+    /// `fail_bucket`.
+    Failed,
+    /// `exclude_bucket`: left out on purpose.
+    Excluded,
 }
 
 const NEVER: usize = usize::MAX;
@@ -187,6 +200,7 @@ impl SynthRender {
             params: Mutex::new(Params { upper: false }),
             fail_after: AtomicUsize::new(NEVER),
             unparsed: Mutex::new(Vec::new()),
+            broken: Mutex::new(BTreeMap::new()),
         }
     }
     fn params(&self) -> Params {
@@ -257,6 +271,7 @@ impl RenderProcessor for SynthRender {
         let params = self.params();
         let version = self.version.load(Ordering::SeqCst);
         let fail_after = self.fail_after.load(Ordering::SeqCst);
+        let broken = self.broken.lock().unwrap().clone();
         let docs = expected(&model, params);
         let mut rendered = 0usize;
         // Every bucket this run looks at, present in the store or not: a
@@ -272,6 +287,21 @@ impl RenderProcessor for SynthRender {
                 bail!("synthetic failure after {rendered} document(s)");
             }
             rendered += 1;
+            match broken.get(&id) {
+                Some(Broken::DeclaredEmpty) => {
+                    ctx.declare_bucket(&id, &[])?;
+                    continue;
+                }
+                Some(Broken::Failed) => {
+                    ctx.fail_bucket(&id, "synthetic build failure")?;
+                    continue;
+                }
+                Some(Broken::Excluded) => {
+                    ctx.exclude_bucket(&id)?;
+                    continue;
+                }
+                None => {}
+            }
             let mut inputs = vec![Input::new("parents", &id)];
             if let Some(parent) = model.parents.get(&id) {
                 inputs.push(Input::new("authors", &parent.author_id));
@@ -805,6 +835,7 @@ impl SynthRender {
             params: Mutex::new(other.params()),
             fail_after: AtomicUsize::new(other.fail_after.load(Ordering::SeqCst)),
             unparsed: Mutex::new(other.unparsed.lock().unwrap().clone()),
+            broken: Mutex::new(other.broken.lock().unwrap().clone()),
         }
     }
 }
@@ -1151,4 +1182,165 @@ async fn a_render_reports_its_head_as_the_store_spells_it() {
         .map(|c| c.version)
         .collect();
     assert_eq!(claimed, head.into_iter().collect::<Vec<_>>());
+}
+
+// ── what a bucket that built nothing does to its documents ──────────
+
+fn parent(n: u32) -> Mutation {
+    Mutation::InsertParent(
+        format!("p{n}"),
+        Parent {
+            title: format!("title {n}"),
+            author_id: "a0".into(),
+        },
+    )
+}
+
+/// Two parents rendered, so a later run has a document to lose.
+async fn two_rendered(world: &mut World, synth: &SynthRender) {
+    world
+        .commit(&[
+            Mutation::RenameAuthor("a0".into(), "ann".into()),
+            parent(1),
+            parent(2),
+        ])
+        .await;
+    let first = world.render_report(synth, false).await.unwrap();
+    assert_eq!(first.docs, 2);
+}
+
+fn held(world: &World) -> BTreeMap<String, Doc> {
+    render_store_at(&world.data_root, None).0
+}
+
+/// A build that failed declares its bucket with nothing, though the
+/// rows it was built from are all still upstream. That must not delete
+/// the bucket's document: it stays as it was, with a warning on it,
+/// until the bucket renders again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_bucket_declared_with_nothing_whose_rows_did_not_leave_keeps_its_document() {
+    use datalib_schema::problems::Severity;
+    let td = tempfile::tempdir().unwrap();
+    let mut world = World::new(td.path()).await;
+    if !world.dolt {
+        return;
+    }
+    let synth = SynthRender::new(world.raw_db.clone());
+    two_rendered(&mut world, &synth).await;
+    let before = held(&world);
+
+    synth
+        .broken
+        .lock()
+        .unwrap()
+        .insert("p1".into(), Broken::DeclaredEmpty);
+    world
+        .commit(&[Mutation::Retitle("p1".into(), "retitled".into())])
+        .await;
+    let narrowed = world.render_report(&synth, false).await.unwrap();
+    assert_eq!(narrowed.removed, 0, "p1's rows are all still upstream");
+    assert_eq!(held(&world).get("p1"), before.get("p1"), "p1 as it was");
+    assert_eq!(narrowed.problems.get(&Severity::Warning), Some(&1));
+
+    // A standing problem commits nothing.
+    let head = commits_of(&world);
+    world.render(&synth, false).await.unwrap();
+    assert_eq!(commits_of(&world), head);
+
+    synth.broken.lock().unwrap().clear();
+    world
+        .commit(&[Mutation::Retitle("p1".into(), "fixed".into())])
+        .await;
+    let fixed = world.render_report(&synth, false).await.unwrap();
+    assert_eq!(fixed.docs, 1);
+    assert!(fixed.problems.is_empty(), "{:?}", fixed.problems);
+    assert_store_is(
+        &world,
+        &expected(&world.model, Params { upper: false }),
+        "after the fix",
+    );
+}
+
+/// The other half: a bucket declared with nothing whose rows the diff
+/// reports removed is gone, and so is its document.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_bucket_declared_with_nothing_whose_rows_left_loses_its_document() {
+    let td = tempfile::tempdir().unwrap();
+    let mut world = World::new(td.path()).await;
+    if !world.dolt {
+        return;
+    }
+    let synth = SynthRender::new(world.raw_db.clone());
+    two_rendered(&mut world, &synth).await;
+
+    synth
+        .broken
+        .lock()
+        .unwrap()
+        .insert("p1".into(), Broken::DeclaredEmpty);
+    world.commit(&[Mutation::DeleteParent("p1".into())]).await;
+    let report = world.render_report(&synth, false).await.unwrap();
+    assert_eq!(report.removed, 1);
+    assert!(report.problems.is_empty(), "{:?}", report.problems);
+    assert_store_is(
+        &world,
+        &expected(&world.model, Params { upper: false }),
+        "after the delete",
+    );
+}
+
+/// A failed bucket's document survives a full walk — here a version
+/// bump, which also must not fail the step over the older version the
+/// kept document carries, nor make every later run a full walk.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_bucket_survives_a_full_walk() {
+    use datalib_schema::problems::Severity;
+    let td = tempfile::tempdir().unwrap();
+    let mut world = World::new(td.path()).await;
+    if !world.dolt {
+        return;
+    }
+    let synth = SynthRender::new(world.raw_db.clone());
+    two_rendered(&mut world, &synth).await;
+    let before = held(&world);
+
+    synth
+        .broken
+        .lock()
+        .unwrap()
+        .insert("p1".into(), Broken::Failed);
+    synth.version.fetch_add(1, Ordering::SeqCst);
+    let walk = world.render_report(&synth, false).await.unwrap();
+    assert_eq!(walk.removed, 0);
+    assert_eq!(held(&world).get("p1"), before.get("p1"), "p1 as it was");
+    assert_eq!(walk.problems.get(&Severity::Error), Some(&1));
+
+    let next = world.render_report(&synth, false).await.unwrap();
+    assert_eq!(next.docs, 0, "the run after the walk is not another walk");
+}
+
+/// A bucket the renderer leaves out on purpose goes, though its rows
+/// are all still upstream: the renderer's word is the evidence.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_excluded_bucket_loses_its_document() {
+    let td = tempfile::tempdir().unwrap();
+    let mut world = World::new(td.path()).await;
+    if !world.dolt {
+        return;
+    }
+    let synth = SynthRender::new(world.raw_db.clone());
+    two_rendered(&mut world, &synth).await;
+
+    synth
+        .broken
+        .lock()
+        .unwrap()
+        .insert("p1".into(), Broken::Excluded);
+    world
+        .commit(&[Mutation::Retitle("p1".into(), "retitled".into())])
+        .await;
+    let report = world.render_report(&synth, false).await.unwrap();
+    assert_eq!(report.removed, 1);
+    assert!(report.problems.is_empty(), "{:?}", report.problems);
+    assert!(!held(&world).contains_key("p1"));
 }

@@ -26,7 +26,9 @@ use datalib_schema::edges::DDL as EDGES_DDL;
 use datalib_schema::grid_rows::DDL as GRID_ROWS_DDL;
 use datalib_schema::markdowns::DDL as MARKDOWNS_DDL;
 use datalib_schema::measurements::{SourceMeasurementRow, DDL as MEASUREMENTS_DDL};
-use datalib_schema::problems::{ProblemRow, ScopeKind, Severity, Stage, DDL as PROBLEMS_DDL};
+use datalib_schema::problems::{
+    ProblemRow, Reason, ScopeKind, Severity, Stage, DDL as PROBLEMS_DDL,
+};
 use datalib_schema::render_cursor::{RenderCursorRow, DDL as RENDER_CURSOR_DDL};
 use datalib_schema::render_inputs::{DDL as RENDER_INPUTS_DDL, INDEX_DDL as RENDER_INPUTS_INDEX};
 use datalib_schema::source_contact_handles::DDL as SOURCE_CONTACT_HANDLES_DDL;
@@ -265,13 +267,25 @@ impl IndexedMarkdownStore {
     /// they declare would fail every source — and counting it as
     /// "declared" would blunt the check for the documents it exists to
     /// guard.
+    ///
+    /// So is a document a run kept although it could not render it
+    /// again (its problem says so): it carries the version that last
+    /// rendered it, and counting that would fail every run, or walk the
+    /// whole source every run, until the one bucket renders.
     pub fn render_versions(&self) -> Result<BTreeSet<u32>> {
         blocking(async {
             let rows = sqlx::query(
                 "SELECT DISTINCT renderer_version FROM markdowns \
-                 WHERE renderer_version IS NOT NULL AND kind <> ?",
+                 WHERE renderer_version IS NOT NULL AND kind <> ? \
+                   AND markdown_uuid NOT IN ( \
+                       SELECT scope_key FROM problems \
+                        WHERE scope_kind = ? AND stage = ? AND reason IN (?, ?))",
             )
             .bind(datalib_schema::measurements::DOC_KIND)
+            .bind(ScopeKind::Markdown.as_str())
+            .bind(Stage::Render.as_str())
+            .bind(Reason::RenderFailed.as_str())
+            .bind(Reason::NoDocument.as_str())
             .fetch_all(&self.pool)
             .await
             .context("read renderer versions")?;
@@ -454,6 +468,35 @@ impl IndexedMarkdownStore {
                 }
                 Ok(())
             })
+        })
+    }
+
+    /// What each of `bucket_keys` was last declared to read.
+    pub fn inputs_of(&self, bucket_keys: &[&str]) -> Result<HashMap<String, Vec<Input>>> {
+        blocking(async {
+            let mut guard = self.write_lock.acquire().await?;
+            let mut out: HashMap<String, Vec<Input>> = HashMap::new();
+            for chunk in bucket_keys.chunks(datalib_etl::bulk::SQL_CHUNK) {
+                let mut sql = String::from(
+                    "SELECT bucket_key, input_table, input_id FROM render_inputs WHERE bucket_key IN (",
+                );
+                datalib_etl::bulk::push_placeholder_list(&mut sql, chunk.len());
+                sql.push(')');
+                // Audited: a placeholder run sized from the chunk; every
+                // key is bound.
+                let mut q = sqlx::query_as::<_, (String, String, String)>(sqlx::AssertSqlSafe(sql));
+                for key in chunk {
+                    q = q.bind(*key);
+                }
+                for (bucket, table, id) in q
+                    .fetch_all(&mut **guard.conn())
+                    .await
+                    .context("read the inputs of buckets")?
+                {
+                    out.entry(bucket).or_default().push(Input::new(table, id));
+                }
+            }
+            Ok(out)
         })
     }
 
@@ -888,6 +931,33 @@ impl IndexedMarkdownStore {
                     .with_context(|| format!("insert problem {}", row.problem_uuid))?;
             }
             Ok(())
+        })
+    }
+
+    /// Write each of `rows` over the row of the same id, if there is
+    /// one, and leave every other row alone: what the driver records on
+    /// a document it kept, beside the problems its last render left.
+    pub fn put_problems(&self, rows: &[ProblemRow]) -> Result<()> {
+        blocking(async {
+            let mut guard = self.write_lock.acquire().await?;
+            let conn = guard.conn();
+            let mut seen: HashMap<String, ProblemRow> = HashMap::new();
+            for row in rows {
+                if let Some(r) = sqlx::query("SELECT * FROM problems WHERE problem_uuid = ?")
+                    .bind(&row.problem_uuid)
+                    .fetch_optional(&mut **conn)
+                    .await
+                    .context("read the problem about to be rewritten")?
+                {
+                    seen.insert(row.problem_uuid.clone(), ProblemRow::from_row(&r)?);
+                }
+                sqlx::query("DELETE FROM problems WHERE problem_uuid = ?")
+                    .bind(&row.problem_uuid)
+                    .execute(&mut **conn)
+                    .await
+                    .context("clear the problem about to be rewritten")?;
+            }
+            self.insert_problems(conn, rows, &seen).await
         })
     }
 
