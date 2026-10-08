@@ -195,7 +195,7 @@ already offers everything a chip's would.
 | | a person | a group | a step |
 |---|---|---|---|
 | **click** | the link popover, where a contacts app is configured | nothing; the href is never followed | nothing; the href is never followed |
-| **double-click** | everything from them: a search card from a document, an `author_handle:` filter in a grid (the contact card takes this over when it is built) | the group's sync dashboard | the step's log |
+| **double-click** | the person card (`personView`): your contact and each source's record of them, the source the chip was seen in first | the group's sync dashboard | the step's log |
 | **right-click** | `chipMenu`: copy the name, the identifier or both; everything from them; link to a contact or edit the link | `entityMenu`: copy the name, the id or both; open its dashboard; browse its documents | `entityMenu`: copy; show its log |
 | **hover** | the tooltip: who, the identifier, what each source calls them, their other handles | the tooltip: name and id, its type, its status | the same |
 | **copy** | `Will Riker <riker@enterprise.org>` as text, a working `mailto:` link as HTML | `Work Slack (datalib:group/slack)`, and the link | the same |
@@ -252,5 +252,5 @@ A new kind of *handle* is a person and goes through
 
 A system event as a chip ("Worf joined the channel"), which needs each
 provider to carry the handle on its system events; chips for a channel
-or a document; and the contact card a person's double-click will open
+or a document; and editing a contact on the person card
 ([`plans/contact_editing.md`](plans/contact_editing.md)).

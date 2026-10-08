@@ -24,3 +24,13 @@ export type SyncDashboardOpts = {
 export function syncDashboardSource(opts: SyncDashboardOpts): string {
   return `syncDashboardView(${JSON.stringify(opts)})`;
 }
+
+export type PersonViewOpts = {
+  /** The source the chip was seen in: its record of the person leads. */
+  seenIn?: string | null;
+};
+
+/// The source of a person card, for a chip that opens one.
+export function personSource(handle: string, opts: PersonViewOpts = {}): string {
+  return `personView(${JSON.stringify(handle)}, ${JSON.stringify(opts)})`;
+}

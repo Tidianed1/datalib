@@ -524,6 +524,15 @@ programs against:
   (`cards/JsonTree.ce.vue`), the source link at the process's commit,
   the process itself. Its *keep* / *exclude* buttons narrow the log
   beside it through the bus (`log.query`, a token for the query bar).
+- `personView(handle, { seenIn })` — one person (`cards/PersonCard.ce.vue`,
+  its rules in `cards/person.ts`): your contact, when the handle is
+  linked to one, and each source's record of them from `/people`, a
+  section per source, never merged. The source named by `seenIn` —
+  where the chip that opened it was — leads, marked "seen here". A
+  person chip's double-click opens it (`personSource` in
+  `cards/cardSources.ts`); it offers the search for everything from
+  them, and *Create contact* for an unlinked handle where a contacts
+  app is configured.
 - `configView()` — `config.toml` itself, edited directly, saved through
   the backend's loader. Reloads on the root's `config_changed` frame
   and, a beat sooner, on the `config.written` bus topic a card publishes

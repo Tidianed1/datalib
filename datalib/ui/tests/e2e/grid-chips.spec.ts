@@ -14,8 +14,8 @@ import {
 // The search grid's Author cell is the same chip a document draws
 // (docs/dev/chips.md § "In a grid"): a link with the handle, the
 // name the source showed, the kind's mark. Right-click on it offers the
-// chip's entries ahead of the row's; a double-click narrows the grid to
-// everything from that person. The fixture has no contacts app, so the
+// chip's entries ahead of the row's; a double-click opens the person's
+// card, led by the row's source. The fixture has no contacts app, so the
 // chips are unresolved; the shape and the clicks are what every root has.
 
 type Row = { uuid: string; author_handle: string | null; author_ref: { id: string } | null };
@@ -47,7 +47,7 @@ test("an author with a handle is drawn as a chip link", async ({ page, request }
   await expect(chip).not.toHaveText("");
 });
 
-test("right-click on the chip offers its copies, and a double-click narrows to the person", async ({
+test("right-click on the chip offers its copies, and a double-click opens the person", async ({
   page,
 }) => {
   const chip = await anAuthorChip(page);
@@ -62,12 +62,14 @@ test("right-click on the chip offers its copies, and a double-click narrows to t
     .poll(() => page.evaluate(() => (window as unknown as { __copied?: string }).__copied))
     .toBe(value);
 
-  await chip.dblclick();
-  // The query bar carries the term; the value is bare or quoted as the
-  // grammar needs, so match on the key and the handle's text.
   const bar = page.locator('[data-testid="search-input"]');
-  await expect(bar).toHaveValue(/author_handle:/);
-  await expect(bar).toHaveValue(new RegExp(value.replaceAll("+", "\\+")));
+  const query = await bar.inputValue();
+  await chip.dblclick();
+  const card = page.locator(".person");
+  await expect(card.locator(".person-name")).not.toHaveText("", { timeout: 10_000 });
+  await expect(card.locator(".person-section").first()).toHaveClass(/person-seen-here/);
+  // The grid's own search is left as it was.
+  await expect(bar).toHaveValue(query);
 });
 
 /// The Source cell is a group chip (docs/dev/chips.md): datalib-http
