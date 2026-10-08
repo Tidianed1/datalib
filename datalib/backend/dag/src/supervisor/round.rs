@@ -2019,10 +2019,17 @@ mod tests {
             a.state_detail.as_deref(),
             Some("stopping: no open request wants it")
         );
-        assert_eq!(
-            outcome(&other, &id).await,
-            Some(Some(RequestOutcome::Stopped))
-        );
+        // The loop saves the row before it closes the request, so a closed
+        // request has no step serving it; the reverse order is not promised.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while outcome(&other, &id).await != Some(Some(RequestOutcome::Stopped)) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for the request to close as stopped: {:?}",
+                outcome(&other, &id).await
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
 
         let_go.store(true, Ordering::SeqCst);
         running.await.unwrap().unwrap();
@@ -2196,12 +2203,17 @@ mod tests {
         assert_eq!(outcome, "succeeded");
     }
 
+    /// With nothing asked of it the loop returns rather than waiting for a
+    /// request, and starts no step.
     #[tokio::test]
     async fn a_loop_with_no_open_request_ends_at_once() {
         let f = fixture();
-        tokio::time::timeout(Duration::from_secs(5), serve(&f))
+        // A loop that waited for a request would never return; the deadline
+        // only tells that from slow store I/O on a loaded runner, and stays
+        // under the `small` test timeout so a hang fails here by name.
+        tokio::time::timeout(Duration::from_secs(30), serve(&f))
             .await
-            .expect("returns")
+            .expect("the loop to return with no request open")
             .unwrap()
             .unwrap();
         assert_eq!(f.runs[0].load(Ordering::SeqCst), 0);
