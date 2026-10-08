@@ -1932,6 +1932,16 @@ contacts
     created_at_utc
     updated_at_utc
     tz_offset
+fields
+    field_id
+    contact_id
+    kind
+    label
+    value
+    handle
+    position
+    copied_from_source
+    copied_from_key
 handles
     handle
     contact_id

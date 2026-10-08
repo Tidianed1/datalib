@@ -19,7 +19,7 @@ use datalib_etl::doltlite_raw;
 use datalib_handle::{Handle, HandleKind};
 use datalib_store_meta::{Migration, StoreKind};
 use datalib_time::IsoOffsetTimestamp;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 use strum::{EnumString, IntoStaticStr, VariantArray};
@@ -38,6 +38,7 @@ pub fn store_path(data_root: &Path) -> PathBuf {
     data_root.join(CURATED_DIR).join(APP_DIR).join(STORE_FILE)
 }
 
+pub mod drafts;
 pub mod schema;
 
 use schema::contacts::ContactRow;
@@ -229,6 +230,43 @@ pub enum LinkedHow {
 impl LinkedHow {
     pub fn as_str(self) -> &'static str {
         self.into()
+    }
+}
+
+/// What a contact's field says: a vCard property, more or less.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    EnumString,
+    IntoStaticStr,
+    VariantArray,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum FieldKind {
+    Email,
+    Phone,
+    Organization,
+    Title,
+    Birthday,
+    Address,
+    Url,
+    Other,
+}
+
+impl FieldKind {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+
+    /// `None` for a spelling this build does not know.
+    pub fn parse(s: &str) -> Option<Self> {
+        s.parse().ok()
     }
 }
 
