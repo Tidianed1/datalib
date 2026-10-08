@@ -22,7 +22,7 @@ type Row = { uuid: string; author_handle: string | null; author_ref: { id: strin
 
 // Slack's authors all carry a handle, and the grid draws only the rows in
 // view, so the grid is opened on Slack rather than on everything.
-const SLACK_ROWS = "/gridView()::q%3Dsource_id%3Aslack";
+const SLACK_ROWS = "/searchView()::q%3Dsource_id%3Aslack";
 
 async function anAuthorChip(page: import("@playwright/test").Page) {
   await page.goto(SLACK_ROWS);

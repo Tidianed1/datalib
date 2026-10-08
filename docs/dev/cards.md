@@ -16,7 +16,7 @@ what a card gets, what it can ask for, and what it must not assume.
 A card's source is a JS **expression**, e.g.
 
 ```js
-gridView()
+searchView()
 documentView("e28ed67d-507b-5319-8732-00e249b6ebf6")
 documentView("e28ed67d-…", "11ec65e9-…")   // doc + section to highlight
 ```
@@ -166,7 +166,7 @@ export function galleryView(): CardRender {
 ```
 
 The grid card retitles itself (`Search: <q>`) as the user searches,
-unless its source gives it a name (`gridView({ name: "Slack documents" })`,
+unless its source gives it a name (`searchView({ name: "Slack documents" })`,
 which is what Browse opens);
 the document card starts as "Document" and switches to the document's
 actual name once its fetch lands. This works the same for builtin
@@ -459,22 +459,21 @@ programs against:
   filter, and "Meaning only" moves its free text into a
   `qmd_vsearch:` predicate and back, so a filter that was clicked is
   the one that could have been typed. The toolbar's search box (⌘K)
-  opens one. `gridView` without a `url` is the same card under its
-  older name, which saved layouts and links still use.
+  opens one. Its table is the grid below, over the search: row click
+  opens the row's document via `host.openCards`; double-click opens it
+  as a standalone single-column page in a new tab. Persists
+  `q`/`sel`/`cols`/`view` state. A search given no `q` opens on
+  `is:document`, one row per document; the empty bar suggests filters
+  on the biggest source the index holds (`cards/searchDefaults.ts`).
 
-- `gridView(opts?: { q?, columns?, name?, url?, placeholder? })` —
-  search bar + a SlickGrid over `/applet/unified_index/search`, or over
-  `url`, another table that pages, sorts and groups the way the search
-  does (the Manage screen's problems cell opens
-  `/applet/unified_index/problems` this way). Each answer says which
-  field names a row, which document a row opens and whether qmd ranks
-  its free text (`RowsSpec`); the qmd columns and ranking appear only
-  for the search. Row click opens the row's document via
-  `host.openCards`; double-click opens it as a standalone single-column
-  page in a new tab. Persists `q`/`sel`/`cols` state. A search given
-  no `q` opens on `is:document`, one row per document; with no
-  `placeholder`, the empty bar suggests filters on the biggest source
-  the index holds (`cards/searchDefaults.ts`).
+- `gridView(opts: { url, q?, columns?, name?, placeholder? })` — the
+  general-purpose grid: a search bar + a SlickGrid over `url`, any
+  table that pages, sorts and groups the way the search does (the
+  Manage screen's problems cell opens `/applet/unified_index/problems`
+  this way). `url` is required; without one the card says so and names
+  `searchView()` for the search. Each answer says which field names a
+  row, which document a row opens and whether qmd ranks its free text
+  (`RowsSpec`). Persists `q`/`sel`/`cols` state.
 - `documentView(markdownUuid?, sectionUuid?)` — renders one document
   (`/applet/unified_index/chat/{markdownUuid}`), highlighting and scrolling to
   `sectionUuid`. A different selection is a different card: the grid
@@ -520,7 +519,7 @@ programs against:
   — the wizard, a removal's confirm — teleported to `<body>`. Its
   header says how the last sync went, the config's notices are strips above the table, its status column reads
   word first ("Failed · 2 hours ago"), and its rows follow the density. Through `host.openCards` it opens beside
-  itself a `gridView(...)` for Browse or a problems count, a
+  itself a `searchView(...)` for Browse, a `gridView(...)` for a problems count, a
   `logView(...)` for a step's log or the server's, a `historyView(...)`
   for a row's commit history, a `syncDashboardView(...)` for a group's
   sync, and `configView()`. What a row's actions do is

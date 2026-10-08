@@ -1,13 +1,15 @@
-// `searchView()` in card source returns a CardRender for the Search
-// card (cards/GridCard.ce.vue): one query, shown as a list with a
-// preview or as a table. It opens on the view picked last unless `view`
-// names one. A search given a `name` keeps it; one without names itself
-// after the live query; no `q` opens on `DEFAULT_QUERY`.
+// The two card sources GridCard.ce.vue draws.
 //
-// `gridView` is the same factory under its older name, which saved
-// layouts and links still use, and the one that takes `url`: another
-// table that pages the way the search does (the problems), drawn as the
-// table alone.
+// `searchView()` is the Search card: one query over the unified index,
+// shown as a list with a preview or as a table. It opens on the view
+// picked last unless `view` names one. A search given a `name` keeps
+// it; one without names itself after the live query; no `q` opens on
+// `DEFAULT_QUERY`.
+//
+// `gridView({ url })` is the general-purpose grid: the table alone,
+// over any endpoint that pages, sorts and groups the way the search
+// does (the problems). It has no views, chips or "Meaning only", and
+// its `url` is required.
 import GridCard from "../GridCard.ce.vue";
 import SearchList from "../SearchList.ce.vue";
 import { DEFAULT_QUERY } from "../searchDefaults";
@@ -27,21 +29,44 @@ export type SearchOpts = {
   view?: SearchViewId;
 };
 
-export function gridView(opts?: SearchOpts & { url?: string; placeholder?: string }): CardRender {
+export type GridOpts = {
+  url: string;
+  q?: string;
+  columns?: string[];
+  name?: string;
+  placeholder?: string;
+};
+
+const STYLES = { styleSources: [SearchList, slickCss, tableGridCss, chipCss] };
+
+export function searchView(opts?: SearchOpts): CardRender {
   return vueCard(
     GridCard,
     {
-      q: opts?.q || (opts?.url ? "" : DEFAULT_QUERY),
+      q: opts?.q || DEFAULT_QUERY,
       columns: opts?.columns,
       name: opts?.name,
-      url: opts?.url,
-      placeholder: opts?.placeholder,
       view: opts?.view,
     },
-    { styleSources: [SearchList, slickCss, tableGridCss, chipCss] },
+    STYLES,
   );
 }
 
-export function searchView(opts?: SearchOpts): CardRender {
-  return gridView(opts);
+export function gridView(opts?: GridOpts): CardRender {
+  if (!opts?.url) {
+    throw new Error(
+      'gridView needs the url of the table to show, as in gridView({ url: "/applet/unified_index/problems" }). The search is searchView().',
+    );
+  }
+  return vueCard(
+    GridCard,
+    {
+      url: opts.url,
+      q: opts.q ?? "",
+      columns: opts.columns,
+      name: opts.name,
+      placeholder: opts.placeholder,
+    },
+    STYLES,
+  );
 }

@@ -152,7 +152,7 @@ const props = defineProps<{
   // documents"})`). Without one the card is named for its live query.
   name?: string;
   // The table the card pages (`gridView({url: "/applet/unified_index/problems"})`);
-  // the search when absent. Its groups are at `${url}/groups`.
+  // the search when absent (`searchView()`). Its groups are at `${url}/groups`.
   url?: string;
   // What the empty search bar suggests typing.
   placeholder?: string;

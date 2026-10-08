@@ -24,7 +24,7 @@ test("the list and the table are two views of one query", async ({ page }) => {
     localStorage.removeItem("datalib-search-view");
     sessionStorage.setItem("view-pick-cleared", "1");
   });
-  await page.goto("/searchView()");
+  await page.goto(GRID);
   await expect(viewTab(page, "List and preview")).toHaveAttribute("aria-selected", "true");
   await expect(results(page).first()).toBeVisible({ timeout: 10_000 });
   // The table asks nothing until it is shown.
@@ -49,18 +49,27 @@ test("the list and the table are two views of one query", async ({ page }) => {
   await expect(shownCards(page).locator(".grid-box .slickgrid-container")).toBeHidden();
 });
 
-test("a new search opens on the view picked last, under either of the card's names", async ({
-  page,
-}) => {
+test("a new search opens on the view picked last", async ({ page }) => {
   // The suite's pick is the table.
-  await page.goto("/searchView()");
+  await page.goto(GRID);
   await expect(viewTab(page, "Table")).toHaveAttribute("aria-selected", "true");
   await viewTab(page, "List and preview").click();
   await expect(results(page).first()).toBeVisible({ timeout: 10_000 });
 
-  await page.goto(GRID);
+  await page.goto(`${GRID}::q%3D`);
   await expect(viewTab(page, "List and preview")).toHaveAttribute("aria-selected", "true");
   await expect(results(page).first()).toBeVisible({ timeout: 10_000 });
+});
+
+test("gridView is the grid over a table it is given, and says so when given none", async ({
+  page,
+}) => {
+  await page.goto(`/${encodeURIComponent('gridView({"url":"/applet/unified_index/problems"})')}`);
+  await expect(shownCards(page).locator(".grid-wrap")).toHaveAttribute("data-shown-query", "");
+  await expect(shownCards(page).getByRole("tablist", { name: "View" })).toHaveCount(0);
+
+  await page.goto("/gridView()");
+  await expect(shownCards(page)).toContainText("gridView needs the url of the table to show");
 });
 
 test("a source chip writes the source filter, and a typed one lights the chip", async ({
