@@ -51,34 +51,53 @@ pub async fn sync(grid: &SqlitePool, terms_path: &Path) -> Result<Synced> {
     let Some(head) = datalib_etl::doltlite_raw::head_commit(grid).await? else {
         return Ok(Synced::default());
     };
-    let terms = open_terms(terms_path).await?;
+    let terms = open_in_shape(terms_path).await?;
     let result = sync_open(grid, &terms, &head).await;
     // On the error path too: dropping the pool only schedules the close.
     terms.close().await;
     result
 }
 
+/// The file, made new when it was built in another shape: it holds
+/// nothing a pass cannot write again.
+async fn open_in_shape(path: &Path) -> Result<SqlitePool> {
+    let pool = open_terms(path).await?;
+    let mut conn = pool.acquire().await?;
+    let has_meta: bool = sqlx::query_scalar(
+        "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = 'terms_meta'",
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    let shape = if has_meta {
+        meta(&mut conn, META_SHAPE).await?
+    } else {
+        None
+    };
+    if shape.as_deref().is_none_or(|s| s == TERMS_SHAPE) {
+        create(&mut conn).await?;
+        drop(conn);
+        return Ok(pool);
+    }
+    drop(conn);
+    tracing::info!(
+        was = shape.as_deref().unwrap_or(""),
+        now = TERMS_SHAPE,
+        "the terms file is in another shape; building it again"
+    );
+    pool.close().await;
+    std::fs::remove_file(path).with_context(|| format!("remove {}", path.display()))?;
+    let pool = open_terms(path).await?;
+    let mut conn = pool.acquire().await?;
+    create(&mut conn).await?;
+    drop(conn);
+    Ok(pool)
+}
+
 async fn sync_open(grid: &SqlitePool, terms: &SqlitePool, head: &str) -> Result<Synced> {
     let mut conn = terms.acquire().await.context("acquire the terms file")?;
-    let shape = meta(&mut conn, META_SHAPE).await?;
-    if shape.as_deref().is_some_and(|s| s != TERMS_SHAPE) {
-        tracing::info!(
-            was = shape.as_deref().unwrap_or(""),
-            now = TERMS_SHAPE,
-            "the terms file is in another shape; building it again"
-        );
-        for table in ["terms_fts", "terms", "terms_meta"] {
-            // Audited: the table names are literals.
-            sqlx::query(sqlx::AssertSqlSafe(format!("DROP TABLE IF EXISTS {table}")))
-                .execute(&mut *conn)
-                .await?;
-        }
-        create(&mut conn).await?;
-    }
     let recorded = meta(&mut conn, META_GRID_COMMIT).await?;
     let shape = meta(&mut conn, META_SHAPE).await?;
-    let plan = plan(recorded.as_deref(), shape.as_deref(), head);
-    match plan {
+    match plan(recorded.as_deref(), shape.as_deref(), head) {
         Plan::Current => Ok(Synced {
             plan: "current",
             ..Synced::default()
@@ -149,8 +168,9 @@ async fn rows_by_uuid(grid: &SqlitePool, uuids: &[String]) -> Result<Vec<TermSou
     Ok(out)
 }
 
-/// One transaction: drop the terms of `replace` (every term, for `None`),
-/// write `rows`' terms, and record `head`. Returns the terms written.
+/// One transaction: drop the rows `replace` names (every row, for `None`)
+/// with their terms, write `rows`' terms, drop the values no term uses any
+/// more, and record `head`. Returns the terms written.
 async fn write(
     conn: &mut SqliteConnection,
     replace: Option<&[String]>,
@@ -159,22 +179,43 @@ async fn write(
 ) -> Result<usize> {
     sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
     let written = async {
+        // The batch is staged first, so the dictionary tables fill by
+        // joins rather than a lookup per term. `dropped` holds the values
+        // the removed rows used: the only ones that can have lost their
+        // last term.
+        for sql in [
+            "CREATE TEMP TABLE IF NOT EXISTS incoming (uuid TEXT NOT NULL, \
+             touched_at_utc TEXT, kind INTEGER NOT NULL, value TEXT NOT NULL)",
+            "CREATE TEMP TABLE IF NOT EXISTS dropped (val_id INTEGER PRIMARY KEY)",
+            "DELETE FROM temp.incoming",
+            "DELETE FROM temp.dropped",
+        ] {
+            sqlx::query(sql).execute(&mut *conn).await?;
+        }
         match replace {
             None => {
-                sqlx::query("INSERT INTO terms_fts (terms_fts) VALUES ('delete-all')")
-                    .execute(&mut *conn)
-                    .await?;
-                sqlx::query("DELETE FROM terms").execute(&mut *conn).await?;
+                for sql in [
+                    "INSERT INTO vals_fts (vals_fts) VALUES ('delete-all')",
+                    "DELETE FROM terms",
+                    "DELETE FROM vals",
+                    "DELETE FROM rows",
+                ] {
+                    sqlx::query(sql).execute(&mut *conn).await?;
+                }
             }
             Some(uuids) => {
                 for chunk in uuids.chunks(CHUNK) {
                     let p = placeholders(chunk.len(), 1);
                     for sql in [
                         format!(
-                            "DELETE FROM terms_fts WHERE rowid IN \
-                             (SELECT term_id FROM terms WHERE uuid IN ({p}))"
+                            "INSERT OR IGNORE INTO temp.dropped SELECT t.val_id FROM terms t \
+                             JOIN rows r ON r.row_id = t.row_id WHERE r.uuid IN ({p})"
                         ),
-                        format!("DELETE FROM terms WHERE uuid IN ({p})"),
+                        format!(
+                            "DELETE FROM terms WHERE row_id IN \
+                             (SELECT row_id FROM rows WHERE uuid IN ({p}))"
+                        ),
+                        format!("DELETE FROM rows WHERE uuid IN ({p})"),
                     ] {
                         // Audited: a placeholder per value, every value bound.
                         let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
@@ -186,11 +227,6 @@ async fn write(
                 }
             }
         }
-        // New rows take keys above every one left, so the index picks up
-        // exactly these.
-        let floor: i64 = sqlx::query_scalar("SELECT coalesce(max(term_id), 0) FROM terms")
-            .fetch_one(&mut *conn)
-            .await?;
         let terms: Vec<(&TermSource, datalib_schema::terms::Term)> = rows
             .iter()
             .flat_map(|row| terms_of(row).into_iter().map(move |t| (row, t)))
@@ -198,26 +234,49 @@ async fn write(
         for chunk in terms.chunks(CHUNK) {
             // Audited: four placeholders per term, every value bound.
             let sql = format!(
-                "INSERT INTO terms (uuid, kind, value, touched_at_utc) VALUES {}",
+                "INSERT INTO temp.incoming (uuid, touched_at_utc, kind, value) VALUES {}",
                 placeholders(chunk.len(), 4)
             );
             let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
             for (row, term) in chunk {
                 q = q
                     .bind(&row.uuid)
-                    .bind(term.kind.as_str())
-                    .bind(&term.value)
-                    .bind(&row.touched_at_utc);
+                    .bind(&row.touched_at_utc)
+                    .bind(i64::from(term.kind.code()))
+                    .bind(&term.value);
             }
             q.execute(&mut *conn).await?;
         }
+        // New values take keys above every one there now, so the index
+        // picks up exactly these.
+        let floor: i64 = sqlx::query_scalar("SELECT coalesce(max(val_id), 0) FROM vals")
+            .fetch_one(&mut *conn)
+            .await?;
+        for sql in [
+            "INSERT INTO rows (uuid, touched_at_utc) \
+             SELECT uuid, max(touched_at_utc) FROM temp.incoming GROUP BY uuid",
+            // `WHERE true`: an upsert's SELECT needs a WHERE to parse.
+            "INSERT INTO vals (value) SELECT DISTINCT value FROM temp.incoming WHERE true \
+             ON CONFLICT (value) DO NOTHING",
+        ] {
+            sqlx::query(sql).execute(&mut *conn).await?;
+        }
         sqlx::query(
-            "INSERT INTO terms_fts (rowid, value) SELECT term_id, value FROM terms \
-             WHERE term_id > ?",
+            "INSERT INTO vals_fts (rowid, value) SELECT val_id, value FROM vals WHERE val_id > ?",
         )
         .bind(floor)
         .execute(&mut *conn)
         .await?;
+        for sql in [
+            "INSERT OR IGNORE INTO terms (val_id, kind, row_id) \
+             SELECT v.val_id, i.kind, r.row_id FROM temp.incoming i \
+             JOIN vals v ON v.value = i.value JOIN rows r ON r.uuid = i.uuid",
+            "DELETE FROM temp.dropped WHERE val_id IN (SELECT val_id FROM terms)",
+            "DELETE FROM vals_fts WHERE rowid IN (SELECT val_id FROM temp.dropped)",
+            "DELETE FROM vals WHERE val_id IN (SELECT val_id FROM temp.dropped)",
+        ] {
+            sqlx::query(sql).execute(&mut *conn).await?;
+        }
         for (key, value) in [(META_GRID_COMMIT, head), (META_SHAPE, TERMS_SHAPE)] {
             sqlx::query(
                 "INSERT INTO terms_meta (key, value) VALUES (?, ?) \
@@ -264,17 +323,13 @@ async fn open_terms(path: &Path) -> Result<SqlitePool> {
         .filename(format!("file:{}?doltlite_engine=sqlite", path.display()))
         .create_if_missing(true)
         .busy_timeout(Duration::from_secs(30));
-    let pool = SqlitePoolOptions::new()
+    SqlitePoolOptions::new()
         .max_connections(1)
         .idle_timeout(None)
         .max_lifetime(None)
         .connect_with(opts)
         .await
-        .with_context(|| format!("open {}", path.display()))?;
-    let mut conn = pool.acquire().await?;
-    create(&mut conn).await?;
-    drop(conn);
-    Ok(pool)
+        .with_context(|| format!("open {}", path.display()))
 }
 
 async fn create(conn: &mut SqliteConnection) -> Result<()> {
@@ -302,6 +357,7 @@ mod tests {
     use crate::grid_index::{apply_one, delete_markdown, open_index, RenderedMarkdown, WriteLock};
     use datalib_schema::grid_rows::GridRow;
     use datalib_schema::providers::Provider;
+    use datalib_schema::terms::TermKind;
 
     /// A document of one row: its uuid, its author's handle, its title.
     fn doc(root: &Path, uuid: &str, handle: &str, title: &str) -> RenderedMarkdown {
@@ -374,17 +430,36 @@ mod tests {
         /// The `(uuid, kind)` of every term matching `value` exactly.
         async fn matching(&self, value: &str) -> Vec<(String, String)> {
             let terms = open_terms(&self.terms).await.unwrap();
-            let mut hits: Vec<(String, String)> = sqlx::query_as(
-                "SELECT t.uuid, t.kind FROM terms_fts JOIN terms t ON t.term_id = terms_fts.rowid \
-                 WHERE terms_fts MATCH ?",
+            let coded: Vec<(String, i64)> = sqlx::query_as(
+                "SELECT r.uuid, t.kind FROM vals_fts JOIN terms t ON t.val_id = vals_fts.rowid \
+                 JOIN rows r ON r.row_id = t.row_id WHERE vals_fts MATCH ?",
             )
             .bind(format!("\"{value}\""))
             .fetch_all(&terms)
             .await
             .unwrap();
             terms.close().await;
+            let mut hits: Vec<(String, String)> = coded
+                .into_iter()
+                .map(|(uuid, code)| {
+                    let kind = TermKind::from_code(code).expect("a known kind");
+                    (uuid, kind.as_str().to_string())
+                })
+                .collect();
             hits.sort();
             hits
+        }
+
+        /// Whether the dictionary still holds `value` at all.
+        async fn holds(&self, value: &str) -> bool {
+            let terms = open_terms(&self.terms).await.unwrap();
+            let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM vals WHERE value = ?")
+                .bind(value)
+                .fetch_one(&terms)
+                .await
+                .unwrap();
+            terms.close().await;
+            n > 0
         }
 
         async fn set_meta(&self, key: &str, value: &str) {
@@ -462,6 +537,12 @@ mod tests {
             g.matching("email:kit@example.com").await,
             [hit("c-k", "from")]
         );
+        assert!(
+            !g.holds("email:ann@example.com").await,
+            "a value no row uses any more stays"
+        );
+        assert!(!g.holds("Bridge").await, "a removed row's title stays");
+        assert!(g.holds("Kept").await);
     }
 
     /// A commit the grid no longer has, or a file in another shape, cannot

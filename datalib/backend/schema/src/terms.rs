@@ -4,7 +4,7 @@
 // The file, and why it is plain SQLite beside the grid index rather than a
 // table in it: `docs/dev/plans/search_tabs.md` § "`grid_row_terms`".
 
-/// What a term is to its row. Stored as its `as_str` spelling.
+/// What a term is to its row. Stored as its [`code`](TermKind::code).
 #[derive(
     Debug,
     Clone,
@@ -17,18 +17,19 @@
     strum::VariantArray,
 )]
 #[strum(serialize_all = "snake_case")]
+#[repr(u8)]
 pub enum TermKind {
     /// The row's own uuid.
-    Id,
+    Id = 1,
     /// The uuid of something the row is in: its conversation, its
     /// document, its Notion page.
-    Container,
+    Container = 2,
     /// The handle of the row's author.
-    From,
+    From = 3,
     /// The title of the row's conversation or document.
-    Title,
+    Title = 4,
     /// A name the row shows: its author, its channel, its account.
-    Name,
+    Name = 5,
 }
 
 impl TermKind {
@@ -39,6 +40,20 @@ impl TermKind {
     /// `None` for a spelling this build does not know.
     pub fn parse(s: &str) -> Option<Self> {
         s.parse().ok()
+    }
+
+    /// What the terms file stores. A code, once given, keeps its kind.
+    pub fn code(self) -> u8 {
+        self as u8
+    }
+
+    /// `None` for a code this build does not know.
+    pub fn from_code(code: i64) -> Option<Self> {
+        use strum::VariantArray;
+        Self::VARIANTS
+            .iter()
+            .copied()
+            .find(|k| i64::from(k.code()) == code)
     }
 
     /// How strongly a match in this kind says the row is the one meant:
@@ -130,18 +145,22 @@ pub fn terms_of(row: &TermSource) -> Vec<Term> {
 /// What [`terms_of`] derives and how the file lays it out. A file built
 /// under another shape is rebuilt whole, so change it whenever either
 /// changes.
-pub const TERMS_SHAPE: &str = "1";
+pub const TERMS_SHAPE: &str = "2";
 
-/// The terms file's tables. The FTS5 index holds only each term's value,
-/// linked to its row in `terms` by rowid, and keeps `@ . - _ + :` inside a
-/// token so an id or an address is one token
-/// (`docs/dev/doltlite.md` § "Full-text search (FTS5)").
+/// The terms file's tables, dictionary-encoded: each grid row once in
+/// `rows`, each distinct value once in `vals`, and a term is three
+/// integers. The FTS5 index covers `vals` alone, linked by rowid, and
+/// keeps `@ . - _ + : /` inside a token so an id or a handle is one
+/// token (`docs/dev/doltlite.md` § "Full-text search (FTS5)").
 pub const TERMS_DDL: &[&str] = &[
-    "CREATE TABLE IF NOT EXISTS terms (term_id INTEGER PRIMARY KEY, uuid TEXT NOT NULL, \
-     kind TEXT NOT NULL, value TEXT NOT NULL, touched_at_utc TEXT)",
-    "CREATE INDEX IF NOT EXISTS terms_by_uuid ON terms (uuid)",
-    "CREATE VIRTUAL TABLE IF NOT EXISTS terms_fts USING fts5(value, content='', \
-     contentless_delete=1, tokenize=\"unicode61 tokenchars '@.-_+:'\")",
+    "CREATE TABLE IF NOT EXISTS rows (row_id INTEGER PRIMARY KEY, \
+     uuid TEXT NOT NULL UNIQUE, touched_at_utc TEXT)",
+    "CREATE TABLE IF NOT EXISTS vals (val_id INTEGER PRIMARY KEY, value TEXT NOT NULL UNIQUE)",
+    "CREATE TABLE IF NOT EXISTS terms (val_id INTEGER NOT NULL, kind INTEGER NOT NULL, \
+     row_id INTEGER NOT NULL, PRIMARY KEY (val_id, kind, row_id)) WITHOUT ROWID",
+    "CREATE INDEX IF NOT EXISTS terms_by_row ON terms (row_id)",
+    "CREATE VIRTUAL TABLE IF NOT EXISTS vals_fts USING fts5(value, content='', \
+     contentless_delete=1, tokenize=\"unicode61 tokenchars '@.-_+:/'\")",
     "CREATE TABLE IF NOT EXISTS terms_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
 ];
 
@@ -206,11 +225,39 @@ mod tests {
     }
 
     #[test]
-    fn every_kind_reads_back_by_its_spelling() {
+    fn every_kind_reads_back_by_its_spelling_and_its_code() {
         use strum::VariantArray;
         for kind in TermKind::VARIANTS {
             assert_eq!(TermKind::parse(kind.as_str()), Some(*kind));
+            assert_eq!(TermKind::from_code(i64::from(kind.code())), Some(*kind));
         }
         assert_eq!(TermKind::parse("bcc"), None);
+        assert_eq!(TermKind::from_code(0), None);
+    }
+
+    /// A stored code is a promise: a kind keeps its number, or every file
+    /// written before reads its terms as another kind.
+    #[test]
+    fn the_codes_are_the_ones_files_hold() {
+        let codes: Vec<(TermKind, u8)> = [
+            TermKind::Id,
+            TermKind::Container,
+            TermKind::From,
+            TermKind::Title,
+            TermKind::Name,
+        ]
+        .into_iter()
+        .map(|k| (k, k.code()))
+        .collect();
+        assert_eq!(
+            codes,
+            [
+                (TermKind::Id, 1),
+                (TermKind::Container, 2),
+                (TermKind::From, 3),
+                (TermKind::Title, 4),
+                (TermKind::Name, 5)
+            ]
+        );
     }
 }

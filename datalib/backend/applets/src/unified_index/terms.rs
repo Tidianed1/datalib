@@ -49,7 +49,8 @@ fn identifier(word: &str) -> Option<String> {
 #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
 pub struct Hit {
     pub uuid: String,
-    pub kind: String,
+    /// A [`TermKind`] code.
+    pub kind: i64,
     pub value: String,
     pub touched_at_utc: Option<String>,
 }
@@ -58,7 +59,8 @@ pub struct Hit {
 /// telling kind first (`TermKind::affinity`), then newest. The score is
 /// that affinity, and the words shown are the kind and the value matched.
 pub fn rank(per_identifier: &[Vec<Hit>]) -> Vec<(String, (f64, String))> {
-    let affinity = |h: &Hit| TermKind::parse(&h.kind).map_or(0, TermKind::affinity);
+    let affinity = |h: &Hit| TermKind::from_code(h.kind).map_or(0, TermKind::affinity);
+    let kind = |h: &Hit| TermKind::from_code(h.kind).map_or("term", TermKind::as_str);
     let Some((first, rest)) = per_identifier.split_first() else {
         return Vec::new();
     };
@@ -87,7 +89,7 @@ pub fn rank(per_identifier: &[Vec<Hit>]) -> Vec<(String, (f64, String))> {
         .map(|h| {
             (
                 h.uuid.clone(),
-                (f64::from(affinity(h)), format!("{}: {}", h.kind, h.value)),
+                (f64::from(affinity(h)), format!("{}: {}", kind(h), h.value)),
             )
         })
         .collect()
@@ -128,8 +130,10 @@ pub async fn lookup(root: &Path, identifiers: &[String]) -> Result<Option<Found>
         let mut per_identifier = Vec::with_capacity(identifiers.len());
         for id in identifiers {
             let hits: Vec<Hit> = sqlx::query_as(
-                "SELECT t.uuid, t.kind, t.value, t.touched_at_utc FROM terms_fts \
-                 JOIN terms t ON t.term_id = terms_fts.rowid WHERE terms_fts MATCH ?",
+                "SELECT r.uuid, t.kind, v.value, r.touched_at_utc FROM vals_fts \
+                 JOIN vals v ON v.val_id = vals_fts.rowid \
+                 JOIN terms t ON t.val_id = v.val_id \
+                 JOIN rows r ON r.row_id = t.row_id WHERE vals_fts MATCH ?",
             )
             // A phrase, so the identifier is matched whole; an identifier
             // holds no double quote (`identifier`).
@@ -184,7 +188,7 @@ mod tests {
     fn hit(uuid: &str, kind: &str, touched: &str) -> Hit {
         Hit {
             uuid: uuid.into(),
-            kind: kind.into(),
+            kind: i64::from(TermKind::parse(kind).expect("a kind").code()),
             value: "v".into(),
             touched_at_utc: Some(touched.into()),
         }
