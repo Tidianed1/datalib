@@ -173,6 +173,11 @@ edges: each time it loads a document it deletes the terms carrying its
   `label:work source_id:gmail is:document budget` is the rows matching
   every part.
 
+**A message's text is not a term, its preview included.** Words in
+the body are what the Words and Meaning tabs search; a preview is only
+the first few hundred characters, so a term made of it would match a
+word near the top of a message and miss the same word further down.
+
 It replaces three things this plan used to list separately: the
 four-column uuid lookup, a separate `grid_row_handles` table, and the
 substring scans of the short fields.
@@ -236,10 +241,6 @@ and could fold in later too.
 
 ## Open questions
 
-- Whether a message's preview is a term. It is only the first few
-  hundred characters, so a word further in would not match, which may
-  confuse more than it helps next to Words, which searches the whole
-  text.
 - A query that mixes an identifier and words (`someone@example.com
   budget`): Fields can require both, which is likely what a person
   means. The qmd tabs would search the words alone.
