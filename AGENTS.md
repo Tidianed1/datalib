@@ -74,21 +74,37 @@ merge conflict waiting to happen.
 
 - [`docs/user/first_time_user.md`](docs/user/first_time_user.md), [`docs/user/getting_your_data.md`](docs/user/getting_your_data.md), [`docs/user/config_examples/`](docs/user/config_examples/).
 
-## Breaking changes are fine
+## Keep a forward path for existing data
 
-**There are no real users yet, so nothing here has to stay
-backward-compatible.** A rename that costs a re-index, a config shape
-that stops loading, a stored column that changes name — all of these are
-cheaper now than they will ever be again. When you find a name that lies
-or a shape that fights you, fix it properly rather than layering a
-compatibility shim over it.
+**A data root that works today should still work after an upgrade.**
+datalib is alpha and we don't promise stable bytes at rest yet, but we
+are aiming to, so treat every existing store and config as something
+the next build has to carry forward. A raw store may hold what upstream
+has since deleted; re-downloading is not a free undo.
 
-Two things this does *not* license. Keep a compatibility path where the
-input comes from a **person** rather than from our own code — a filter
-somebody typed into the search bar lives in their fingers and in their
-saved queries, and an alias costs one line. And say what breaks: a
-change that invalidates a store or a config belongs in the commit
-message.
+When you find a name that lies or a shape that fights you, still fix
+it properly — then bring the existing data along:
+
+- **A raw store whose shape changes** gets a rung on its migration
+  ladder (`datalib/backend/etl/README.md` §"The migration ladder"),
+  which the launch's migrate pass climbs
+  (`datalib/backend/dag/README.md` §"Upgrading a root"). The raw shape
+  every release left is kept in `datalib_step/raw_shapes/`, and a test
+  migrates each one.
+- **A config shape that stops loading** gets a rewrite: in
+  `datalib-http`'s config upgrade when it can be made without asking,
+  otherwise in `datalib-migrate-config` (`docs/dev/config_model.md`
+  §"The retired shapes").
+- **A derived store** (a render store, the grid or qmd index) can be
+  rebuilt from the raw stores; a change that costs a re-render or
+  re-index is fine.
+
+Where no migration can be written, a reset (`datalib-dag --reset
+<step>`) is the last resort; say so, and why, in the commit message.
+Keep a compatibility path, too, where the input comes from a
+**person** rather than from our own code — a filter somebody typed
+into the search bar lives in their fingers and in their saved queries,
+and an alias costs one line.
 
 ## A change keeps the docs true
 
