@@ -850,28 +850,28 @@ mod tests {
         );
         assert_eq!(
             voice_date_ms(
-                &json!({"when": "2019-08-01T14:49:00.742-07:00"}),
+                &json!({"when": "2364-03-01T09:00:00.742-08:00"}),
                 &mut Vec::new()
             ),
-            Some(1_564_696_140_742),
+            Some(12_438_637_200_742),
         );
     }
 
     #[test]
     fn voice_groups_by_contact_and_buckets_by_month() {
         let messages = vec![
-            json!({"id":"u1","kind":"text","conversation_key":"+1410","conversation_display":"Wes Blackwell","when":"2019-08-01T14:49:00.742-07:00","sender":{"tel":"+1410","name":"Wes Blackwell"},"is_me":false,"body":"Hello","attachments":[]}),
-            json!({"id":"u2","kind":"text","conversation_key":"+1410","conversation_display":"+1410","when":"2019-09-02T10:00:00.000-07:00","sender":{"tel":"+6506","name":null},"is_me":true,"body":"Hi back","attachments":[]}),
+            json!({"id":"u1","kind":"text","conversation_key":"+12025550102","conversation_display":"William Riker","when":"2364-03-01T09:00:00.742-08:00","sender":{"tel":"+12025550102","name":"William Riker"},"is_me":false,"body":"Hello","attachments":[]}),
+            json!({"id":"u2","kind":"text","conversation_key":"+12025550102","conversation_display":"+12025550102","when":"2364-04-02T10:00:00.000-08:00","sender":{"tel":"+12025550100","name":null},"is_me":true,"body":"Hi back","attachments":[]}),
         ];
         let chats = build_voice_chats("gt", &with_ids(&messages, "id"));
         assert_eq!(chats.len(), 1);
         // Human name wins over the bare-number display.
-        assert_eq!(chats[0].display, "Wes Blackwell");
-        assert_eq!(chats[0].id, "voice:+1410");
+        assert_eq!(chats[0].display, "William Riker");
+        assert_eq!(chats[0].id, "voice:+12025550102");
         // Two distinct months → two buckets.
         assert_eq!(chats[0].buckets.len(), 2);
-        assert_eq!(chats[0].buckets[0].period_key, "2019-08");
-        assert_eq!(chats[0].buckets[1].period_key, "2019-09");
+        assert_eq!(chats[0].buckets[0].period_key, "2364-03");
+        assert_eq!(chats[0].buckets[1].period_key, "2364-04");
         // is_me → "Me".
         assert_eq!(chats[0].buckets[1].items[0].author_display, "Me");
     }
@@ -884,12 +884,12 @@ mod tests {
         let messages = vec![
             json!({
                 "id":"t1","kind":"text","conversation_key":"+1555","conversation_display":"Q",
-                "when":"2010-02-18T16:10:05.000-08:00","sender":{"tel":"+1555","name":"Q"},
+                "when":"2364-02-18T16:10:05.000-08:00","sender":{"tel":"+1555","name":"Q"},
                 "body":"<script>x</script> & co"
             }),
             json!({
                 "id":"v1","kind":"voicemail","conversation_key":"+1555","conversation_display":"Q",
-                "when":"2010-02-18T16:11:05.000-08:00","party":{"tel":"+1555","name":"Q"},
+                "when":"2364-02-18T16:11:05.000-08:00","party":{"tel":"+1555","name":"Q"},
                 "transcript":"<script>x</script> & co","audio":"vm.mp3"
             }),
         ];
@@ -910,7 +910,7 @@ mod tests {
     fn voicemail_is_attachment_with_transcript_caption() {
         let messages = vec![json!({
             "id":"v1","kind":"voicemail","conversation_key":"+1555","conversation_display":"Jean-Luc Picard",
-            "when":"2010-02-18T16:10:05.000-08:00","party":{"tel":"+1555","name":"Jean-Luc Picard"},
+            "when":"2364-02-18T16:10:05.000-08:00","party":{"tel":"+1555","name":"Jean-Luc Picard"},
             "transcript":"Make it so.","duration":"PT13S","audio":"vm.mp3"
         })];
         let chats = build_voice_chats("gt", &with_ids(&messages, "id"));
@@ -926,7 +926,7 @@ mod tests {
     fn missed_call_is_system_note() {
         let messages = vec![json!({
             "id":"c1","kind":"missed","conversation_key":"+1999","conversation_display":"Spammer",
-            "when":"2009-03-06T09:50:34.000-08:00","party":{"tel":"+1999","name":"Spammer"}
+            "when":"2364-03-06T09:50:34.000-08:00","party":{"tel":"+1999","name":"Spammer"}
         })];
         let chats = build_voice_chats("gt", &with_ids(&messages, "id"));
         let item = &chats[0].buckets[0].items[0];
@@ -938,7 +938,7 @@ mod tests {
     fn voice_mms_text_becomes_attachment_item() {
         let messages = vec![json!({
             "id":"t1","kind":"text","conversation_key":"+1202","conversation_display":"+1202",
-            "when":"2024-02-02T09:06:01.024-08:00","sender":{"tel":"+1202","name":null},"is_me":false,
+            "when":"2364-03-02T09:06:01.024-08:00","sender":{"tel":"+1202","name":null},"is_me":false,
             "body":"pic","attachments":["+1202 - Text - x-1-1.jpg"]
         })];
         let chats = build_voice_chats("gt", &with_ids(&messages, "id"));
