@@ -249,7 +249,13 @@ impl Runner {
         let mut turned_off: BTreeMap<usize, String> = BTreeMap::new();
         let mut seq = 0u64;
         let mut slots: Vec<Slot> = graph.steps.iter().map(|_| Slot::default()).collect();
-        let mut changed_now: HashMap<String, bool> = HashMap::new();
+        // A step may seal and end several passes in one round; the summary
+        // says whether the round as a whole moved its output.
+        let at_start: HashMap<String, Option<String>> = state
+            .steps
+            .iter()
+            .map(|(id, s)| (id.clone(), s.version.clone()))
+            .collect();
         let mut queue = QueueLedger::new(graph.steps.len());
         let mut cancelled = false;
         let mut stop_rx = self.stop.clone();
@@ -601,8 +607,8 @@ impl Runner {
                 Some(signal) = checkpoints.recv() => {
                     // Every one queued in one turn, so repeats cost one tick.
                     for signal in std::iter::once(signal).chain(queued(&mut checkpoints)) {
-                        self.on_signal(graph, signal, &mut facts, &mut state, &mut changed_now,
-                            &mut queue, &mut slots).await;
+                        self.on_signal(graph, signal, &mut facts, &mut state, &mut queue,
+                            &mut slots).await;
                     }
                 }
                 Some(()) = wait_for_stop(&mut stop_rx), if !cancelled => {
@@ -620,8 +626,8 @@ impl Runner {
                     // task can finish, so every seal this join follows is
                     // queued by now.
                     for signal in queued(&mut checkpoints) {
-                        self.on_signal(graph, signal, &mut facts, &mut state, &mut changed_now,
-                            &mut queue, &mut slots).await;
+                        self.on_signal(graph, signal, &mut facts, &mut state, &mut queue,
+                            &mut slots).await;
                     }
                     let (id, attempts, res) = joined
                         .expect("a live task implies a joinable one")
@@ -631,7 +637,7 @@ impl Runner {
                     let live = slots[i].live.take().expect("a joined step was started");
                     let started = facts.steps[i].running.take().map(|r| r.started).unwrap_or(Seq(0));
                     let e = self.on_ended(graph, i, attempts, res, &live, &mut facts,
-                        &mut state, &mut changed_now, &mut queue).await;
+                        &mut state, &mut queue).await;
                     facts.steps[i].last_attempt = Some(Attempt {
                         started,
                         failed: !matches!(e.status, StepStatus::Succeeded { .. }),
@@ -695,7 +701,8 @@ impl Runner {
                 let now = facts.sinks[i]
                     .clone()
                     .unwrap_or_else(|| UNKNOWN.to_string());
-                let changed = changed_now.get(&path).copied().unwrap_or(false);
+                let before = at_start.get(&graph.steps[i].id).cloned().flatten();
+                let changed = facts.sinks[i].is_some() && facts.sinks[i] != before;
                 Some(StepReport {
                     id: graph.steps[i].id.clone(),
                     status: slots[i].status.clone()?,
@@ -953,7 +960,6 @@ impl Runner {
         signal: crate::step::StepSignal,
         facts: &mut Facts,
         state: &mut Record,
-        changed_now: &mut HashMap<String, bool>,
         queue: &mut QueueLedger,
         slots: &mut [Slot],
     ) {
@@ -987,11 +993,9 @@ impl Runner {
             .as_ref()
             .map_or(&graph.fingerprints[p], |l| &l.consumed.fingerprint);
         let qualified = format!("{fingerprint}:{version}");
-        let out = graph.steps[p].output().as_str().to_string();
         let moved = facts.sinks[p].as_deref() != Some(qualified.as_str());
         facts.sinks[p] = Some(qualified.clone());
         state.steps.entry(step.clone()).or_default().version = Some(qualified.clone());
-        changed_now.insert(out, moved);
         queue.sealed(graph, p, &qualified, rows, &*self.sink);
         if moved {
             self.sink.emit(&Event::Checkpoint {
@@ -1027,7 +1031,6 @@ impl Runner {
         live: &Live,
         facts: &mut Facts,
         state: &mut Record,
-        changed_now: &mut HashMap<String, bool>,
         queue: &mut QueueLedger,
     ) -> Ended {
         let spec = &graph.steps[i];
@@ -1045,7 +1048,6 @@ impl Runner {
             attempts,
             pass_ended: false,
         };
-        let path = spec.output().as_str().to_string();
         match res {
             Ok(outcome) => {
                 let v = match reported_version(spec, fingerprint, &outcome.outputs) {
@@ -1058,7 +1060,6 @@ impl Runner {
                 };
                 let moved = prior.as_ref() != Some(&v);
                 facts.sinks[i] = Some(v.clone());
-                changed_now.insert(path, moved);
                 let rows = outcome.outputs.first().and_then(|o| o.rows);
                 queue.sealed(graph, i, &v, rows, &*self.sink);
                 let consumed_paths = paths_of(graph, consumed);
@@ -1092,7 +1093,6 @@ impl Runner {
                 // consumers read (plans/supervisor.md §2.5). One that reports
                 // nothing moves nothing: its tree may be mid-write.
                 if let Ok(Some(v)) = reported_version(spec, fingerprint, &step_err.outputs) {
-                    changed_now.insert(path, prior.as_ref() != Some(&v));
                     facts.sinks[i] = Some(v.clone());
                     state.steps.entry(spec.id.clone()).or_default().version = Some(v);
                 }
