@@ -726,6 +726,48 @@ Creating and dropping a table in one open still appends chunks, though
   `doc/doltlite/dolt_gc.md`; not measured here).
 - Only `sqlite_mirror` and `fsindex` run gc today.
 
+### Full-text search (FTS5)
+
+The layout these were checked on: a plain table of terms keyed by an
+`INTEGER PRIMARY KEY` (`term_id`), indexed by document, and an FTS5
+index over the term's text alone, `content=''` and
+`contentless_delete=1`, linked by rowid. Doltlite embeds SQLite 3.54.0.
+
+- **The tokenizer can keep an id or an address whole.** With
+  `tokenize="unicode61 tokenchars '@.-_+:'"`, a uuid, `email:…` or
+  `slack:T…/U…` is one token, matched exactly as a phrase:
+  `email:ann@example.com` does not match `email:ann@example.com.au`,
+  and a uuid's first group alone matches nothing.
+- **`word*` matches by prefix**, and only at a word's start.
+- **An FTS5 table is matched by its own name, never by an alias**
+  (`no such column`).
+- **The join from a hit back to its term seeks the key**
+  (`SEARCH … USING INTEGER PRIMARY KEY`), so filtering on a term's
+  other columns costs nothing beyond the match.
+- **A contentless-delete index forgets a row by rowid**, so replacing a
+  document's terms is: delete their rowids from the index (found
+  through the plain table's index), delete them from the table, insert
+  the new ones.
+- **An `INTEGER PRIMARY KEY` is the rowid and counts up** from the
+  largest, unlike a text key's rowid.
+- **A reader of one commit matches that commit's terms**, through a
+  detached `<file>@<hash>` open and through a held read transaction
+  alike.
+- **A plain SQLite file attached to a reader of one commit matches
+  too**, and a join from its terms to the store's tables seeks keys on
+  both sides. The plain file is read as it is now, not at the commit.
+
+**What it costs to write, measured** (shell, 0.50.14, 732k synthetic
+terms for 122k rows; not a test). One transaction built the table and
+its index in 2.2 s into a 375 MB store; the same build into a plain
+SQLite file took 1.1 s and 97 MB. Then 200 one-document replaces, each
+its own transaction and, in the store, its own commit: about 1 ms each
+in both, but the store grew 35.5 MB (about 180 KB a commit, every one
+pinning the index pages it rewrote) and the plain file 0.7 MB.
+`dolt_gc()` took the store to 144 MB. An exact address matched in
+0.3 ms in the store and 0.1 ms in the plain file; a prefix with the
+join back, 27 ms and 6 ms.
+
 ### Plain SQLite files and SQLite compatibility
 
 - **Stock `sqlite3` cannot open a `.doltlite_db`**: `file is not a
@@ -740,7 +782,12 @@ Creating and dropping a table in one open still appends chunks, though
 - **`VACUUM INTO` of a live SQLite file in WAL mode includes the WAL's
   rows**, which is how the SQLite mirrors snapshot a source in use.
 - **`journal_mode` is inert**: any mode is accepted and reads back
-  `wal`, and doltlite makes no `-wal` or `-shm` sidecar. `synchronous`
+  `wal`, and doltlite makes no `-wal` or `-shm` sidecar. **A plain
+  SQLite file opened through doltlite answers `wal` too, but keeps a
+  rollback journal**: a `-journal` sidecar during a write, its header
+  never marked WAL, and stock `sqlite3` reads its mode as `delete`. By
+  SQLite's rules for a rollback journal, a reader of a plain file then
+  waits while its writer commits (not measured here). `synchronous`
   at anything above `OFF` syncs every commit (upstream
   `doc/doltlite/pragmas.md`).
 - **`:memory:` works**, commits and diffs included, which is what unit
