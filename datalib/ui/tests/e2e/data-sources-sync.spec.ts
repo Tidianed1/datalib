@@ -727,12 +727,16 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
     await pickRowMenu(page, row(page, "soured/ingest"), "Show step log", log);
     const groupChip = log.locator('.rl-grid a.chip[data-entity="datalib:group/soured"]').first();
     await expect(groupChip).toBeVisible({ timeout: 10_000 });
+    // Resolved and held: the hover carries the group's status.
+    await expect(groupChip).toHaveAttribute("title", /\nSucceeded/, { timeout: 10_000 });
     await expect(groupChip).not.toHaveClass(/entity-failed/);
 
     await untilTheSecondTurns();
     await syncBtn(page, "soured/ingest").click();
+    // Before `settle`, which reloads the page and would ask afresh: this
+    // is the chip drawn before the sync, following it.
+    await expect(groupChip).toHaveClass(/entity-failed/, { timeout: 30_000 });
     expect(await settle(page, "soured/ingest", succeeded)).toBe("Failed");
-    await expect(groupChip).toHaveClass(/entity-failed/, { timeout: 15_000 });
     await expandGroup(page, "soured");
     const failed = await lastSyncedOf(page, "soured/ingest");
     expect(failed).not.toBe(succeeded);

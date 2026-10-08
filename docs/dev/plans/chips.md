@@ -229,8 +229,12 @@ of the page. An edit — a link, an unlink, a new contact, "no longer
 works" — forgets the handles it touched, and the resolver tells every
 subscribed surface, so a grid already open redraws a chip linked in a
 document beside it. An answer to a question asked before the edit is
-dropped when it lands. Groups and steps get a resolver of their own of
-the same shape, with `datalib-http` behind it.
+dropped when it lands. Groups and steps have a resolver of their own of
+the same shape, `entities`, with `datalib-http` behind it. A group's or
+a step's answer also moves on its own, as a sync runs, so `entities`
+follows the live connection and revalidates what it holds on every
+frame that can move a status or a name: it asks again with the old
+answer still drawn, and tells a surface only of answers that changed.
 
 ## Copy
 
