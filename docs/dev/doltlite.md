@@ -811,7 +811,15 @@ The rows it throws away were written after the last seal and never
 committed, so no reader — every reader pins a commit — was ever
 promised them. Keeping them would have meant committing a state the
 writer never vouched for: an entity row whose blobs never arrived, half
-a channel. The next pass refetches from the cursor.
+a channel. The next pass owes them again.
+
+The other thing a dead writer can leave is a `dolt_commit` on its own
+branch that it never published: the kill landed between `commit_run`'s
+two halves. That commit is a seal the run vouched for, so `open`
+publishes it to `main` rather than discarding it.
+`doltlite_two_process_test` kills a writer at each of the three points
+— inside the transaction, after its SQL commit, after its `dolt_commit`
+— and reads what the next open makes of each.
 
 `commit_run` is tolerant of "nothing to commit, working tree clean": a
 pass that fetched nothing new leaves the working set clean.

@@ -194,7 +194,9 @@ impl FingerprintCache {
         let opts = SqliteConnectOptions::new()
             .filename(datalib_runtime::plain_sqlite::uri(path))
             .create_if_missing(true)
-            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+            // Doltlite's plain-SQLite engine answers `wal` and stays in
+            // rollback-journal mode; ask for the mode the file is in.
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Delete)
             // A cache. A torn row after a power cut costs one rehash.
             .synchronous(sqlx::sqlite::SqliteSynchronous::Normal);
         let pool = SqlitePoolOptions::new()
