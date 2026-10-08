@@ -108,11 +108,10 @@ A card kind can also say it is a **developer tool** (`devTool` in
 working on the library or on datalib itself — its logs, its config, its
 pipeline, its components — rather than a view of the data. The gallery
 lists every entry that says so, builtin or custom alike, after the rest
-in a "Developer tools" section, with the "build a component with an
-agent" entry last in it. The section starts closed outside edit mode
-and open in it, until the person opens or closes it; that choice is
-kept in the browser. Nothing else reads the field: a developer tool
-opens, pins and saves like any card.
+in a "Developer tools" section with a heading and a shaded ground of
+its own, with the "build a component with an agent" entry last in it.
+Nothing else reads the field: a developer tool opens, pins and saves
+like any card.
 
 The header around each card has two faces, switched by the **Edit**
 toggle in the status bar (`datalib/ui/src/editMode.ts`, persisted in

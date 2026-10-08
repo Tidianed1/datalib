@@ -37,11 +37,13 @@ test.describe("new-card gallery (outside edit mode)", () => {
   test("gallery's Logs entry becomes a log card over every run", async ({ page }) => {
     await page.goto(GRID);
     await page.locator(".ct-main .ct-add").click();
-    // Logs is a developer tool: listed in its own section, closed until asked for.
-    const logs = page.locator(".gv-dev .gv-row", { hasText: "Logs" });
-    await expect(logs).toBeHidden();
-    await page.locator(".gv-dev > summary").click();
-    await logs.click();
+    // Logs is a developer tool: listed in that section, after the views.
+    const section = page.getByRole("region", { name: "Developer tools" });
+    await expect(section.locator(".gv-row").first()).toContainText("Logs");
+    await expect(
+      page.locator(".gv-row", { hasText: "Markdown Document" }).and(section.locator(".gv-row")),
+    ).toHaveCount(0);
+    await section.locator(".gv-row", { hasText: "Logs" }).click();
     const col = shownCards(page).filter({ has: page.locator(".rl-panel") });
     await expect(col).toBeVisible({ timeout: 10_000 });
     await expect(cardTitle(col)).toHaveText("Log · everything");

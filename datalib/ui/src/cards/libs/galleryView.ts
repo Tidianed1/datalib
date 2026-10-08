@@ -7,8 +7,8 @@
 // which mints a fresh component and walks the user through handing it
 // to a coding agent. An entry whose metadata says `devTool` — the logs,
 // the config, the pipeline graph, the agent entry — is listed after
-// the rest under "Developer tools", a section that starts closed
-// outside edit mode. A builtin that is a building block (a Dashboard
+// the rest under "Developer tools", a section with a heading and a
+// shaded ground of its own. A builtin that is a building block (a Dashboard
 // section) is listed only once "Show every view" is on. Picking an
 // entry REPLACES this card — with the chosen component via
 // ctx.host.setSource, or with a copy of the composite via
@@ -37,27 +37,6 @@ const showAll = ref(storedShowAll());
 watch(showAll, (on) => {
   try {
     localStorage.setItem(SHOW_ALL_KEY, on ? "1" : "0");
-  } catch {
-    // Blocked storage: the choice lasts as long as the page.
-  }
-});
-
-// Whether "Developer tools" is open, once the person has opened or
-// closed it; kept in this browser. Before that it follows edit mode.
-const DEV_OPEN_KEY = "datalib-gallery-dev-tools";
-function storedDevOpen(): boolean | null {
-  try {
-    const kept = localStorage.getItem(DEV_OPEN_KEY);
-    return kept === null ? null : kept === "1";
-  } catch {
-    return null;
-  }
-}
-const devOpen = ref(storedDevOpen());
-watch(devOpen, (open) => {
-  if (open === null) return;
-  try {
-    localStorage.setItem(DEV_OPEN_KEY, open ? "1" : "0");
   } catch {
     // Blocked storage: the choice lasts as long as the page.
   }
@@ -112,10 +91,10 @@ export function galleryView(): CardRender {
       .gv-desc { opacity: .65; }
       .gv-src { font: 11px/1.4 ui-monospace, Menlo, monospace; opacity: .5; }
       .gv-foot { padding: 8px 12px; opacity: .55; font-size: 12px; }
-      .gv-dev > summary { display: flex; align-items: baseline; gap: 8px; padding: 8px 12px; cursor: pointer; font-weight: 600; list-style: none; border-bottom: 1px solid var(--datalib-border, #8882); background: var(--datalib-hover, rgba(127,127,127,.08)); }
-      .gv-dev > summary::-webkit-details-marker { display: none; }
-      .gv-dev > summary::before { content: "▸"; font-size: 10px; opacity: .7; }
-      .gv-dev[open] > summary::before { content: "▾"; }
+      /* The developer tools: one shaded block under its own heading, so
+         it reads as a different kind of thing from the views above. */
+      .gv-dev { background: color-mix(in srgb, var(--datalib-fg, #000) 6%, transparent); border-top: 1px solid var(--datalib-border, #8884); }
+      .gv-dev-head { display: flex; align-items: baseline; gap: 8px; padding: 10px 12px 6px; font-weight: 600; }
       .gv-dev-note { font-weight: 400; opacity: .65; }
     `;
     root.appendChild(style);
@@ -124,12 +103,11 @@ export function galleryView(): CardRender {
     wrap.className = "gv";
     root.appendChild(wrap);
 
-    function paint([manifest, dev, all, , keptOpen]: [
+    function paint([manifest, dev, all]: [
       Map<string, Map<string, import("@/api").Meta>>,
       boolean,
       boolean,
       unknown,
-      boolean | null,
     ]) {
       wrap.replaceChildren();
       const head = document.createElement("div");
@@ -222,19 +200,17 @@ export function galleryView(): CardRender {
       for (const entry of views) addEntry(wrap, entry);
 
       // The tools for working on the library itself, apart from the
-      // views of its data, and closed until asked for outside edit mode.
-      const section = document.createElement("details");
+      // views of its data.
+      const section = document.createElement("section");
       section.className = "gv-dev";
-      section.open = keptOpen ?? dev;
-      section.addEventListener("toggle", () => {
-        if (section.open !== (devOpen.value ?? dev)) devOpen.value = section.open;
-      });
-      const summary = document.createElement("summary");
+      section.setAttribute("aria-label", "Developer tools");
+      const heading = document.createElement("div");
+      heading.className = "gv-dev-head";
       const note = document.createElement("span");
       note.className = "gv-dev-note";
       note.textContent = "logs, the config, the pipeline, components";
-      summary.append("Developer tools", note);
-      section.appendChild(summary);
+      heading.append("Developer tools", note);
+      section.appendChild(heading);
       for (const entry of devTools) addEntry(section, entry);
       // Last, after even the user's own components: the escape hatch
       // for when nothing above fits. No source line in edit mode — the
@@ -261,7 +237,7 @@ export function galleryView(): CardRender {
 
     void ensureFrontend();
     void loadComposites();
-    const stop = watch([frontendManifest, editMode, showAll, savedComposites, devOpen], paint, {
+    const stop = watch([frontendManifest, editMode, showAll, savedComposites], paint, {
       immediate: true,
     });
     return () => stop();
