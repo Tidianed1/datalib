@@ -38,8 +38,8 @@ export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
     icon: "search",
     gallery: "searchView()",
   },
-  // The Search card opened on its table; the gallery lists it once, as
-  // `searchView`.
+  // The Search card under its older name, and the table over another
+  // endpoint; the gallery lists the card once, as `searchView`.
   gridView: {
     title: "Search",
     description: "Search and browse everything in your library, as a table.",

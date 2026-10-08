@@ -440,14 +440,17 @@ programs against:
   the search; their decisions are `cards/dashboard.ts`, their look
   `cards/dashboardCard.css`. A section card leaves the ground and the
   space below it to the Page it sits in.
-- `searchView(opts?: { q? })` and `gridView()` over the search —
-  "Search", one card (`cards/GridCard.ce.vue`) with two views of one
-  query, picked by a switch beside the search box: **List and
-  preview** (`cards/SearchList.ce.vue`: the results as a list with the
-  typed words marked, and the picked result drawn in place by
-  `documentView` in a shadow root of its own) and **Table** (the grid
-  below). `searchView` opens on the list, `gridView` on the table, and
-  the gallery lists the card once. A view stays mounted once shown, so
+- `searchView(opts?: { q?, columns?, name?, view? })` — "Search", one
+  card (`cards/GridCard.ce.vue`) with two views of one query, picked by
+  two tabs at the end of the source chips' row, right above what they
+  switch: **List and preview** (`cards/SearchList.ce.vue`: the results
+  as a list with the typed words marked, and the picked result drawn in
+  place by `documentView` in a shadow root of its own) and **Table**
+  (the grid below). A new search opens on the view picked last, in any
+  search, kept in the browser (`cards/searchViewPref.ts`), and on the
+  list before any was picked; `view` in the card source insists on one,
+  which a Browse does because it names columns. A card whose view was
+  picked keeps it in its own state. A view stays mounted once shown, so
   switching keeps each one's selection and scroll; a hidden view asks
   nothing and catches up when shown. The query string is the card's
   only record of a search (`cards/search.ts`): the chips for the
@@ -456,7 +459,8 @@ programs against:
   filter, and "Meaning only" moves its free text into a
   `qmd_vsearch:` predicate and back, so a filter that was clicked is
   the one that could have been typed. The toolbar's search box (⌘K)
-  opens one on its list.
+  opens one. `gridView` without a `url` is the same card under its
+  older name, which saved layouts and links still use.
 
 - `gridView(opts?: { q?, columns?, name?, url?, placeholder? })` —
   search bar + a SlickGrid over `/applet/unified_index/search`, or over

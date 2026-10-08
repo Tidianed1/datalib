@@ -44,19 +44,15 @@ test.describe("new-card gallery (outside edit mode)", () => {
     await expect(cardOf(page, "logView()")).toHaveCount(1);
   });
 
-  test("gallery's Search entry becomes a second search, on its list", async ({ page }) => {
+  test("gallery's Search entry becomes a second search", async ({ page }) => {
     await page.goto(GRID);
     await page.locator(".ct-main .ct-add").click();
     await page
       .locator(".gv-row", { has: page.locator(".gv-title", { hasText: /^Search$/ }) })
       .click();
-    const picked = cardOf(page, "searchView()");
-    await expect(picked).toHaveCount(1);
-    await expect(picked.getByRole("button", { name: "List and preview" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    await expect(picked.getByRole("list", { name: "Results" }).locator("li").first()).toBeVisible({
+    await expect(cardOf(page, "searchView()")).toHaveCount(1);
+    // Two search cards now: the one the page opened on and the one picked.
+    await expect(page.locator(".grid-box .slickgrid-container")).toHaveCount(2, {
       timeout: 10_000,
     });
   });

@@ -9,8 +9,9 @@
 //
 // Over the search itself the card is the Search card, with two views of
 // the one query: a list with a preview (SearchList.ce.vue) and this
-// table. Both stay mounted once shown, so switching keeps each one's
-// selection and scroll. The source chips and "Meaning only" rewrite the
+// table, picked by the tabs above them. A new search opens on the view
+// picked last (searchViewPref.ts). Both stay mounted once shown, so
+// switching keeps each one's selection and scroll. The source chips and "Meaning only" rewrite the
 // query (cards/search.ts) rather than keep state beside it.
 //
 // Selecting a row opens the row's document as a new card via
@@ -125,6 +126,7 @@ import { DEFAULT_QUERY, PLAIN_HINT, searchPlaceholder } from "./searchDefaults";
 import SearchList from "./SearchList.ce.vue";
 import { freeText, meaningOnly, pickedSource, setMeaningOnly, setSource } from "./search";
 import { iconUrl } from "@/config/icons";
+import { lastSearchView, rememberSearchView, type SearchViewId } from "./searchViewPref";
 import { pushToast } from "@/toasts";
 import type { CardCtx } from "./types";
 
@@ -154,29 +156,35 @@ const props = defineProps<{
   url?: string;
   // What the empty search bar suggests typing.
   placeholder?: string;
-  // Which view the search opens in (`searchView()` asks for the list,
-  // `gridView()` for the table); the persisted state's wins over it.
-  view?: View;
+  // The view a search opens in when the card source insists on one
+  // (a Browse names columns, which only the table has). Without it the
+  // search opens on the view picked last; the persisted state's wins
+  // over both.
+  view?: SearchViewId;
 }>();
 
 const url = props.url ?? SEARCH;
 // The search itself, not another table that pages the way it does.
 const isSearch = url === SEARCH;
 
-const VIEWS = [
-  { id: "list", label: "List and preview" },
-  { id: "table", label: "Table" },
-] as const;
-type View = (typeof VIEWS)[number]["id"];
+// Each view's tab: its name and its glyph, a stroked path on a 24px grid.
+const VIEWS: { id: SearchViewId; label: string; icon: string }[] = [
+  { id: "list", label: "List and preview", icon: "M3 4h18v16H3zM10 4v16M5 8h3M5 12h3M5 16h3" },
+  { id: "table", label: "Table", icon: "M3 4h18v16H3zM3 10h18M3 15h18M9 4v16M15 4v16" },
+];
 
 const initialState = new URLSearchParams(props.ctx.initialState);
 
 const query = ref(initialState.get("q") ?? props.q ?? "");
 
-const openingView: View = isSearch ? (props.view ?? "table") : "table";
-const view = ref<View>(
-  isSearch ? (VIEWS.find((v) => v.id === initialState.get("view"))?.id ?? openingView) : "table",
+const view = ref<SearchViewId>(
+  isSearch
+    ? (VIEWS.find((v) => v.id === initialState.get("view"))?.id ?? props.view ?? lastSearchView())
+    : "table",
 );
+// Kept with the card once the person has picked one, so a change of
+// the view the next search opens on does not move this one.
+let viewPicked = initialState.has("view");
 // The list mounts the first time it is shown, and stays.
 const listSeen = ref(view.value === "list");
 // `query` once typing has paused: what the list and the chips ask for.
@@ -193,9 +201,10 @@ search: <code>author:worf</code>, <code>before:2371-01-01</code>, <code>-kind:co
 <p>The chips under the box say which sources the results come from, and how many each;
 pick one to see only its results. A chip and the tick box write a filter into the search
 box, the same one you could type.</p>
-<p><b>List and preview</b> shows each result with your words marked, and the picked one to
-read beside it. <b>Table</b> shows the same results with every column, sorting and
-grouping.</p>
+<p>The two tabs above the results are two ways to see them. <b>List and preview</b> shows
+each result with your words marked, and the picked one to read beside it. <b>Table</b>
+shows the same results with every column, sorting and grouping. A new search opens on
+the one you picked last.</p>
 `
     : null,
 );
@@ -468,7 +477,7 @@ function saveState() {
   if (query.value !== (props.q ?? "")) params.set("q", query.value);
   if (sel.value) params.set("sel", sel.value);
   if (colsEncoded) params.set("cols", colsEncoded);
-  if (view.value !== openingView) params.set("view", view.value);
+  if (viewPicked) params.set("view", view.value);
   props.ctx.host.setState(params.toString());
 }
 
@@ -1034,6 +1043,8 @@ watch(query, (q, before) => {
 });
 
 watch(view, (v) => {
+  viewPicked = true;
+  rememberSearchView(v);
   saveState();
   if (v === "list") listSeen.value = true;
   if (v === "table" && tableBehind) {
@@ -2191,16 +2202,18 @@ onBeforeUnmount(() => {
           {{ g.sample.source_ref?.label ?? g.sample.source_id }} {{ g.count.toLocaleString() }}
         </button>
       </div>
-      <div class="view-switch" role="group" aria-label="View">
+      <div class="view-tabs" role="tablist" aria-label="View">
         <button
           v-for="v in VIEWS"
           :key="v.id"
           type="button"
-          class="view-option"
+          class="view-tab"
           :class="{ 'is-on': view === v.id }"
-          :aria-pressed="view === v.id"
+          role="tab"
+          :aria-selected="view === v.id"
           @click="view = v.id"
         >
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path :d="v.icon" /></svg>
           {{ v.label }}
         </button>
       </div>
@@ -2299,39 +2312,61 @@ onBeforeUnmount(() => {
   flex: 1 1 16rem;
   min-width: 0;
 }
+/* The chips, then the views' tabs at the row's end. The row's rule is
+   the top edge of what the tabs switch; the tab in use is open onto it. */
 .view-row {
   flex: 0 0 auto;
   display: flex;
   align-items: flex-end;
   gap: 0.75rem;
+  border-bottom: 1px solid var(--datalib-border);
 }
-.view-switch {
+.source-chips {
+  padding-bottom: 6px;
+}
+.view-tabs {
   flex: 0 0 auto;
   margin-left: auto;
   display: flex;
-  border: 1px solid var(--datalib-border);
-  border-radius: var(--datalib-radius);
-  overflow: hidden;
+  gap: 2px;
+  margin-bottom: -1px;
 }
-.view-option {
-  height: var(--datalib-control-h);
+.view-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: calc(var(--datalib-control-h) + 2px);
   padding: 0 10px;
   font: inherit;
   white-space: nowrap;
-  color: var(--datalib-fg);
-  background: var(--datalib-bg);
-  border: 0;
+  color: var(--datalib-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom-color: var(--datalib-border);
+  border-radius: var(--datalib-radius) var(--datalib-radius) 0 0;
   cursor: pointer;
 }
-.view-option + .view-option {
-  border-left: 1px solid var(--datalib-border);
+.view-tab svg {
+  width: var(--datalib-icon-size);
+  height: var(--datalib-icon-size);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linejoin: round;
 }
-.view-option:hover {
+.view-tab:hover {
+  color: var(--datalib-fg);
   background: var(--datalib-hover);
 }
-.view-option.is-on {
-  background: var(--datalib-fg);
-  color: var(--datalib-bg);
+.view-tab.is-on {
+  color: var(--datalib-fg);
+  font-weight: 600;
+  background: var(--datalib-bg);
+  border-color: var(--datalib-border);
+  border-bottom-color: var(--datalib-bg);
+}
+.view-tab.is-on svg {
+  color: var(--datalib-accent);
 }
 .meaning-check {
   flex: 0 0 auto;
