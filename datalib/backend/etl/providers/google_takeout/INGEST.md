@@ -65,10 +65,12 @@ A feed reads only the files that changed since it last stamped them
 (`file_checkpoint`), so what failed has to be either read again next run
 or stamped with its problem. Each kind is a `problems` row:
 
-- **An entry read but not stored** — a review or saved place with no
-  place id or date, a subscription row short of columns or with no
-  channel id, a watch-history entry that is not a video — is a
-  `skipped:<feed>:<hash>` row (`RunProblems::skipped`).
+- **An entry read but not stored** — a review with no place id or
+  date, a saved place with no date or nothing to key it on (a place id,
+  a `cid`, or for a pin dropped on an address, its `q=` query), a
+  subscription row short of columns or with no channel id, a
+  watch-history entry that is not a video, a Gemini entry with no date
+  line — is a `skipped:<feed>:<hash>` row (`RunProblems::skipped`).
   A feed replaces only its own rows, and only when it read its file, so
   an unchanged file keeps last run's rows. A Maps file with no
   `features` list is one `file:google_takeout/<feed>:<path>` row,
@@ -110,6 +112,28 @@ that stamps the files, so a run that fails before its deletions leaves
 the files to be read again too. A run that was
 stopped writes a `phase:` or `listing:` row only for what failed before
 the stop, and clears none.
+
+## Files are named the way Google names them
+
+What Google writes differs from what one would guess, and the fixture
+follows Google:
+
+- A Maps photo's sidecar is named after its media, extension and all:
+  `<photo>.jpg.json` describes `<photo>.jpg`.
+- A Gemini entry's links are percent-encoded (`Prime%20Directive.pdf`), and
+  a generated image can be on disk under another extension than the
+  page names it by (`….jpeg` on the page, `….png` on disk). Its cell
+  is `Prompted <prompt>`, then optional `N generated image.` and
+  `Attached N file.` lines, the date, and the response's HTML; the
+  right-hand cell holds a preview `<img>` of an attached image.
+
+## A reader that changes has to reach stores already synced
+
+A feed reads only the files that changed since it stamped them, so a
+fix to what a reader makes of an unchanged file reaches nobody's store
+on its own. It needs a rung on `schema_raw::LADDER` that forgets that
+feed's stamps (`read_again`); the next sync then reads those files
+whole. `tests/fixture_walk.rs`'s `rung_1_…` is the test to copy.
 
 ## Tests
 

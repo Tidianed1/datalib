@@ -120,7 +120,7 @@ MAX_STAMP_MS = (1 << 48) - 1
 # records as a nulled `created_at` on that message. Google Takeout's
 # three are entries shaped like a real export's: an attachment its
 # message names and the export lacks, a watch-history entry that is not
-# a video, a saved place whose URL has no place id.
+# a video, a saved place with no date.
 #
 # A fetch row about an attachment names the grid row of what owns it,
 # so the screen can open it: the conversation for claude (minted from
@@ -171,11 +171,10 @@ TAKEOUT_CHAT_ATTACHMENT_NOT_IN_EXPORT = (
     "||not_found|risa-shore-leave.png is not in the export"
 )
 TAKEOUT_SAVED_PLACE_WITHOUT_KEY = (
-    "dd770a87-9dab-5b1f-8e08-7bb609755c6f"
+    "5e4f794e-967e-5d6e-ac01-3e5031ebe907"
     "|error|fetch|entity"
-    "|skipped:maps_saved_places:51f2c2edc22052ee"
-    "||google_maps_url|no_identity"
-    "|http://maps.google.com/?q=Quark%27s+Bar,+Deep+Space+Nine"
+    "|skipped:maps_saved_places:17f4280e0ea1d5c3"
+    "||date|no_identity|"
 )
 EXPECTED_PROBLEMS = {
     "claude-api": [POISONED_PROBLEM, CLAUDE_ATTACHMENT_WITHOUT_BYTES],
@@ -183,8 +182,8 @@ EXPECTED_PROBLEMS = {
     "tng_pdfs": [PDF_THAT_WILL_NOT_IDENTIFY],
     "google-takeout": [
         TAKEOUT_POST_NOT_A_VIDEO,
-        TAKEOUT_CHAT_ATTACHMENT_NOT_IN_EXPORT,
         TAKEOUT_SAVED_PLACE_WITHOUT_KEY,
+        TAKEOUT_CHAT_ATTACHMENT_NOT_IN_EXPORT,
     ],
 }
 

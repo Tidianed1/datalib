@@ -25,7 +25,15 @@
       "properties": {
         "date": "2026-03-01T08:00:00Z",
         "google_maps_url": "http://maps.google.com/?q=Quark%27s+Bar,+Deep+Space+Nine",
-        "location": {"name": "Quark's Bar"}
+        "Comment": "Avoid the Dabo table"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {"type": "Point", "coordinates": [0.0, 0.0]},
+      "properties": {
+        "google_maps_url": "https://maps.google.com/?cid=4711",
+        "location": {"name": "Starbase 74"}
       }
     }
   ]

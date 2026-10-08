@@ -73,9 +73,9 @@ async fn maps_reviews_lands_two_rows() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn maps_saved_places_handles_ftid_and_cid() {
+async fn maps_saved_places_handles_ftid_cid_and_an_address_query() {
     let (_work, summary, _db_path) = run_all().await;
-    assert_eq!(summary.maps_saved_places, 2);
+    assert_eq!(summary.maps_saved_places, 3);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -87,7 +87,7 @@ async fn maps_photo_lands_row_and_blob() {
     assert_eq!(rows.len(), 1);
     // blake3 column populated from JPEG bytes.
     let blake3: Option<String> = sqlx::query_scalar("SELECT blake3 FROM maps_photos WHERE id = ?")
-        .bind("2026-06-04-tenfwd")
+        .bind("2026-06-04-tenfwd.jpg")
         .fetch_one(db.pool())
         .await
         .unwrap();
@@ -197,18 +197,81 @@ async fn google_chat_lands_groups_users_messages_and_attachments() {
     assert!(s.contains("Course 314"));
 }
 
+/// The fixture's cells are laid out as Google writes them: "Prompted …",
+/// optional "N generated image." and "Attached N file." lines, the date,
+/// then the response. Read with a guess at the layout, the prompt took in
+/// the response and the footer, and the response lost its first paragraph.
 #[tokio::test(flavor = "multi_thread")]
-async fn gemini_apps_lands_two_cells_and_one_attachment() {
+async fn gemini_apps_splits_each_cell_into_prompt_and_response() {
     let (_work, summary, db_path) = run_all().await;
-    assert_eq!(summary.gemini_activity, 2);
-    assert_eq!(summary.gemini_attachments, 1);
+    assert_eq!(summary.gemini_activity, 3);
     let db = RawDb::open(&db_path).await.unwrap();
+    let rows = db.load_payloads("gemini_activity").await.unwrap();
+    let by_prompt = |prompt: &str| {
+        rows.iter()
+            .find(|v| v["promptText"] == prompt)
+            .unwrap_or_else(|| panic!("no cell prompted {prompt:?}: {rows:#?}"))
+    };
+
+    let prime = by_prompt("Tell me about the Prime Directive. Is it ever waived?");
+    let response = prime["responseHtml"].as_str().unwrap();
+    assert!(
+        response.starts_with("<p>The Prime Directive (General Order 1)"),
+        "{response}"
+    );
+    assert!(response.contains("court of inquiry"), "{response}");
+    assert!(!response.contains("Products:"), "{response}");
+    assert_eq!(prime["whenStr"], "Feb 14, 2026, 11:48:37 AM PDT");
+    assert_eq!(
+        prime["attachedFiles"],
+        serde_json::json!([{
+            "file": "Prime Directive summary-1701236400000001.txt",
+            "name": "Prime Directive summary.txt",
+        }])
+    );
+
+    let drawn = by_prompt("Make this saucer sketch look like the Enterprise-D at warp.");
+    assert_eq!(
+        drawn["generatedImages"],
+        serde_json::json!(["2364030112000000001-ncc1701d0e5f6a7b.jpeg"])
+    );
+    by_prompt("How does a warp coil work?");
+
     let when_count: i64 =
         sqlx::query_scalar("SELECT count(*) FROM gemini_activity WHERE when_ts IS NOT NULL")
             .fetch_one(db.pool())
             .await
             .unwrap();
-    assert_eq!(when_count, 2);
+    assert_eq!(when_count, 3);
+}
+
+/// Every file a cell names lands with its bytes: a link Google
+/// percent-encoded, the image a response drew, and that image written to
+/// disk under another extension than the one the page names it by.
+#[tokio::test(flavor = "multi_thread")]
+async fn gemini_apps_stores_every_file_a_cell_names() {
+    let e = Export::new();
+    let s = e.sync().await;
+    assert_eq!(s.gemini_attachments, 3, "{s:?}");
+    assert_eq!(e.keys().await, Vec::<String>::new());
+
+    let db = RawDb::open(&e.db_path).await.unwrap();
+    let rows: Vec<(String, Option<String>)> =
+        sqlx::query_as("SELECT filename, blake3 FROM gemini_attachments ORDER BY filename")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+    db.close().await;
+    let names: Vec<&str> = rows.iter().map(|r| r.0.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "2364030112000000001-ncc1701d0e5f6a7b.jpeg",
+            "Prime Directive summary-1701236400000001.txt",
+            "saucer-sketch-0c1d2e3f40516273.jpg",
+        ]
+    );
+    assert!(rows.iter().all(|r| r.1.is_some()), "{rows:?}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -394,7 +457,7 @@ async fn a_deleted_maps_photo_sidecar_takes_its_row() {
     e.sync().await;
     assert_eq!(e.count("maps_photos").await, 1);
 
-    e.remove("Maps/Photos and videos/2026-06-04-tenfwd.json");
+    e.remove("Maps/Photos and videos/2026-06-04-tenfwd.jpg.json");
     let s = e.sync().await;
     assert_eq!(s.removed, 1);
     assert_eq!(e.count("maps_photos").await, 0);
@@ -493,12 +556,12 @@ async fn a_review_dropped_from_a_newer_export_is_gone() {
 async fn a_saved_place_dropped_from_a_newer_export_is_gone() {
     let e = Export::new();
     e.sync().await;
-    assert_eq!(e.count("maps_saved_places").await, 2);
+    assert_eq!(e.count("maps_saved_places").await, 3);
 
     e.rewrite(SAVED, drop_first_feature);
     let s = e.sync().await;
     assert_eq!(s.removed, 1, "{s:?}");
-    assert_eq!(e.count("maps_saved_places").await, 1);
+    assert_eq!(e.count("maps_saved_places").await, 2);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -531,14 +594,14 @@ async fn a_watch_dropped_from_a_newer_export_is_gone() {
 async fn a_gemini_activity_dropped_from_a_newer_export_is_gone_with_its_attachment() {
     let e = Export::new();
     e.sync().await;
-    assert_eq!(e.count("gemini_activity").await, 2);
-    assert_eq!(e.count("gemini_attachments").await, 1);
+    assert_eq!(e.count("gemini_activity").await, 3);
+    assert_eq!(e.count("gemini_attachments").await, 3);
 
     e.rewrite(GEMINI, drop_first_cell);
     let s = e.sync().await;
     assert_eq!(s.removed, 1, "{s:?}");
-    assert_eq!(e.count("gemini_activity").await, 1);
-    assert_eq!(e.count("gemini_attachments").await, 0);
+    assert_eq!(e.count("gemini_activity").await, 2);
+    assert_eq!(e.count("gemini_attachments").await, 2);
 }
 
 /// A reviews file with no `features` list says nothing about which reviews
@@ -567,10 +630,10 @@ async fn a_missing_single_file_feed_deletes_nothing() {
     let s = e.sync().await;
     assert_eq!(s.removed, 0, "{s:?}");
     assert_eq!(e.count("maps_reviews").await, 2);
-    assert_eq!(e.count("maps_saved_places").await, 2);
+    assert_eq!(e.count("maps_saved_places").await, 3);
     assert_eq!(e.count("youtube_subscriptions").await, 3);
     assert_eq!(e.count("youtube_watch_history").await, 3);
-    assert_eq!(e.count("gemini_activity").await, 2);
+    assert_eq!(e.count("gemini_activity").await, 3);
 }
 
 // ── A product missing from the export deletes nothing ───────────────
@@ -643,10 +706,11 @@ async fn a_product_that_returns_smaller_loses_what_it_dropped() {
 
 // ── What a run could not do is a problem until it succeeds ──────────
 
-const MAPS_PHOTO_SIDECAR: &str = "Maps/Photos and videos/2026-06-04-tenfwd.json";
+const MAPS_PHOTO_SIDECAR: &str = "Maps/Photos and videos/2026-06-04-tenfwd.jpg.json";
 const MAPS_PHOTO_MEDIA: &str = "Maps/Photos and videos/2026-06-04-tenfwd.jpg";
 const CHAT_ATTACHMENT: &str = "Google Chat/Groups/DM TNG-BRIDGE/course-laid-in.txt";
-const GEMINI_ATTACHMENT: &str = "My Activity/Gemini Apps/Prime-Directive-summary.txt";
+const GEMINI_ATTACHMENT: &str =
+    "My Activity/Gemini Apps/Prime Directive summary-1701236400000001.txt";
 const VOICE_MMS: &str = "Voice/Calls/Jean-Luc Picard - Text - 2364-03-01T09_00_00Z-1-1.jpg";
 const VOICE_MISSED: &str = "Voice/Calls/Wesley Crusher - Missed - 2364-03-03T11_00_00Z.html";
 
@@ -730,7 +794,7 @@ async fn a_maps_photo_that_did_not_read_is_tried_again_until_it_does() {
     assert_eq!(
         e.problems().await,
         [(
-            "maps_photos:2026-06-04-tenfwd".to_string(),
+            "maps_photos:2026-06-04-tenfwd.jpg".to_string(),
             "warning".to_string(),
             "not_found".to_string()
         )]
@@ -799,7 +863,9 @@ async fn a_gemini_attachment_not_in_the_export_is_tried_again() {
     assert_eq!(problems.len(), 1, "{problems:?}");
     assert!(
         problems[0].0.starts_with("gemini_attachments:")
-            && problems[0].0.ends_with("#Prime-Directive-summary.txt"),
+            && problems[0]
+                .0
+                .ends_with("#Prime Directive summary-1701236400000001.txt"),
         "{problems:?}"
     );
     assert_eq!(
@@ -925,11 +991,19 @@ async fn a_feed_that_fails_is_a_problem_row_and_the_rest_land() {
 #[tokio::test(flavor = "multi_thread")]
 async fn entries_read_and_not_stored_are_problem_rows() {
     let (_work, summary, db_path) = run_all().await;
-    assert_eq!(summary.maps_saved_places, 2);
+    assert_eq!(summary.maps_saved_places, 3);
     assert_eq!(summary.youtube_watch_history, 3);
     let db = RawDb::open(&db_path).await.unwrap();
-    let rows: Vec<(String, String, String, Option<String>, String)> = sqlx::query_as(
-        "SELECT scope_key, severity, reason, rule, sample FROM problems \
+    type Row = (
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        String,
+    );
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT scope_key, severity, reason, rule, field, sample FROM problems \
          WHERE scope_key LIKE 'skipped:%' ORDER BY scope_key",
     )
     .fetch_all(db.pool())
@@ -947,14 +1021,14 @@ async fn entries_read_and_not_stored_are_problem_rows() {
         (place.1.as_str(), place.2.as_str()),
         ("error", "no_identity")
     );
-    assert!(place.4.contains("?q=Quark"), "{place:?}");
+    assert_eq!(place.4.as_deref(), Some("date"), "{place:?}");
     assert!(
         watch.0.starts_with("skipped:youtube_watch_history:"),
         "{watch:?}"
     );
     assert_eq!(watch.1, "warning");
     assert_eq!(watch.3.as_deref(), Some("youtube_watch_not_a_video"));
-    assert!(watch.4.contains("/post/"), "{watch:?}");
+    assert!(watch.5.contains("/post/"), "{watch:?}");
 }
 
 /// A feed whose file is unchanged reads nothing and reports nothing, so
@@ -1049,7 +1123,7 @@ async fn a_file_in_a_layout_this_reader_does_not_know_deletes_nothing_and_says_s
         rel: GEMINI,
         feed: "gemini_apps",
         table: "gemini_activity",
-        rows: 2,
+        rows: 3,
         edit,
     };
     let cases = [
@@ -1059,7 +1133,7 @@ async fn a_file_in_a_layout_this_reader_does_not_know_deletes_nothing_and_says_s
             rel: SAVED,
             feed: "maps_saved_places",
             table: "maps_saved_places",
-            rows: 2,
+            rows: 3,
             edit: rename_properties,
         },
         Rewrite {
@@ -1131,6 +1205,55 @@ impl Export {
         db.commit_all("test").await.unwrap();
         db.close().await;
     }
+}
+
+// ── A reader that changes reaches a store already synced ────────────
+
+impl Export {
+    async fn schema_version(&self) -> String {
+        let db = RawDb::open(&self.db_path).await.unwrap();
+        let v = sqlx::query_scalar("SELECT value FROM _datalib_meta WHERE key = 'schema_version'")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        db.close().await;
+        v
+    }
+}
+
+/// An unchanged file is not read again, so a store an earlier build
+/// synced would never meet the fixed Maps, YouTube and Gemini readers.
+/// Rung 1 of the ladder forgets those feeds' files, and only theirs.
+#[tokio::test(flavor = "multi_thread")]
+async fn rung_1_reads_the_feeds_whose_reader_changed_again() {
+    let e = Export::new();
+    e.sync().await;
+    assert_eq!(
+        e.schema_version().await,
+        "1",
+        "a new store starts at the top"
+    );
+    assert_eq!(e.sync().await.gemini_activity, 0, "nothing changed");
+
+    e.exec("UPDATE _datalib_meta SET value = '0' WHERE key = 'schema_version'")
+        .await;
+    let s = e.sync().await;
+    assert_eq!(e.schema_version().await, "1");
+    assert_eq!(
+        (
+            s.maps_photos,
+            s.maps_saved_places,
+            s.youtube_watch_history,
+            s.gemini_activity
+        ),
+        (1, 3, 3, 3),
+        "{s:?}"
+    );
+    assert_eq!(
+        (s.maps_reviews, s.youtube_subscriptions, s.chat_messages),
+        (0, 0, 0),
+        "a feed whose reader did not change is not read again: {s:?}"
+    );
 }
 
 const VOICE_TEXT: &str = "Voice/Calls/Jean-Luc Picard - Text - 2364-03-01T09_00_00Z.html";
@@ -1343,7 +1466,7 @@ async fn a_maps_photo_sidecar_that_will_not_open_keeps_its_row() {
     e.sync().await;
     assert_eq!(e.count("maps_photos").await, 1);
 
-    let rel = "Maps/Photos and videos/2026-06-04-tenfwd.json";
+    let rel = MAPS_PHOTO_SIDECAR;
     let locked = e.root.join(rel);
     if !lock(&locked) {
         return;

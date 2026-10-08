@@ -226,7 +226,10 @@ async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
     }
     if opts.sync.gemini_apps {
         if let Some(s) = found
-            .run_phase("gemini_apps", gemini_apps::ingest(&db, scan, progress))
+            .run_phase(
+                "gemini_apps",
+                gemini_apps::ingest(&db, scan, progress, &found),
+            )
             .await
         {
             summary.gemini_activity += s.activity;
