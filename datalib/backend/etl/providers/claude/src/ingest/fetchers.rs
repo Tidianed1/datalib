@@ -242,9 +242,9 @@ impl Fetcher<Blob> for Files<'_> {
 }
 
 impl Files<'_> {
-    /// One edge's bytes, from the `preview_url` the conversation's file
-    /// object names. Bytes the CAS already holds for the file, under any
-    /// conversation, cost no request.
+    /// One edge's bytes, from where [`file_url`] says they are. Bytes the
+    /// CAS already holds for the file, under any conversation, cost no
+    /// request.
     async fn one(&self, key: &str) -> Result<Outcome<Blob>, BatchError> {
         let ctx = self.0;
         let (Some(conv_uuid), Some((_, file_uuid))) = (
@@ -271,19 +271,28 @@ impl Files<'_> {
             // with the refetch, or will.
             return Ok(Outcome::Gone);
         };
-        let Some(path) = preview_path(&file) else {
-            return Ok(gone("the file has no preview URL".to_string()));
+        let org = ctx
+            .db
+            .org_of_conversation(conv_uuid)
+            .await
+            .map_err(BatchError::Abort)?;
+        let Some(url) = file_url(&file, org.as_deref(), file_uuid) else {
+            return Ok(gone(
+                "its conversation names no org to ask for the file".to_string(),
+            ));
         };
-        let url = if path.starts_with("http") {
-            path.to_string()
-        } else {
-            format!("{}{path}", super::CLAUDE_ORIGIN)
-        };
+        // For a response that names no type; `file_kind` ("image",
+        // "blob") is not one.
         let declared = file
-            .get("file_kind")
+            .get("mime_type")
             .and_then(Value::as_str)
-            .or_else(|| file.get("mime_type").and_then(Value::as_str))
-            .map(String::from);
+            .map(String::from)
+            .or_else(|| {
+                file.get("file_name")
+                    .and_then(Value::as_str)
+                    .and_then(|name| mime_guess::from_path(name).first_raw())
+                    .map(String::from)
+            });
         let req = HttpRequest::get(HttpService::Claude, &url)
             .latchkey(ctx.client.latchkey().clone())
             .timeout(ATTACH_FILE_TIMEOUT);
@@ -311,18 +320,27 @@ impl Files<'_> {
     }
 }
 
-/// Where a file object says its bytes are: `preview_url`, else the
-/// `document_asset.url`.
-fn preview_path(file: &Value) -> Option<&str> {
-    file.get("preview_url")
+/// Where a file's own bytes are. A document's `document_asset.url` is
+/// the upload exactly; every other file, a picture or one the sandbox
+/// made, is served whole at its org's `/contents`. The `preview_url` a
+/// picture names is a re-encoded copy, and a sandbox file names no URL.
+pub(crate) fn file_url(file: &Value, org: Option<&str>, file_uuid: &str) -> Option<String> {
+    let original = file
+        .pointer("/document_asset/url")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
-        .or_else(|| {
-            file.get("document_asset")
-                .and_then(|d| d.get("url"))
-                .and_then(Value::as_str)
-                .filter(|s| !s.is_empty())
+        .map(|path| match path.starts_with("http") {
+            true => path.to_string(),
+            false => format!("{}{path}", super::CLAUDE_ORIGIN),
+        });
+    original.or_else(|| {
+        org.map(|org| {
+            format!(
+                "{}/api/organizations/{org}/files/{file_uuid}/contents",
+                super::CLAUDE_ORIGIN
+            )
         })
+    })
 }
 
 /// Nothing to fetch: the edge is held, with a warning, and asked for
@@ -334,4 +352,35 @@ fn gone(why: String) -> Outcome<Blob> {
 /// The file object with `file_uuid` among `files`.
 pub(crate) fn find_file<'a>(files: &'a [Value], file_uuid: &str) -> Option<&'a Value> {
     files.iter().find(|f| file_uuid_of(f) == Some(file_uuid))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// A file the sandbox made names no URL, and a picture's `preview_url`
+    /// is a re-encoded copy: both come whole from the org's `/contents`.
+    /// They used to be held as not found, and pictures stored as webp.
+    #[test]
+    fn a_file_comes_from_its_original() {
+        let org = Some("org-1");
+        let made = json!({"file_kind": "blob", "file_uuid": "f1", "download_source": "files-api"});
+        assert_eq!(
+            file_url(&made, org, "f1").as_deref(),
+            Some("https://claude.ai/api/organizations/org-1/files/f1/contents")
+        );
+        let picture = json!({"file_kind": "image", "preview_url": "/api/org-1/files/f2/preview"});
+        assert_eq!(
+            file_url(&picture, org, "f2").as_deref(),
+            Some("https://claude.ai/api/organizations/org-1/files/f2/contents")
+        );
+        let document = json!({"file_kind": "document",
+                              "document_asset": {"url": "/api/org-1/files/f3/document_pdf"}});
+        assert_eq!(
+            file_url(&document, org, "f3").as_deref(),
+            Some("https://claude.ai/api/org-1/files/f3/document_pdf")
+        );
+        assert_eq!(file_url(&made, None, "f1"), None);
+    }
 }

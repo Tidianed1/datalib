@@ -260,9 +260,8 @@ impl Synthesizer for ClaudeSynth {
 }
 
 /// The bytes behind each conversation file whose `files/<file_uuid>.<ext>`
-/// is present, served where a download asks: an image's `preview_url`,
-/// a document's `document_asset.url`. A file with neither is left
-/// unserved, as claude.ai leaves it.
+/// is present, served where the download asks for them
+/// ([`crate::ingest::file_url`]).
 fn synthesize_files(files_dir: &Path, convs: &[Value], out_root: &Path) -> Result<usize> {
     if !files_dir.is_dir() {
         return Ok(0);
@@ -274,31 +273,33 @@ fn synthesize_files(files_dir: &Path, convs: &[Value], out_root: &Path) -> Resul
             on_disk.insert(stem.to_string(), path);
         }
     }
-    let files = convs
-        .iter()
-        .filter_map(|c| c.get("chat_messages").and_then(Value::as_array))
-        .flatten()
-        .filter_map(|m| m.get("files").and_then(Value::as_array))
-        .flatten();
+    let files = convs.iter().flat_map(|c| {
+        let org = org_uuid_of(c);
+        c.get("chat_messages")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|m| m.get("files").and_then(Value::as_array))
+            .flatten()
+            .map(move |f| (org.clone(), f))
+    });
     let mut count = 0;
-    for file in files {
-        let Some(path) = file
+    for (org, file) in files {
+        let Some((file_uuid, path)) = file
             .get("file_uuid")
             .and_then(Value::as_str)
-            .and_then(|id| on_disk.get(id))
+            .and_then(|id| on_disk.get(id).map(|p| (id, p)))
         else {
             continue;
         };
-        let Some(url) = file
-            .get("preview_url")
-            .or_else(|| file.pointer("/document_asset/url"))
-            .and_then(Value::as_str)
-        else {
+        let Some(url) = crate::ingest::file_url(file, org.as_deref(), file_uuid) else {
             continue;
         };
         let mime = match path.extension().and_then(|e| e.to_str()) {
             Some("png") => "image/png",
             Some("pdf") => "application/pdf",
+            // What claude.ai answers for a script, too.
+            Some("txt") => "text/plain",
             _ => "application/octet-stream",
         };
         let bytes = HttpResponse {
@@ -307,7 +308,7 @@ fn synthesize_files(files_dir: &Path, convs: &[Value], out_root: &Path) -> Resul
             body: fs::read(path).with_context(|| format!("read {}", path.display()))?,
             duration_ms: 0,
         };
-        let req = HttpRequest::get(HttpService::Claude, format!("https://claude.ai{url}"));
+        let req = HttpRequest::get(HttpService::Claude, url);
         write_fixture(out_root, &req, &bytes)?;
         count += 1;
     }

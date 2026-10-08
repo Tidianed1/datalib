@@ -259,7 +259,7 @@ treatment differs.
 
 | Slot | What it carries | Ingest | Render |
 |---|---|---|---|
-| `chat_messages[*].files[]` | A downloadable upload — image, PDF, … Has `file_uuid`, `file_name`, `preview_url`, `document_asset.url`. | `fetch_files` → `download_one_file` → the blob CAS, with a `claude_attachments` edge from the conversation's `file_uuid` to the bytes. | chat-common materializes it by `file_uuid`: an image inline, anything else as a link. |
+| `chat_messages[*].files[]` | A downloadable file — an upload (image, PDF, …) or one Claude's sandbox made (`file_kind: "blob"`, which names no URL). Has `file_uuid`, `file_name`, and for an upload `preview_url` and `document_asset.url`. | The file loop → the blob CAS, with a `claude_attachments` edge from the conversation's `file_uuid` to the bytes. | chat-common materializes it by `file_uuid`: an image inline, anything else as a link. |
 | `chat_messages[*].attachments[]` | **Text** Claude extracted from an upload: `id`, `file_name`, `file_type`, `file_size`, `extracted_content`. **No `preview_url`** — the binary is not retained server-side. | Nothing to fetch; no edge row. | `render_extracted_attachment`: a quoted block headed `**[attachment: <name>]**`. |
 
 An `attachments[]` item has no CAS edge because there are no bytes to
@@ -271,13 +271,18 @@ The edges are written in the conversation's transaction, one per
 `file_uuid` its messages name, with no `blake3`; a refetch that no
 longer names a file drops its edge. The file loop then fetches every
 edge not held at its conversation's version, from the file object the
-conversation carries. Bytes the CAS already holds for the file, under
-any conversation, are not fetched again. A file that does not land is
+conversation carries (`fetchers::file_url`): a document from its
+`document_asset.url`, which is the upload's exact bytes, and every
+other file from `/api/organizations/{org}/files/{file_uuid}/contents`,
+which serves a picture at full resolution and a sandbox file whole. A
+picture's `preview_url` is a re-encoded webp, so it is not used. Bytes
+the CAS already holds for the file, under any conversation, are not
+fetched again. A file that does not land is
 owed, its bookkeeping and its `problems` row saying why, and the next
 run asks again.
 
-A file claude.ai answers `404` or `410` for, or one whose object names
-no URL, is not there to fetch rather than failed: its edge is held with
+A file claude.ai answers `404` or `410` for, or one in a conversation
+that names no org, is not there to fetch rather than failed: its edge is held with
 a `not_found` warning, and asked for again only when its conversation
 changes and is refetched.
 
@@ -402,5 +407,4 @@ requests; see the table above.
 A curated TNG-themed fixture lives at `tests/fixtures/claude_export/`
 and is exposed through the Bazel `tng_fixture` filegroup. Its
 `files/<file_uuid>.<ext>` hold the bytes the synthesizer serves where a
-download asks for them: an image's `preview_url`, a document's
-`document_asset.url`.
+download asks for them (`fetchers::file_url`).
