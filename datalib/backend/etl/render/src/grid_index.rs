@@ -2558,6 +2558,28 @@ mod source_cursor_tests {
         assert_eq!(errors, 0, "the error goes once the store reads");
     }
 
+    /// A render step's store exists as an empty file from the moment its
+    /// writer opens it until its first page is written. An index pass
+    /// that ran in that window failed, and failed every request it
+    /// served (a CI flake in data-sources-control.spec.ts).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_store_its_writer_has_only_just_created_is_not_yet_rendered() {
+        let td = tempdir().unwrap();
+        let root = td.path();
+        let pool = index_pool(root).await;
+        let sources = ["born".to_string(), "fresh".to_string()];
+        render(root, "fresh", &[doc(root, "fresh", "md-f", "fresh body")]);
+        let store = crate::indexed_markdown::path_for(&rendered_root(root, "born"));
+        std::fs::create_dir_all(store.parent().unwrap()).unwrap();
+        std::fs::write(&store, b"").unwrap();
+
+        let s = build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
+            .await
+            .unwrap();
+        assert!(s.sources_failed.is_empty(), "{:?}", s.sources_failed);
+        assert_eq!(index_row_count(&pool).await, 1);
+    }
+
     /// Run `sql` on a source's store as its owner would and commit it,
     /// leaving `_datalib_meta` as it was.
     async fn alter_store(root: &Path, source: &str, sql: &str, message: &str) {
