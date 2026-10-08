@@ -193,6 +193,8 @@ pub struct ParsedExport {
     /// pass where its project didn't change.
     pub project_name_by_uuid: std::collections::HashMap<String, String>,
     pub conversations: Vec<ClaudeConversation>,
+    /// Conversations whose rows would not build, by raw id, and why.
+    pub failed: Vec<(String, String)>,
     /// Count of docs (conversations + projects) `dolt_diff` reported as
     /// unchanged.
     pub docs_skipped: usize,
@@ -582,9 +584,7 @@ pub fn parse_loaded(raw: datalib_etl_claude::ingest::db::LoadedRaw) -> ParsedExp
                 inputs,
             }),
             Ok(None) => {}
-            Err(e) => {
-                tracing::warn!(event = "claude_build_conv_failed", error = %e, "a conversation could not be built from its rows");
-            }
+            Err(e) => out.failed.push((id, format!("{e:#}"))),
         }
     }
     out
@@ -723,6 +723,32 @@ pub fn shred(c: &ClaudeConversation) -> ShreddedConversation {
         messages,
         content_blocks,
         attachments,
+    }
+}
+
+#[cfg(test)]
+mod failed_tests {
+    use super::*;
+    use datalib_etl_claude::ingest::db::{LoadedConversation, LoadedRaw};
+
+    /// A conversation that will not build is named with why, not
+    /// dropped with only a log line.
+    #[test]
+    fn a_conversation_that_will_not_build_is_named() {
+        let parsed = parse_loaded(LoadedRaw {
+            conversations: vec![LoadedConversation {
+                id: "c1".into(),
+                org_uuid: None,
+                org_name: None,
+                payload: serde_json::json!({"name": "Holodeck"}),
+            }],
+            ..LoadedRaw::default()
+        });
+        assert!(parsed.conversations.is_empty());
+        assert_eq!(
+            parsed.failed,
+            vec![("c1".to_string(), "conversation missing uuid".to_string())]
+        );
     }
 }
 

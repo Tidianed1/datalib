@@ -70,6 +70,13 @@ impl SourceRender for ClaudeRender {
             &mut on_doc,
         )
         .context("claude render_all")?;
+        // A conversation that would not build keeps its page, and the
+        // problem says why.
+        for (id, why) in &parsed.failed {
+            let uuid = crate::render::ids::conversation(ctx.name, id).uuid;
+            ctx.report_document_failed(&uuid, why, Some(self.render_version()))?;
+            ctx.fail_bucket(&uuid, why)?;
+        }
         // A bucket this run looked at is a conversation or a project;
         // both uuids are declared with nothing, so whichever page it had
         // that this run did not produce goes. The rendered ones follow

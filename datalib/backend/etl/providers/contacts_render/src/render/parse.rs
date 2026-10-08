@@ -24,9 +24,6 @@ pub struct ParsedContact {
     /// came from. Shows up on grid rows as `channel` and groups
     /// contacts together in the UI.
     pub addressbook: String,
-    /// Source file on disk — surfaced in tracing so misformatted
-    /// vCards point at the right file.
-    pub source_path: PathBuf,
     /// `FN` (formatted name). `None` for nameless cards — the
     /// render path falls back to the UID.
     pub display_name: Option<String>,
@@ -133,33 +130,21 @@ pub fn parse_loaded(rows: Vec<LoadedRawContact>) -> ParsedContacts {
             blocks
         };
         for (idx, block) in iter.into_iter().enumerate() {
-            match parse_block(&block, &source_path, &row.addressbook_label) {
-                Ok(mut c) => {
-                    if c.uid.is_empty() {
-                        c.uid = match idx {
-                            _ if row.uid.is_empty() => {
-                                derive_uid_from_path(&row.addressbook_label, &source_path, idx)
-                            }
-                            0 => row.uid.clone(),
-                            _ => format!("{}:{idx}", row.uid),
-                        };
+            let mut c = parse_block(&block, &row.addressbook_label);
+            if c.uid.is_empty() {
+                c.uid = match idx {
+                    _ if row.uid.is_empty() => {
+                        derive_uid_from_path(&row.addressbook_label, &source_path, idx)
                     }
-                    c.inputs.push(Input::new("contacts", &row.id));
-                    if let Some(book) = &row.addressbook_id {
-                        c.inputs.push(Input::new("addressbooks", book));
-                    }
-                    out.contacts.push(c);
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        event = "contacts_vcard_parse_failed",
-                        href = %row.href,
-                        block_index = idx,
-                        error = %e,
-                        "a vCard block did not parse; skipped it"
-                    );
-                }
+                    0 => row.uid.clone(),
+                    _ => format!("{}:{idx}", row.uid),
+                };
             }
+            c.inputs.push(Input::new("contacts", &row.id));
+            if let Some(book) = &row.addressbook_id {
+                c.inputs.push(Input::new("addressbooks", book));
+            }
+            out.contacts.push(c);
         }
     }
     out.contacts.sort_by(|a, b| {
@@ -188,18 +173,17 @@ fn display_name(block: &str, emails: &[VcardProp], phones: &[VcardProp]) -> Opti
         .or_else(|| nonblank(org(block).join(" — ")))
 }
 
-fn parse_block(block: &str, source_path: &Path, addressbook: &str) -> Result<ParsedContact> {
+fn parse_block(block: &str, addressbook: &str) -> ParsedContact {
     let uid = vcard_uid(block).unwrap_or_default();
     let emails = vcard_all(block, "EMAIL");
     let phones = vcard_all(block, "TEL");
     let addresses = vcard_all(block, "ADR");
     let photo = vcard_all(block, "PHOTO");
     let (photo, photo_url) = pick_photo(photo);
-    Ok(ParsedContact {
+    ParsedContact {
         inputs: Vec::new(),
         uid,
         addressbook: addressbook.to_string(),
-        source_path: source_path.to_path_buf(),
         display_name: display_name(block, &emails, &phones),
         revision: vcard_rev(block),
         created: vcard_created(block),
@@ -214,7 +198,7 @@ fn parse_block(block: &str, source_path: &Path, addressbook: &str) -> Result<Par
         note: single_text(block, "NOTE"),
         photo,
         photo_url,
-    })
+    }
 }
 
 fn single_text(vcard: &str, name: &str) -> Option<String> {
@@ -382,11 +366,7 @@ mod tests {
     /// email-only cards rendered.
     #[test]
     fn nameless_card_is_titled_by_what_it_does_have() {
-        let name = |block: &str| {
-            parse_block(block, Path::new("x.vcf"), "book")
-                .unwrap()
-                .display_name
-        };
+        let name = |block: &str| parse_block(block, "book").display_name;
         assert_eq!(
             name("BEGIN:VCARD\nN:Picard;Jean-Luc;;;\nEMAIL:jlp@x.test\nEND:VCARD").as_deref(),
             Some("Jean-Luc Picard")
@@ -428,7 +408,7 @@ mod tests {
             NOTE:Make it so.\\nTea\\, Earl Grey\\, hot.\n\
             ADR;TYPE=WORK:;;Ready Room\\, Deck 1;;;;\n\
             END:VCARD";
-        let c = parse_block(card, Path::new("x.vcf"), "book").unwrap();
+        let c = parse_block(card, "book");
         assert_eq!(c.display_name.as_deref(), Some("Picard, Jean-Luc"));
         assert_eq!(c.org, ["Starfleet; Command", "USS Enterprise, NCC-1701-D"]);
         assert_eq!(c.title.as_deref(), Some("Captain; Diplomat"));
