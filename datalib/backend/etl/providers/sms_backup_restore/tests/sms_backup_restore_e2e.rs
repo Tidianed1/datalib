@@ -617,3 +617,82 @@ fn reading_an_unchanged_export_again_commits_nothing() -> Result<()> {
         Ok(())
     })
 }
+
+/// A backup that will not open may hold any message, so a run that reads
+/// every other file deletes nothing while it is unread: before, an
+/// unopenable file was a walk error, and once it was not, the prune took
+/// every record only it held.
+#[cfg(unix)]
+#[test]
+fn a_backup_that_will_not_open_holds_deletions_back() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir()?;
+    let raw_dir = tmp.path().join("raw");
+    let input = tmp.path().join("input");
+    fs::create_dir_all(&raw_dir)?;
+    fs::create_dir_all(&input)?;
+    let sms = input.join("sms-2369041512000.xml");
+    let calls = input.join("calls-2369041512000.xml");
+    fs::copy(fixture_root().join("sms-2369041512000.xml"), &sms)?;
+    fs::copy(fixture_root().join("calls-2369041512000.xml"), &calls)?;
+    let cache = tmp.path().join("fpcache.sqlite");
+    let count = |db: &RawDb, table: &'static str| {
+        let pool = db.pool().clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(format!(
+                // Audited: `table` is a literal at every call below.
+                "SELECT count(*) FROM {table}"
+            )))
+            .fetch_one(&pool)
+            .await
+        }
+    };
+    let set_mode = |mode| fs::set_permissions(&calls, fs::Permissions::from_mode(mode));
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?;
+    rt.block_on(async {
+        let db = RawDb::open(&db_path_for(&raw_dir)).await?;
+        fetch_dir(&db, &input, &cache).await?;
+        let (messages, calls_held) = (
+            count(&db, "sms_messages").await?,
+            count(&db, "sms_calls").await?,
+        );
+        assert!(calls_held > 0);
+
+        // One message leaves the backup, and the calls backup will not open.
+        let xml = fs::read_to_string(&sms)?;
+        let first = xml.find("<sms ").expect("an <sms> element");
+        let end = first + xml[first..].find("/>").expect("self-closing <sms>") + 2;
+        fs::write(&sms, format!("{}{}", &xml[..first], &xml[end..]))?;
+        set_mode(0o000)?;
+        if fs::read(&calls).is_ok() {
+            // Root reads through any mode; CI's container runs as root.
+            set_mode(0o644)?;
+            db.close().await;
+            return Ok(());
+        }
+        let held = fetch_dir(&db, &input, &cache).await;
+        set_mode(0o644)?;
+        assert_eq!(held?.removed, 0);
+        assert_eq!(count(&db, "sms_calls").await?, calls_held);
+        let keys: Vec<String> = problems(&db).await?.into_iter().map(|(k, _)| k).collect();
+        assert_eq!(
+            keys,
+            [
+                "listing:removed_records",
+                "record:files:calls-2369041512000.xml"
+            ]
+        );
+
+        let caught_up = fetch_dir(&db, &input, &cache).await?;
+        assert_eq!(caught_up.removed, 1);
+        assert_eq!(count(&db, "sms_messages").await?, messages - 1);
+        assert_eq!(count(&db, "sms_calls").await?, calls_held);
+        assert!(problems(&db).await?.is_empty());
+        db.close().await;
+        Ok::<_, anyhow::Error>(())
+    })
+}

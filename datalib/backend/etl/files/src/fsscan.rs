@@ -125,11 +125,24 @@ pub struct Scan {
     pub given_resolved: PathBuf,
     pub files: Vec<ScannedFile>,
     /// Root-relative paths the walk found and did not read: refused by the
-    /// caller's admit hook, or over [`ScanOptions::max_bytes`]. They are
-    /// there, so a caller keyed by path keeps their rows.
+    /// caller's admit hook, over [`ScanOptions::max_bytes`], or
+    /// [`Self::unreadable`]. They are there, so a caller keyed by path
+    /// keeps their rows.
     pub present_unread: Vec<String>,
+    /// Files the walk found and could not open to hash. Each is a problem
+    /// of its own ([`Self::report_problems`]), not a walk error: the walk
+    /// saw it, so it says nothing about what else is gone.
+    pub unreadable: Vec<UnreadableFile>,
     pub errors: Vec<WalkError>,
     pub stats: ScanStats,
+}
+
+/// A file the walk found and could not open.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnreadableFile {
+    pub rel: String,
+    /// Why, without the path, which names this machine.
+    pub error: String,
 }
 
 /// A file that is at a new path but whose bytes the caller already has.
@@ -248,7 +261,12 @@ impl Scan {
             walk_errors: self.errors.len(),
             ..Changes::default()
         };
-        let now: BTreeSet<&str> = self.files.iter().map(|f| f.rel.as_str()).collect();
+        let now: BTreeSet<&str> = self
+            .files
+            .iter()
+            .map(|f| f.rel.as_str())
+            .chain(self.present_unread.iter().map(String::as_str))
+            .collect();
 
         // Paths the caller knew that are gone. Held first, because a
         // move is one of these paired with an addition.
@@ -338,6 +356,21 @@ impl Scan {
                     None => true,
                 })
         }
+    }
+
+    /// Everything this walk could not do, into the run's problems: the
+    /// listing row of [`Self::walk_problems_as`], and a
+    /// `record:<name>:<path>` row per file it found and could not open. A
+    /// file that opens again loses its row; one under an entry the walk
+    /// could not read keeps it.
+    pub fn report_problems(&self, found: &datalib_etl::run_problems::RunProblems, name: &str) {
+        found.extend(self.walk_problems_as(name));
+        found.records_failed(
+            self.unreadable.iter().map(|u| {
+                datalib_etl::download_problems::RecordProblem::new(name, &u.rel, &u.error)
+            }),
+        );
+        found.records_tried_all_but(name, self.unseen());
     }
 
     /// The run problem a walk with errors leaves, for the run's
@@ -461,7 +494,7 @@ where
         ..ScanStats::default()
     };
 
-    let (walked, mut errors) = fswalk::walk_files(&root, &opts.ignore, max_depth, |p| {
+    let (walked, errors) = fswalk::walk_files(&root, &opts.ignore, max_depth, |p| {
         only.as_ref()
             .is_none_or(|name| p.file_name() == Some(name.as_os_str()))
             && accept(p)
@@ -512,6 +545,7 @@ where
     );
 
     let mut files = Vec::with_capacity(candidates.len());
+    let mut unreadable = Vec::new();
     let mut fresh_prints = Vec::with_capacity(candidates.len());
     // Hashed but not yet in the cache. Flushed every `FLUSH_BYTES` so a
     // scan that is stopped halfway resumes instead of starting over.
@@ -537,14 +571,14 @@ where
                     hash
                 }
                 Err(e) => {
-                    // Unreadable now; surfaced like any other walk error
-                    // rather than failing the whole scan. Dropping it
-                    // silently would report the file as deleted.
+                    // There, and unreadable now: kept as present, so
+                    // nothing reads it as deleted, and a problem of its own.
                     tracing::warn!(path = %entry.path.display(), error = %e, "fsscan_hash_failed");
-                    errors.push(WalkError {
-                        path: entry.path,
-                        error: format!("{e:#}"),
+                    unreadable.push(UnreadableFile {
+                        rel: entry.rel.clone(),
+                        error: format!("could not open to hash: {}", e.root_cause()),
                     });
+                    present_unread.push(entry.rel);
                     continue;
                 }
             },
@@ -591,6 +625,7 @@ where
         given_resolved: resolved,
         files,
         present_unread,
+        unreadable,
         errors,
         stats,
     })
@@ -955,6 +990,44 @@ mod tests {
         assert_eq!(changes.walk_errors, 1, "{changes:?}");
         assert_eq!(changes.removed.len(), 1, "the removal is still reported");
         assert!(changes.gone_by_path(&BTreeSet::new()).is_empty());
+    }
+
+    /// A file that will not open is there: it was a walk error, so one
+    /// unreadable file held back every deletion under the root. It is
+    /// present and unread now, with a problem of its own, and the file
+    /// beside it that really went is gone.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_file_that_will_not_open_is_present_not_a_walk_error() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("tree");
+        write(&root, "locked.vcf", b"a");
+        write(&root, "goes.vcf", b"b");
+        let cache = fresh_cache(tmp.path()).await;
+        let mark = scan_all(&cache, &root).await.cursor();
+
+        std::fs::remove_file(root.join("goes.vcf")).unwrap();
+        let locked = root.join("locked.vcf");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read(&locked).is_ok() {
+            // Root reads through any mode; CI's container runs as root.
+            return;
+        }
+        let scan = scan_all(&cache, &root).await;
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert!(scan.errors.is_empty(), "{:?}", scan.errors);
+        assert_eq!(scan.present_unread, ["locked.vcf"]);
+        assert_eq!(scan.unreadable.len(), 1);
+        assert_eq!(scan.unreadable[0].rel, "locked.vcf");
+        assert!(
+            !scan.unreadable[0].error.contains(&*root.to_string_lossy()),
+            "the problem names no machine's path: {}",
+            scan.unreadable[0].error
+        );
+        let changes = scan.changes_since(&mark);
+        assert_eq!(changes.gone(), ["goes.vcf"], "{changes:?}");
     }
 
     /// A rename must not read a byte: the content is already known, so
