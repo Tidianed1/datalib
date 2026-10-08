@@ -63,6 +63,20 @@ reactors with nothing, merged with any source contact the provider gives in
 What source contacts are and who reads them is `docs/dev/contacts.md`
 §"Source contacts: `NormalizedContact`".
 
+## Branches: the versions a conversation left fold in where they forked
+
+An edited prompt or a regenerated answer makes a conversation a tree.
+The page reads the branch the account last saw, and keeps every other
+version: `branches::reading_order` takes the messages (id, parent, in
+time order) and the leaf last seen, and returns them in reading order,
+each other version just before the version shown where it forked, and
+a version left inside another nested in it. A provider sets each item's
+`branch` from it; chat-common knows nothing of trees, and wraps each run
+of items on another branch in a collapsed `<details class="branch">`
+("Another version · N messages"), nested as the branches nest. Like an
+aside, such an item keeps its anchor and its grid row, and its
+document's row leaves it out. ChatGPT and Claude use it.
+
 ## Asides: runs of tool steps fold into one `<details>`
 
 An item with `is_aside` set is machinery rather than conversation — an

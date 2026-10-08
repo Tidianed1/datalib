@@ -448,27 +448,25 @@ async fn parse_async(
     //    sibling CAS in one shot via ATTACHMENTS_PROJECTION_SQL. Same
     //    shape slack uses for per-thread bundles — render no longer
     //    has to open a CAS pool itself.
-    let cas_path = blob_cas::cas_path_for(db_path);
-    let mut blobs_by_chat: HashMap<String, BlobBundle> = HashMap::new();
-    if cas_path.is_file() {
-        let cas_pool: SqlitePool = datalib_etl::blob_cas::open_cas_reader(&cas_path)
-            .await
-            .with_context(|| format!("open CAS for render at {}", cas_path.display()))?;
-        let refs = out.iter().map(|chat| {
-            let refs = chat
-                .buckets
-                .iter()
-                .flat_map(|bucket| &bucket.items)
-                .flat_map(|item| &item.attachments)
-                .filter_map(|att| att.ref_id.as_deref());
-            (chat.id.clone(), refs)
-        });
-        let loaded =
-            BlobBundle::load_many(&pool, &cas_pool, ATTACHMENTS_PROJECTION_SQL, refs).await;
-        cas_pool.close().await;
-        blobs_by_chat = loaded?;
-        blobs_by_chat.retain(|_, bundle| !bundle.is_empty());
+    let cas_pool = blob_cas::open_cas_for_render(db_path)
+        .await
+        .with_context(|| format!("open the blob store beside {}", db_path.display()))?;
+    let refs = out.iter().map(|chat| {
+        let refs = chat
+            .buckets
+            .iter()
+            .flat_map(|bucket| &bucket.items)
+            .flat_map(|item| &item.attachments)
+            .filter_map(|att| att.ref_id.as_deref());
+        (chat.id.clone(), refs)
+    });
+    let loaded =
+        BlobBundle::load_many(&pool, cas_pool.as_ref(), ATTACHMENTS_PROJECTION_SQL, refs).await;
+    if let Some(cas) = cas_pool {
+        cas.close().await;
     }
+    let mut blobs_by_chat = loaded?;
+    blobs_by_chat.retain(|_, bundle| !bundle.is_empty() || bundle.has_missing());
     pool.close().await;
 
     Ok(ParsedWhatsApp {
@@ -554,6 +552,7 @@ fn build_item(
         kind_label: None,
         source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
         is_aside: false,
+        branch: Vec::new(),
         unread,
         recipients: Vec::new(),
         problems: Vec::new(),

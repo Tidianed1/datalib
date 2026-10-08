@@ -81,12 +81,7 @@ impl RawDb {
         let Some(reader) = dr::open_reader(db_path, commit).await? else {
             return Ok(None);
         };
-        let cas_path = cas_path_for(db_path);
-        let cas = if cas_path.is_file() {
-            Some(BlobCas::open_reader(&cas_path).await?)
-        } else {
-            None
-        };
+        let cas = BlobCas::open_for_render(db_path).await?;
         Ok(Some(Self {
             pool: reader.pool().clone(),
             cas,

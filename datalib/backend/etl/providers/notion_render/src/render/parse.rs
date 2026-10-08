@@ -123,13 +123,13 @@ async fn load(db: &RawDb, range: RawRange<'_>) -> Result<ParsedNotion> {
     }
     let mut blobs_by_page = BlobBundle::load_many(
         db.pool(),
-        db.cas().pool(),
+        Some(db.cas().pool()),
         ATTACHMENTS_PROJECTION_SQL,
         refs_by_page,
     )
     .await
     .context("load attachments")?;
-    blobs_by_page.retain(|_, bundle| !bundle.is_empty());
+    blobs_by_page.retain(|_, bundle| !bundle.is_empty() || bundle.has_missing());
 
     Ok(ParsedNotion {
         pages,

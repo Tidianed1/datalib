@@ -29,7 +29,10 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// existing root to hold them.
 /// v12: the people baseline counts a reactor to a message not in
 /// the mirror, which moves only the `source_contacts` rows.
-pub const LAYOUT_VERSION: u32 = 12;
+/// v13: an attachment's size comes from its bytes when the provider
+/// gave none, lost bytes are a `blob_missing` problem, and the versions
+/// a conversation left fold in as `<details class="branch">`.
+pub const LAYOUT_VERSION: u32 = 13;
 
 /// What every chat-common provider declares through
 /// `RenderProcessor::render_params`, merged with its own knobs: the
@@ -58,7 +61,7 @@ use datalib_etl_render::message::{chip_link, timestamp_html, MessageHeader};
 use datalib_etl_render::section::{join, msg_div_open_with, Section};
 use datalib_etl_render::title::Title;
 use datalib_schema::grid_rows::GridRow;
-use datalib_schema::problems::{Outcome, ProblemRow, Scope, Stage};
+use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
 use datalib_schema::providers::Provider;
 
 use crate::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
@@ -322,6 +325,7 @@ fn materialize_attachment_bytes(
     blobs: &BlobBundle,
 ) -> NormalizedDoc {
     let mut out = doc.clone();
+    report_missing_bytes(&mut out, blobs);
     if blobs.is_empty() {
         return out;
     }
@@ -340,10 +344,33 @@ fn materialize_attachment_bytes(
             };
             if let Some(fname) = blobs.filename_for(ref_id) {
                 att.rel_path = Some(format!("blobs/{fname}"));
+                if att.byte_len.is_none() {
+                    att.byte_len = blobs.get(ref_id).map(|b| b.bytes.len() as i64);
+                }
             }
         }
     }
     out
+}
+
+/// An attachment the download stored but the blob store has lost would
+/// otherwise read as merely not fetched yet.
+fn report_missing_bytes(doc: &mut NormalizedDoc, blobs: &BlobBundle) {
+    if !blobs.has_missing() {
+        return;
+    }
+    for item in &mut doc.items {
+        for att in &item.attachments {
+            let Some(ref_id) = att.ref_id.as_deref() else {
+                continue;
+            };
+            if blobs.is_missing(ref_id) {
+                let name = att.file_name.as_deref().unwrap_or(ref_id);
+                item.problems
+                    .push(Problem::field("attachment", Reason::BlobMissing, name));
+            }
+        }
+    }
 }
 
 /// `<out>/<stanza>/render_markdown/<chat_uuid>/<period>.md` plus the matching
@@ -431,11 +458,31 @@ fn render_markdown(
 
     let first_unread = doc.items.iter().position(|it| it.unread);
     let mut sections = vec![Section::unkeyed(s)];
+    let mut open_branches: Vec<&str> = Vec::new();
     let mut i = 0;
     while i < doc.items.len() {
+        let item = &doc.items[i];
+        let shared = open_branches
+            .iter()
+            .zip(&item.branch)
+            .take_while(|(open, b)| **open == b.as_str())
+            .count();
+        while open_branches.len() > shared {
+            open_branches.pop();
+            sections.push(Section::unkeyed("</details>\n\n".to_string()));
+        }
+        while open_branches.len() < item.branch.len() {
+            let depth = open_branches.len();
+            let inside = doc.items[i..]
+                .iter()
+                .take_while(|it| it.branch.get(..=depth) == item.branch.get(..=depth))
+                .count();
+            sections.push(Section::unkeyed(branch_opener(inside)));
+            open_branches.push(&item.branch[depth]);
+        }
         let run_end = doc.items[i..]
             .iter()
-            .position(|it| !it.is_aside)
+            .position(|it| !it.is_aside || it.branch != item.branch)
             .map_or(doc.items.len(), |n| i + n);
         if run_end > i {
             render_aside_run(
@@ -450,10 +497,23 @@ fn render_markdown(
             i += 1;
         }
     }
+    for _ in open_branches {
+        sections.push(Section::unkeyed("</details>\n\n".to_string()));
+    }
     if let Some(orphans) = render_orphan_reactions(doc) {
         sections.push(Section::unkeyed(orphans));
     }
     sections
+}
+
+/// A version of the conversation the account left, folded like a run of
+/// tool steps: outside the messages' own `<div>`s, so every anchor in it
+/// still works.
+fn branch_opener(messages: usize) -> String {
+    let plural = if messages == 1 { "" } else { "s" };
+    format!(
+        "<details class=\"branch\">\n<summary>✎ Another version · {messages} message{plural}</summary>\n\n"
+    )
 }
 
 /// Who reacted: a chip link where the provider has their handle, so the
@@ -805,14 +865,16 @@ fn build_grid_rows(
             .conversation_name(conversation_name.clone())
             .conversation_uuid(chat.chat_uuid.clone())
             .entire_chat(entire_chat.clone())
-            // What was said: no system events, and none of the asides — a
-            // tool call, a harness's injected preamble — that the page
-            // folds away.
+            // What was said: no system events, none of the asides — a
+            // tool call, a harness's injected preamble — and no version of
+            // the conversation the account left; the page folds those away.
             .body(
                 doc.items
                     .iter()
                     .zip(&bodies)
-                    .filter(|(i, _)| !matches!(i.kind, ItemKind::System) && !i.is_aside)
+                    .filter(|(i, _)| {
+                        !matches!(i.kind, ItemKind::System) && !i.is_aside && i.branch.is_empty()
+                    })
                     .map(|(_, body)| body.as_str())
                     .filter(|body| !body.is_empty())
                     .collect::<Vec<_>>()
@@ -1101,6 +1163,7 @@ mod tests {
                     kind_label: None,
                     source_ref: None,
                     is_aside: false,
+                    branch: Vec::new(),
                     unread: false,
                     recipients: Vec::new(),
                     problems: Vec::new(),
@@ -1274,6 +1337,7 @@ mod tests {
             kind_label: None,
             source_ref: None,
             is_aside: false,
+            branch: Vec::new(),
             unread: false,
             recipients: Vec::new(),
             problems: Vec::new(),
@@ -1527,6 +1591,7 @@ mod tests {
             kind_label: Some("Tool Call".to_string()),
             source_ref: None,
             is_aside: true,
+            branch: Vec::new(),
             unread: false,
             recipients: Vec::new(),
             problems: Vec::new(),
@@ -1696,6 +1761,110 @@ mod tests {
         let md = join(&render_markdown(&profile, &chat, &chat.buckets[0], "Test"));
         assert!(md.contains("not yet fetched"));
         assert!(md.contains("https://example/vscapture"));
+    }
+
+    /// An attachment whose stored bytes the blob store has lost is a
+    /// problem on its message, not a silent "(not yet fetched)".
+    #[test]
+    fn an_attachment_the_blob_store_lost_is_reported() {
+        let mut chat = mk_chat();
+        chat.buckets[0].items[0].attachments = vec![NormalizedAttachment {
+            rel_path: None,
+            file_name: Some("away-team-scan.png".to_string()),
+            mime_type: Some("image/png".to_string()),
+            byte_len: None,
+            source_url: None,
+            ref_id: Some("scan-1".to_string()),
+        }];
+        let mut blobs = BlobBundle::default();
+        blobs.mark_missing("scan-1");
+        // No bytes to write, so nothing touches the page directory.
+        let doc = materialize_attachment_bytes(&chat.buckets[0], Path::new("/nonexistent"), &blobs);
+
+        let problems = &doc.items[0].problems;
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert_eq!(problems[0].reason, Reason::BlobMissing);
+        assert_eq!(problems[0].sample, "away-team-scan.png");
+    }
+
+    /// A version of the conversation the account left is kept, folded
+    /// in where it forked; a version left inside it folds inside it.
+    #[test]
+    fn another_version_folds_where_it_forked() {
+        let mut chat = mk_chat();
+        let base = chat.buckets[0].items[0].clone();
+        let item = |id: &str, branch: &[&str]| NormalizedChatItem {
+            message_uuid: id.to_string(),
+            text: Some(format!("text of {id}")),
+            branch: branch.iter().map(|b| b.to_string()).collect(),
+            reactions: Vec::new(),
+            ..base.clone()
+        };
+        chat.buckets[0].items = vec![
+            item("q-original", &["q-original"]),
+            item("a-first", &["q-original", "a-first"]),
+            item("a-retried", &["q-original"]),
+            item("q-edited", &[]),
+            item("a-edited", &[]),
+        ];
+        let md = join(&render_markdown(
+            &test_profile(),
+            &chat,
+            &chat.buckets[0],
+            "Test",
+        ));
+        let at = |needle: &str| {
+            md.find(needle)
+                .unwrap_or_else(|| panic!("{needle} in {md}"))
+        };
+        assert!(md.contains("Another version · 3 messages"));
+        assert!(md.contains("Another version · 1 message<"));
+        assert!(at("Another version · 3") < at("text of q-original"));
+        assert!(at("text of a-first") < at("text of a-retried"));
+        assert!(at("text of a-retried") < at("text of q-edited"));
+        assert_eq!(md.matches("<details class=\"branch\">").count(), 2);
+        assert_eq!(md.matches("</details>").count(), 2);
+        let between = &md[at("text of a-retried")..at("text of q-edited")];
+        assert!(
+            between.contains("</details>"),
+            "the outer version closes before the edit"
+        );
+
+        let rows = rows_of(&test_profile(), &chat);
+        assert_eq!(rows.len(), 6, "every version keeps its own grid row");
+        assert!(
+            rows[0].preview.starts_with("text of q-edited"),
+            "the document's text is the version shown: {}",
+            rows[0].preview
+        );
+    }
+
+    /// A provider that does not know an attachment's size gets it from
+    /// the bytes, rather than "size unknown" beside a file on disk.
+    #[test]
+    fn a_held_attachment_takes_its_size_from_its_bytes() {
+        let mut chat = mk_chat();
+        chat.buckets[0].items[0].attachments = vec![NormalizedAttachment {
+            rel_path: None,
+            file_name: Some("warp-core-schematic.pdf".to_string()),
+            mime_type: None,
+            byte_len: None,
+            source_url: None,
+            ref_id: Some("schematic".to_string()),
+        }];
+        let mut blobs = BlobBundle::default();
+        blobs.add(
+            "schematic",
+            vec![0; 2048],
+            Some("application/pdf".into()),
+            None,
+        );
+        let dir = tempfile::tempdir().unwrap();
+
+        let doc = materialize_attachment_bytes(&chat.buckets[0], dir.path(), &blobs);
+
+        assert_eq!(doc.items[0].attachments[0].byte_len, Some(2048));
+        assert!(doc.items[0].attachments[0].rel_path.is_some());
     }
 
     #[test]

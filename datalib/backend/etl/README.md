@@ -578,12 +578,19 @@ whichever way the run ends.
 
 **Nothing resets the CAS.** Delete `blobs.sqlite` and reset the ingest
 step together; deleting the file alone leaves edge rows naming bytes
-that are gone, and the download will not refetch them. For the same
-reason `BlobCas::open` converts a `blobs.doltlite_db` an older build
-left: it copies every blob into a temporary plain file, checks the row
-count and byte total, renames it into place and deletes the old store.
-A crash part-way leaves the old store whole and the next open starts
-over.
+that are gone, and the download will not refetch them. A render reports
+each such attachment as a `blob_missing` problem on its message rather
+than calling it unfetched. For the same reason `BlobCas::open` converts
+a `blobs.doltlite_db` an older build left: it copies every blob into a
+temporary plain file, checks the row count and byte total, renames it
+into place and deletes the old store. A crash part-way leaves the old
+store whole and the next open starts over.
+
+**A render opens the CAS through `open_cas_for_render`**, never by
+testing for `blobs.sqlite` itself. Until the source's next download
+converts it, that reads an older build's `blobs.doltlite_db` in place,
+read-only: a render may not write the raw directory, and a page
+rendered without its attachments stays that way until the page changes.
 
 **Filenames dedupe on the content hash, not on the derived name.** A blob's
 rendered filename has a content-addressed stem and an extension derived from

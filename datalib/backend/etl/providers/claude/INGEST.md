@@ -74,12 +74,20 @@ latchkey auth set claude-ai -H "Cookie: cf_clearance=$(pbpaste)"
 
 All paths are under `https://claude.ai/api`.
 
-A `403` on the conversation listing means "no chat permission for this
-org": the org is counted (`forbidden_orgs`), reported as one `problems`
-row (`listing:org:<name>`), and skipped. Same for the project listing. A
-`403` on a detail fetch is retried twice first (0.5 s, then 2 s),
-because claude.ai answers 403 now and then to a detail GET issued right
-after the listing, and the same UUID a moment later returns 200.
+An org whose `capabilities` list is there and leaves out `chat` — an
+API-console org, `["api", …]` — is not walked at all: no listing, no
+project, no detail is asked of it, it is counted (`non_chat_orgs`) and
+logged, and it is not a problem. Nothing of it is pruned either, so a
+conversation the store holds for it stays. An org with no
+`capabilities`, or something other than a list there, is walked.
+
+A `403` on a walked org's conversation listing means "no chat permission
+for this org": the org is counted (`forbidden_orgs`), reported as one
+`problems` row (`listing:org:<org uuid>`, its name in the text, since two
+orgs of one account can share a name), and skipped. Same for the project
+listing. A `403` on a detail fetch is retried twice first (0.5 s, then
+2 s), because claude.ai answers 403 now and then to a detail GET issued
+right after the listing, and the same UUID a moment later returns 200.
 
 ## When part of a sync fails
 
@@ -95,8 +103,8 @@ the step.
 | what failed | row | cleared by |
 |---|---|---|
 | `/account`, with no user stored | `phase:account` | the next run, which asks again while there is no user |
-| one org's conversation listing (not a 403) | `listing:conversations org:<name>` | the next run that lists it; until then nothing of that org is pruned |
-| one org's project listing | `listing:projects org:<name>` | the next run that lists it |
+| one org's conversation listing (not a 403) | `listing:conversations org:<org uuid>` | the next run that lists it; until then nothing of that org is pruned |
+| one org's project listing | `listing:projects org:<org uuid>` | the next run that lists it |
 | one project's docs listing | `project_docs_listings:<project uuid>` (a warning for a 403, or when docs from an earlier listing are held) | the next listing of them: a listing that failed is not held, so it is due again whatever its sweep marker says |
 | a configured `project_uuids` entry no listed org has | `config:project_uuids:<value>` | a run in which it matches, or the config dropping it |
 | a configured `conv_uuids` entry every org answers 404 or 403 for | `config:conv_uuids:<value>` | as above |
@@ -300,15 +308,16 @@ conversation the store holds for that org that the listing does not
 name was deleted on claude.ai, and the walk deletes it
 (`prune_org_conversations`; the row stays in doltlite history). The
 prune reads the unfiltered listing, not the `since`-narrowed one, and
-never touches a row whose `org_uuid` is NULL (an export-ingested one)
-or an org whose listing was refused or failed. A pruned conversation
+never touches a row whose `org_uuid` is NULL (an export-ingested one),
+an org whose listing was refused or failed, or an org with no chat. A pruned conversation
 takes its attachment edges, their bookkeeping and the `problems` rows
 of both with it.
 
 A conversation whose every fetch failed is an id-only stub — no
-payload, so no org. When every org listed, a stub no listing names is
-pruned too, problem and all; otherwise stubs wait for a run in which
-they all did.
+payload, so no org. When every walked org listed, a stub no listing
+names is pruned too, problem and all; otherwise stubs wait for a run in
+which they all did. An org with no chat lists nothing, so it holds no
+stub back.
 
 ## Bootstrapping from an export, then keeping it fresh with the API
 
@@ -391,4 +400,7 @@ requests; see the table above.
 ## Sample data
 
 A curated TNG-themed fixture lives at `tests/fixtures/claude_export/`
-and is exposed through the Bazel `tng_fixture` filegroup.
+and is exposed through the Bazel `tng_fixture` filegroup. Its
+`files/<file_uuid>.<ext>` hold the bytes the synthesizer serves where a
+download asks for them: an image's `preview_url`, a document's
+`document_asset.url`.

@@ -9,7 +9,10 @@ exports_files(["Cargo.toml"])
 # //tests/fixtures:ingested_tng.
 filegroup(
     name = "tng_fixture",
-    srcs = glob(["tests/fixtures/chatgpt_api/**/*.json"]),
+    srcs = glob([
+        "tests/fixtures/chatgpt_api/**/*.json",
+        "tests/fixtures/chatgpt_api/files/*",
+    ]),
     visibility = ["//visibility:public"],
 )
 

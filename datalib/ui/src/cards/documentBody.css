@@ -452,6 +452,24 @@
   /* The full instant is in `title`; say so with the cursor. */
   cursor: help;
 }
+/* A version of the conversation the account left (an edited prompt, a
+   regenerated answer), folded in where it forked. Dashed, so it reads as
+   beside the conversation rather than part of it. */
+.chat-body details.branch {
+  margin: 0.4rem 0;
+  border: 1px dashed var(--datalib-border, #d8d8d8);
+  border-radius: calc(var(--datalib-radius) + 2px);
+}
+.chat-body details.branch > summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--datalib-muted, #94a3b8);
+  padding: 0.35rem 0.6rem;
+}
+.chat-body details.branch[open] {
+  padding: 0 0.5rem 0.25rem;
+}
+
 /* A run of adjacent tool steps, folded into one line until asked for. */
 .chat-body details.tool-group {
   margin: 0.35rem 0;

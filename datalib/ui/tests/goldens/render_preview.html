@@ -709,6 +709,24 @@ code.hljs {
   /* The full instant is in `title`; say so with the cursor. */
   cursor: help;
 }
+/* A version of the conversation the account left (an edited prompt, a
+   regenerated answer), folded in where it forked. Dashed, so it reads as
+   beside the conversation rather than part of it. */
+.chat-body details.branch {
+  margin: 0.4rem 0;
+  border: 1px dashed var(--datalib-border, #d8d8d8);
+  border-radius: calc(var(--datalib-radius) + 2px);
+}
+.chat-body details.branch > summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--datalib-muted, #94a3b8);
+  padding: 0.35rem 0.6rem;
+}
+.chat-body details.branch[open] {
+  padding: 0 0.5rem 0.25rem;
+}
+
 /* A run of adjacent tool steps, folded into one line until asked for. */
 .chat-body details.tool-group {
   margin: 0.35rem 0;
@@ -1353,7 +1371,7 @@ a.chip {
 </div>
 </section>
 <section class="preview-source" id="src-chatgpt-api">
-<h2 class="preview-source-name">chatgpt-api <span class="preview-count">5 documents</span></h2>
+<h2 class="preview-source-name">chatgpt-api <span class="preview-count">6 documents</span></h2>
 <div class="preview-doc">
 <h3 class="preview-name">chatgpt-api/render_markdown/00000000-0000-8020-9a72-3216b3199332/all.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8020-9a72-3216b3199332">Sonnet on a Cat Named Spot <a class="source-link" href="https://chatgpt.com/c/68fa0001-fake-7000-8000-positronic0001" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -1440,6 +1458,116 @@ coeffs = np.polyfit(x, y, <span class="hljs-number">2</span>)
 </div>
 </div>
 <div class="preview-doc">
+<h3 class="preview-name">chatgpt-api/render_markdown/00000000-0000-8db7-990a-e9ff89094860/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8db7-990a-e9ff89094860">Risa Survey Briefing <a class="source-link" href="https://chatgpt.com/c/68fa0005-fake-7000-8000-positronic0005" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<details class="branch">
+<summary>✎ Another version · 15 messages</summary>
+<div id="m-0b810308-e000-81d4-8edb-98e80816d9a9" data-section-uuid="0b810308-e000-81d4-8edb-98e80816d9a9" class="msg msg--chatgpt">
+<h2><span class="msg-author">User</span> <time class="msg-ts" datetime="2370-10-28T08:00:00+00:00" title="2370-10-28 08:00:00 UTC">Wed Oct 28th, 2370 at 08:00</time></h2>
+<p>Search the subspace archives for the three most recent survey missions to Risa and cite your sources.</p>
+</div>
+<div id="m-0b810308-f388-84a1-a6d5-0d77bb5bab4e" data-section-uuid="0b810308-f388-84a1-a6d5-0d77bb5bab4e" class="msg msg--chatgpt">
+<h2><span class="msg-author">gpt-5</span> <time class="msg-ts" datetime="2370-10-28T08:00:05+00:00" title="2370-10-28 08:00:05 UTC">Wed Oct 28th, 2370 at 08:00</time></h2>
+<blockquote>
+<p>Checking the archives</p>
+<p>Looking for survey logs.</p>
+</blockquote>
+</div>
+<div id="m-0b810308-ff40-878a-b7d4-444627d07a48" data-section-uuid="0b810308-ff40-878a-b7d4-444627d07a48" class="msg msg--chatgpt">
+<h2><span class="msg-author">gpt-5</span> <time class="msg-ts" datetime="2370-10-28T08:00:08+00:00" title="2370-10-28 08:00:08 UTC">Wed Oct 28th, 2370 at 08:00</time></h2>
+<blockquote>
+<p>Searched 3 archives</p>
+</blockquote>
+</div>
+<div id="m-0b810309-0328-8e55-b616-2ffbc1c7b6e6" data-section-uuid="0b810309-0328-8e55-b616-2ffbc1c7b6e6" class="msg msg--chatgpt">
+<h2><span class="msg-author">gpt-5</span> <time class="msg-ts" datetime="2370-10-28T08:00:09+00:00" title="2370-10-28 08:00:09 UTC">Wed Oct 28th, 2370 at 08:00</time></h2>
+<p>The three most recent surveys of Risa were led by the USS Enterprise.</p>
+<p><strong>Sources</strong></p>
+<ol>
+<li><a href="https://memory-alpha.example/Risa">Risa</a> — Memory Alpha</li>
+<li><a href="https://starfleet.example/surveys/risa">Starfleet Survey Log: Risa</a> — Starfleet</li>
+</ol>
+</div>
+<div id="m-0b810309-ca60-8dae-81b5-0cd94f501396" data-section-uuid="0b810309-ca60-8dae-81b5-0cd94f501396" class="msg msg--chatgpt">
+<h2><span class="msg-author">User</span> <time class="msg-ts" datetime="2370-10-28T08:01:00+00:00" title="2370-10-28 08:01:00 UTC">Wed Oct 28th, 2370 at 08:01</time></h2>
+<p>Use Python to plot the survey durations as a bar chart, and show me the code.</p>
+</div>
+<div id="m-0b810309-dde8-817b-8755-7dcd1145be5a" data-section-uuid="0b810309-dde8-817b-8755-7dcd1145be5a" class="msg msg--chatgpt">
+<h2><span class="msg-author">gpt-5</span> <time class="msg-ts" datetime="2370-10-28T08:01:05+00:00" title="2370-10-28 08:01:05 UTC">Wed Oct 28th, 2370 at 08:01</time></h2>
+<pre><code>import matplotlib.pyplot as plt
+plt.bar(['41153', '42286', '43125'], [3, 5, 2])
+plt.savefig('surveys.png')
+</code></pre>
+</div>
+<details class="tool-group">
+<summary>🛠 1 tool step</summary>
+<div id="m-0b810309-e1d0-8fe7-91e7-e7b0e7ba6f03" data-section-uuid="0b810309-e1d0-8fe7-91e7-e7b0e7ba6f03" class="msg msg--chatgpt">
+<h2><span class="msg-author">Tool</span> <time class="msg-ts" datetime="2370-10-28T08:01:06+00:00" title="2370-10-28 08:01:06 UTC">Wed Oct 28th, 2370 at 08:01</time></h2>
+<pre><code>Saved surveys.png
+</code></pre>
+</div>
+</details>
+<div id="m-0b810309-e5b8-8573-9a0c-e446e8d7d2c2" data-section-uuid="0b810309-e5b8-8573-9a0c-e446e8d7d2c2" class="msg msg--chatgpt">
+<h2><span class="msg-author">gpt-5</span> <time class="msg-ts" datetime="2370-10-28T08:01:07+00:00" title="2370-10-28 08:01:07 UTC">Wed Oct 28th, 2370 at 08:01</time></h2>
+<p>Here is the chart of survey durations in days.</p>
+</div>
+<div id="m-0b81030a-b4c0-8846-a121-4deb6d3ef616" data-section-uuid="0b81030a-b4c0-8846-a121-4deb6d3ef616" class="msg msg--chatgpt">
+<h2><span class="msg-author">User</span> <time class="msg-ts" datetime="2370-10-28T08:02:00+00:00" title="2370-10-28 08:02:00 UTC">Wed Oct 28th, 2370 at 08:02</time></h2>
+<p>Summarize the away team report and describe the photos.</p>
+<p><img src="blobs/e827a91f36122dae.jpg" alt="viewscreen.jpg"></p>
+<p><img src="blobs/3b5513fa91f4c23f.jpg" alt="beach.jpg"></p>
+<p>📎 <a href="blobs/4473037304ea1f98.pdf">Away Team Report.pdf</a> — 400 B</p>
+</div>
+<details class="tool-group">
+<summary>🛠 1 tool step</summary>
+<div id="m-0b81030a-bc90-8ac2-bc06-c5a9c897e49f" data-section-uuid="0b81030a-bc90-8ac2-bc06-c5a9c897e49f" class="msg msg--chatgpt">
+<h2><span class="msg-author">Tool</span> <time class="msg-ts" datetime="2370-10-28T08:02:02+00:00" title="2370-10-28 08:02:02 UTC">Wed Oct 28th, 2370 at 08:02</time></h2>
+<p><strong>Away Team Report.pdf</strong></p>
+<blockquote>
+<p>All crew accounted for.</p>
+</blockquote>
+</div>
+</details>
+<div id="m-0b81030a-c078-8a9e-959b-bc653ba2d1c7" data-section-uuid="0b81030a-c078-8a9e-959b-bc653ba2d1c7" class="msg msg--chatgpt">
+<h2><span class="msg-author">gpt-5</span> <time class="msg-ts" datetime="2370-10-28T08:02:03+00:00" title="2370-10-28 08:02:03 UTC">Wed Oct 28th, 2370 at 08:02</time></h2>
+<p>The report says all crew are accounted for. The first photo is the bridge viewscreen; the second is a beach at dusk.</p>
+</div>
+<div id="m-0b81030b-9f20-874c-b4fd-978dc52db2eb" data-section-uuid="0b81030b-9f20-874c-b4fd-978dc52db2eb" class="msg msg--chatgpt">
+<h2><span class="msg-author">User</span> <time class="msg-ts" datetime="2370-10-28T08:03:00+00:00" title="2370-10-28 08:03:00 UTC">Wed Oct 28th, 2370 at 08:03</time></h2>
+<p>Generate an image of the Enterprise in orbit at dusk.</p>
+</div>
+<div id="m-0b81030b-c630-8a4e-8f03-bc9eecb57d0e" data-section-uuid="0b81030b-c630-8a4e-8f03-bc9eecb57d0e" class="msg msg--chatgpt">
+<h2><span class="msg-author">Tool</span> <time class="msg-ts" datetime="2370-10-28T08:03:10+00:00" title="2370-10-28 08:03:10 UTC">Wed Oct 28th, 2370 at 08:03</time></h2>
+<p><img src="blobs/f612a31ba7cf5ab9.png" alt="f612a31ba7cf5ab9.png"></p>
+</div>
+<details class="branch">
+<summary>✎ Another version · 1 message</summary>
+<div id="m-0b81030b-ca18-8e4a-88f6-ae3fa416c8d0" data-section-uuid="0b81030b-ca18-8e4a-88f6-ae3fa416c8d0" class="msg msg--chatgpt">
+<h2><span class="msg-author">gpt-5</span> <time class="msg-ts" datetime="2370-10-28T08:03:11+00:00" title="2370-10-28 08:03:11 UTC">Wed Oct 28th, 2370 at 08:03</time></h2>
+<p>Here is the Enterprise in orbit.</p>
+</div>
+</details>
+<div id="m-0b81030b-ed40-8cbe-b447-eaf35f95bb7f" data-section-uuid="0b81030b-ed40-8cbe-b447-eaf35f95bb7f" class="msg msg--chatgpt">
+<h2><span class="msg-author">gpt-5</span> <time class="msg-ts" datetime="2370-10-28T08:03:20+00:00" title="2370-10-28 08:03:20 UTC">Wed Oct 28th, 2370 at 08:03</time></h2>
+<p>Here is another rendering, with the planet's twin moons.</p>
+</div>
+</details>
+<div id="m-0b81030d-73e0-8265-861e-1321560c9a08" data-section-uuid="0b81030d-73e0-8265-861e-1321560c9a08" class="msg msg--chatgpt">
+<h2><span class="msg-author">User</span> <time class="msg-ts" datetime="2370-10-28T08:05:00+00:00" title="2370-10-28 08:05:00 UTC">Wed Oct 28th, 2370 at 08:05</time></h2>
+<p>Search the subspace archives for the four most recent survey missions to Risa and cite your sources.</p>
+</div>
+<div id="m-0b81030d-8768-8043-abf9-c26ebe5f1805" data-section-uuid="0b81030d-8768-8043-abf9-c26ebe5f1805" class="msg msg--chatgpt">
+<h2><span class="msg-author">gpt-5</span> <time class="msg-ts" datetime="2370-10-28T08:05:05+00:00" title="2370-10-28 08:05:05 UTC">Wed Oct 28th, 2370 at 08:05</time></h2>
+<p>Four surveys of Risa are on record; the most recent was led by the USS Enterprise.</p>
+<p><strong>Sources</strong></p>
+<ol>
+<li><a href="https://memory-alpha.example/Risa">Risa</a> — Memory Alpha</li>
+<li><a href="https://starfleet.example/surveys/risa">Starfleet Survey Log: Risa</a> — Starfleet</li>
+</ol>
+</div>
+</div>
+</div>
+<div class="preview-doc">
 <h3 class="preview-name">chatgpt-api/render_markdown/_datalib/storage.md</h3>
 <div class="chat-body markdown-body"><h1><a href="datalib:group/chatgpt-api" title="chatgpt-api" class="chip" data-entity="datalib:group/chatgpt-api">chatgpt-api</a> — storage</h1>
 <p>Measured 2369-04-15T00:00:00+00:00.</p>
@@ -1476,7 +1604,7 @@ coeffs = np.polyfit(x, y, <span class="hljs-number">2</span>)
 <td><a href="datalib:step/chatgpt-api/ingest" title="chatgpt-api/ingest" class="chip" data-entity="datalib:step/chatgpt-api/ingest">ingest</a></td>
 <td><code>chatgpt-api/ingest/blobs.sqlite#cas_objects</code></td>
 <td></td>
-<td>0 rows</td>
+<td>4 rows</td>
 <td><span id="m-00000000-0000-8df9-b479-b68a1e1d758f" data-section-uuid="00000000-0000-8df9-b479-b68a1e1d758f"><code>00000000</code></span></td>
 </tr>
 <tr>
@@ -1492,7 +1620,7 @@ coeffs = np.polyfit(x, y, <span class="hljs-number">2</span>)
 <td><a href="datalib:step/chatgpt-api/ingest" title="chatgpt-api/ingest" class="chip" data-entity="datalib:step/chatgpt-api/ingest">ingest</a></td>
 <td><code>chatgpt-api/ingest/entities.doltlite_db#chatgpt_attachments</code></td>
 <td></td>
-<td>0 rows</td>
+<td>4 rows</td>
 <td><span id="m-00000000-0000-865b-b49c-a7e4111ac63e" data-section-uuid="00000000-0000-865b-b49c-a7e4111ac63e"><code>00000000</code></span></td>
 </tr>
 <tr>
@@ -1500,7 +1628,7 @@ coeffs = np.polyfit(x, y, <span class="hljs-number">2</span>)
 <td><a href="datalib:step/chatgpt-api/ingest" title="chatgpt-api/ingest" class="chip" data-entity="datalib:step/chatgpt-api/ingest">ingest</a></td>
 <td><code>chatgpt-api/ingest/entities.doltlite_db#conversations</code></td>
 <td></td>
-<td>4 rows</td>
+<td>5 rows</td>
 <td><span id="m-00000000-0000-8710-b041-6c312503e484" data-section-uuid="00000000-0000-8710-b041-6c312503e484"><code>00000000</code></span></td>
 </tr>
 <tr>
@@ -1517,7 +1645,7 @@ coeffs = np.polyfit(x, y, <span class="hljs-number">2</span>)
 </div>
 </section>
 <section class="preview-source" id="src-claude-api">
-<h2 class="preview-source-name">claude-api <span class="preview-count">7 documents</span></h2>
+<h2 class="preview-source-name">claude-api <span class="preview-count">9 documents</span></h2>
 <div class="preview-doc">
 <h3 class="preview-name">claude-api/render_markdown/00000000-0000-8184-b70f-0aace9f02d6c/all.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8184-b70f-0aace9f02d6c">Klingon Diplomatic Greeting Drafting <a class="source-link" href="https://claude.ai/chat/c0000003-1701-4d00-8000-00000000c003" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -1571,6 +1699,133 @@ coeffs = np.polyfit(x, y, <span class="hljs-number">2</span>)
 <div id="m-0b75b542-99c0-8310-bcb9-5ca68ee391c2" data-section-uuid="0b75b542-99c0-8310-bcb9-5ca68ee391c2" class="msg msg--claude">
 <h2><span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-14T10:02:00+00:00" title="2369-04-14 10:02:00 UTC">Mon Apr 14th, 2369 at 10:02</time></h2>
 <p>Perfect. Make it so.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">claude-api/render_markdown/00000000-0000-81ce-8161-7a771ae8bff5/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-81ce-8161-7a771ae8bff5">Warp Field Recalibration <a class="source-link" href="https://claude.ai/chat/c0000007-1701-4d00-8000-00000000c007" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-0b75c9a3-4680-86b2-82cb-16793b644d6b" data-section-uuid="0b75c9a3-4680-86b2-82cb-16793b644d6b" class="msg msg--claude">
+<h2><span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-18T09:00:00+00:00" title="2369-04-18 09:00:00 UTC">Fri Apr 18th, 2369 at 09:00</time></h2>
+<p>Geordi, how far can we push the warp field before the nacelles complain?</p>
+</div>
+<details class="tool-group">
+<summary>🛠 2 tool steps</summary>
+<div id="m-0b75c9a3-5a08-8774-a4f0-88f06b979c64" data-section-uuid="0b75c9a3-5a08-8774-a4f0-88f06b979c64" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:00:05+00:00" title="2369-04-18 09:00:05 UTC">Fri Apr 18th, 2369 at 09:00</time></h2>
+<details><summary>Tool use: web_search — Searching the web</summary>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;query&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Galaxy class maximum sustainable warp&quot;</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+</details>
+</div>
+<div id="m-0b75c9a3-65c0-8cf3-8faa-bfdbd1d74e36" data-section-uuid="0b75c9a3-65c0-8cf3-8faa-bfdbd1d74e36" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:00:08+00:00" title="2369-04-18 09:00:08 UTC">Fri Apr 18th, 2369 at 09:00</time></h2>
+<details><summary>Tool result: web_search</summary>
+<ul>
+<li><a href="https://memory-alpha.test/wiki/Warp_factor">Warp factor</a> — Memory Alpha</li>
+<li><a href="https://tech-manual.test/ncc-1701-d/propulsion">Galaxy class propulsion</a> — Starfleet Technical Manual</li>
+</ul>
+</details>
+</div>
+</details>
+<div id="m-0b75c9a3-94a0-8946-8b50-e001e23974c8" data-section-uuid="0b75c9a3-94a0-8946-8b50-e001e23974c8" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:00:20+00:00" title="2369-04-18 09:00:20 UTC">Fri Apr 18th, 2369 at 09:00</time></h2>
+<p>Sustained warp 9.2 is the rated ceiling; the nacelles tolerate 9.6 for about twelve hours before the coils need a full recalibration.</p>
+<p><strong>Sources</strong></p>
+<ol>
+<li><a href="https://memory-alpha.test/wiki/Warp_factor">Warp factor</a> — Memory Alpha</li>
+<li><a href="https://tech-manual.test/ncc-1701-d/propulsion">Galaxy class propulsion</a> — Starfleet Technical Manual</li>
+<li><a href="https://memory-alpha.test/wiki/Warp_coil">Warp coil</a> — Memory Alpha</li>
+</ol>
+</div>
+<details class="branch">
+<summary>✎ Another version · 2 messages</summary>
+<div id="m-0b75c9a4-30e0-8afe-869a-f421df2f8c6a" data-section-uuid="0b75c9a4-30e0-8afe-869a-f421df2f8c6a" class="msg msg--claude">
+<h2><span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-18T09:01:00+00:00" title="2369-04-18 09:01:00 UTC">Fri Apr 18th, 2369 at 09:01</time></h2>
+<p>Give me the coil efficiencies as a table.</p>
+</div>
+<div id="m-0b75c9a4-57f0-800d-b41c-fc03ecd89b29" data-section-uuid="0b75c9a4-57f0-800d-b41c-fc03ecd89b29" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:01:10+00:00" title="2369-04-18 09:01:10 UTC">Fri Apr 18th, 2369 at 09:01</time></h2>
+<p>This answer was left behind when the question was edited.</p>
+</div>
+</details>
+<div id="m-0b75c9a5-1b40-816e-a33e-acede3e6771e" data-section-uuid="0b75c9a5-1b40-816e-a33e-acede3e6771e" class="msg msg--claude">
+<h2><span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-18T09:02:00+00:00" title="2369-04-18 09:02:00 UTC">Fri Apr 18th, 2369 at 09:02</time></h2>
+<p>Write me a script that checks these coil readings.</p>
+<p><strong>[attachment: Pasted text]</strong></p>
+<blockquote>
+<p>Coil 1: 98.2%
+Coil 2: 97.1%</p>
+</blockquote>
+</div>
+<details class="tool-group">
+<summary>🛠 6 tool steps</summary>
+<div id="m-0b75c9a5-2ec8-8ed5-b054-634468b6a72e" data-section-uuid="0b75c9a5-2ec8-8ed5-b054-634468b6a72e" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:02:05+00:00" title="2369-04-18 09:02:05 UTC">Fri Apr 18th, 2369 at 09:02</time></h2>
+<details><summary>Tool use: artifacts — Creating the coil check</summary>
+<p>Create artifact: <strong>Coil check</strong> (<code>application/vnd.ant.code</code>)</p>
+<pre><code class="language-python"><span class="hljs-string">&quot;&quot;&quot;Coil check for the Enterprise-D.&quot;&quot;&quot;</span>
+REPORT = <span class="hljs-string">&quot;&quot;&quot;
+```
+warp 9.6 for 12h
+```
+&quot;&quot;&quot;</span>
+
+<span class="hljs-keyword">def</span> <span class="hljs-title function_">ok</span>(<span class="hljs-params">efficiency</span>):
+    <span class="hljs-keyword">return</span> efficiency &gt;= <span class="hljs-number">97.5</span>
+</code></pre>
+</details>
+</div>
+<div id="m-0b75c9a5-32b0-8aa0-b61b-87712fc773aa" data-section-uuid="0b75c9a5-32b0-8aa0-b61b-87712fc773aa" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:02:06+00:00" title="2369-04-18 09:02:06 UTC">Fri Apr 18th, 2369 at 09:02</time></h2>
+<details><summary>Tool result: artifacts</summary>
+<pre><code>OK
+</code></pre>
+</details>
+</div>
+<div id="m-0b75c9a5-4250-857b-8b81-5e02408abcf8" data-section-uuid="0b75c9a5-4250-857b-8b81-5e02408abcf8" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:02:10+00:00" title="2369-04-18 09:02:10 UTC">Fri Apr 18th, 2369 at 09:02</time></h2>
+<details><summary>Tool use: artifacts — Raising the threshold</summary>
+<p>Update artifact: <strong>coil_check</strong></p>
+<p>Replace:</p>
+<pre><code>97.5
+</code></pre>
+<p>with:</p>
+<pre><code>98.0
+</code></pre>
+</details>
+</div>
+<div id="m-0b75c9a5-55d8-8e34-9155-6466ff633f50" data-section-uuid="0b75c9a5-55d8-8e34-9155-6466ff633f50" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:02:15+00:00" title="2369-04-18 09:02:15 UTC">Fri Apr 18th, 2369 at 09:02</time></h2>
+<details><summary>Tool use: create_file — Writing the report</summary>
+<p>Create <code>/mnt/user-data/outputs/coil_report.md</code> — Coil report for the chief engineer</p>
+<pre><code class="language-markdown"><span class="hljs-section"># Coil report</span>
+
+Coil 2 is below threshold.
+</code></pre>
+</details>
+</div>
+<div id="m-0b75c9a5-6960-81e1-92fe-e8dfd3f8beb6" data-section-uuid="0b75c9a5-6960-81e1-92fe-e8dfd3f8beb6" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:02:20+00:00" title="2369-04-18 09:02:20 UTC">Fri Apr 18th, 2369 at 09:02</time></h2>
+<details><summary>Tool use: bash_tool — Running the check</summary>
+<p>Check coil 2 against the threshold</p>
+<pre><code class="language-bash">python3 coil_check.py --coil 2
+</code></pre>
+</details>
+</div>
+<div id="m-0b75c9a5-7ce8-82c7-8676-f3a6b8cb7c22" data-section-uuid="0b75c9a5-7ce8-82c7-8676-f3a6b8cb7c22" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:02:25+00:00" title="2369-04-18 09:02:25 UTC">Fri Apr 18th, 2369 at 09:02</time></h2>
+<details><summary>Tool result: bash_tool</summary>
+<pre><code>coil 2: 97.1% (below 98.0%)
+</code></pre>
+</details>
+</div>
+</details>
+<div id="m-0b75c9a5-9070-8f81-b330-d956c36e5e05" data-section-uuid="0b75c9a5-9070-8f81-b330-d956c36e5e05" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:02:30+00:00" title="2369-04-18 09:02:30 UTC">Fri Apr 18th, 2369 at 09:02</time></h2>
+<p>Coil 2 is under threshold; schedule it for recalibration.</p>
 </div>
 </div>
 </div>
@@ -1665,6 +1920,211 @@ coeffs = np.polyfit(x, y, <span class="hljs-number">2</span>)
 </div>
 </div>
 <div class="preview-doc">
+<h3 class="preview-name">claude-api/render_markdown/00000000-0000-8c06-8231-9340b6e3de70/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8c06-8231-9340b6e3de70">Holodeck Malfunction Report <a class="source-link" href="https://claude.ai/chat/c0000008-1701-4d00-8000-00000000c008" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<details class="branch">
+<summary>✎ Another version · 5 messages</summary>
+<div id="m-0b7611f3-3d00-860c-b617-7d38a26b9806" data-section-uuid="0b7611f3-3d00-860c-b617-7d38a26b9806" class="msg msg--claude">
+<h2><span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-05-02T10:00:00+00:00" title="2369-05-02 10:00:00 UTC">Fri May 2nd, 2369 at 10:00</time></h2>
+<p>Look up the three most recent holodeck malfunctions aboard the Enterprise and cite your sources.</p>
+</div>
+<div id="m-0b7611f3-6410-8b4c-9b53-1c87201ee777" data-section-uuid="0b7611f3-6410-8b4c-9b53-1c87201ee777" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:00:10+00:00" title="2369-05-02 10:00:10 UTC">Fri May 2nd, 2369 at 10:00</time></h2>
+<details><summary>Thinking</summary>
+<blockquote>
+<p>Search the incident logs.</p>
+</blockquote>
+</details>
+</div>
+<details class="tool-group">
+<summary>🛠 2 tool steps</summary>
+<div id="m-0b7611f3-6be0-887a-8afa-fc9700525277" data-section-uuid="0b7611f3-6be0-887a-8afa-fc9700525277" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:00:12+00:00" title="2369-05-02 10:00:12 UTC">Fri May 2nd, 2369 at 10:00</time></h2>
+<details><summary>Tool use: web_search — Searching the web</summary>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;query&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Enterprise holodeck malfunctions&quot;</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+</details>
+</div>
+<div id="m-0b7611f3-6be0-8dc9-8751-ccd0ff9215d0" data-section-uuid="0b7611f3-6be0-8dc9-8751-ccd0ff9215d0" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:00:12+00:00" title="2369-05-02 10:00:12 UTC">Fri May 2nd, 2369 at 10:00</time></h2>
+<details><summary>Tool result: web_search</summary>
+<ul>
+<li><a href="https://memory-alpha.example/Holodeck">Holodeck</a> — Memory Alpha</li>
+<li><a href="https://starfleet.example/incidents/holodeck">Holodeck malfunctions</a> — Starfleet</li>
+</ul>
+</details>
+</div>
+</details>
+<div id="m-0b7611f3-b230-8ba0-99c9-60c1cf5b8ffc" data-section-uuid="0b7611f3-b230-8ba0-99c9-60c1cf5b8ffc" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:00:30+00:00" title="2369-05-02 10:00:30 UTC">Fri May 2nd, 2369 at 10:00</time></h2>
+<p>The three most recent were the Moriarty incident, the Fistful of Datas program and the Robin Hood program.</p>
+<p><strong>Sources</strong></p>
+<ol>
+<li><a href="https://starfleet.example/incidents/holodeck">Holodeck malfunctions</a> — Starfleet</li>
+</ol>
+</div>
+</details>
+<div id="m-0b7611f5-11c0-8451-b127-935f1ccdc7ad" data-section-uuid="0b7611f5-11c0-8451-b127-935f1ccdc7ad" class="msg msg--claude">
+<h2><span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-05-02T10:02:00+00:00" title="2369-05-02 10:02:00 UTC">Fri May 2nd, 2369 at 10:02</time></h2>
+<p>Look up the four most recent holodeck malfunctions aboard the Enterprise and cite your sources.</p>
+</div>
+<div id="m-0b7611f5-38d0-8624-badd-c85c173d5f15" data-section-uuid="0b7611f5-38d0-8624-badd-c85c173d5f15" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:02:10+00:00" title="2369-05-02 10:02:10 UTC">Fri May 2nd, 2369 at 10:02</time></h2>
+<details><summary>Thinking</summary>
+<blockquote>
+<p>Search again for four.</p>
+</blockquote>
+</details>
+</div>
+<details class="tool-group">
+<summary>🛠 2 tool steps</summary>
+<div id="m-0b7611f5-40a0-8dc4-a877-1ee3c3eda29b" data-section-uuid="0b7611f5-40a0-8dc4-a877-1ee3c3eda29b" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:02:12+00:00" title="2369-05-02 10:02:12 UTC">Fri May 2nd, 2369 at 10:02</time></h2>
+<details><summary>Tool use: web_search — Searching the web</summary>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;query&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Enterprise holodeck malfunctions four&quot;</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+</details>
+</div>
+<div id="m-0b7611f5-40a0-8ef7-9071-4dbaf906d82c" data-section-uuid="0b7611f5-40a0-8ef7-9071-4dbaf906d82c" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:02:12+00:00" title="2369-05-02 10:02:12 UTC">Fri May 2nd, 2369 at 10:02</time></h2>
+<details><summary>Tool result: web_search</summary>
+<ul>
+<li><a href="https://memory-alpha.example/Holodeck">Holodeck</a> — Memory Alpha</li>
+<li><a href="https://starfleet.example/incidents/holodeck">Holodeck malfunctions</a> — Starfleet</li>
+</ul>
+</details>
+</div>
+</details>
+<div id="m-0b7611f5-ae00-8355-8ddb-2d04ce2d70f7" data-section-uuid="0b7611f5-ae00-8355-8ddb-2d04ce2d70f7" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:02:40+00:00" title="2369-05-02 10:02:40 UTC">Fri May 2nd, 2369 at 10:02</time></h2>
+<p>Four are on record; the most recent was the Moriarty incident.</p>
+<p><strong>Sources</strong></p>
+<ol>
+<li><a href="https://memory-alpha.example/Holodeck">Holodeck</a> — Memory Alpha</li>
+<li><a href="https://starfleet.example/incidents/holodeck">Holodeck malfunctions</a> — Starfleet</li>
+</ol>
+</div>
+<div id="m-0b7611f5-fc20-8df6-8736-9fce3ac9cabe" data-section-uuid="0b7611f5-fc20-8df6-8736-9fce3ac9cabe" class="msg msg--claude">
+<h2><span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-05-02T10:03:00+00:00" title="2369-05-02 10:03:00 UTC">Fri May 2nd, 2369 at 10:03</time></h2>
+<p>Plot how long each malfunction lasted and send me the chart.</p>
+</div>
+<div id="m-0b7611f6-0fa8-8cce-b7fe-d08773ffaf91" data-section-uuid="0b7611f6-0fa8-8cce-b7fe-d08773ffaf91" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:03:05+00:00" title="2369-05-02 10:03:05 UTC">Fri May 2nd, 2369 at 10:03</time></h2>
+<details><summary>Thinking</summary>
+<blockquote>
+<p>Write a script, run it, send the chart.</p>
+</blockquote>
+</details>
+</div>
+<details class="tool-group">
+<summary>🛠 6 tool steps</summary>
+<div id="m-0b7611f6-2330-8b27-a61c-00a9a6232014" data-section-uuid="0b7611f6-2330-8b27-a61c-00a9a6232014" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:03:10+00:00" title="2369-05-02 10:03:10 UTC">Fri May 2nd, 2369 at 10:03</time></h2>
+<details><summary>Tool use: Write — Created a file</summary>
+<p>Create <code>holodeck_chart.py</code></p>
+<pre><code class="language-python"><span class="hljs-keyword">import</span> matplotlib.pyplot <span class="hljs-keyword">as</span> plt
+plt.bar([<span class="hljs-string">&#x27;Moriarty&#x27;</span>, <span class="hljs-string">&#x27;Datas&#x27;</span>, <span class="hljs-string">&#x27;Robin Hood&#x27;</span>, <span class="hljs-string">&#x27;Fair Haven&#x27;</span>], [<span class="hljs-number">3</span>, <span class="hljs-number">1</span>, <span class="hljs-number">1</span>, <span class="hljs-number">2</span>])
+plt.savefig(<span class="hljs-string">&#x27;holodeck_chart.png&#x27;</span>)
+</code></pre>
+</details>
+</div>
+<div id="m-0b7611f6-2718-8443-adf7-614edb6cac84" data-section-uuid="0b7611f6-2718-8443-adf7-614edb6cac84" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:03:11+00:00" title="2369-05-02 10:03:11 UTC">Fri May 2nd, 2369 at 10:03</time></h2>
+<details><summary>Tool result: Write</summary>
+<pre><code>File created successfully at: holodeck_chart.py
+</code></pre>
+</details>
+</div>
+<div id="m-0b7611f6-4a40-8d68-9e0f-122a251c5f63" data-section-uuid="0b7611f6-4a40-8d68-9e0f-122a251c5f63" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:03:20+00:00" title="2369-05-02 10:03:20 UTC">Fri May 2nd, 2369 at 10:03</time></h2>
+<details><summary>Tool use: Bash — Ran a command</summary>
+<p>Render the chart</p>
+<pre><code class="language-bash">python3 holodeck_chart.py
+</code></pre>
+</details>
+</div>
+<div id="m-0b7611f6-7150-87ee-b757-7f2f8e24789e" data-section-uuid="0b7611f6-7150-87ee-b757-7f2f8e24789e" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:03:30+00:00" title="2369-05-02 10:03:30 UTC">Fri May 2nd, 2369 at 10:03</time></h2>
+<details><summary>Tool result: Bash</summary>
+<pre><code>(no output)
+</code></pre>
+</details>
+</div>
+<div id="m-0b7611f6-9860-83ca-8b5c-3db8eaea2189" data-section-uuid="0b7611f6-9860-83ca-8b5c-3db8eaea2189" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:03:40+00:00" title="2369-05-02 10:03:40 UTC">Fri May 2nd, 2369 at 10:03</time></h2>
+<details><summary>Tool use: SendUserFile — Shared files</summary>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;caption&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Malfunction durations&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;files&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">[</span>
+    <span class="hljs-string">&quot;/home/claude/holodeck_chart.png&quot;</span>
+  <span class="hljs-punctuation">]</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;status&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;normal&quot;</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+</details>
+</div>
+<div id="m-0b7611f6-9c48-8851-8b3e-320ef00c7ad0" data-section-uuid="0b7611f6-9c48-8851-8b3e-320ef00c7ad0" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:03:41+00:00" title="2369-05-02 10:03:41 UTC">Fri May 2nd, 2369 at 10:03</time></h2>
+<details><summary>Tool result: SendUserFile</summary>
+<pre><code>Sent 1 file.
+</code></pre>
+</details>
+</div>
+</details>
+<div id="m-0b7611f6-bf70-8e69-b5e0-27e3fb4f723e" data-section-uuid="0b7611f6-bf70-8e69-b5e0-27e3fb4f723e" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:03:50+00:00" title="2369-05-02 10:03:50 UTC">Fri May 2nd, 2369 at 10:03</time></h2>
+<p>Here is the chart, and the script that drew it.</p>
+<p>📎 <em>[holodeck_chart.py (not yet fetched)]</em></p>
+</div>
+<div id="m-0b7611f7-d0e0-85e0-869e-c55cb9e6bc24" data-section-uuid="0b7611f7-d0e0-85e0-869e-c55cb9e6bc24" class="msg msg--claude">
+<h2><span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-05-02T10:05:00+00:00" title="2369-05-02 10:05:00 UTC">Fri May 2nd, 2369 at 10:05</time></h2>
+<p>Here is the away team report and two photos from the holodeck. What do they show?</p>
+<p><img src="blobs/0ae22de3748a8df9.png" alt="arch.png"></p>
+<p><img src="blobs/650b03afa397278c.png" alt="sherwood.png"></p>
+<p>📎 <a href="blobs/4473037304ea1f98.pdf">Away Team Report.pdf</a> — 400 B</p>
+</div>
+<details class="branch">
+<summary>✎ Another version · 4 messages</summary>
+<div id="m-0b7611f7-e468-84c2-8dde-873bf5deca1f" data-section-uuid="0b7611f7-e468-84c2-8dde-873bf5deca1f" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:05:05+00:00" title="2369-05-02 10:05:05 UTC">Fri May 2nd, 2369 at 10:05</time></h2>
+<details><summary>Thinking</summary>
+<blockquote>
+<p>Read the report first.</p>
+</blockquote>
+</details>
+</div>
+<details class="tool-group">
+<summary>🛠 2 tool steps</summary>
+<div id="m-0b7611f7-f7f0-8979-9d66-05aeb2b9f860" data-section-uuid="0b7611f7-f7f0-8979-9d66-05aeb2b9f860" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:05:10+00:00" title="2369-05-02 10:05:10 UTC">Fri May 2nd, 2369 at 10:05</time></h2>
+<details><summary>Tool use: Read — Read a file</summary>
+<p>Read <code>/mnt/user-data/uploads/Away Team Report.pdf</code></p>
+</details>
+</div>
+<div id="m-0b7611f7-fbd8-862d-87a0-46a8d0c8b3cc" data-section-uuid="0b7611f7-fbd8-862d-87a0-46a8d0c8b3cc" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:05:11+00:00" title="2369-05-02 10:05:11 UTC">Fri May 2nd, 2369 at 10:05</time></h2>
+<details><summary>Tool result: Read</summary>
+<pre><code>All crew accounted for.
+</code></pre>
+</details>
+</div>
+</details>
+<div id="m-0b7611f8-4610-8780-a026-e85c5efa46c4" data-section-uuid="0b7611f8-4610-8780-a026-e85c5efa46c4" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:05:30+00:00" title="2369-05-02 10:05:30 UTC">Fri May 2nd, 2369 at 10:05</time></h2>
+<p>The report says all crew are accounted for; the photos show the holodeck arch and Sherwood Forest.</p>
+</div>
+</details>
+<div id="m-0b7611f8-bb40-8d20-91aa-089d84a4355c" data-section-uuid="0b7611f8-bb40-8d20-91aa-089d84a4355c" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:06:00+00:00" title="2369-05-02 10:06:00 UTC">Fri May 2nd, 2369 at 10:06</time></h2>
+<p>A second look: the arch is the holodeck's exit, and the forest is the Robin Hood program.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
 <h3 class="preview-name">claude-api/render_markdown/00000000-0000-8c45-a404-118e0e422b6b/all.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8c45-a404-118e0e422b6b">Claude Project · Bridge Operations <a class="source-link" href="https://claude.ai/project/70000001-1701-4d00-8000-000000000701" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-0b5016d5-ce80-81dc-9685-d9bd0bb507f9" data-section-uuid="0b5016d5-ce80-81dc-9685-d9bd0bb507f9" class="msg msg--claude">
@@ -1741,7 +2201,7 @@ Medical emergencies route directly to Sickbay (Crusher).</p>
 <td><a href="datalib:step/claude-api/ingest" title="claude-api/ingest" class="chip" data-entity="datalib:step/claude-api/ingest">ingest</a></td>
 <td><code>claude-api/ingest/blobs.sqlite#cas_objects</code></td>
 <td></td>
-<td>0 rows</td>
+<td>3 rows</td>
 <td><span id="m-00000000-0000-8615-9fce-74ab65b75df9" data-section-uuid="00000000-0000-8615-9fce-74ab65b75df9"><code>00000000</code></span></td>
 </tr>
 <tr>
@@ -1757,7 +2217,7 @@ Medical emergencies route directly to Sickbay (Crusher).</p>
 <td><a href="datalib:step/claude-api/ingest" title="claude-api/ingest" class="chip" data-entity="datalib:step/claude-api/ingest">ingest</a></td>
 <td><code>claude-api/ingest/entities.doltlite_db#claude_attachments</code></td>
 <td></td>
-<td>1 row</td>
+<td>5 rows</td>
 <td><span id="m-00000000-0000-8c3c-bf55-1f2a0a4044ae" data-section-uuid="00000000-0000-8c3c-bf55-1f2a0a4044ae"><code>00000000</code></span></td>
 </tr>
 <tr>
@@ -1765,7 +2225,7 @@ Medical emergencies route directly to Sickbay (Crusher).</p>
 <td><a href="datalib:step/claude-api/ingest" title="claude-api/ingest" class="chip" data-entity="datalib:step/claude-api/ingest">ingest</a></td>
 <td><code>claude-api/ingest/entities.doltlite_db#conversations</code></td>
 <td></td>
-<td>4 rows</td>
+<td>6 rows</td>
 <td><span id="m-00000000-0000-8ab5-a82e-6456a9de5e12" data-section-uuid="00000000-0000-8ab5-a82e-6456a9de5e12"><code>00000000</code></span></td>
 </tr>
 <tr>
@@ -3413,7 +3873,7 @@ Riker out.</p>
 <h2><a href="tel:+12025550101" title="Jean-Luc Picard (+12025550101)" class="chip" data-handle="tel:+12025550101">Jean-Luc Picard</a> <time class="msg-ts" datetime="2364-03-02T18:00:00+00:00" title="2364-03-02 18:00:00 UTC">Mon Mar 2nd, 2364 at 18:00</time></h2>
 <p><strong>Voicemail:</strong> Number One, the away team is ready. Make it so.</p>
 <p><audio controls src="blobs/1971bd86278d9dc6.mp3"></audio></p>
-<p>🔊 <a href="blobs/1971bd86278d9dc6.mp3">Jean-Luc Picard - Voicemail - 2364-03-02T10_00_00Z.mp3</a> — size unknown</p>
+<p>🔊 <a href="blobs/1971bd86278d9dc6.mp3">Jean-Luc Picard - Voicemail - 2364-03-02T10_00_00Z.mp3</a> — 22 B</p>
 </div>
 </div>
 </div>
@@ -3424,7 +3884,7 @@ Riker out.</p>
 <h2><a href="tel:+12025550190" title="Ferengi Commerce Authority (+12025550190)" class="chip" data-handle="tel:+12025550190">Ferengi Commerce Authority</a> <time class="msg-ts" datetime="2364-03-04T20:00:00+00:00" title="2364-03-04 20:00:00 UTC">Wed Mar 4th, 2364 at 20:00</time></h2>
 <p><strong>Voicemail:</strong> Greetings, valued customer. You have won a free holodeck program.</p>
 <p><audio controls src="blobs/5b1a259c45cfa10e.mp3"></audio></p>
-<p>🔊 <a href="blobs/5b1a259c45cfa10e.mp3"> - Voicemail - 2364-03-04T12_00_00Z.mp3</a> — size unknown</p>
+<p>🔊 <a href="blobs/5b1a259c45cfa10e.mp3"> - Voicemail - 2364-03-04T12_00_00Z.mp3</a> — 23 B</p>
 </div>
 </div>
 </div>
@@ -5135,7 +5595,7 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 <h2><span class="msg-author">Me</span> <time class="msg-ts" datetime="2369-04-15T09:03:00+00:00" title="2369-04-15 09:03:00 UTC">Tue Apr 15th, 2369 at 09:03</time></h2>
 <p>Captain's log, supplemental.</p>
 <p><audio controls src="blobs/722dc947668381e9.m4a"></audio></p>
-<p>🔊 <a href="blobs/722dc947668381e9.m4a">captainslog.m4a</a> — size unknown</p>
+<p>🔊 <a href="blobs/722dc947668381e9.m4a">captainslog.m4a</a> — 895 B</p>
 </div>
 </div>
 </div>
