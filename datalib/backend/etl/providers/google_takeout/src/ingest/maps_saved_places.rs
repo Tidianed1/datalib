@@ -1,7 +1,9 @@
 //! `Maps (your places)/Saved Places.json` walker.
 //!
 //! GeoJSON `FeatureCollection`; one feature per saved/starred place.
-//! PK recipe: `uuidv5(NS, "maps_saved:{ftid_or_cid}:{date}")`.
+//! PK recipe: `uuidv5(NS, "maps_saved:{place}:{date}")`, where the place
+//! is the URL's feature id, its `cid`, or — for a pin dropped on an
+//! address rather than a place — its `q=` address query.
 
 use datalib_etl::download_problems::SkippedRecord;
 use datalib_etl::run_problems::RunProblems;
@@ -48,7 +50,7 @@ pub async fn ingest(
                 .get("google_maps_url")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let key = extract_ftid_or_cid(url).unwrap_or("");
+            let key = place_key(url).unwrap_or("");
             if key.is_empty() || date.is_empty() {
                 let (field, value) = if date.is_empty() {
                     ("date", date)
@@ -80,7 +82,7 @@ pub async fn ingest(
     Ok(n)
 }
 
-fn extract_ftid_or_cid(url: &str) -> Option<&str> {
+fn place_key(url: &str) -> Option<&str> {
     if let Some(rest) = url.find("!1s").map(|i| &url[i + 3..]) {
         let end = rest.find('!').unwrap_or(rest.len());
         let ftid = &rest[..end];
@@ -97,7 +99,11 @@ fn extract_ftid_or_cid(url: &str) -> Option<&str> {
             return Some(cid);
         }
     }
-    None
+    let query = url.split_once('?')?.1;
+    query
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("q="))
+        .filter(|q| !q.is_empty())
 }
 
 #[cfg(test)]
@@ -107,7 +113,7 @@ mod tests {
     #[test]
     fn ftid_wins_over_cid() {
         assert_eq!(
-            extract_ftid_or_cid("https://maps.google.com/?cid=42&data=!1sabc!8m"),
+            place_key("https://maps.google.com/?cid=42&data=!1sabc!8m"),
             Some("abc"),
         );
     }
@@ -115,8 +121,18 @@ mod tests {
     #[test]
     fn falls_back_to_cid() {
         assert_eq!(
-            extract_ftid_or_cid("https://maps.google.com/?cid=12345"),
+            place_key("https://maps.google.com/?cid=12345"),
             Some("12345"),
         );
+    }
+
+    #[test]
+    fn a_pin_on_an_address_is_keyed_by_its_query() {
+        assert_eq!(
+            place_key("http://maps.google.com/?q=Quark%27s+Bar,+Deep+Space+Nine"),
+            Some("Quark%27s+Bar,+Deep+Space+Nine"),
+        );
+        assert_eq!(place_key("http://maps.google.com/?q="), None);
+        assert_eq!(place_key("http://maps.google.com/"), None);
     }
 }

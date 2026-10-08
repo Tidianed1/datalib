@@ -33,6 +33,7 @@ rust_library(
         "@datalib_crates//:sha2",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tracing",
+        "@datalib_crates//:url",
         "@datalib_crates//:uuid",
     ],
 )

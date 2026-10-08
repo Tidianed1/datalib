@@ -198,11 +198,11 @@ fn ingest_one(json_path: &Path) -> Result<Option<Photo>> {
         .and_then(|v| v.get("timestamp"))
         .and_then(|v| v.as_str())
         .map(str::to_string);
-    let (cas, media_problem) = match locate_media_sibling(json_path) {
+    let (cas, media_problem) = match media_beside(json_path) {
         None => (
             None,
             Some(MediaProblem::NotFound(format!(
-                "no photo or video beside {stem}.json in the export"
+                "{stem} is not in the export beside its sidecar"
             ))),
         ),
         Some(media_path) => match std::fs::read(&media_path) {
@@ -235,16 +235,11 @@ fn ingest_one(json_path: &Path) -> Result<Option<Photo>> {
     }))
 }
 
-fn locate_media_sibling(json_path: &Path) -> Option<PathBuf> {
-    let parent = json_path.parent()?;
-    let stem = json_path.file_stem()?.to_str()?;
-    for ext in ["jpg", "jpeg", "png", "heic", "mp4", "mov", "webp"] {
-        let cand = parent.join(format!("{stem}.{ext}"));
-        if cand.exists() {
-            return Some(cand);
-        }
-    }
-    None
+/// Google names a sidecar after its media, extension and all:
+/// `2026-06-04-tenfwd.jpg.json` describes `2026-06-04-tenfwd.jpg`.
+fn media_beside(json_path: &Path) -> Option<PathBuf> {
+    let media = json_path.with_extension("");
+    media.is_file().then_some(media)
 }
 
 fn content_type_for(path: &Path) -> Option<String> {
