@@ -518,7 +518,7 @@ fn branch_opener(messages: usize) -> String {
 
 /// Who reacted: a chip link where the provider has their handle, so the
 /// reactor resolves to a contact as an author does
-/// (docs/dev/plans/chips.md); the name as shown otherwise.
+/// (docs/dev/chips.md); the name as shown otherwise.
 fn reactor(r: &crate::types::NormalizedReaction) -> String {
     match &r.reactor_handle {
         Some(h) => chip_link(&r.reactor_display, h),

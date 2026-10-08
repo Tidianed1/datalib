@@ -91,7 +91,7 @@ describe("chipLook", () => {
 
   /** A link a sender wrote can name anyone it likes; the chip says who
    *  the handle really is. This is what lets a chip sit anywhere in a
-   *  body (docs/dev/plans/chips.md § Trust). */
+   *  body (docs/dev/chips.md § Trust). */
   it("shows the resolved name, never the link's text", () => {
     const who = {
       mine: null,

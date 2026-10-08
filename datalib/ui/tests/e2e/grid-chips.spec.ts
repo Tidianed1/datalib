@@ -12,7 +12,7 @@ import {
 } from "./grid-helpers";
 
 // The search grid's Author cell is the same chip a document draws
-// (docs/dev/plans/chips.md § "In a grid"): a link with the handle, the
+// (docs/dev/chips.md § "In a grid"): a link with the handle, the
 // name the source showed, the kind's mark. Right-click on it offers the
 // chip's entries ahead of the row's; a double-click narrows the grid to
 // everything from that person. The fixture has no contacts app, so the
@@ -70,7 +70,7 @@ test("right-click on the chip offers its copies, and a double-click narrows to t
   await expect(bar).toHaveValue(new RegExp(value.replaceAll("+", "\\+")));
 });
 
-/// The Source cell is a group chip (docs/dev/plans/chips.md): datalib-http
+/// The Source cell is a group chip (docs/dev/chips.md): datalib-http
 /// answers what the group is now — its name, its type, its status — the
 /// menu copies its id, and a double-click opens its sync dashboard.
 test("a row's Source is a group chip that resolves, copies its id and opens its dashboard", async ({

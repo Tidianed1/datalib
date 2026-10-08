@@ -14,7 +14,7 @@ import {
 // chip in a document, links the other handle to it from a chip in
 // another source's document, and from then on both chips, in documents
 // and in the grid's Author column, show the contact rather than what
-// either source called him (docs/dev/plans/chips.md).
+// either source called him (docs/dev/chips.md).
 
 const SLACK = "slack:T_NCC1701D/U_RIKER";
 const EMAIL = "email:riker@enterprise.starfleet";

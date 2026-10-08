@@ -51,7 +51,7 @@ export type SlickColumnOptions<T> = {
   overrides?: Record<string, Partial<Column<T>>>;
   /// An identity whose id names a person (a handle as a URI) is drawn
   /// as a chip, the way a document draws one, from what the grid has
-  /// resolved so far (docs/dev/plans/chips.md § "In a grid"). Absent,
+  /// resolved so far (docs/dev/chips.md § "In a grid"). Absent,
   /// every identity is icon and label.
   chips?: {
     who: (handle: string) => Who | undefined;

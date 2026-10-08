@@ -11,7 +11,7 @@ use crate::html::{escape_attr, escape_md_inline, md_link_dest};
 
 /// A chip: a markdown link naming a person, which datalib draws as a
 /// chip and every other viewer shows as a link with a tooltip
-/// (`docs/dev/plans/chips.md`). The text is what the source showed, the
+/// (`docs/dev/chips.md`). The text is what the source showed, the
 /// href is the handle as a URI, and the title is the static hover — the
 /// name and the identifier — which datalib's live hover card replaces.
 pub fn chip_link(shown: &str, handle: &Handle) -> String {

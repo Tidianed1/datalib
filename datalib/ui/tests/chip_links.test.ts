@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { entityFromUri, handleFromUri, uriFromHandle } from "../src/cards/chipLinks";
 import { renderDocument } from "../src/cards/renderDocument";
 
-/// A chip is a link whose href names a handle (docs/dev/plans/chips.md).
+/// A chip is a link whose href names a handle (docs/dev/chips.md).
 /// The URI forms here are the ones `datalib_handle::Handle::to_uri` and
 /// `from_uri` are tested over, so the two sides cannot drift apart
 /// without one of the two suites failing.

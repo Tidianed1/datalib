@@ -59,9 +59,10 @@ above it:
 What is still to build: [`plans/contact_linking.md`](plans/contact_linking.md)
 (merge, groups, `row_handles`, contacts in search, numbers without a
 country code) and [`plans/contact_editing.md`](plans/contact_editing.md)
-(the contact card: its fields, drafts, saving, undo, the export). [`plans/chips.md`](plans/chips.md) covers chips for
-things that are not people: groups and steps are built, system events
-are not. This page says what the tree does.
+(the contact card: its fields, drafts, saving, undo, the export).
+How every chip is written, drawn, resolved and clicked — a person's, a
+group's, a step's — is [`chips.md`](chips.md). This page says what the
+tree does for a person.
 
 ## Words
 
@@ -366,7 +367,7 @@ Everything is in `datalib/ui/src/cards/`:
 - `chipLinks.js` is the markdown-it plugin: an explicit link whose
   href `handleFromUri` reads becomes `<a class="chip" data-handle=…>`
   (and one naming a group or step, `data-entity`; see
-  [`plans/chips.md`](plans/chips.md)); a link `linkify` made from a
+  [`chips.md`](chips.md)); a link `linkify` made from a
   bare address in running text is left alone, so a signature's address
   stays an address. Plain JavaScript, so the render preview runs it
   too. It mirrors `to_uri` and `from_uri` over the same test cases.
@@ -377,14 +378,11 @@ Everything is in `datalib/ui/src/cards/`:
   record and the person's other handles), `chipMenu` (copy the name,
   the identifier or both; find everything from the person; link or
   edit), `copyText` and the copy rewrite. `people` is who each handle
-  is, for the whole app: an instance of `resolver.ts`, the one resolver
-  every document and grid asks. A chip asks as it is drawn, one drawing
-  pass is one request to `/people` and the contacts app's `/resolve`,
-  answers are kept, and an edit (create, link, unlink, no longer works)
-  forgets the handles it touched, so every open document and grid draws
-  them again. `decorateHandles` draws a document's chips: it collects
-  the chips under a body, asks `people`, and draws. `chipCell` draws
-  the same chip in a grid cell.
+  is, for the whole app: the resolver ([`chips.md`](chips.md)
+  §"Resolving") over `/people` and the contacts app's `/resolve`; an
+  edit (create, link, unlink, no longer works) forgets the handles it
+  touched. `decorateHandles` draws a document's chips and `chipCell` a
+  grid cell's.
 - `ChatBody.ce.vue` runs the decorate pass over a document's frame and
   owns the popover
   (`HandlePopover.ce.vue`: link to a contact, create one, unlink, mark

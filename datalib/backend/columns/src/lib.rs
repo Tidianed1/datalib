@@ -193,7 +193,7 @@ pub struct Identity {
     pub detail: Option<String>,
     /// The entity this names, as the URI a chip link would carry
     /// (`datalib:group/slack`), when the viewer should draw it as a chip
-    /// it can resolve, open and copy (docs/dev/plans/chips.md). Beside
+    /// it can resolve, open and copy (docs/dev/chips.md). Beside
     /// `id` rather than in it: other code keys on the bare id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entity: Option<String>,

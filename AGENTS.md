@@ -53,6 +53,7 @@ merge conflict waiting to happen.
 **UI**
 
 - [`docs/dev/cards.md`](docs/dev/cards.md), [`docs/dev/dactal.md`](docs/dev/dactal.md) — the card system and the containers layout that hosts every card; the dactal view bridge.
+- [`docs/dev/chips.md`](docs/dev/chips.md) — a person, a group or a step drawn inline: the link a chip is written as, the resolvers, the clicks. Start here to add a kind of chip or a place that draws them.
 - [`datalib/backend/etl/chat-common/README.md`](datalib/backend/etl/chat-common/README.md) — the one chat layout and the sanitizer allowlist. Read before changing how a message looks.
 - [`docs/dev/wizard_design.md`](docs/dev/wizard_design.md) — how an "Add source" form is put together: what is basic, what is advanced, how each part is worded. Read before adding or changing a catalog entry.
 - [`docs/dev/wizard_file_pickers.md`](docs/dev/wizard_file_pickers.md) — a path field in the source wizard offers a native picker.
