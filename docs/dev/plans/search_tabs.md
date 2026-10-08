@@ -10,8 +10,9 @@ ships, run on a copy of the index. Each SQL timing includes about
 
 Today a free-text search is one qmd hybrid query (keyword and vector,
 merged), and the grid shows nothing until it answers. This plan runs
-three searches at once, each shown in its own tab: a SQL match on the
-grid's own fields, qmd's keyword search, and qmd's vector search. A tab
+three searches at once, each shown in its own tab: a full-text match
+over everything a row answers to (`grid_row_terms`), qmd's keyword
+search, and qmd's vector search. A tab
 is greyed out until its search answers, and what a tab shows never
 changes while you look at it.
 
@@ -70,14 +71,15 @@ indexes it already has:
 
 | tab | what answers it | pages |
 |---|---|---|
-| **Fields** | SQL over the grid index: identifiers matched exactly, words matched as substrings of the short fields | without limit, like every SQL search |
+| **Fields** | `grid_row_terms` (below): every id, person, label and title a row answers to, in one full-text index | without limit, like every SQL search |
 | **Words** | qmd's keyword (BM25) query over every document's whole text | qmd's ranked list |
 | **Meaning** ("QMD semantic (vector)") | qmd's vector query | qmd's ranked list |
 
 The three run at once. Each tab reads its own list from the results
 cache (`results::Key` gains the tab), with its own count, paging, sort
 and grouping. **The tabs answer in different ways, and the labels say
-so:** Fields finds what is written in a row's fields, Words finds the
+so:** Fields finds the ids, people, labels and titles a row answers
+to, Words finds the
 words anywhere in a document, ranked, and Meaning finds documents about
 the same thing, whatever words they use.
 
@@ -114,35 +116,77 @@ few hundred, nearness is noise). Measure what a larger
 already fetches `limit × 3` candidates per collection, so most of the
 cost is paid either way.
 
-### Identifiers: which columns, and how
+### `grid_row_terms`: everything a row answers to, in one tall table
 
-A pure function reads each bare term and says which columns it could
-be a value of. A term it recognizes becomes an exact match in Fields,
-not a substring.
-
-| looks like | matched against |
-|---|---|
-| a uuid, or a slug ending in one (`extract_uuid_suffix` parses both) | `uuid`, `conversation_uuid`, `markdown_uuid`, `notion_page_uuid`: one `OR`, one index lookup each |
-| a handle `datalib_handle` parses: an email address, a phone number, `slack:T…/U…` | `grid_row_handles` (below) |
-
-**Every person a row names, in one table.** `grid_rows` holds one
-`author_handle`. An email's To, Cc and Bcc, a chat's participants and
-mentions are only in each provider's raw store and in the rendered
-HTML. A column per role would mean a column, an index and a search
-clause for each, in every provider. Instead, the grid index gets one
-narrow table:
+A row answers to more than its columns hold. An email has one
+`author_handle` in `grid_rows`, but also its To, Cc and Bcc, its
+labels, its subject and its own ids. Those sets do not belong in
+`grid_rows`, which keeps one value per column; they belong in one tall
+table beside it, one row per term:
 
 ```
-grid_row_handles (handle, role, uuid)   index (handle, uuid)
+grid_row_terms (markdown_uuid, uuid, kind, value)
 ```
 
-A render writes one row per person a grid row names (`from`, `to`,
-`cc`, `bcc`, `participant`, `mention`), the way it writes `edges`, and
-`grid_index` copies them. Finding a handle is then one indexed query,
-`uuid IN (SELECT uuid FROM grid_row_handles WHERE handle = ?)`, the
-same for every provider and every role. A new role or a new provider
-costs a render change and no search code. The `role` column is there
-for a later `to:` or `cc:` key, which is one more `AND role = ?`.
+with FTS5 indexing `value`, under a tokenizer that keeps `@ . - _ + :`
+inside a word, so a uuid, an email address or `slack:T…/U…` is one
+token. Tried on doltlite: an address matched in two kinds at once, a
+uuid matched exactly, `budg*` matched by prefix, and a commit worked.
+
+**`kind` is an enum** (`TermKind`: `id`, `from`, `to`, `cc`, `bcc`,
+`participant`, `mention`, `label`, `title`, `name`, …) with the usual
+strum/serde pair, and a new kind is new data, never a schema change.
+Each kind has an affinity, a pure function in code (`affinity(kind)`):
+a row's own id outranks a `to`, a `to` outranks a `cc`, a `title`
+outranks a `name`.
+
+**One table holds every term, so one query reaches all of them.** The
+uuid columns are in it as `id` terms, `author_handle` as a `from` term,
+`conversation_name` as a `title` term. Two writers fill it:
+
+- **`grid_index` derives the terms a row already holds**, in one pure
+  function of the `GridRow`: its uuids, its author's handle, its
+  title, its author, channel and account as names. No render changes
+  for these.
+- **A render supplies the terms a row does not hold**: recipients,
+  labels, mentions, participants. It returns them alongside each
+  document, the way it returns `edges` and `problems`; they are stored
+  in its render store, and `grid_index` copies them.
+
+Either way, `grid_index` owns a document's terms the way it owns its
+edges: each time it loads a document it deletes the terms carrying its
+`markdown_uuid` and inserts the new set.
+
+**How a search uses it.**
+
+- **A bare word or identifier** (`sam@s.com`, a uuid, `budget`) is one
+  `MATCH` over every term, ranked by the best kind each row matched
+  in, then FTS5's own score, then newest first. A handle is normalized
+  by `datalib_handle` first, so `sam@s.com` searches `email:sam@s.com`.
+- **A keyed search names a kind**: `to:sam@s.com`, `cc:…`, `from:…`,
+  `label:work`. It is the same `MATCH` restricted to `kind = ?`, and
+  `-to:…` is `uuid NOT IN` that. These keys are declared beside the
+  grid's column keys and read through the same grammar, so a key the
+  search does not have is still refused by name. `from:` replaces
+  `author_handle:`, which a person no longer needs to know.
+- **Mixed with other terms**, it narrows like any other key:
+  `label:work source_id:gmail is:document budget` is the rows matching
+  every part.
+
+It replaces three things this plan used to list separately: the
+four-column uuid lookup, a separate `grid_row_handles` table, and the
+substring scans of the short fields.
+
+**Not `edges`.** An edge leads from a place in one document to a place
+in another, for navigation, and only Perseus writes them
+([`edges.md`](../edges.md)). A term says a row has a value, for
+search. They meet where a term's value can itself be opened: a `to`
+term's handle is a person the contacts store resolves, and an `id`
+term naming another document would be a whole-document link. Whether
+edges should one day become terms of a `link` kind, keeping edges only
+for Perseus's section-to-section links, is left for later.
+`source_contact_handles` has this same tall shape for contact records,
+and could fold in later too.
 
 ## Making qmd's tabs fast in themselves
 
@@ -164,32 +208,41 @@ for a later `to:` or `cc:` key, which is one more `AND role = ?`.
 
 ## Order of work
 
-1. **Fields, for identifiers.** The recognizer, the uuid `OR`, and no
-   qmd for an identifier-only query. Test: a uuid search answers
-   without asking qmd at all (the applet tests can give it a daemon that
-   fails on any request).
-2. **The qmd fixes** (above, 1 to 3) and `candidateLimit`, each its own
-   PR. Fact tests in `qmd_facts_test` for anything new we rely on.
+0. **The doltlite facts FTS5 needs,** as tests in
+   `doltlite_facts_test`, before anything is built on them: a reader
+   pinned to one commit (`<file>@<hash>`, the open `grid_index` and the
+   applet's readers use) can `MATCH`, with `doltlite_two_process_test`
+   run with the new statements; what a full build over a real-sized
+   table and a one-document replace cost to write; and how a
+   document's old terms are removed.
+1. **`grid_row_terms`, derived terms only.** The table, the
+   `TermKind` enum, the derivation in `grid_index`, and bare words and
+   identifiers searched through it. An identifier-only query does not
+   ask qmd. Test: a uuid search answers without asking qmd at all (the
+   applet tests can give it a daemon that fails on any request).
+2. **The qmd fixes** ("Making qmd's tabs fast in themselves", 1 to 3)
+   and `candidateLimit`, each its own PR, with a `qmd_facts_test` test
+   for anything new we rely on.
 3. **Tabs.** The `tab` parameter on the search and groups endpoints,
    the cache key, three requests from the grid, the tab strip with its
-   greyed state and counts, the opening rule. Fields matches words as
-   substrings here. The e2e spec holds the qmd answers back
-   (`page.route`) and checks that Fields is on screen, that the qmd tabs
-   are greyed, and that their answers arriving changes no row.
-4. **`grid_row_handles`.** The table, `grid_index` copying it, and the
-   email renders filling it first, then the chat ones.
-5. **More identifier kinds** if wanted: an upstream URL (`chatgpt.com/c/…`)
-   against `upstream_id`, which needs its own index.
+   greyed state and counts, the opening rule. The e2e spec holds the
+   qmd answers back (`page.route`) and checks that Fields is on screen,
+   that the qmd tabs are greyed, and that their answers arriving changes
+   no row.
+4. **Terms from renders,** and the `to:`, `cc:`, `from:` and `label:`
+   keys: the email renders first, then the chat ones.
+5. **More identifier kinds** if wanted: an upstream URL
+   (`chatgpt.com/c/…`) as an `id` term.
 
 ## Open questions
 
-- Whether Fields should match words as substrings of `preview`. It is a
-  cut of the text, so a match there is a match in the first few hundred
-  characters only, which may confuse more than it helps next to Words.
+- Whether a message's preview is a term. It is only the first few
+  hundred characters, so a word further in would not match, which may
+  confuse more than it helps next to Words, which searches the whole
+  text.
 - A query that mixes an identifier and words (`someone@example.com
-  budget`): Fields can treat the identifier as a filter and the words
-  as substrings, which is likely what a person means. The qmd tabs
-  would search the words alone.
+  budget`): Fields can require both, which is likely what a person
+  means. The qmd tabs would search the words alone.
 - The live refresh when the index commits still patches rows in place
   (`applyPatch` in `GridCard.ce.vue`). The same "nothing changes
   unasked" rule may want a "N changed · Show" there too; that is its
