@@ -24,6 +24,7 @@ mod qmd_search_tests;
 mod results;
 #[cfg(test)]
 mod serve_tests;
+mod terms;
 
 use datalib_columns::Identity;
 use datalib_schema::grid_rows::GridRowColumn;
@@ -673,18 +674,25 @@ async fn ranked(
     if let Some(list) = s.results.get(&key) {
         return Ok((list, key.at));
     }
-    if !datalib_unified_index::qmd::qmd_index_path(&s.root).exists() {
-        return Err(SearchFailure::NoIndex);
-    }
-    let ranking = qmd_ranking(&s.root, &s.repo, &s.qmd, parsed, QMD_DEPTH)
-        .await
-        .map_err(|e| SearchFailure::Qmd(format!("{e:#}")))?;
+    let (ranking, terms_at) = match identifiers(parsed) {
+        Some(ids) => match terms::lookup(&s.root, &ids).await.map_err(index)? {
+            Some(found) => (terms::rank(&found.per_identifier), Some(found.grid_commit)),
+            None => {
+                tracing::info!("no terms file yet; searching identifiers through qmd");
+                (qmd_or_no_index(s, parsed).await?, None)
+            }
+        },
+        None => (qmd_or_no_index(s, parsed).await?, None),
+    };
     let uuids: Vec<String> = ranking.iter().map(|(uuid, _)| uuid.clone()).collect();
     let listing = s
         .repo
         .filter_uuids(parsed, &uuids, &[], &[])
         .await
         .map_err(index)?;
+    // Terms written for another commit than the rows were read at may be
+    // a pass out: answer with them, and ask again next time.
+    let keep = terms_at.is_none_or(|at| at == listing.at);
     let mut hit_of: std::collections::HashMap<String, (f64, String)> =
         ranking.into_iter().collect();
     let list: Arc<Vec<results::Entry>> = Arc::new(
@@ -697,14 +705,37 @@ async fn ranked(
             })
             .collect(),
     );
-    s.results.put(
-        results::Key {
-            at: listing.at.clone(),
-            ..key
-        },
-        list.clone(),
-    );
+    if keep {
+        s.results.put(
+            results::Key {
+                at: listing.at.clone(),
+                ..key
+            },
+            list.clone(),
+        );
+    }
     Ok((list, listing.at))
+}
+
+/// The identifiers a search is made of, when it is made of nothing else
+/// and asked for no qmd mode of its own.
+fn identifiers(parsed: &ParsedQuery) -> Option<Vec<String>> {
+    if parsed.free_text_mode != FreeTextMode::Hybrid {
+        return None;
+    }
+    terms::identifiers(&parsed.free_text)
+}
+
+async fn qmd_or_no_index(
+    s: &Index,
+    parsed: &ParsedQuery,
+) -> Result<Vec<(String, (f64, String))>, SearchFailure> {
+    if !datalib_unified_index::qmd::qmd_index_path(&s.root).exists() {
+        return Err(SearchFailure::NoIndex);
+    }
+    qmd_ranking(&s.root, &s.repo, &s.qmd, parsed, QMD_DEPTH)
+        .await
+        .map_err(|e| SearchFailure::Qmd(format!("{e:#}")))
 }
 
 /// How many hits qmd ranks for one free-text search: every page of it is
@@ -1196,29 +1227,46 @@ mod tests {
     /// Commits one document per entry to the root's grid index, the way
     /// the `grid_index` step writes and seals it.
     async fn index_documents(root: &std::path::Path, docs: &[Doc<'_>]) {
+        let rows = docs
+            .iter()
+            .map(|(uuid, created_at, kind, author)| {
+                document_row(uuid, created_at, kind)
+                    .author(author.map(String::from))
+                    .build()
+                    .unwrap()
+            })
+            .collect();
+        index_rows(root, rows).await;
+    }
+
+    fn document_row(
+        uuid: &str,
+        created_at: &str,
+        kind: &str,
+    ) -> datalib_schema::grid_rows::GridRowBuilder {
+        datalib_schema::grid_rows::GridRow::builder()
+            .uuid(uuid)
+            .provider(datalib_schema::providers::Provider::Claude)
+            .kind(kind)
+            .source_label("Claude")
+            .is_document(true)
+            .created_at(Some(created_at.to_string()))
+            .conversation_uuid(uuid)
+            .entire_chat(format!("/chat/{uuid}"))
+            .body("")
+            .markdown_uuid(Some(uuid.to_string()))
+    }
+
+    /// Commits each row as a document of its own.
+    async fn index_rows(root: &std::path::Path, rows: Vec<datalib_schema::grid_rows::GridRow>) {
         use datalib_etl_render::grid_index::{apply_one, open_index, RenderedMarkdown, WriteLock};
-        use datalib_schema::grid_rows::GridRow;
-        use datalib_schema::providers::Provider;
 
         let pool = open_index(&datalib_runtime::layout::grid_index_db(root))
             .await
             .unwrap();
         let lock = WriteLock::new(pool.clone());
-        for (uuid, created_at, kind, author) in docs {
-            let row = GridRow::builder()
-                .uuid(*uuid)
-                .provider(Provider::Claude)
-                .kind(*kind)
-                .author(author.map(String::from))
-                .source_label("Claude")
-                .is_document(true)
-                .created_at(Some(created_at.to_string()))
-                .conversation_uuid(*uuid)
-                .entire_chat(format!("/chat/{uuid}"))
-                .body("")
-                .markdown_uuid(Some(uuid.to_string()))
-                .build()
-                .unwrap();
+        for row in rows {
+            let uuid = row.uuid.clone();
             let md = RenderedMarkdown {
                 markdown_uuid: uuid.to_string(),
                 source_id: "enterprise".into(),
@@ -1238,6 +1286,65 @@ mod tests {
             .await
             .unwrap();
         pool.close().await;
+    }
+
+    /// What the `grid_index` step does after its pass.
+    async fn sync_terms(root: &std::path::Path) {
+        let pool = datalib_etl_render::grid_index::open_index(
+            &datalib_runtime::layout::grid_index_db(root),
+        )
+        .await
+        .unwrap();
+        datalib_etl_render::grid_terms::sync(&pool, &datalib_runtime::layout::grid_terms_db(root))
+            .await
+            .unwrap();
+        pool.close().await;
+    }
+
+    /// A pasted uuid or address is answered from the terms file, never by
+    /// qmd. This root has no qmd index, so a search that asked qmd says so,
+    /// which is what the same search did before the terms were written.
+    #[tokio::test]
+    async fn an_identifier_search_is_answered_from_the_terms_without_qmd() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (a, b) = (
+            "00000000-0000-4000-8000-0000000000a1",
+            "00000000-0000-4000-8000-0000000000b2",
+        );
+        index_rows(
+            tmp.path(),
+            vec![
+                document_row(a, "2026-01-01T09:00:00+00:00", "Chat")
+                    .author_handle(Some("email:ann@example.com".to_string()))
+                    .build()
+                    .unwrap(),
+                document_row(b, "2026-01-02T09:00:00+00:00", "Chat")
+                    .author_handle(Some("email:bo@example.com".to_string()))
+                    .build()
+                    .unwrap(),
+            ],
+        )
+        .await;
+        let qmd_missing = |r: &SearchResponse| r.query_echo["qmd_index_missing"] == true;
+
+        let before = search(&index_over(tmp.path()).await, a, None, 10, None).await;
+        assert!(qmd_missing(&before), "{:?}", before.query_echo);
+
+        sync_terms(tmp.path()).await;
+        let s = index_over(tmp.path()).await;
+        let by_id = search(&s, a, None, 10, None).await;
+        assert!(!qmd_missing(&by_id), "{:?}", by_id.query_echo);
+        assert_eq!(uuids(&by_id), [a]);
+        assert_eq!(by_id.rows[0].snippet, format!("id: {a}"));
+
+        let by_address = search(&s, "Bo@Example.com", None, 10, None).await;
+        assert_eq!(uuids(&by_address), [b]);
+        assert_eq!(by_address.rows[0].snippet, "from: email:bo@example.com");
+
+        let kept = search(&s, &format!("{a} kind:Chat"), None, 10, None).await;
+        assert_eq!(uuids(&kept), [a]);
+        let narrowed = search(&s, &format!("{a} kind:Email"), None, 10, None).await;
+        assert_eq!(uuids(&narrowed), Vec::<&str>::new());
     }
 
     pub(super) async fn index_over(root: &std::path::Path) -> Index {

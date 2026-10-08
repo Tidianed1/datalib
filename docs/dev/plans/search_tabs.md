@@ -243,7 +243,12 @@ and could fold in later too.
    the facts in `doltlite_facts_test`, the write cost in
    `doltlite.md`, and the attached terms file beside a sealing writer
    in `doltlite_two_process_test`.
-1. **`grid_row_terms`, derived terms only.** The terms file, the
+1. **`grid_row_terms`, derived terms only.** Built in this step's PR,
+   with one narrowing: only a query made entirely of identifiers is
+   answered from the terms; words still go to qmd until the tabs give
+   their answer a place. On a real root (122,579 rows) the first pass
+   wrote 674,672 terms, 131 MB, with the whole step taking 3.5 s, and a
+   pasted uuid's lookup took 1.6 ms. The terms file, the
    `TermKind` enum, the derivation in `grid_index`, and bare words and
    identifiers searched through it. An identifier-only query does not
    ask qmd. Test: a uuid search answers without asking qmd at all (the

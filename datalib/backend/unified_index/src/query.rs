@@ -35,7 +35,7 @@ pub fn extract_uuid_suffix(value: &str) -> &str {
     }
 }
 
-fn is_uuid_shape(s: &str) -> bool {
+pub fn is_uuid_shape(s: &str) -> bool {
     if s.len() != 36 {
         return false;
     }

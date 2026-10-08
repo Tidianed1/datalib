@@ -19,6 +19,10 @@ pub mod edges {
     include!("edges.rs");
 }
 
+pub mod terms {
+    include!("terms.rs");
+}
+
 pub mod markdowns {
     include!("markdowns.rs");
 }

@@ -22,6 +22,8 @@ pub const GRID_DIR: &str = "grid_index";
 pub const CURATED_DIR: &str = "datalib_curated";
 /// The doltlite database file inside [`GRID_DIR`].
 pub const GRID_DB: &str = "db.doltlite_db";
+/// The grid's terms index, beside its store.
+pub const GRID_TERMS_DB: &str = "terms.sqlite";
 /// The qmd index's directory, relative to [`UNIFIED_INDEX_DIR`]: the
 /// `qmd_aggregator` step's tree, so its size is counted against that
 /// step. Every qmd step writes the one index under it, which qmd lays
@@ -102,6 +104,14 @@ pub fn grid_index_dir(data_root: &Path) -> PathBuf {
 /// helper is the contract between them.
 pub fn grid_index_db(data_root: &Path) -> PathBuf {
     grid_index_dir(data_root).join(GRID_DB)
+}
+
+/// `data_root/unified_index/grid_index/terms.sqlite` — every id, person,
+/// title and name a grid row answers to, as a full-text index. Plain
+/// SQLite: written by the `grid_index` step after each pass, read by the
+/// applet beside its grid commit.
+pub fn grid_terms_db(data_root: &Path) -> PathBuf {
+    grid_index_dir(data_root).join(GRID_TERMS_DB)
 }
 
 pub fn qmd_dir(data_root: &Path) -> PathBuf {
