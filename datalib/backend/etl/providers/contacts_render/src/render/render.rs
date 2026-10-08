@@ -295,7 +295,6 @@ mod tests {
             inputs: Vec::new(),
             uid: "tng-picard".to_string(),
             addressbook: "Bridge".to_string(),
-            source_path: std::path::PathBuf::from("Bridge.vcf"),
             display_name: Some("Jean-Luc Picard".to_string()),
             revision: Some("2370-04-15T00:00:00Z".to_string()),
             created: None,

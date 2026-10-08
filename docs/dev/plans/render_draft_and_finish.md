@@ -1,6 +1,7 @@
 # Render: a document goes only when its rows did
 
-**Status: proposed 2026-10-08; steps 0 (#1066) and 1 are built.** The render
+**Status: steps 0 (#1066), 1 (#1073) and 2 are built; the `DocDraft`
+reshape (§3 and step 3) is dropped; steps 4 and 5 are open.** The render
 half of the 2026-10-05 audit
 ([`audits/2026-10-05_loose_ends.md`](../audits/2026-10-05_loose_ends.md)
 §3.2, §4, and the short version's item 4), checked against the tree at
@@ -149,6 +150,15 @@ bug it closes.
 - **Step 2. The chat-common sources** (fourteen crates): `changed_chats`
   stops calling an unmapped uuid gone; `ctx.load` and `emit` replace the
   shared loader and the hand-written `.md`. Closes 2, 3, 4 for them.
+  *Built as:* no reshape. Step 1 already keeps a bucket `changed_chats`
+  calls gone without evidence. The shared loaders fail on a row they
+  cannot read back instead of skipping it; claude reports a conversation
+  that will not build (`report_document_failed` + `fail_bucket`);
+  contacts' skip was dead code and went. Signal's and beeper's skips are
+  internal-consistency checks and whatsapp's drop orphan rows, so they
+  stay. Not done: a record that fails the first time it is seen has no
+  document, and only its renderer knows which rows it tried, so nothing
+  general reports it; codex still fails its render on one bad line.
 - **Step 3. The rest by shape:** contact-common and calendar-common;
   the forges; notion and pdf; the timeseries pages. Then the shim goes.
 - **Step 4. Problems:** fetch problems through `render_inputs`; parse

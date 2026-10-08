@@ -27,7 +27,6 @@ rust_library(
         "@datalib_crates//:anyhow",
         "@datalib_crates//:base64",
         "@datalib_crates//:tokio",
-        "@datalib_crates//:tracing",
     ],
 )
 

@@ -2614,17 +2614,15 @@ pub async fn load_payloads(pool: &SqlitePool, table: &str) -> Result<Vec<Value>>
         .fetch_all(pool)
         .await
         .with_context(|| format!("select {table} payloads"))?;
-    let mut out = Vec::with_capacity(rows.len());
-    for r in rows {
-        let payload: String = match r.try_get("payload") {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
-        if let Ok(v) = serde_json::from_str::<Value>(&payload) {
-            out.push(v);
-        }
-    }
-    Ok(out)
+    // A row our own write cannot read back is a damaged store: say so
+    // rather than render as though the row were never there.
+    rows.iter()
+        .map(|r| {
+            let payload: String = r.try_get("payload")?;
+            serde_json::from_str::<Value>(&payload).map_err(Into::into)
+        })
+        .collect::<Result<_>>()
+        .with_context(|| format!("read {table} payloads"))
 }
 
 /// [`load_payloads_with_id`] for a store whose tables vary with what the
@@ -2649,21 +2647,14 @@ pub async fn load_payloads_with_id(pool: &SqlitePool, table: &str) -> Result<Vec
         .fetch_all(pool)
         .await
         .with_context(|| format!("select {table} id+payloads"))?;
-    let mut out = Vec::with_capacity(rows.len());
-    for r in rows {
-        let id: String = match r.try_get("id") {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
-        let payload: String = match r.try_get("payload") {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
-        if let Ok(v) = serde_json::from_str::<Value>(&payload) {
-            out.push((id, v));
-        }
-    }
-    Ok(out)
+    rows.iter()
+        .map(|r| {
+            let id: String = r.try_get("id")?;
+            let payload: String = r.try_get("payload")?;
+            Ok((id, serde_json::from_str::<Value>(&payload)?))
+        })
+        .collect::<Result<_>>()
+        .with_context(|| format!("read {table} id+payloads"))
 }
 
 // ── sync_scope_state ────────────────────────────────────────────────
@@ -2713,6 +2704,29 @@ mod tests {
     use super::*;
     use serde_json::json;
     use tempfile::tempdir;
+
+    /// A row the loaders cannot read back fails the load rather than
+    /// vanishing from it: a render built on the rest would lose that
+    /// row's document with nothing saying why.
+    #[tokio::test]
+    async fn a_payload_row_that_will_not_read_fails_the_load() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .connect_with(SqliteConnectOptions::from_str("sqlite::memory:").unwrap())
+            .await
+            .unwrap();
+        for sql in [
+            "CREATE TABLE crew (id ANY, payload TEXT)",
+            r#"INSERT INTO crew VALUES ('picard', '{"rank":"captain"}'), (1701, '{"rank":"ensign"}')"#,
+        ] {
+            sqlx::query(sql).execute(&pool).await.unwrap();
+        }
+        let err = load_payloads_with_id(&pool, "crew").await.unwrap_err();
+        assert!(format!("{err:#}").contains("crew"), "{err:#}");
+        pool.close().await;
+    }
 
     /// `SHARED_TABLES` is what the mirror engine and a content diff
     /// read; a table added to `SHARED_DDL` without it would be dropped
