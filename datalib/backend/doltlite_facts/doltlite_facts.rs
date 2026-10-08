@@ -1501,6 +1501,249 @@ mod gc {
     }
 }
 
+// ── Full-text search (FTS5) ─────────────────────────────────────────
+
+mod fts5 {
+    use super::*;
+
+    /// The layout the grid's terms index uses: a plain table holding each
+    /// term with its document, and an FTS5 index over the term's value
+    /// alone, linked by `term_id`. `@ . - _ + :` stay inside a token, so
+    /// an id or an address is one token.
+    async fn terms_store() -> (Store, SqliteConnection) {
+        let s = Store::new();
+        let mut c = s.rw().await;
+        ok(
+            &mut c,
+            "CREATE TABLE terms (term_id INTEGER PRIMARY KEY, markdown_uuid TEXT, \
+             uuid TEXT, kind TEXT, value TEXT)",
+        )
+        .await;
+        ok(&mut c, "CREATE INDEX terms_by_md ON terms (markdown_uuid)").await;
+        ok(
+            &mut c,
+            "CREATE VIRTUAL TABLE terms_fts USING fts5(value, content='', \
+             contentless_delete=1, tokenize=\"unicode61 tokenchars '@.-_+:'\")",
+        )
+        .await;
+        (s, c)
+    }
+
+    async fn add(c: &mut SqliteConnection, id: i64, md: &str, uuid: &str, kind: &str, v: &str) {
+        ok(
+            c,
+            &format!(
+                "INSERT INTO terms VALUES ({id}, '{md}', '{uuid}', '{kind}', '{v}'); \
+                 INSERT INTO terms_fts (rowid, value) VALUES ({id}, '{v}')"
+            ),
+        )
+        .await;
+    }
+
+    async fn matching(c: &mut SqliteConnection, q: &str) -> Vec<String> {
+        texts(
+            c,
+            &format!(
+                "SELECT t.uuid || ':' || t.kind FROM terms_fts f \
+                 JOIN terms t ON t.term_id = f.rowid WHERE terms_fts MATCH '{q}'"
+            ),
+        )
+        .await
+    }
+
+    async fn two_documents() -> (Store, SqliteConnection) {
+        let (s, mut c) = terms_store().await;
+        add(
+            &mut c,
+            1,
+            "d1",
+            "r1",
+            "id",
+            "00000000-0000-8b8a-896d-63addc7b31ad",
+        )
+        .await;
+        add(&mut c, 2, "d1", "r1", "from", "email:ann@example.com").await;
+        add(&mut c, 3, "d1", "r1", "title", "Quarterly budget review").await;
+        add(&mut c, 4, "d2", "r2", "to", "email:ann@example.com").await;
+        add(&mut c, 5, "d2", "r2", "to", "email:ann@example.com.au").await;
+        (s, c)
+    }
+
+    #[tokio::test]
+    async fn an_id_or_an_address_is_one_token_and_matches_only_itself() {
+        let (_s, mut c) = two_documents().await;
+        assert_eq!(
+            matching(&mut c, "\"email:ann@example.com\"").await,
+            ["r1:from", "r2:to"]
+        );
+        assert_eq!(
+            matching(&mut c, "\"00000000-0000-8b8a-896d-63addc7b31ad\"").await,
+            ["r1:id"]
+        );
+        assert_eq!(matching(&mut c, "\"00000000\"").await, Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn a_prefix_query_matches_the_start_of_a_word() {
+        let (_s, mut c) = two_documents().await;
+        assert_eq!(matching(&mut c, "budg*").await, ["r1:title"]);
+        assert_eq!(matching(&mut c, "udget*").await, Vec::<String>::new());
+    }
+
+    /// The join back to the plain table seeks its key for every hit, so a
+    /// `kind` filter costs nothing beyond the match.
+    #[tokio::test]
+    async fn the_join_back_to_the_terms_seeks_their_key() {
+        let (_s, mut c) = two_documents().await;
+        let p = plan(
+            &mut c,
+            "SELECT t.uuid FROM terms_fts f JOIN terms t ON t.term_id = f.rowid \
+             WHERE terms_fts MATCH 'x' AND t.kind = 'to'",
+        )
+        .await;
+        assert!(p.contains("SEARCH t USING INTEGER PRIMARY KEY"), "{p}");
+    }
+
+    /// Replacing a document's terms: its `term_id`s come from the plain
+    /// table's index, and the FTS5 index forgets each one by rowid.
+    #[tokio::test]
+    async fn a_contentless_delete_index_forgets_a_documents_terms_by_rowid() {
+        let (_s, mut c) = two_documents().await;
+        ok(
+            &mut c,
+            "DELETE FROM terms_fts WHERE rowid IN \
+             (SELECT term_id FROM terms WHERE markdown_uuid = 'd1'); \
+             DELETE FROM terms WHERE markdown_uuid = 'd1'",
+        )
+        .await;
+        assert_eq!(
+            matching(&mut c, "\"email:ann@example.com\"").await,
+            ["r2:to"]
+        );
+        assert_eq!(matching(&mut c, "budget").await, Vec::<String>::new());
+    }
+
+    /// `term_id` is a plain counter: an `INTEGER PRIMARY KEY` is the rowid
+    /// itself, and one left `NULL` is the next one up, unlike a text key's
+    /// rowid (`rowid_on_a_text_key_is_a_hash_not_an_order`).
+    #[tokio::test]
+    async fn an_integer_primary_key_is_the_rowid_and_counts_up() {
+        let (_s, mut c) = two_documents().await;
+        ok(
+            &mut c,
+            "INSERT INTO terms (term_id, markdown_uuid) VALUES (NULL, 'd3')",
+        )
+        .await;
+        assert_eq!(
+            int(
+                &mut c,
+                "SELECT term_id FROM terms WHERE markdown_uuid = 'd3'"
+            )
+            .await,
+            6
+        );
+        assert_eq!(
+            int(&mut c, "SELECT COUNT(*) FROM terms WHERE rowid != term_id").await,
+            0
+        );
+    }
+
+    /// The grid's readers open `<file>@<hash>`, and the applet holds a read
+    /// transaction; each matches the terms of the commit it reads.
+    #[tokio::test]
+    async fn a_reader_of_one_commit_matches_that_commits_terms() {
+        let (s, mut c) = two_documents().await;
+        let first = commit(&mut c, "first").await;
+        add(&mut c, 6, "d3", "r3", "label", "work").await;
+        commit(&mut c, "second").await;
+
+        let mut d = connect(&s.at(&first), true, Duration::from_secs(5)).await;
+        assert_eq!(matching(&mut d, "work").await, Vec::<String>::new());
+        assert_eq!(matching(&mut d, "budget").await, ["r1:title"]);
+
+        let mut r = s.ro().await;
+        ok(&mut r, "BEGIN").await;
+        assert_eq!(matching(&mut r, "work").await, ["r3:label"]);
+        ok(&mut r, "COMMIT").await;
+    }
+
+    /// An FTS5 table is matched by its own name, not by an alias.
+    #[tokio::test]
+    async fn an_fts5_table_is_matched_by_name_not_by_alias() {
+        let (_s, mut c) = two_documents().await;
+        assert_eq!(
+            int(
+                &mut c,
+                "SELECT COUNT(*) FROM terms_fts AS f WHERE terms_fts MATCH 'budget'"
+            )
+            .await,
+            1
+        );
+        err_contains(
+            exec(
+                &mut c,
+                "SELECT COUNT(*) FROM terms_fts AS f WHERE f MATCH 'budget'",
+            )
+            .await,
+            "no such column: f",
+        );
+    }
+
+    /// The terms can live in a plain SQLite file beside the store, which
+    /// keeps no history of them: attached to a reader of one commit, its
+    /// FTS5 index matches and the joins on both sides seek their keys.
+    #[tokio::test]
+    async fn a_plain_sqlite_terms_file_attached_to_a_commit_matches_and_joins_by_key() {
+        let s = Store::new();
+        let plain = s.path.with_file_name("terms.sqlite");
+        let mut t = connect(
+            &format!("file:{}?doltlite_engine=sqlite", plain.display()),
+            false,
+            Duration::from_secs(5),
+        )
+        .await;
+        ok(
+            &mut t,
+            "CREATE TABLE terms (term_id INTEGER PRIMARY KEY, uuid TEXT, kind TEXT, value TEXT); \
+             CREATE VIRTUAL TABLE terms_fts USING fts5(value, content='', contentless_delete=1, \
+             tokenize=\"unicode61 tokenchars '@.-_+:'\"); \
+             INSERT INTO terms VALUES (1, 'r1', 'to', 'email:ann@example.com'), \
+             (2, 'r2', 'from', 'email:ann@example.com'); \
+             INSERT INTO terms_fts (rowid, value) SELECT term_id, value FROM terms",
+        )
+        .await;
+        t.close().await.expect("close");
+
+        let mut w = s.rw().await;
+        ok(
+            &mut w,
+            "CREATE TABLE grid_rows (uuid TEXT PRIMARY KEY, touched TEXT); \
+             INSERT INTO grid_rows VALUES ('r1', '2026-01-02'), ('r2', '2026-01-01')",
+        )
+        .await;
+        let first = commit(&mut w, "rows").await;
+        ok(&mut w, "DELETE FROM grid_rows WHERE uuid = 'r1'").await;
+        commit(&mut w, "r1 gone").await;
+
+        let mut d = connect(&s.at(&first), true, Duration::from_secs(5)).await;
+        ok(
+            &mut d,
+            &format!(
+                "ATTACH 'file:{}?doltlite_engine=sqlite&mode=ro' AS t",
+                plain.display()
+            ),
+        )
+        .await;
+        let q = "SELECT g.uuid FROM t.terms_fts JOIN t.terms x ON x.term_id = terms_fts.rowid \
+                 JOIN grid_rows g ON g.uuid = x.uuid \
+                 WHERE terms_fts MATCH '\"email:ann@example.com\"'";
+        assert_eq!(texts(&mut d, q).await, ["r1", "r2"]);
+        let p = plan(&mut d, q).await;
+        assert!(p.contains("SEARCH x USING INTEGER PRIMARY KEY"), "{p}");
+        assert!(p.contains("SEARCH g USING"), "{p}");
+    }
+}
+
 // ── Plain SQLite files and SQLite compatibility ─────────────────────
 
 mod compat {
@@ -1548,6 +1791,31 @@ mod compat {
         );
         let wal = s.path.with_file_name("store.doltlite_db-wal");
         assert!(!wal.exists(), "doltlite made a -wal sidecar");
+    }
+
+    /// A plain SQLite file opened through doltlite answers `wal` too, but
+    /// keeps a rollback journal: its header never says WAL (bytes 18 and
+    /// 19 stay 1), so a reader waits while its writer commits.
+    #[tokio::test]
+    async fn a_plain_sqlite_file_keeps_a_rollback_journal_whatever_it_answers() {
+        let s = Store::new();
+        let plain = s.path.with_file_name("plain.sqlite");
+        let mut c = connect(
+            &format!("file:{}?doltlite_engine=sqlite", plain.display()),
+            false,
+            Duration::from_secs(5),
+        )
+        .await;
+        assert_eq!(
+            text(&mut c, "PRAGMA journal_mode = WAL").await.as_deref(),
+            Some("wal")
+        );
+        ok(&mut c, "CREATE TABLE a (x)").await;
+        ok(&mut c, "INSERT INTO a VALUES (1)").await;
+        c.close().await.expect("close");
+        let bytes = std::fs::read(&plain).unwrap();
+        assert_eq!(&bytes[..16], b"SQLite format 3\0");
+        assert_eq!(&bytes[18..20], &[1, 1], "the header now says WAL");
     }
 
     #[tokio::test]
