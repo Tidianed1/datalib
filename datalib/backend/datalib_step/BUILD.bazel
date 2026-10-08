@@ -188,12 +188,14 @@ rust_test(
     crate_root = "tests/step_tests/main.rs",
     data = [
         ":datalib_step",
+        "//datalib/backend/etl/providers/calendar:split_fixture",
         "//datalib/backend/etl/providers/sms_backup_restore:tng_fixture",
         "//tests/fixtures:ingested/qmd-index.tar",
         "//third-party/doltlite:doltlite",
     ],
     edition = "2021",
     env = {
+        "CALENDAR_SPLIT_FIXTURE_DIR": "datalib/backend/etl/providers/calendar/tests/fixtures/calendar_split_tng",
         "DATALIB_STEP_BIN": "$(rootpath :datalib_step)",
         "DOLTLITE_BIN": "$(rootpath //third-party/doltlite:doltlite)",
         "QMD_INDEX_TAR": "$(rootpath //tests/fixtures:ingested/qmd-index.tar)",

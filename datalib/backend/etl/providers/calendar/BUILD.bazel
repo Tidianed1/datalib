@@ -8,6 +8,12 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
+filegroup(
+    name = "split_fixture",
+    srcs = glob(["tests/fixtures/calendar_split_tng/**/*.ics"]),
+    visibility = ["//visibility:public"],
+)
+
 rust_library(
     name = "datalib_etl_calendar",
     srcs = glob(["src/**/*.rs"]),

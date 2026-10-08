@@ -67,20 +67,20 @@ pub struct ChildStatus {
     pub status: StatusView,
 }
 
-/// The status a group row shows, and which child it is read from: the
-/// liveliest child's. Running if any child is running; then waiting,
-/// queued, failed, stopped, in that order; otherwise the last step in
-/// pipeline order — the one whose state says how far the group's data
-/// got. A child turned off is passed over (an embed step turned off
-/// says nothing about the source), so the group reads Off only when
-/// every child is. A group with only applets reads its last applet.
-/// `children` must already be in pipeline order.
+/// The status a group row shows, and which child it is read from.
+/// Running if any child is running; then waiting, failed, queued,
+/// stopped, in that order; otherwise the last step in pipeline order —
+/// the one whose state says how far the group's data got. A child
+/// turned off is passed over (an embed step turned off says nothing
+/// about the source), so the group reads Off only when every child is.
+/// A group with only applets reads its last applet. `children` must
+/// already be in pipeline order.
 pub fn group_status(children: &[ChildStatus]) -> Option<(StatusView, String)> {
     let on: Vec<&ChildStatus> = children.iter().filter(|c| c.status.key != "off").collect();
     if on.is_empty() {
         return children.first().map(read);
     }
-    for key in ["running", "waiting", "queued", "failed", "stopped"] {
+    for key in ["running", "waiting", "failed", "queued", "stopped"] {
         if let Some(child) = on.iter().find(|c| c.status.key == key) {
             return Some(read(child));
         }
@@ -269,6 +269,20 @@ mod tests {
         let got = group_status(&[
             child("s/ingest", "failed", Step, None),
             child("s/render_markdown", "skipped_up_to_date", Step, None),
+        ])
+        .unwrap();
+        assert_eq!(got.0.key, "failed");
+        assert_eq!(got.1, "s/ingest");
+    }
+
+    /// A failed download read "Queued" for minutes while the steps after
+    /// it waited their turn on what it last saved, hiding the failure.
+    #[test]
+    fn group_status_is_failed_over_a_later_child_that_is_queued() {
+        let got = group_status(&[
+            child("s/ingest", "failed", Step, None),
+            child("s/render_markdown", "succeeded", Step, None),
+            child("s/embed", "queued", Step, None),
         ])
         .unwrap();
         assert_eq!(got.0.key, "failed");
