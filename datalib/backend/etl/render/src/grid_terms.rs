@@ -320,7 +320,7 @@ async fn open_terms(path: &Path) -> Result<SqlitePool> {
         std::fs::create_dir_all(dir)?;
     }
     let opts = SqliteConnectOptions::new()
-        .filename(format!("file:{}?doltlite_engine=sqlite", path.display()))
+        .filename(datalib_core::plain_sqlite::uri(path))
         .create_if_missing(true)
         .busy_timeout(Duration::from_secs(30));
     SqlitePoolOptions::new()

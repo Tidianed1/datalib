@@ -110,10 +110,7 @@ pub async fn lookup(root: &Path, identifiers: &[String]) -> Result<Option<Found>
         return Ok(None);
     }
     let mut conn = SqliteConnectOptions::new()
-        .filename(format!(
-            "file:{}?doltlite_engine=sqlite&mode=ro",
-            path.display()
-        ))
+        .filename(datalib_runtime::plain_sqlite::uri(&path))
         .read_only(true)
         .create_if_missing(false)
         .busy_timeout(Duration::from_secs(5))
