@@ -750,22 +750,45 @@ Deletion happens at the end of a run that got through every processor,
 in the same transaction as the storage report and the cursor
 (`seal_run`), and it has two halves:
 
-- **Per bucket, every run.** A bucket the run declared produces exactly
-  what it emitted; any document the store still holds under that
-  `bucket_key` is removed — rows and the `.md` file. A bucket declared
-  with nothing is a bucket whose entity is gone; a periodized bucket
-  that re-rendered to fewer documents drops the extra ones. Positive
-  evidence only: a bucket the run never looked at says nothing about
-  its documents, so a narrowed run cannot delete its own steady state.
+- **Per bucket, every run.** A processor ends each bucket it looked at
+  one of three ways (`RenderCtx`, `etl/render/src/processor.rs`), and
+  the driver decides what that does to the documents the store holds
+  under its `bucket_key` (`fate` in `datalib_step/src/render.rs`):
+
+  | the processor said | the bucket's documents |
+  |---|---|
+  | `declare_bucket` with the rows it read | replaced by what it emitted; any other document under the key is removed, rows and `.md` file (a periodized bucket that re-rendered to fewer documents drops the extra ones) |
+  | `declare_bucket` with no rows, and emitted nothing | removed **only when its rows left it**: the raw diff reports `removed` for a row the bucket was last built from (its `render_inputs` as they stood before the run), or every one of those rows is now read by a bucket that is new this run (it had no `render_inputs` before) — the key the bucket is minted from changed (a renamed address book re-keys its cards), and its rows build that bucket instead. A bucket that already read those rows is no evidence: a calendar series reads every row of its changed occurrences, and a Claude project page's rows are all read by its conversations. Otherwise they stay as they were, each with a `no_document` warning, and the bucket keeps its old `render_inputs` |
+  | `exclude_bucket` — left out on purpose (email's label filter) | removed, on the renderer's word |
+  | `fail_bucket(why)` — its build failed | kept, each with a `render_failed` error carrying `why`, even on a full walk |
+
+  The warning and the error are scoped to the document, so they show
+  on its banner, and they clear when the bucket next renders it or
+  removes it. A whole-table input is never the evidence: one row of a
+  table leaving, or another bucket reading it, says nothing about a
+  bucket that read all of it. The diff runs from the stored cursor on
+  every run, a full walk included, so a version bump keeps an
+  unexplained bucket's documents too. A run with no diff to read — no
+  cursor yet, or a range the store cannot resolve — has no evidence,
+  so it removes nothing this way. And a
+  bucket the run never looked at says nothing about its documents, so
+  a narrowed run cannot delete its own steady state.
 - **Whole store, on a full walk only.** A *full walk* is a run that
   rendered everything (version or params changed) **and** in which
   every processor reported the raw commit it read
   (`RenderCtx::consumed`). Then a document the walk did not produce —
   a chat re-bucketed under a different period, a uuid minted by the old
-  recipe — is gone. A first run with no cursor is not a full walk, and
+  recipe — is gone, except the documents of a bucket the table above
+  keeps. A first run with no cursor is not a full walk, and
   neither is one in which a processor read no store (none on disk,
   nothing committed): it said nothing about what should exist, and
   nothing is swept.
+
+A kept document still carries the render version that last built it.
+The version checks (`IndexedMarkdownStore::render_versions`) leave out
+a document with a render-stage `render_failed` or `no_document`
+problem, so one bucket that will not build neither fails the step nor
+makes every later run a full walk.
 
 The `.md` file matters as much as the rows: `md_path` is what
 `/applet/unified_index/chat/{uuid}` serves and what qmd indexed, so a
@@ -784,7 +807,7 @@ removes.
 ### Edge cases
 
 1. **First run, no cursor.** The provider reads its whole store at
-   HEAD; nothing is swept except through the buckets it declared; the
+   HEAD; nothing is swept except under the buckets it built; the
    cursor is recorded at the end.
 
 2. **A reset of the raw store.** `datalib-dag --reset` empties the

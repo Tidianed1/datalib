@@ -2496,17 +2496,56 @@ pub async fn primary_key_columns(pool: &SqlitePool, table: &str) -> Result<Vec<S
         .collect()
 }
 
+/// What `dolt_diff` says happened to one row between two commits, for a
+/// row that did not stay `unchanged`.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    strum::EnumString,
+    strum::IntoStaticStr,
+    strum::VariantArray,
+)]
+#[strum(serialize_all = "snake_case")]
+pub enum RowChange {
+    Added,
+    Modified,
+    Removed,
+}
+
+impl RowChange {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+
+    /// `None` for a spelling this build does not know.
+    pub fn parse(s: &str) -> Option<Self> {
+        s.parse().ok()
+    }
+}
+
+/// One row [`changed_keys`] names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangedKey {
+    pub key: String,
+    pub change: RowChange,
+}
+
 /// The primary keys of every row of `table` that is not `unchanged`
-/// between `from_ref` and `to_ref`, rendered as text the way
-/// `render_inputs.input_id` is: a composite key's columns in
-/// `pragma_table_info` order, joined by `|`. A removed row's key comes
-/// from its `from_` side, so a deletion names the row that left.
+/// between `from_ref` and `to_ref`, with what happened to it, the key
+/// rendered as text the way `render_inputs.input_id` is: a composite
+/// key's columns in `pragma_table_info` order, joined by `|`. A removed
+/// row's key comes from its `from_` side, so a deletion names the row
+/// that left.
 pub async fn changed_keys(
     pool: &SqlitePool,
     table: &str,
     from_ref: &str,
     to_ref: &str,
-) -> Result<Vec<String>> {
+) -> Result<Vec<ChangedKey>> {
     let pk = primary_key_columns(pool, table).await?;
     if pk.is_empty() {
         anyhow::bail!("{table} has no primary key, so dolt_diff_{table} cannot name its rows");
@@ -2516,18 +2555,26 @@ pub async fn changed_keys(
         .map(|c| format!("CAST(coalesce(to_{c}, from_{c}) AS TEXT)"))
         .collect();
     let sql = format!(
-        "SELECT {} FROM dolt_diff_{table} \
+        "SELECT {}, diff_type FROM dolt_diff_{table} \
           WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'",
         parts.join(" || '|' || ")
     );
     // Audited: `table` and its columns come from `sqlite_master` and
     // `pragma_table_info` of the store itself; both refs are bound.
-    sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql))
+    let rows = sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(sql))
         .bind(from_ref)
         .bind(to_ref)
         .fetch_all(pool)
         .await
-        .with_context(|| format!("dolt_diff_{table} keys from {from_ref} to {to_ref}"))
+        .with_context(|| format!("dolt_diff_{table} keys from {from_ref} to {to_ref}"))?;
+    rows.into_iter()
+        .map(|(key, diff_type)| {
+            let change = RowChange::parse(&diff_type).with_context(|| {
+                format!("dolt_diff_{table}: a diff_type this build does not know: {diff_type:?}")
+            })?;
+            Ok(ChangedKey { key, change })
+        })
+        .collect()
 }
 
 pub async fn record_object_error(
@@ -3336,6 +3383,47 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(logged, 1, "and it is still in history");
+        pool.close().await;
+    }
+
+    /// Render tells a row that left from one that moved by this: only a
+    /// `removed` row is evidence that a document built from it is gone.
+    #[tokio::test]
+    async fn changed_keys_say_what_happened_to_each_row() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("entities.doltlite_db");
+        let pool = open(&p, &[WIDGETS_DDL]).await.unwrap();
+        if !has_dolt_extensions(&pool).await {
+            pool.close().await;
+            return;
+        }
+        sqlx::query("INSERT INTO widgets (id, name) VALUES ('w1', 'a'), ('w2', 'b')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let from = commit_run(&pool, "two widgets").await.unwrap().unwrap();
+        for sql in [
+            "UPDATE widgets SET name = 'c' WHERE id = 'w1'",
+            "DELETE FROM widgets WHERE id = 'w2'",
+            "INSERT INTO widgets (id, name) VALUES ('w3', 'd')",
+        ] {
+            sqlx::query(sql).execute(&pool).await.unwrap();
+        }
+        let to = commit_run(&pool, "one of each").await.unwrap().unwrap();
+        let mut got = changed_keys(&pool, "widgets", &from, &to).await.unwrap();
+        got.sort_by(|a, b| a.key.cmp(&b.key));
+        let change = |key: &str, change| ChangedKey {
+            key: key.into(),
+            change,
+        };
+        assert_eq!(
+            got,
+            vec![
+                change("w1", RowChange::Modified),
+                change("w2", RowChange::Removed),
+                change("w3", RowChange::Added),
+            ]
+        );
         pool.close().await;
     }
 

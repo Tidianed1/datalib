@@ -1,20 +1,21 @@
 //! The render step driver: one source's render wave, written to the tree
 //! the step id names and read from the raw store its input names.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::processor::{Input, ReadScope, RenderCtx, RenderProcessor};
+use datalib_etl_render::processor::{BucketEnd, Input, ReadScope, RenderCtx, RenderProcessor};
 use datalib_schema::problems::{ProblemRow, ScopeKind, Severity, Stage, METRIC};
 use datalib_schema::render_cursor::RenderCursorRow;
 
 use crate::dispatch::{PlannedSource, Wave};
 use crate::events::{Emitter, OutputClaim};
 use crate::source::StepEnv;
-use datalib_etl_render::indexed_markdown::{blocking, Holdings, IndexedMarkdownStore};
+use datalib_etl_render::indexed_markdown::{blocking, Holdings, IndexedMarkdownStore, WHOLE_TABLE};
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
@@ -265,8 +266,19 @@ pub fn render_source(
         cursor = raw_cursor.as_deref().unwrap_or("none"),
         "starting the render"
     );
-    let (raw_pin, stale_buckets) =
-        reverse_lookup(&store, raw_db.as_deref(), raw_cursor.as_deref())?;
+    // The diff runs from the stored cursor even on a full walk: the
+    // walk renders everything, but what left since the cursor is still
+    // the only evidence that a bucket declared with nothing is gone.
+    let ReverseLookup {
+        pin: raw_pin,
+        stale,
+        removed: removed_rows,
+    } = reverse_lookup(
+        &store,
+        raw_db.as_deref(),
+        stored_cursor.as_ref().map(|c| c.raw_commit.as_str()),
+    )?;
+    let stale_buckets = stale.filter(|_| !render_everything);
 
     let mut checkpointer = datalib_etl::checkpointer::Checkpointer::new(cadence);
     let mut docs = 0usize;
@@ -279,6 +291,7 @@ pub fn render_source(
     // Every document this run emitted. On a full render it is what the
     // walk produced, and the sweep below keeps exactly this.
     let mut emitted: BTreeSet<String> = BTreeSet::new();
+    let mut emitted_under: BTreeSet<String> = BTreeSet::new();
     // The documents between two checkpoints share one SQL transaction
     // (the batch), and each is written whole inside it — rows, edges,
     // markdown and problems together — so a commit landing between
@@ -294,6 +307,9 @@ pub fn render_source(
             .put_document(&data_root, &md)
             .with_context(|| format!("store document {}", md.markdown_uuid))?;
         emitted.insert(md.markdown_uuid);
+        if let Some(bucket) = md.bucket_key {
+            emitted_under.insert(bucket);
+        }
         docs += 1;
         progress.metric("documents_rendered_total", &[], docs as i64);
         // What a consumer reading a checkpoint may see is a document
@@ -323,15 +339,34 @@ pub fn render_source(
         }
         Ok(())
     };
-    // The buckets this run rendered. What the store holds under one of
-    // them that this run did not emit is gone. Their inputs land in the
-    // open batch beside their documents.
-    let mut buckets: BTreeSet<String> = BTreeSet::new();
-    let mut on_declare = |bucket: &str, inputs: &[Input]| -> Result<()> {
-        store
-            .put_inputs(bucket, inputs)
-            .with_context(|| format!("record inputs of bucket {bucket}"))?;
-        buckets.insert(bucket.to_string());
+    // How each bucket the run looked at ended, decided at the seal. The
+    // inputs of a built bucket land in the open batch beside its
+    // documents; a bucket declared with none keeps the ones it had until
+    // the seal decides it is gone, because the evidence that it is gone
+    // is in them.
+    let mut ends: BTreeMap<String, Ended> = BTreeMap::new();
+    // Buckets this run built that held no inputs before it: where a
+    // re-keyed bucket's rows go.
+    let mut put_this_run: HashSet<String> = HashSet::new();
+    let mut new_buckets: HashSet<String> = HashSet::new();
+    let running_version: Mutex<Option<u32>> = Mutex::new(None);
+    let mut on_declare = |bucket: &str, end: BucketEnd<'_>| -> Result<()> {
+        if let BucketEnd::Read(inputs) = end {
+            if !inputs.is_empty() {
+                let had_inputs = store
+                    .put_inputs(bucket, inputs)
+                    .with_context(|| format!("record inputs of bucket {bucket}"))?;
+                if put_this_run.insert(bucket.to_string()) && !had_inputs {
+                    new_buckets.insert(bucket.to_string());
+                }
+            }
+        }
+        let ended = Ended::of(end, *running_version.lock().unwrap());
+        // A failure is the bucket's last word: what else the run said
+        // about it cannot make a failed build good.
+        if !ends.get(bucket).is_some_and(Ended::failed) {
+            ends.insert(bucket.to_string(), ended);
+        }
         Ok(())
     };
     // Entity-scoped problems land in the open batch beside the
@@ -355,6 +390,7 @@ pub fn render_source(
     let mut consumed: Vec<Option<String>> = Vec::with_capacity(processors.len());
     let ran = (|| -> Result<()> {
         for proc in processors {
+            *running_version.lock().unwrap() = proc.render_version();
             let ctx = RenderCtx::new(
                 &name,
                 &data_root,
@@ -404,6 +440,57 @@ pub fn render_source(
     if let Some(m) = storage.as_ref() {
         keep.insert(m.doc.markdown_uuid.clone());
     }
+    // Read before the seal clears any of them: what a bucket declared
+    // with nothing was last built from.
+    let silent: Vec<&str> = ends
+        .iter()
+        .filter(|(bucket, e)| {
+            e.end == End::Read { empty: true } && !emitted_under.contains(*bucket)
+        })
+        .map(|(bucket, _)| bucket.as_str())
+        .collect();
+    let last_built_from = store.inputs_of(&silent)?;
+    // Which of those rows a bucket new this run now reads: where they
+    // went when the key a bucket is minted from changed. A bucket that
+    // read them before is no evidence (a calendar series reads all of a
+    // changed occurrence's rows).
+    let built: BTreeSet<&str> = ends
+        .iter()
+        .filter(|(bucket, e)| {
+            e.end == End::Read { empty: false } && new_buckets.contains(bucket.as_str())
+        })
+        .map(|(bucket, _)| bucket.as_str())
+        .collect();
+    let asked: Vec<Input> = last_built_from
+        .values()
+        .flatten()
+        .filter(|i| i.id != WHOLE_TABLE)
+        .cloned()
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let moved: HashSet<Input> = store
+        .readers_of(&asked)?
+        .into_iter()
+        .filter(|(_, bucket)| built.contains(bucket.as_str()))
+        .map(|(input, _)| input)
+        .collect();
+    let removed_rows = removed_rows.unwrap_or_default();
+    let endings: BTreeMap<String, Ending> = ends
+        .into_iter()
+        .map(|(bucket, ended)| {
+            let left = last_built_from
+                .get(&bucket)
+                .is_some_and(|inputs| rows_left(inputs, &removed_rows, &moved));
+            let fate = fate(&ended.end, emitted_under.contains(&bucket), left);
+            let ending = Ending {
+                fate,
+                inputs_unwritten: matches!(ended.end, End::Read { empty: true } | End::Excluded),
+                render_version: ended.render_version,
+            };
+            (bucket, ending)
+        })
+        .collect();
 
     // The sweep runs only on a run that got through every processor
     // — a render that failed partway named a fraction of what it
@@ -412,9 +499,10 @@ pub fn render_source(
         &store,
         &data_root,
         RunEnd {
+            source_id: &name,
             sweep: full_walk,
             keep: &keep,
-            declared: &buckets,
+            buckets: &endings,
             storage,
             // The cursor is rewritten only when it moves: its row carries
             // a per-run stamp, and rewriting it unchanged would give
@@ -438,16 +526,24 @@ pub fn render_source(
         },
     )?;
     removed += sealed.removed;
+    if sealed.kept > 0 {
+        tracing::warn!(
+            source = %name,
+            buckets = sealed.kept,
+            "buckets that produced no document kept the ones they had \
+             (see `problems` in its indexed_markdown.doltlite_db)"
+        );
+    }
     // After the sweep, so an item a problem names is a row the store
     // still holds.
     if let Some(rows) = fetch_problems {
         carry_fetch_problems(&store, processors, &name, rows)
             .with_context(|| format!("carry the download's problems into {name}'s store"))?;
     }
-    if !buckets.is_empty() {
+    if !endings.is_empty() {
         tracing::info!(
             source = %name,
-            buckets = buckets.len(),
+            buckets = endings.len(),
             "buckets declared with their inputs"
         );
     }
@@ -489,17 +585,119 @@ pub fn render_source(
     })
 }
 
-/// What closes a run: the sweep (`Some(keep)` deletes every document not
-/// in it), the storage report, and the cursor to record.
+/// What a processor said about one bucket, as the driver records it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum End {
+    /// Built; `empty` when from no rows at all.
+    Read {
+        empty: bool,
+    },
+    Excluded,
+    Failed(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Ended {
+    end: End,
+    /// The version of the processor that said it.
+    render_version: Option<u32>,
+}
+
+impl Ended {
+    fn of(end: BucketEnd<'_>, render_version: Option<u32>) -> Self {
+        let end = match end {
+            BucketEnd::Read(inputs) => End::Read {
+                empty: inputs.is_empty(),
+            },
+            BucketEnd::Excluded => End::Excluded,
+            BucketEnd::Failed(why) => End::Failed(why.to_string()),
+        };
+        Ended {
+            end,
+            render_version,
+        }
+    }
+
+    fn failed(&self) -> bool {
+        matches!(self.end, End::Failed(_))
+    }
+}
+
+/// What the seal does with the documents the store holds under a bucket.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Fate {
+    /// Whatever this run did not emit under it goes.
+    Swept,
+    /// They stay as they were, each carrying a problem saying why.
+    Kept(Kept),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Kept {
+    /// The renderer said its build failed, and why.
+    Failed(String),
+    /// Declared with nothing, though no row it was built from left.
+    Unexplained,
+}
+
+/// The rule the sweep rests on: a bucket is gone only when the diff says
+/// its rows left. Built, excluded and failed are the renderer's word; a
+/// bucket declared with no rows that emitted nothing is gone only on
+/// that evidence, on a full walk as on a narrowed run.
+pub(crate) fn fate(end: &End, emitted: bool, rows_left: bool) -> Fate {
+    match end {
+        End::Failed(why) => Fate::Kept(Kept::Failed(why.clone())),
+        End::Excluded | End::Read { empty: false } => Fate::Swept,
+        End::Read { empty: true } if emitted || rows_left => Fate::Swept,
+        End::Read { empty: true } => Fate::Kept(Kept::Unexplained),
+    }
+}
+
+/// Whether the rows a bucket was last built from left it: the diff
+/// reports one of them removed, or every one of them is now read by a
+/// bucket new this run (`moved`) — the bucket's key is minted from a
+/// value that changed, and its rows build that bucket instead. A
+/// whole-table input is never evidence: one row of a table leaving, or
+/// another bucket reading it, says nothing about a bucket that read all
+/// of it.
+pub(crate) fn rows_left(
+    last_built_from: &[Input],
+    removed: &HashSet<Input>,
+    moved: &HashSet<Input>,
+) -> bool {
+    let mut rows = last_built_from
+        .iter()
+        .filter(|i| i.id != WHOLE_TABLE)
+        .peekable();
+    if rows.peek().is_none() {
+        return false;
+    }
+    let rows: Vec<&Input> = rows.collect();
+    rows.iter().any(|i| removed.contains(*i)) || rows.iter().all(|i| moved.contains(*i))
+}
+
+/// One bucket the run looked at, as the seal acts on it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Ending {
+    pub(crate) fate: Fate,
+    /// It was declared with no inputs, which the driver has not written
+    /// yet: the seal clears its old ones unless it is kept.
+    pub(crate) inputs_unwritten: bool,
+    /// The version of the processor that declared it, for its problem.
+    pub(crate) render_version: Option<u32>,
+}
+
+/// What closes a run: the sweeps, the storage report, and the cursor to
+/// record.
 pub(crate) struct RunEnd<'a> {
-    /// Whether the run walked everything, so a document not in `keep` is
-    /// one the source no longer produces.
+    pub(crate) source_id: &'a str,
+    /// Whether the run walked everything, so a document not in `keep`
+    /// (or under a kept bucket) is one the source no longer produces.
     pub(crate) sweep: bool,
     /// Every document this run emitted or owns.
     pub(crate) keep: &'a BTreeSet<String>,
-    /// Buckets the run rendered: what the store holds under them beyond
-    /// `keep` is gone.
-    pub(crate) declared: &'a BTreeSet<String>,
+    /// Every bucket the run looked at, and what becomes of it.
+    pub(crate) buckets: &'a BTreeMap<String, Ending>,
     pub(crate) storage: Option<crate::introspect::Measured>,
     pub(crate) cursor: Option<RenderCursorRow>,
 }
@@ -507,6 +705,41 @@ pub(crate) struct RunEnd<'a> {
 pub(crate) struct Sealed {
     pub(crate) stored: usize,
     pub(crate) removed: usize,
+    /// Buckets whose documents stayed though the run produced none.
+    pub(crate) kept: usize,
+}
+
+/// The problem a document of a kept bucket carries. Scoped to the
+/// document, so it reaches the document's banner, and it clears when
+/// the bucket next renders it, or removes it.
+fn kept_problem(source_id: &str, markdown_uuid: &str, ending: &Ending) -> Option<ProblemRow> {
+    use datalib_schema::problems::{Outcome, Problem, Reason, Scope};
+    let Fate::Kept(why) = &ending.fate else {
+        return None;
+    };
+    Some(match why {
+        Kept::Failed(why) => datalib_etl_render::processor::document_failed(
+            source_id,
+            markdown_uuid,
+            why,
+            ending.render_version,
+        ),
+        Kept::Unexplained => ProblemRow::new(
+            source_id,
+            Stage::Render,
+            Scope::Markdown(markdown_uuid),
+            None,
+            Outcome::Ok,
+            Problem::explained(
+                Reason::NoDocument,
+                None,
+                "the last render produced no document here, though the rows this was \
+                 built from are still upstream; this is what an earlier run rendered",
+            )
+            .severity(Severity::Warning),
+            ending.render_version,
+        ),
+    })
 }
 
 /// The sweep, the storage report and the cursor land as one transaction,
@@ -520,10 +753,28 @@ pub(crate) fn seal_run(
         let mut sealed = Sealed {
             stored: 0,
             removed: 0,
+            kept: 0,
         };
+        let kept: Vec<&str> = end
+            .buckets
+            .iter()
+            .filter(|(_, e)| matches!(e.fate, Fate::Kept(_)))
+            .map(|(bucket, _)| bucket.as_str())
+            .collect();
+        sealed.kept = kept.len();
+        let held_by_kept = store.documents_for_buckets(&kept)?;
+        let mut problems = Vec::with_capacity(held_by_kept.len());
+        for (bucket, uuid) in &held_by_kept {
+            problems.extend(kept_problem(end.source_id, uuid, &end.buckets[bucket]));
+        }
+        store
+            .put_problems(&problems)
+            .context("record why kept buckets kept their documents")?;
+        let kept_documents: BTreeSet<&str> =
+            held_by_kept.iter().map(|(_, uuid)| uuid.as_str()).collect();
         if end.sweep {
             for uuid in store.all_document_uuids()? {
-                if end.keep.contains(&uuid) {
+                if end.keep.contains(&uuid) || kept_documents.contains(uuid.as_str()) {
                     continue;
                 }
                 store
@@ -536,12 +787,27 @@ pub(crate) fn seal_run(
                 );
             }
         }
-        // A bucket the run rendered produces exactly what it emitted; a
-        // document the store still holds for it is from a period that
-        // emptied or a thread whose messages went. Positive evidence
-        // only: buckets the run never looked at are not here.
-        let buckets: Vec<&str> = end.declared.iter().map(String::as_str).collect();
-        for (bucket, uuid) in store.documents_for_buckets(&buckets)? {
+        // A swept bucket produces exactly what it emitted; a document the
+        // store still holds for it is from a period that emptied or a
+        // thread whose messages went. Positive evidence only: buckets the
+        // run never looked at are not here.
+        let swept: Vec<&str> = end
+            .buckets
+            .iter()
+            .filter(|(_, e)| e.fate == Fate::Swept)
+            .map(|(bucket, _)| bucket.as_str())
+            .collect();
+        for bucket in end
+            .buckets
+            .iter()
+            .filter(|(_, e)| e.fate == Fate::Swept && e.inputs_unwritten)
+            .map(|(bucket, _)| bucket)
+        {
+            store
+                .put_inputs(bucket, &[])
+                .with_context(|| format!("clear inputs of bucket {bucket}"))?;
+        }
+        for (bucket, uuid) in store.documents_for_buckets(&swept)? {
             if end.keep.contains(&uuid) {
                 continue;
             }
@@ -585,42 +851,63 @@ pub(crate) fn seal_run(
     })
 }
 
-/// The driver's half of the scan: the buckets whose declared inputs
-/// changed between the cursor and the raw store's HEAD, from `dolt_diff`
-/// over every table `render_inputs` mentions and a reverse lookup. Also
-/// the commit that HEAD was, for the provider to pin. `(None, None)`
-/// when there is nothing to say: no cursor, no raw doltlite store,
-/// nothing declared yet, or a range this store cannot resolve — then the
-/// provider's own scan decides alone, as it did before `render_inputs`.
+/// The driver's half of the scan.
+#[derive(Debug, Default)]
+struct ReverseLookup {
+    /// The raw store's HEAD, for the provider to pin.
+    pin: Option<String>,
+    /// The buckets whose declared inputs changed between the cursor and
+    /// the pin.
+    stale: Option<HashSet<String>>,
+    /// The declared inputs the diff reports removed: the only evidence a
+    /// bucket declared with nothing is gone.
+    removed: Option<HashSet<Input>>,
+}
+
+/// The buckets whose declared inputs changed between the cursor and the
+/// raw store's HEAD, from `dolt_diff` over every table `render_inputs`
+/// mentions and a reverse lookup, and which of those rows left. Nothing
+/// to say — no cursor, no raw doltlite store, nothing declared yet, or a
+/// range this store cannot resolve — leaves the provider's own scan to
+/// decide alone, as it did before `render_inputs`, and no bucket gone.
 fn reverse_lookup(
     store: &IndexedMarkdownStore,
     raw_db: Option<&Path>,
     raw_cursor: Option<&str>,
-) -> Result<(Option<String>, Option<std::collections::HashSet<String>>)> {
+) -> Result<ReverseLookup> {
     let (Some(from), Some(raw_db)) = (raw_cursor, raw_db) else {
-        return Ok((None, None));
+        return Ok(ReverseLookup::default());
     };
     if !raw_db.exists() {
-        return Ok((None, None));
+        return Ok(ReverseLookup::default());
     }
     let tables = store.input_tables()?;
     if tables.is_empty() {
-        return Ok((None, None));
+        return Ok(ReverseLookup::default());
     }
     let Some(reader) = blocking(datalib_etl::doltlite_raw::open_reader(raw_db, None))
         .with_context(|| format!("open {} for the reverse lookup", raw_db.display()))?
     else {
-        return Ok((None, None));
+        return Ok(ReverseLookup::default());
     };
     let pool = reader.pool().clone();
     let result = (|| -> Result<_> {
         let to = reader.pin().commit().to_string();
         let mut changed: Vec<Input> = Vec::new();
+        let mut removed: HashSet<Input> = HashSet::new();
         for table in &tables {
             match blocking(datalib_etl::doltlite_raw::changed_keys(
                 &pool, table, from, &to,
             )) {
-                Ok(keys) => changed.extend(keys.into_iter().map(|k| Input::new(table.clone(), k))),
+                Ok(keys) => {
+                    for k in keys {
+                        let input = Input::new(table.clone(), k.key);
+                        if k.change == datalib_etl::doltlite_raw::RowChange::Removed {
+                            removed.insert(input.clone());
+                        }
+                        changed.push(input);
+                    }
+                }
                 // A cursor this store cannot resolve — the file was
                 // replaced by hand — or a table a schema change dropped.
                 // Either way the range is gone; the provider cold-starts.
@@ -631,17 +918,25 @@ fn reverse_lookup(
                         error = %format!("{e:#}"),
                         "reverse lookup could not diff this table; leaving the scan to the provider"
                     );
-                    return Ok((Some(to), None));
+                    return Ok(ReverseLookup {
+                        pin: Some(to),
+                        ..ReverseLookup::default()
+                    });
                 }
             }
         }
         let stale = store.buckets_reading(&changed)?;
         tracing::info!(
             changed_rows = changed.len(),
+            removed_rows = removed.len(),
             stale_buckets = stale.len(),
             "reverse lookup from the changed rows to the buckets"
         );
-        Ok((Some(to), Some(stale)))
+        Ok(ReverseLookup {
+            pin: Some(to),
+            stale: Some(stale),
+            removed: Some(removed),
+        })
     })();
     blocking(pool.close());
     result
@@ -1153,9 +1448,10 @@ mod plan_tests {
             &store,
             td.path(),
             RunEnd {
+                source_id: "src",
                 sweep: true,
                 keep: &keep,
-                declared: &BTreeSet::new(),
+                buckets: &BTreeMap::new(),
                 storage: None,
                 cursor: None,
             },
@@ -1219,9 +1515,10 @@ mod plan_tests {
             &store,
             td.path(),
             RunEnd {
+                source_id: "src",
                 sweep: true,
                 keep: &keep,
-                declared: &BTreeSet::new(),
+                buckets: &BTreeMap::new(),
                 storage: None,
                 cursor: Some(cursor("raw-head", json!({}))),
             },
@@ -1253,9 +1550,10 @@ mod plan_tests {
             &store,
             td.path(),
             RunEnd {
+                source_id: "src",
                 sweep: false,
                 keep: &BTreeSet::new(),
-                declared: &BTreeSet::new(),
+                buckets: &BTreeMap::new(),
                 storage: None,
                 cursor: None,
             },
@@ -1265,6 +1563,62 @@ mod plan_tests {
         assert_eq!(store.all_document_uuids().unwrap().len(), 2);
         assert!(store.cursor().unwrap().is_none());
         store.close();
+    }
+
+    /// The rule, case by case: only the renderer's word or a removed row
+    /// sweeps a bucket that produced nothing.
+    #[test]
+    fn a_bucket_that_produced_nothing_is_gone_only_on_evidence() {
+        let silent = End::Read { empty: true };
+        let built = End::Read { empty: false };
+        let failed = End::Failed("bad payload".into());
+        let kept_failed = Fate::Kept(Kept::Failed("bad payload".into()));
+        let unexplained = Fate::Kept(Kept::Unexplained);
+        // (end, emitted, rows left) → fate
+        for (end, emitted, left, want) in [
+            (&silent, false, false, &unexplained),
+            (&silent, false, true, &Fate::Swept),
+            (&silent, true, false, &Fate::Swept),
+            (&built, false, false, &Fate::Swept),
+            (&End::Excluded, false, false, &Fate::Swept),
+            (&failed, false, true, &kept_failed),
+            (&failed, true, false, &kept_failed),
+        ] {
+            assert_eq!(
+                &fate(end, emitted, left),
+                want,
+                "{end:?} emitted={emitted} rows_left={left}"
+            );
+        }
+    }
+
+    /// Evidence is a removed row the bucket named, or every row it named
+    /// now read by a bucket the run built; a table it read whole says
+    /// nothing either way.
+    #[test]
+    fn rows_left_only_when_a_named_row_was_removed_or_all_moved() {
+        let thread = || Input::new("threads", "t1");
+        let message = || Input::new("messages", "m2");
+        let users = || Input::whole_table("users");
+        let set = |inputs: Vec<Input>| inputs.into_iter().collect::<HashSet<Input>>();
+        let none = HashSet::new();
+        let built_from = [thread(), message(), users()];
+
+        assert!(rows_left(&built_from, &set(vec![message()]), &none));
+        assert!(!rows_left(&[thread()], &set(vec![message()]), &none));
+        assert!(!rows_left(&[users()], &set(vec![users()]), &none));
+        assert!(!rows_left(&[], &none, &none));
+
+        assert!(rows_left(
+            &built_from,
+            &none,
+            &set(vec![thread(), message()])
+        ));
+        assert!(
+            !rows_left(&built_from, &none, &set(vec![message()])),
+            "its thread row still builds nothing else: not moved"
+        );
+        assert!(!rows_left(&[users()], &none, &set(vec![users()])));
     }
 
     #[test]

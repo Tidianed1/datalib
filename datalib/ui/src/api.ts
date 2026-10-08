@@ -192,6 +192,7 @@ export type ProblemReason =
   | "over_size_limit"
   | "not_found"
   | "forbidden"
+  | "no_document"
   | "silent"
   | "noted";
 
