@@ -63,6 +63,22 @@ export function tokenValue(query: string, key: string): string | null {
 const WORD = /-?[A-Za-z_][\w.]*:"(?:[^"\\]|\\.)*"?|"(?:[^"\\]|\\.)*"?|\S+/g;
 const FILTER = /^-?[A-Za-z_][\w.]*:/;
 
+/// `query` as its words, each as typed.
+export function queryWords(query: string): string[] {
+  return query.match(WORD) ?? [];
+}
+
+export function isFilterWord(word: string): boolean {
+  return FILTER.test(word);
+}
+
+/// What a word says once its quotes are off: `"earl grey"` is earl grey.
+export function unquoteValue(v: string): string {
+  if (!v.startsWith('"')) return v;
+  const inner = v.endsWith('"') && v.length > 1 ? v.slice(1, -1) : v.slice(1);
+  return inner.replace(/\\(["\\])/g, "$1");
+}
+
 /// The words of `query` that are not `key:value` filters, in order: what
 /// a search ranks as free text. The grammar itself is the backend's; this
 /// only times a search, never decides one.

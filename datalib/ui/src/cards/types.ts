@@ -125,9 +125,21 @@ export type ViewLibs = {
   sourcesOverviewView: () => CardRender;
   latestActivityView: () => CardRender;
   // The Search card: results as a list, the picked one read in place.
-  // The same search as gridView, which shows it as a table.
-  searchView: (opts?: { q?: string }) => CardRender;
-  gridView: (opts?: { q?: string; columns?: string[]; name?: string }) => CardRender;
+  // The Search card, and the general-purpose grid over another
+  // endpoint's table (libs/gridView.ts).
+  searchView: (opts?: {
+    q?: string;
+    columns?: string[];
+    name?: string;
+    view?: "list" | "table";
+  }) => CardRender;
+  gridView: (opts?: {
+    url: string;
+    q?: string;
+    columns?: string[];
+    name?: string;
+    placeholder?: string;
+  }) => CardRender;
   documentView: (markdownUuid?: string | null, sectionUuid?: string | null) => CardRender;
   // Parameter-less gallery stand-in for documentView: lists every
   // rendered document (the unified_index applet's /docs) and, on
