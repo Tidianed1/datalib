@@ -38,16 +38,42 @@ To copy fields from sources the card needs somewhere to put them, so
 the store gains a table shaped like vCard's properties:
 
 ```
-fields(contact_id, field_id, kind, label, value, position,
+fields(contact_id, field_id, kind, label, value, handle, position,
        copied_from_source, copied_from_handle, copied_at_utc, tz_offset)
 ```
 
-- `kind` is a closed set, an enum: organization, title, birthday,
-  address, url, and others as the card needs them. Handles stay
-  handles; an email or a number is linked, not stored as a field.
+- `kind` is a closed set, an enum: email, phone, organization, title,
+  birthday, address, url, and others as the card needs them.
 - `label` is free text a person types ("home", "work").
+- `handle` is the value normalized as a handle (`email:…`, `tel:…`)
+  where it is one, and empty otherwise. It is how the card matches a
+  field to a link; it links nothing.
 - `copied_from_*` says which source's account the value came from, or
   is empty for a value the person typed.
+
+### Fields and links are separate
+
+A **field** is what the card says about a person: the lines of their
+address-book entry, written out by the export and by CardDAV
+publishing. A **link** is who a chip names: a handle tied to one
+contact, made only by a deliberate act (the popover, the card's link
+button), under the rule that a handle has one holder.
+
+Neither implies the other. A household's landline can be a field on
+Riker's card and on Troi's, and link to nobody, or to a group contact
+for the household if someone makes one. A Slack id can be linked to a
+contact and never appear as a field.
+
+The card shows how each email or phone field stands:
+
+| the field's handle is | the card shows |
+|---|---|
+| linked to this contact | nothing more |
+| not linked | *link it*, one click, never automatic |
+| linked to someone else | that contact's chip ("Troi's"), which also catches a typo |
+
+Linking a handle that is not yet a field offers to add it as one;
+again one click, never automatic.
 
 **A copied value is a copy.** A later change upstream does not flow in
 by itself. The card compares each copied value with the source's
@@ -186,7 +212,8 @@ only ever reads.
 
 - **Are links part of the draft?** Proposed: no. A link changes who a
   chip names everywhere, so it stays an immediate operation, as in
-  the popover, and the card's draft holds only what the contact says.
+  the popover, and the card's draft holds only fields, name, note and
+  photo ([Fields and links are separate](#fields-and-links-are-separate)).
 - **When does an abandoned draft go?** A list of drafts, and an expiry,
   or neither until drafts pile up.
 
