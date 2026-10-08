@@ -67,15 +67,14 @@ pub struct ChildStatus {
     pub status: StatusView,
 }
 
-/// The status a group row shows, and which child it is read from: the
-/// liveliest child's. Running if any child is running; queued if any
-/// child is; off if any child is; failed if any child failed; stopped
-/// if any child was; otherwise the last step in pipeline order — the
-/// one whose state says how far the group's data got. A group with only
-/// applets reads its last applet. `children` must already be in
-/// pipeline order.
+/// The status a group row shows, and which child it is read from.
+/// Running if any child is running; failed if any child failed; queued
+/// if any child is; off if any child is; stopped if any child was;
+/// otherwise the last step in pipeline order — the one whose state says
+/// how far the group's data got. A group with only applets reads its
+/// last applet. `children` must already be in pipeline order.
 pub fn group_status(children: &[ChildStatus]) -> Option<(StatusView, String)> {
-    for key in ["running", "queued", "off", "failed", "stopped"] {
+    for key in ["running", "failed", "queued", "off", "stopped"] {
         if let Some(child) = children.iter().find(|c| c.status.key == key) {
             return Some(read(child));
         }
@@ -264,6 +263,20 @@ mod tests {
         let got = group_status(&[
             child("s/ingest", "failed", Step, None),
             child("s/render_markdown", "skipped_up_to_date", Step, None),
+        ])
+        .unwrap();
+        assert_eq!(got.0.key, "failed");
+        assert_eq!(got.1, "s/ingest");
+    }
+
+    /// A failed download read "Queued" for minutes while the steps after
+    /// it waited their turn on what it last saved, hiding the failure.
+    #[test]
+    fn group_status_is_failed_over_a_later_child_that_is_queued() {
+        let got = group_status(&[
+            child("s/ingest", "failed", Step, None),
+            child("s/render_markdown", "succeeded", Step, None),
+            child("s/embed", "queued", Step, None),
         ])
         .unwrap();
         assert_eq!(got.0.key, "failed");

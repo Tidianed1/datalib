@@ -67,8 +67,8 @@ syncs it stops everything.</p>
 every sync skips it, and if it is running it stops; what reads it waits. Turned back
 on, it runs in the next sync — turning it on starts nothing by itself. On a group it
 turns every step under it off or on. Hover it to see who turned it off.</p>
-<p>A group row reads off its steps: <b>Last update</b> shows the liveliest of them —
-running if any step is, else queued, off, failed or stopped if any is, and otherwise
+<p>A group row reads off its steps: <b>Last update</b> shows the one that matters most —
+running if any step is, else failed, queued, off or stopped if any is, and otherwise
 the last step’s in pipeline order. <b>Last synced</b> and
 <b>Last success</b> are the fetch step’s. <b>Remove</b> takes the steps and applets
 with it.</p>
