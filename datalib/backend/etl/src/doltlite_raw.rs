@@ -2580,6 +2580,20 @@ pub async fn load_payloads(pool: &SqlitePool, table: &str) -> Result<Vec<Value>>
     Ok(out)
 }
 
+/// [`load_payloads_with_id`] for a store whose tables vary with what the
+/// input held: a table the store does not have is no rows, and any other
+/// failure is an error. A load error read as "no rows" renders the
+/// table's documents from nothing, and the render's sweep deletes them.
+pub async fn load_payloads_with_id_if_present(
+    pool: &SqlitePool,
+    table: &str,
+) -> Result<Vec<(String, Value)>> {
+    if !table_exists(pool, table).await? {
+        return Ok(Vec::new());
+    }
+    load_payloads_with_id(pool, table).await
+}
+
 pub async fn load_payloads_with_id(pool: &SqlitePool, table: &str) -> Result<Vec<(String, Value)>> {
     let sql = format!(
         "SELECT id, json(payload) AS payload FROM {table} WHERE payload IS NOT NULL ORDER BY id"

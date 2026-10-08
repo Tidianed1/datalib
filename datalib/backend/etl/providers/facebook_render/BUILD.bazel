@@ -37,4 +37,8 @@ rust_test(
     size = "small",
     crate = ":datalib_etl_facebook_render",
     edition = "2021",
+    deps = [
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+    ],
 )
