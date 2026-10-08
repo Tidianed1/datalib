@@ -32,16 +32,18 @@ export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
     gallery: "sourcesView()",
   },
   searchView: {
-    title: "Unified Search (new)",
-    description: "Find anything in your library by its words or its meaning, and read it in place.",
+    title: "Search",
+    description:
+      "Find anything in your library by its words or its meaning. Read results in place, or see them as a table with every column.",
     icon: "search",
     gallery: "searchView()",
   },
+  // The Search card opened on its table; the gallery lists it once, as
+  // `searchView`.
   gridView: {
-    title: "Unified Search",
+    title: "Search",
     description: "Search and browse everything in your library, as a table.",
     icon: "table",
-    gallery: "gridView()",
   },
   umapView: {
     title: "Embedding map",

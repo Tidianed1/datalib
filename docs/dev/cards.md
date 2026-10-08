@@ -440,15 +440,23 @@ programs against:
   the search; their decisions are `cards/dashboard.ts`, their look
   `cards/dashboardCard.css`. A section card leaves the ground and the
   space below it to the Page it sits in.
-- `searchView(opts?: { q? })` — "Unified Search (new)", the friendly search
-  (`cards/SearchCard.ce.vue`): a box that takes words and filters, a
-  "Meaning only" switch that moves the free text into a `qmd_vsearch:`
-  predicate, chips for the sources the results come from with their
-  counts (`/search/groups?by=source_ref`), the results as a list with
-  the typed words marked, and the picked result drawn in place by
-  `documentView` in a shadow root of its own. "View as table" opens
-  `gridView` on the same query. The toolbar's search box (⌘K) opens
-  one. Its query logic is `cards/search.ts`.
+- `searchView(opts?: { q? })` and `gridView()` over the search —
+  "Search", one card (`cards/GridCard.ce.vue`) with two views of one
+  query, picked by a switch beside the search box: **List and
+  preview** (`cards/SearchList.ce.vue`: the results as a list with the
+  typed words marked, and the picked result drawn in place by
+  `documentView` in a shadow root of its own) and **Table** (the grid
+  below). `searchView` opens on the list, `gridView` on the table, and
+  the gallery lists the card once. A view stays mounted once shown, so
+  switching keeps each one's selection and scroll; a hidden view asks
+  nothing and catches up when shown. The query string is the card's
+  only record of a search (`cards/search.ts`): the chips for the
+  sources the results come from, with their counts
+  (`/search/groups?by=source_ref`), write and read its `source_id:`
+  filter, and "Meaning only" moves its free text into a
+  `qmd_vsearch:` predicate and back, so a filter that was clicked is
+  the one that could have been typed. The toolbar's search box (⌘K)
+  opens one on its list.
 
 - `gridView(opts?: { q?, columns?, name?, url?, placeholder? })` —
   search bar + a SlickGrid over `/applet/unified_index/search`, or over

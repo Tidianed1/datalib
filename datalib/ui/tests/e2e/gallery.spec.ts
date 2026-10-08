@@ -44,18 +44,21 @@ test.describe("new-card gallery (outside edit mode)", () => {
     await expect(cardOf(page, "logView()")).toHaveCount(1);
   });
 
-  test("gallery's Unified Search entry becomes a second grid", async ({ page }) => {
+  test("gallery's Search entry becomes a second search, on its list", async ({ page }) => {
     await page.goto(GRID);
     await page.locator(".ct-main .ct-add").click();
-    // By its exact title: "Unified Search (new)" is the Search card.
     await page
-      .locator(".gv-row", { has: page.locator(".gv-title", { hasText: /^Unified Search$/ }) })
+      .locator(".gv-row", { has: page.locator(".gv-title", { hasText: /^Search$/ }) })
       .click();
-    // Two grid cards now: the default one and the freshly picked one.
-    await expect(page.locator(".grid-box .slickgrid-container")).toHaveCount(2, {
+    const picked = cardOf(page, "searchView()");
+    await expect(picked).toHaveCount(1);
+    await expect(picked.getByRole("button", { name: "List and preview" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await expect(picked.getByRole("list", { name: "Results" }).locator("li").first()).toBeVisible({
       timeout: 10_000,
     });
-    await expect(cardOf(page, "gridView()")).toHaveCount(2);
   });
 
   test("the gallery's Dashboard makes the card the Dashboard composite", async ({ page }) => {
