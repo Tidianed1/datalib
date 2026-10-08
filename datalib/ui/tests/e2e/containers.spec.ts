@@ -108,7 +108,10 @@ test("a tab is pinned from its menu and unpinned by its pin", async ({ page }) =
   await expect(pinned.locator(".ct-tab-label")).toHaveText(["Dashboard", "Sources", /./]);
   await expect(page.locator(".ct-tabs-open .ct-tab-label")).toHaveText(["Search"]);
   // Unpinned and closed, Search stays gone: the defaults are not put back.
-  await page.locator(".ct-tabs-open .ct-tab").getByTitle("close").click();
+  // A tab's close shows once the pointer is on its row.
+  const search = page.locator(".ct-tabs-open .ct-tab");
+  await search.hover();
+  await search.getByTitle("close").click();
   await expect.poll(() => savedTabCount(page), { timeout: 10_000 }).toBe(3);
   await page.reload();
   await expect(tabs(page)).toHaveCount(3);
