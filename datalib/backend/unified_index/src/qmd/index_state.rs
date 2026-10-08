@@ -80,6 +80,10 @@ impl QmdIndexReader {
         Self { pool }
     }
 
+    pub async fn close(self) {
+        self.pool.close().await;
+    }
+
     /// Look up the index state of each of `hashes`. Hashes with no
     /// active `documents` row are absent from the returned map; the
     /// caller reports those as not-indexed.
@@ -129,6 +133,16 @@ impl QmdIndexReader {
             }
         }
         Ok(out)
+    }
+
+    /// Every collection the index holds now, by name. A search names them
+    /// all rather than leave the choice to `qmd mcp`, which would search
+    /// only the ones it read when it started
+    /// (`docs/dev/qmd_behaviour.md`, "How a running `qmd mcp` behaves").
+    pub async fn collections(&self) -> Result<Vec<String>, sqlx::Error> {
+        sqlx::query_scalar("SELECT name FROM store_collections ORDER BY name")
+            .fetch_all(&self.pool)
+            .await
     }
 
     pub async fn summary(&self) -> Result<QmdIndexSummary, sqlx::Error> {
@@ -331,6 +345,10 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query("CREATE TABLE store_collections (name TEXT PRIMARY KEY)")
+            .execute(&pool)
+            .await
+            .unwrap();
         pool
     }
 
@@ -472,6 +490,25 @@ mod tests {
         assert!(st["h_slack"].embedded);
         assert!(st["h_claude"].embedded);
         assert_eq!(r.summary().await.unwrap().documents, 2);
+    }
+
+    #[tokio::test]
+    async fn the_collections_are_the_registry_as_it_is_now() {
+        let td = tempfile::tempdir().unwrap();
+        let pool = qmd_shaped_db(td.path()).await;
+        let r = QmdIndexReader::from_pool(pool.clone());
+        assert_eq!(r.collections().await.unwrap(), Vec::<String>::new());
+        for name in ["slack_imbue", "claude_personal"] {
+            sqlx::query("INSERT INTO store_collections (name) VALUES (?)")
+                .bind(name)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            r.collections().await.unwrap(),
+            ["claude_personal", "slack_imbue"]
+        );
     }
 
     /// Two paths with identical content share one hash. Both are

@@ -226,13 +226,14 @@ the facts are about qmd and not about our daemon.
    real root, a `lex` query took 0.07–0.23 s and a hybrid one
    5.8–10.6 s on a fresh server.
 
-What follows for our side: `QmdDaemon` restarts `qmd mcp` whenever
-`index.sqlite`'s mtime differs from the one it started against. Fact 1
-says it need not restart for new rows. Fact 3 says it must restart for
-a new collection, unless every query names its collections, and fact 2
-says a restart it causes itself can move the mtime once more. The
-mtime moves on every embed batch, so during a long embed nearly every
-search reloads the model.
+What follows for our side. By fact 3, the applet names the collections
+on every query: an unscoped search names every collection
+`store_collections` holds now (`every_collection` in
+`applets/src/unified_index/mod.rs`). Then by fact 1 a write into the
+index needs no new `qmd mcp`, so `QmdDaemon` starts another only when
+`index.sqlite` is a different file than the one its child opened (its
+device and inode), not when its mtime moves, which every keyword and
+embed batch does.
 
 ## What the shipped steps do with these
 
