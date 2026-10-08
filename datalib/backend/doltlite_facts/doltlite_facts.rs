@@ -1014,7 +1014,6 @@ mod drafts {
         assert_eq!(name_of(&mut m, "r").await.as_deref(), Some("Number One"));
     }
 
-    /// The save: the draft's value wins where both sides changed a cell.
     #[tokio::test]
     async fn inside_a_transaction_a_conflict_resolves_as_theirs_and_commits() {
         let (s, _) = store_with_draft().await;
@@ -1133,6 +1132,173 @@ mod drafts {
         assert_eq!(
             texts(&mut m, "SELECT name FROM dolt_branches").await,
             ["main"]
+        );
+    }
+    /// The draft renames Riker and commits; `main` renames him too and
+    /// changes his note, so the row conflicts on `name` alone.
+    async fn a_conflict_beside_a_clean_change(s: &Store) {
+        let mut d = on_draft(s).await;
+        ok(&mut d, "UPDATE p SET name = 'Will Riker' WHERE id = 'r'").await;
+        commit(&mut d, "rename").await;
+        d.close().await.unwrap();
+        let mut m = s.rw().await;
+        ok(
+            &mut m,
+            "UPDATE p SET name = 'Number One', note = 'first officer' WHERE id = 'r'",
+        )
+        .await;
+        commit(&mut m, "edit on main").await;
+        m.close().await.unwrap();
+    }
+
+    async fn riker(c: &mut SqliteConnection) -> (String, String) {
+        sqlx::query_as("SELECT name, note FROM p WHERE id = 'r'")
+            .fetch_one(c)
+            .await
+            .unwrap()
+    }
+
+    /// Guards a save that resolves with `dolt_conflicts_resolve`: it would
+    /// drop what `main` changed in the conflicting row's other cells.
+    #[tokio::test]
+    async fn resolving_as_theirs_takes_the_whole_row_not_the_conflicting_cell() {
+        let (s, _) = store_with_draft().await;
+        a_conflict_beside_a_clean_change(&s).await;
+        let mut m = s.rw().await;
+        ok(&mut m, "BEGIN").await;
+        err_contains(
+            exec(&mut m, "SELECT dolt_merge('draft')").await,
+            "Merge has 1 conflict(s)",
+        );
+        ok(&mut m, "SELECT dolt_conflicts_resolve('--theirs', 'p')").await;
+        assert_eq!(riker(&mut m).await, ("Will Riker".into(), "x".into()));
+    }
+
+    #[tokio::test]
+    async fn during_a_conflicted_merge_the_table_holds_ours_and_the_conflict_rows_every_side() {
+        let (s, _) = store_with_draft().await;
+        a_conflict_beside_a_clean_change(&s).await;
+        let mut m = s.rw().await;
+        ok(&mut m, "BEGIN").await;
+        err_contains(
+            exec(&mut m, "SELECT dolt_merge('draft')").await,
+            "Merge has 1 conflict(s)",
+        );
+        assert_eq!(
+            riker(&mut m).await,
+            ("Number One".into(), "first officer".into())
+        );
+        let sides: (String, String, String, String, String, String) = sqlx::query_as(
+            "SELECT base_name, base_note, our_name, our_note, their_name, their_note
+               FROM dolt_conflicts_p",
+        )
+        .fetch_one(&mut m)
+        .await
+        .unwrap();
+        assert_eq!(
+            sides,
+            (
+                "Riker".into(),
+                "x".into(),
+                "Number One".into(),
+                "first officer".into(),
+                "Will Riker".into(),
+                "x".into()
+            )
+        );
+    }
+
+    /// The save: write the draft's side of each cell the draft changed,
+    /// then clear the conflict rows. Both merges, squash too.
+    #[tokio::test]
+    async fn writing_the_cells_then_deleting_the_conflict_rows_commits_both_changes() {
+        for (how, parents) in [("'draft'", 2), ("'--squash', 'draft'", 1)] {
+            let (s, _) = store_with_draft().await;
+            a_conflict_beside_a_clean_change(&s).await;
+            let mut m = s.rw().await;
+            ok(&mut m, "BEGIN").await;
+            err_contains(
+                exec(&mut m, &format!("SELECT dolt_merge({how})")).await,
+                "Merge has 1 conflict(s)",
+            );
+            ok(
+                &mut m,
+                "UPDATE p SET name = (SELECT their_name FROM dolt_conflicts_p
+                                       WHERE our_id = 'r')
+                  WHERE id = 'r'",
+            )
+            .await;
+            ok(&mut m, "DELETE FROM dolt_conflicts_p").await;
+            assert_eq!(int(&mut m, "SELECT COUNT(*) FROM dolt_conflicts").await, 0);
+            commit(&mut m, "save").await;
+
+            assert_eq!(
+                riker(&mut m).await,
+                ("Will Riker".into(), "first officer".into()),
+                "{how}"
+            );
+            assert_eq!(parents_of_head(&mut m).await, parents, "{how}");
+            assert_eq!(
+                int(&mut m, "SELECT COUNT(*) FROM dolt_status").await,
+                0,
+                "{how}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_draft_connection_reads_main_and_both_diffs_without_touching_its_rows() {
+        let (s, cut) = store_with_draft().await;
+        both_edit_riker(&s, "note", "first officer").await;
+        let mut d = on_draft(&s).await;
+        ok(&mut d, "UPDATE p SET note = 'dirty' WHERE id = 'w'").await;
+
+        let at_main: Vec<(String, String)> =
+            sqlx::query_as("SELECT id, note FROM dolt_at_p('main') ORDER BY id")
+                .fetch_all(&mut d)
+                .await
+                .unwrap();
+        assert_eq!(
+            at_main,
+            [
+                ("r".to_string(), "first officer".to_string()),
+                ("w".to_string(), "y".to_string())
+            ]
+        );
+        assert_eq!(
+            text(&mut d, "SELECT dolt_merge_base('draft', 'main')").await,
+            Some(cut.clone())
+        );
+        let theirs: Vec<(String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT to_id, to_note FROM dolt_diff_p('{cut}', 'main')"
+        )))
+        .fetch_all(&mut d)
+        .await
+        .unwrap();
+        assert_eq!(theirs, [("r".to_string(), "first officer".to_string())]);
+        let mine: Vec<(String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT to_id, to_name FROM dolt_diff_p('{cut}', 'WORKING') ORDER BY to_id"
+        )))
+        .fetch_all(&mut d)
+        .await
+        .unwrap();
+        assert_eq!(
+            mine,
+            [
+                ("r".to_string(), "Will Riker".to_string()),
+                ("w".to_string(), "Worf".to_string())
+            ]
+        );
+        assert_eq!(
+            text(&mut d, "SELECT note FROM p WHERE id = 'w'")
+                .await
+                .as_deref(),
+            Some("dirty"),
+            "still the draft's uncommitted row"
+        );
+        assert_eq!(
+            text(&mut d, "SELECT active_branch()").await.as_deref(),
+            Some("draft")
         );
     }
 

@@ -264,7 +264,7 @@ the same entries and bind each id their own way.
   today. The handler ignores `ev.detail > 1` so a double-click does not
   also open it.
 - **Double-click opens the entity's own card**: a person's contact
-  card once [`contacts.md`](contacts.md) phase 4 lands, and until then
+  card once [`contact_editing.md`](contact_editing.md) lands, and until then
   a search filtered to the handle; a group's row on Sources; a step's
   log. In a grid cell it stops propagation, so it does not also open
   the row.
