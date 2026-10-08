@@ -56,9 +56,10 @@ above it:
    the contacts app, the one store under a data root that nothing can
    rebuild. Its answer ranks above every source's.
 
-What is still to build: [`plans/contacts.md`](plans/contacts.md)
-(managing contacts, `row_handles`, contacts in search, numbers without
-a country code). [`plans/chips.md`](plans/chips.md) covers chips for
+What is still to build: [`plans/contact_linking.md`](plans/contact_linking.md)
+(merge, groups, `row_handles`, contacts in search, numbers without a
+country code) and [`plans/contact_editing.md`](plans/contact_editing.md)
+(the contact card: its fields, drafts, saving, undo, the export). [`plans/chips.md`](plans/chips.md) covers chips for
 things that are not people: groups and steps are built, system events
 are not. This page says what the tree does.
 
@@ -141,7 +142,7 @@ without one, and a phone's SMS backup keeps whatever the phone was
 given. A card whose numbers
 are all national reaches nobody through them. The fix is a default
 region that the render applies to such a number, planned in
-[`plans/contacts.md`](plans/contacts.md) §"Handle kinds not made yet".
+[`plans/contact_linking.md`](plans/contact_linking.md) §"Handle kinds not made yet".
 
 ### Changing the rules
 
@@ -418,7 +419,7 @@ covers part of it:
   anyone else whose name contains it.
 
 **The planned join happens in the index, at query time**
-([`plans/contacts.md`](plans/contacts.md) §"Search"):
+([`plans/contact_linking.md`](plans/contact_linking.md) §"Search"):
 
 1. A snapshot step renders each contact as an ordinary document
    listing its handles.
@@ -451,7 +452,7 @@ every document naming the handle and send each back through qmd.
 `row_handles` would name exactly those documents, so the cost can stay
 proportional to the link. Nothing in the tree rules it out: chips draw
 from the live answer whatever the link text says.
-[`plans/contacts.md`](plans/contacts.md) §"Option: the contact's name
+[`plans/contact_linking.md`](plans/contact_linking.md) §"Option: the contact's name
 in the markdown" keeps it open.
 
 ## What renders again when
@@ -499,5 +500,6 @@ handle for a number without its country code, a handle that stopped
 working in some apps but not others, mentions outside Slack
 (an email's @-mention or +-mention is drawn as a chip from its
 `mailto:` link but recorded nowhere), and a handle for a Beeper
-(Matrix) user: [`plans/contacts.md`](plans/contacts.md) §"Order of
-work".
+(Matrix) user: [`plans/contact_linking.md`](plans/contact_linking.md)
+and [`plans/contact_editing.md`](plans/contact_editing.md), §"Order of
+work" in each.

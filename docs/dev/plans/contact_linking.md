@@ -1,4 +1,4 @@
-# Contacts: what is still to build
+# Contact linking: what is still to build
 
 *Proposal (2026-10-01). Phases 1 to 3 are built, and what the tree
 does is [`../contacts.md`](../contacts.md): handles, each source's
@@ -9,9 +9,14 @@ it.*
 
 The same person shows up in a mirror under many identifiers. Handles
 and the contacts app (built) let a person say which are one person and
-see it on every chip. What remains is managing contacts as records,
-answering "everything about this person" in search, and the identifiers
-no source has a handle for yet.
+see it on every chip. What remains is the rest of linking (merge,
+groups, adopting what a source already ties together, the triage
+grid), answering "everything about this person" in search, and the
+identifiers no source has a handle for yet.
+
+Editing what a contact *holds* — the contact card, its fields, drafts,
+saving, undo, the export, writing back to CardDAV — is the other plan,
+[`contact_editing.md`](contact_editing.md).
 
 ## Words
 
@@ -86,7 +91,7 @@ Measure it first on a copy of a real root — counts and sizes only —
 against a budget: the table under 5% of the index, and `grid_index`'s
 incremental pass under 10% slower.
 
-## Managing contacts
+## Linking
 
 ### The store, what it still needs
 
@@ -100,14 +105,6 @@ contacts app"); these parts of them are not used yet:
   group contact whose members are those people; `members` holds them.
 - **`linked_how`** gains `card` (adopted from an address-book card)
   and `suggestion` (accepted from a suggestion), beside `manual`.
-- **An export**: JSON of every table, and vCard for the people,
-  leaving out handles that stopped working, so the data is readable
-  without doltlite.
-- **Undo.** Every edit is a commit, so undo is `dolt_revert` of that
-  commit. A draft is on the branch `claude/contact-card-wip`: the
-  store's `history` and `revert`, the two routes, and a section of
-  `doltlite.md` with tests of what `dolt_revert` refuses (a later edit
-  of the same rows, a second undo, an uncommitted change).
 
 Routes still to add to the applet:
 
@@ -115,12 +112,10 @@ Routes still to add to the applet:
 |---|---|
 | `POST merge` | merge two contacts |
 | `POST members` | add or remove a group member |
-| `GET contact/{id}/history`, `POST revert` | a contact's commits; undo one |
-| `GET export` | the JSON and vCard export |
 | `GET search?q=` | also unlinked address-book cards, for the typeahead |
 | `POST contacts` | also adopting every handle on an address-book card |
 
-### Editing
+### Where links are made
 
 Three surfaces, in the order a person meets them. The first is built
 in part; the popover links, creates, unlinks and marks a handle as no
@@ -131,12 +126,12 @@ longer working.
    contact and adopts every handle on it), and, when a source ties the
    handle to other handles (an address-book card, a Slack profile's
    email), offers to link those too. One gesture, no dialog.
-2. **The contact card**, opened from a resolved chip (the chip's
-   double-click, `chips.md` §"Clicks") — a card, not a modal
-   (`cards.md`). Handles grouped by kind, each with unlink; those that
-   stopped working after the working ones, struck through; groups it
-   belongs to, or members if it is a group; "Merge with…"; its
-   documents (a `contact:` search); its history, each entry with undo.
+2. **The contact card** ([`contact_editing.md`](contact_editing.md)).
+   For linking it shows the handles grouped by kind, each with unlink;
+   those that stopped working after the working ones, struck through;
+   the groups it belongs to, or its members if it is a group; and
+   "Merge with…". A link made there is an operation like the
+   popover's, not part of the card's draft.
 3. **A triage grid** of unresolved handles ranked by how often
    `row_handles` names them. Linking the top fifty correspondents
    covers most of a mailbox, and this is where that happens.
@@ -251,8 +246,9 @@ Phases 1 to 3 (handles end to end, the store and its applet and chips,
 `NormalizedContact` and the source contacts) are built, but for the two
 pieces of phase 1 above: `row_handles`, and mentions outside Slack.
 
-4. **Managing contacts.** The contact card, merge, undo, groups and
-   members, the triage grid, adopting a source's handles, the export.
+4. **Linking.** Merge, groups and members, the triage grid, adopting
+   a source's handles. The contact card, undo and the export are
+   [`contact_editing.md`](contact_editing.md)'s.
 5. **Contacts in search.** The snapshot step, `live_view`, the
    `contact:` filter.
 6. **Later.** Suggestions, on a branch of the store, so nothing

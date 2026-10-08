@@ -6,7 +6,7 @@
 //! Its one writer is the `datalib_contacts` applet. Nothing in the core
 //! opens it; the core knows handles, never contacts.
 //! `docs/dev/contacts.md` is the reference; what is still to build is
-//! `docs/dev/plans/contacts.md`.
+//! `docs/dev/plans/contact_linking.md` and `contact_editing.md`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
