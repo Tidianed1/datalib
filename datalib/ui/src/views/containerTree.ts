@@ -207,12 +207,17 @@ export function tabRows(box: BoxNode): { node: TreeNode; depth: number }[] {
   return out;
 }
 
-// The pinned tab that already shows `source`, when a card opened from
-// `fromId` would get a tab of its own: the open shows that tab instead
-// of making a second one.
-export function pinnedShowing(root: TreeNode, fromId: string, source: string): string | null {
-  if (root.kind !== "box" || landing(root, fromId)?.boxId !== root.id) return null;
-  const tab = root.children.find((c) => c.pinned && c.kind === "card" && c.source === source);
+// The tab that already shows `source`, when a card opened from `fromId`
+// would get a tab of its own: a pinned tab, else a tab opened from the
+// opener's own tab. The open shows that tab instead of making a second
+// one.
+export function tabShowing(root: TreeNode, fromId: string, source: string): string | null {
+  const land = landing(root, fromId);
+  if (root.kind !== "box" || land?.boxId !== root.id) return null;
+  const shows = (c: TreeNode) => c.kind === "card" && c.source === source;
+  const tab =
+    root.children.find((c) => c.pinned && shows(c)) ??
+    root.children.find((c) => c.openedBy === land.branchId && shows(c));
   return tab?.id ?? null;
 }
 

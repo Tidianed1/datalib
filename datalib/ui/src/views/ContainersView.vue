@@ -52,7 +52,6 @@ import {
   openFrom,
   parentOf,
   parseTree,
-  pinnedShowing,
   pinnedTabs,
   predatesPins,
   remove,
@@ -67,6 +66,7 @@ import {
   setSolidified,
   setTemplate,
   tabRows,
+  tabShowing,
   unwrap,
   withPins,
   wrap,
@@ -296,10 +296,10 @@ function ctxFor(card: CardNode): CardCtx {
     const cardId = card.id;
     const host: HostCommands = {
       openCards: (...sources) => {
-        const pinned = sources.length === 1 ? pinnedShowing(root.value, cardId, sources[0]) : null;
-        if (pinned !== null) {
-          select(pinned);
-          return [pinned];
+        const shown = sources.length === 1 ? tabShowing(root.value, cardId, sources[0]) : null;
+        if (shown !== null) {
+          select(shown);
+          return [shown];
         }
         const nodes = sources.map((s) => makeCard(newCardId(), s));
         update(openFrom(root.value, cardId, nodes));

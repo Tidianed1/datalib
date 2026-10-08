@@ -9,7 +9,6 @@ import {
   openFrom,
   move,
   parseTree,
-  pinnedShowing,
   pinnedTabs,
   predatesPins,
   remove,
@@ -21,6 +20,7 @@ import {
   setCard,
   setSolidified,
   tabRows,
+  tabShowing,
   unwrap,
   withPins,
   wrap,
@@ -285,12 +285,32 @@ describe("pinned tabs", () => {
       "src",
       true,
     );
-    expect(pinnedShowing(root, "d1", "sourcesView()")).toBe("src");
-    expect(pinnedShowing(root, "d1", 'sourcesView({"add":true})')).toBeNull();
+    expect(tabShowing(root, "d1", "sourcesView()")).toBe("src");
+    expect(tabShowing(root, "d1", 'sourcesView({"add":true})')).toBeNull();
     // Inside an unsolidified container the card lands beside its opener.
-    expect(pinnedShowing(root, "s1", "sourcesView()")).toBeNull();
+    expect(tabShowing(root, "s1", "sourcesView()")).toBeNull();
     // An unpinned tab is not a destination.
-    expect(pinnedShowing(setPinned(root, "src", false), "d1", "sourcesView()")).toBeNull();
+    expect(tabShowing(setPinned(root, "src", false), "d1", "sourcesView()")).toBeNull();
+  });
+
+  it("an open of a card a tab opened from the same tab already shows goes to that tab", () => {
+    // "sandbox" solidified, so its cards open tabs under it: "a" from s1.
+    let root = openFrom(setSolidified(fixture(), "sandbox", true), "s1", [
+      makeCard("a", "x()"),
+    ]) as BoxNode;
+    expect(tabShowing(root, "s1", "x()")).toBe("a");
+    // From any card of the same tab, and only for the same source.
+    expect(tabShowing(root, "s3", "x()")).toBe("a");
+    expect(tabShowing(root, "s1", "y()")).toBeNull();
+    // Not a tab opened from another tab, nor one further down.
+    expect(tabShowing(root, "d1", "x()")).toBeNull();
+    root = openFrom(root, "a", [makeCard("b", "y()")]) as BoxNode;
+    expect(tabShowing(root, "s1", "y()")).toBeNull();
+    expect(tabShowing(root, "a", "y()")).toBe("b");
+    // A pinned tab that shows the card comes first.
+    const src = makeCard("src", "x()");
+    const pinned = setPinned({ ...root, children: [...root.children, src] }, "src", true);
+    expect(tabShowing(pinned, "s1", "x()")).toBe("src");
   });
 
   it("withPins pins the tab that already shows a pin, and adds the ones missing", () => {

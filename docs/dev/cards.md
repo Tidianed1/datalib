@@ -328,9 +328,17 @@ things follow from a tab being pinned:
 - It has no Close: unpin it first.
 - An open that would make a new tab for a card a pinned tab already
   shows — the same source, exactly — shows that tab instead
-  (`pinnedShowing`). The Dashboard's "Open Sources" goes to the pinned
+  (`tabShowing`). The Dashboard's "Open Sources" goes to the pinned
   Sources tab; `sourcesView({"add":true})` is another source and gets a
   tab.
+
+**An open that shows a tab already there.** An open of one card that
+would make a new tab shows an existing tab instead when that tab is a
+card of exactly the same source and is either pinned or was opened from
+the opener's own tab (`tabShowing`); a pinned one is preferred. So
+opening the same document twice from a search shows the one tab. A tab
+opened from a pinned tab has no opener, so opening the same card from a
+pinned tab twice makes two tabs.
 
 A main window with no kept tree starts with three pinned tabs
 (`defaultPins` in `ContainersView.vue`): the Dashboard, Search
