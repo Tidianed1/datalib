@@ -1,8 +1,9 @@
 <script setup lang="ts">
 // Containers layout host: a tree of containers, each laying out its own
 // children (containerTree.ts holds the rules). The outermost container
-// is always tabs, listed down the sidebar as a tree; what is inside each
-// tab is drawn by the recursive ContainerNode. The tree is kept in the
+// is always tabs, listed down the sidebar: the pinned ones, then the
+// rest as a tree; what is inside each tab is drawn by the recursive
+// ContainerNode. The tree is kept in the
 // library (`/api/ui/state/layout`), so it survives a restart.
 //
 // The cards themselves live in one flat pool here and are teleported
@@ -51,6 +52,8 @@ import {
   openFrom,
   parentOf,
   parseTree,
+  pinnedTabs,
+  predatesPins,
   remove,
   rename,
   resetTo,
@@ -59,10 +62,13 @@ import {
   setCard,
   setDirection,
   setLayout as setBoxLayout,
+  setPinned,
   setSolidified,
   setTemplate,
   tabRows,
+  tabShowing,
   unwrap,
+  withPins,
   wrap,
   type BoxNode,
   type CardNode,
@@ -97,6 +103,15 @@ const SAVE_DELAY_MS = 400;
 
 function dashboard(): TreeNode {
   return instantiate(BUILTIN_COMPOSITES.Dashboard, newCardId);
+}
+
+// The tabs a main window has pinned until the person says otherwise.
+function defaultPins(): TreeNode[] {
+  return [
+    dashboard(),
+    { ...makeCard(newCardId(), "searchView()"), name: "Search" },
+    { ...makeCard(newCardId(), "sourcesView()"), name: "Sources" },
+  ].map((tab) => ({ ...tab, pinned: true }));
 }
 
 // Closing the last tab brings the Dashboard back: the outermost
@@ -196,17 +211,18 @@ function storedItem(storage: () => Storage, key: string): string | null {
   }
 }
 
-async function readKept(): Promise<BoxNode | null> {
+// The tree as it was stored, unparsed.
+async function readKept(): Promise<unknown> {
   if (!keeps) {
     const text = storedItem(() => sessionStorage, SESSION_KEY);
     try {
-      return text === null ? null : parseTree(JSON.parse(text) as unknown);
+      return text === null ? null : (JSON.parse(text) as unknown);
     } catch {
       return null;
     }
   }
   try {
-    return parseTree(await fetchUiState(STATE_NAME));
+    return await fetchUiState(STATE_NAME);
   } catch (e) {
     console.warn("could not read the kept layout", e);
     pushToast("Could not read the saved layout from the library; starting afresh.");
@@ -218,10 +234,12 @@ async function start() {
   const mainWindow = await isMainWindow();
   keeps = mainWindow && storedItem(() => localStorage, UNSAVED_KEY) !== "1";
   void loadComposites();
-  const kept = await readKept();
+  const stored = await readKept();
+  const kept = parseTree(stored);
   // A second window starts with nothing but the cards its URL names.
   const fromUrl = routeNode();
-  let tree = kept ?? makeBox(newCardId(), "tabs", mainWindow ? [dashboard()] : []);
+  let tree = kept ?? makeBox(newCardId(), "tabs", mainWindow ? defaultPins() : []);
+  if (kept && mainWindow && predatesPins(stored)) tree = withPins(kept, defaultPins());
   if (fromUrl) tree = addChild(tree, tree.id, fromUrl) as BoxNode;
   // The outermost container is tabs and never solidified, whatever was stored.
   root.value = withATab({ ...tree, layout: "tabs", solidified: false });
@@ -278,6 +296,11 @@ function ctxFor(card: CardNode): CardCtx {
     const cardId = card.id;
     const host: HostCommands = {
       openCards: (...sources) => {
+        const shown = sources.length === 1 ? tabShowing(root.value, cardId, sources[0]) : null;
+        if (shown !== null) {
+          select(shown);
+          return [shown];
+        }
         const nodes = sources.map((s) => makeCard(newCardId(), s));
         update(openFrom(root.value, cardId, nodes));
         return nodes.map((n) => n.id);
@@ -332,6 +355,31 @@ function select(id: string) {
 
 function close(id: string) {
   update(remove(root.value, id));
+}
+
+// A tab of the outermost container: the only kind that can be pinned.
+function isTab(id: string): boolean {
+  return root.value.children.some((c) => c.id === id);
+}
+
+function setPin(id: string, pinned: boolean) {
+  update(setPinned(root.value, id, pinned));
+}
+
+// Pin or unpin, for a tab; and Close, which a pinned tab does not have.
+function tabActions(node: TreeNode): PanelAction[] {
+  const pin: PanelAction = {
+    label: node.pinned ? "Unpin" : "Pin",
+    icon: PANEL_ICONS.pin,
+    run: () => setPin(node.id, !node.pinned),
+  };
+  const shut: PanelAction = {
+    label: "Close",
+    icon: PANEL_ICONS.close,
+    danger: true,
+    run: () => close(node.id),
+  };
+  return [...(isTab(node.id) ? [pin] : []), ...(node.pinned ? [] : [shut])];
 }
 
 function commitSource(card: CardNode, e: Event) {
@@ -542,7 +590,7 @@ function boxPanel(box: BoxNode): Panel {
                 },
               ]
             : []),
-          { label: "Close", icon: PANEL_ICONS.close, danger: true, run: () => close(box.id) },
+          ...tabActions(box),
         ],
       },
     ],
@@ -560,7 +608,7 @@ function cardPanel(card: CardNode): Panel {
         kind: "rows",
         actions: [
           { label: "Rename…", icon: PANEL_ICONS.rename, run: () => void renameNode(card) },
-          { label: "Close", icon: PANEL_ICONS.close, danger: true, run: () => close(card.id) },
+          ...tabActions(card),
         ],
       },
     ],
@@ -609,7 +657,16 @@ function startResize(id: string, axis: "x" | "y", ev: PointerEvent) {
 
 // ---- what the page shows ----
 
-const rows = computed(() => tabRows(root.value));
+// The sidebar's two lists: the pinned tabs, which stay put while the
+// list below them scrolls, and the rest as a tree.
+const pinnedRows = computed(() => pinnedTabs(root.value).map((node) => ({ node, depth: 0 })));
+const openRows = computed(() => tabRows(root.value));
+const lists = computed(() => [
+  ...(pinnedRows.value.length
+    ? [{ key: "pinned", label: "pinned tabs", rows: pinnedRows.value }]
+    : []),
+  { key: "open", label: "open tabs", rows: openRows.value },
+]);
 const selectedTab = computed(() => root.value.children.find((c) => c.id === root.value.selected));
 
 // The tabs, in any tabs container, shown at least once. A shown tab is
@@ -658,13 +715,20 @@ provide(CONTAINERS_API, api);
 
 <template>
   <div class="ct-root">
-    <nav class="ct-sidebar" aria-label="open tabs">
-      <ul class="ct-tabs" role="tree">
+    <nav class="ct-sidebar" aria-label="tabs">
+      <ul
+        v-for="list in lists"
+        :key="list.key"
+        class="ct-tabs"
+        :class="`ct-tabs-${list.key}`"
+        role="tree"
+        :aria-label="list.label"
+      >
         <li
-          v-for="row in rows"
+          v-for="row in list.rows"
           :key="row.node.id"
           class="ct-tab"
-          :class="{ 'is-selected': row.node.id === root.selected }"
+          :class="{ 'is-selected': row.node.id === root.selected, 'is-pinned': row.node.pinned }"
           role="treeitem"
           :aria-selected="row.node.id === root.selected"
           :data-node-id="row.node.id"
@@ -672,7 +736,9 @@ provide(CONTAINERS_API, api);
           :title="titleOf(row.node)"
           @click="select(row.node.id)"
           @contextmenu="openPanel($event, panelFor(row.node.id))"
-          @auxclick.prevent="(e: MouseEvent) => e.button === 1 && close(row.node.id)"
+          @auxclick.prevent="
+            (e: MouseEvent) => e.button === 1 && !row.node.pinned && close(row.node.id)
+          "
         >
           <CardIcon v-if="row.node.kind === 'card'" class="ct-tab-icon" :source="row.node.source" />
           <svg v-else class="ct-tab-icon ct-tab-glyph" viewBox="0 0 24 24" aria-hidden="true">
@@ -688,9 +754,21 @@ provide(CONTAINERS_API, api);
           >
             ⋯
           </button>
-          <button class="ct-tab-action" title="close" @click.stop="close(row.node.id)">✕</button>
+          <button
+            v-if="row.node.pinned"
+            class="ct-tab-action ct-tab-unpin"
+            title="unpin"
+            @click.stop="setPin(row.node.id, false)"
+          >
+            <svg class="ct-tab-glyph" viewBox="0 0 24 24" aria-hidden="true">
+              <path :d="PANEL_ICONS.pin" />
+            </svg>
+          </button>
+          <button v-else class="ct-tab-action" title="close" @click.stop="close(row.node.id)">
+            ✕
+          </button>
         </li>
-        <li class="ct-new-row" role="none">
+        <li v-if="list.key === 'open'" class="ct-new-row" role="none">
           <button
             class="ct-new"
             title="a new tab, with a card that asks what it should show"
@@ -771,6 +849,11 @@ provide(CONTAINERS_API, api);
   flex-direction: column;
   gap: 3px;
 }
+.ct-tabs-pinned {
+  flex: 0 0 auto;
+  max-height: 50%;
+  border-bottom: 1px solid var(--datalib-border);
+}
 .ct-tab {
   display: flex;
   align-items: center;
@@ -824,6 +907,16 @@ provide(CONTAINERS_API, api);
 .ct-tab:hover .ct-tab-action,
 .ct-tab.is-selected .ct-tab-action {
   visibility: visible;
+}
+/* A pinned tab's pin shows always, as the mark that it is pinned. */
+.ct-tab-unpin {
+  visibility: visible;
+  display: flex;
+  align-items: center;
+}
+.ct-tab-unpin svg {
+  width: 12px;
+  height: 12px;
 }
 .ct-tab-action:hover {
   background: var(--datalib-hover);

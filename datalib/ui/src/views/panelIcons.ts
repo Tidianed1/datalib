@@ -12,5 +12,6 @@ export const PANEL_ICONS = {
   rename: "M4 20h4L19 9l-4-4L4 16z",
   save: "M6 3h12v18l-6-4-6 4z",
   reset: "M4 4v6h6M5 15a8 8 0 1 0 2-8.5L4 10",
+  pin: "M9 3h6l-1 6 3 3v2H7v-2l3-3zM12 14v7",
   close: "M6 6l12 12M18 6L6 18",
 } as const;
