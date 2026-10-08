@@ -624,7 +624,7 @@ const plain: Formatter<RunLogLine> = (_r, _c, value, _col, line) => ({
   addClasses: levelClass(line),
 });
 
-/// The Group and Step cells are chips (docs/dev/plans/chips.md): the name
+/// The Group and Step cells are chips (docs/dev/chips.md): the name
 /// the config gives the group or step now, its mark and its status, from
 /// `entities`. The line's level class stays on the cell.
 const groupChip: Formatter<RunLogLine> = (r, c, value, col, line, grid) =>

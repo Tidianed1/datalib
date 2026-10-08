@@ -1,5 +1,5 @@
 /* A chip: a link the app resolves, drawn as the person it names
-   (docs/dev/plans/chips.md). Shared by the document frame and the
+   (docs/dev/chips.md). Shared by the document frame and the
    grid's cells, so both draw the same chip; each includes this file
    in its own root, since neither sees the page's styles. */
 /* A handle the contacts app can name: a chip. One it cannot yet: the
@@ -59,7 +59,7 @@
 .handle-chip:hover {
   outline: 1px solid var(--datalib-border, #d8d8d8);
 }
-/* A chip is a link the app resolves (docs/dev/plans/chips.md): drawn as
+/* A chip is a link the app resolves (docs/dev/chips.md): drawn as
    the person, not as a link. */
 a.chip {
   color: inherit;
