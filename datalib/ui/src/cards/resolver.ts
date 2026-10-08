@@ -6,7 +6,9 @@
 //
 // A key is forgotten rather than updated in place: the answer after an
 // edit is whatever the server says next, and an answer to a question
-// asked before the edit is dropped when it lands.
+// asked before the edit is dropped when it lands. An answer that moves
+// on its own, like a step's status, is revalidated instead: asked again
+// with the old one still drawn, and a surface told only if it changed.
 
 export type Listener = (keys: ReadonlySet<string>) => void;
 
@@ -61,6 +63,18 @@ export class Resolver<V> {
     if (dropped.size > 0) this.notify(dropped);
   }
 
+  /** Ask again about every key that has an answer, keeping each answer
+   *  until its new one lands; subscribers hear only of keys whose answer
+   *  changed, or vanished. */
+  revalidate(): void {
+    for (const key of this.known.keys()) {
+      if (this.inflight.has(key)) continue;
+      const batch = this.batch();
+      batch.keys.push(key);
+      this.inflight.set(key, batch.done);
+    }
+  }
+
   /** Be told which keys' answers changed; returns the way to stop. */
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
@@ -97,11 +111,15 @@ export class Resolver<V> {
       const landed = new Set<string>();
       keys.forEach((key, i) => {
         if ((this.generation.get(key) ?? 0) !== asked[i]) return;
+        const before = this.known.get(key);
         const v = answers.get(key);
-        if (v !== undefined) {
-          this.known.set(key, v);
-          landed.add(key);
+        if (v === undefined) {
+          // Named nothing any more: a group removed from the config.
+          if (before !== undefined && this.known.delete(key)) landed.add(key);
+          return;
         }
+        this.known.set(key, v);
+        if (before === undefined || JSON.stringify(before) !== JSON.stringify(v)) landed.add(key);
       });
       if (landed.size > 0) this.notify(landed);
     } catch (e) {

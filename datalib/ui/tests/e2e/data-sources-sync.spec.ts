@@ -720,9 +720,19 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
     expect(succeeded).not.toBeNull();
     expect(await lastSuccessOf(page, "soured/ingest")).toBe(succeeded);
 
+    // The step's log, left open beside the table: its Group chip says the
+    // group succeeded, and follows the next sync's failure without a
+    // reload (the chip's answer is asked again on each live frame).
+    const log = shownCards(page).filter({ has: page.locator(".rl-panel") });
+    await pickRowMenu(page, row(page, "soured/ingest"), "Show step log", log);
+    const groupChip = log.locator('.rl-grid a.chip[data-entity="datalib:group/soured"]').first();
+    await expect(groupChip).toBeVisible({ timeout: 10_000 });
+    await expect(groupChip).not.toHaveClass(/entity-failed/);
+
     await untilTheSecondTurns();
     await syncBtn(page, "soured/ingest").click();
     expect(await settle(page, "soured/ingest", succeeded)).toBe("Failed");
+    await expect(groupChip).toHaveClass(/entity-failed/, { timeout: 15_000 });
     await expandGroup(page, "soured");
     const failed = await lastSyncedOf(page, "soured/ingest");
     expect(failed).not.toBe(succeeded);
