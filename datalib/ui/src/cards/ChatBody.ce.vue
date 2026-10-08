@@ -250,7 +250,7 @@ function onHandleChipClick(ev: MouseEvent) {
 }
 
 /// Double-click opens the person: the contact card once there is one
-/// (docs/dev/plans/contacts.md, phase 4); until then, everything from
+/// (docs/dev/plans/contact_editing.md); until then, everything from
 /// them, as a search.
 function onChipDblClick(ev: MouseEvent) {
   const entity = entityChipAt(ev);
