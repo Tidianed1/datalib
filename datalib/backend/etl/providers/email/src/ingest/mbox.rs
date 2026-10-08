@@ -680,7 +680,6 @@ impl Accumulator {
                 &eml_blob_id,
                 raw.to_vec(),
                 Some("message/rfc822".to_string()),
-                None,
             );
             summary.blobs_stored += 1;
         }

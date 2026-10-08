@@ -146,7 +146,7 @@ fn attach(acc: &mut CasEdgeAccumulator, cell_dir: &Path, owning: &str, file_name
     match std::fs::read(&sibling) {
         Ok(bytes) => {
             let ct = guess_content_type(&sibling);
-            acc.add_fetched(owning, file_name, bytes, ct, Some(file_name.to_string()));
+            acc.add_fetched(owning, file_name, bytes, ct);
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => acc.add_skipped(
             owning,
@@ -164,7 +164,7 @@ fn attach(acc: &mut CasEdgeAccumulator, cell_dir: &Path, owning: &str, file_name
 
 /// Returns how many blobs it stored.
 async fn flush(db: &RawDb, acc: &mut CasEdgeAccumulator) -> Result<usize> {
-    let blobs_stored = acc.bundle_mut().cas_inserts().len();
+    let blobs_stored = acc.fetched_len();
     acc.flush(db.pool(), db.cas(), |owning, ref_id, blake3| {
         GeminiAttachmentRow {
             id: GeminiAttachmentRow::pk_recipe(owning, ref_id),

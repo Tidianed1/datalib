@@ -670,18 +670,8 @@ mod tests {
         });
         upsert_email(&db, &EmailRow::from_jmap_envelope("A", &p).unwrap()).await;
         // Stash an entry in the sibling CAS directly so we can prove
-        // it survives. blake3 is fake (64-char hex of zeros) — the
-        // CHECK constraint on `cas_objects.blake3` cares about
-        // length, not value.
-        let fake_blake3 = "0".repeat(64);
-        db.cas()
-            .put_many(&[datalib_etl::blob_cas::CasInsert {
-                blake3: &fake_blake3,
-                bytes: b"raw",
-                content_type: Some("message/rfc822"),
-            }])
-            .await
-            .unwrap();
+        // it survives.
+        let stashed = db.cas().put(b"raw", Some("message/rfc822")).await.unwrap();
 
         db.delete_emails(&["E1".to_string()]).await.unwrap();
 
@@ -698,7 +688,7 @@ mod tests {
         // CAS untouched.
         let cas_bytes: Option<Vec<u8>> =
             sqlx::query_scalar("SELECT bytes FROM cas_objects WHERE blake3 = ?")
-                .bind(&fake_blake3)
+                .bind(&stashed)
                 .fetch_optional(db.cas().pool())
                 .await
                 .unwrap();

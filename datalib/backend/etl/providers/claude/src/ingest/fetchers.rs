@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use datalib_etl::blob_cas::{blake3_hex, CasEdgeRow as _, CasInsert};
+use datalib_etl::blob_cas::{CasEdgeRow as _, CasInsert};
 use datalib_etl_web::http::{latchkey_curl, HttpError, HttpRequest, HttpService};
 use datalib_etl_web::owed::{BatchError, Fetched, Fetcher, Listed, Outcome};
 use datalib_problems::Reason;
@@ -178,14 +178,15 @@ impl Fetcher<Conversation> for Conversations<'_> {
 
 // ── files ──────────────────────────────────────────────────────────────
 
-/// What one edge's fetch came to: the hash its edge gets, with the
-/// bytes behind it when this run fetched them. No hash for a file
-/// claude.ai no longer has.
-pub struct Blob {
-    blake3: Option<String>,
-    /// `None` when the CAS holds the bytes already, under another
-    /// conversation.
-    fetched: Option<(Vec<u8>, Option<String>)>,
+/// What one edge's fetch came to.
+pub enum Blob {
+    /// The CAS holds the bytes already, under another conversation, by
+    /// this hash.
+    Held(String),
+    /// Bytes this run fetched, and their type. The CAS names them.
+    Fetched(Vec<u8>, Option<String>),
+    /// A file claude.ai no longer has.
+    Missing,
 }
 
 pub(crate) struct Files<'a>(pub(crate) &'a Ctx<'a>);
@@ -206,42 +207,44 @@ impl Fetcher<Blob> for Files<'_> {
         tx: &mut Transaction<'static, Sqlite>,
         batch: &[Fetched<Blob>],
     ) -> Result<()> {
-        let inserts: Vec<CasInsert<'_>> = batch
+        let inserts: Vec<CasInsert<'_, &str>> = batch
             .iter()
             .filter_map(|f| match &f.outcome {
-                Outcome::Got(blob) | Outcome::Unusable(blob, ..) => {
-                    match (&blob.blake3, &blob.fetched) {
-                        (Some(blake3), Some((bytes, content_type))) => Some(CasInsert {
-                            blake3,
-                            bytes,
-                            content_type: content_type.as_deref(),
-                        }),
-                        _ => None,
-                    }
-                }
+                Outcome::Got(Blob::Fetched(bytes, content_type))
+                | Outcome::Unusable(Blob::Fetched(bytes, content_type), ..) => Some(CasInsert {
+                    id: f.listed.key.as_str(),
+                    bytes,
+                    content_type: content_type.as_deref(),
+                }),
                 _ => None,
             })
             .collect();
-        self.0.db.cas().put_many(&inserts).await?;
+        let stored = self.0.db.cas().put_many(inserts).await?;
         for f in batch {
-            if let Outcome::Got(blob) | Outcome::Unusable(blob, ..) = &f.outcome {
-                if let Some(blake3) = &blob.blake3 {
-                    self.0.db.store_blob(tx, &f.listed.key, blake3).await?;
+            let blake3 = match &f.outcome {
+                Outcome::Got(Blob::Held(held)) | Outcome::Unusable(Blob::Held(held), ..) => held,
+                Outcome::Got(Blob::Fetched(..)) | Outcome::Unusable(Blob::Fetched(..), ..) => {
+                    &stored[f.listed.key.as_str()]
                 }
-            }
+                _ => continue,
+            };
+            self.0.db.store_blob(tx, &f.listed.key, blake3).await?;
         }
         Ok(())
     }
 
     fn weight(&self, blob: &Blob) -> usize {
-        blob.fetched.as_ref().map_or(0, |(bytes, _)| bytes.len())
+        match blob {
+            Blob::Fetched(bytes, _) => bytes.len(),
+            Blob::Held(_) | Blob::Missing => 0,
+        }
     }
 }
 
 impl Files<'_> {
-    /// One edge's bytes, from the `preview_url` the conversation's file
-    /// object names. Bytes the CAS already holds for the file, under any
-    /// conversation, cost no request.
+    /// One edge's bytes, from where [`file_url`] says they are. Bytes the
+    /// CAS already holds for the file, under any conversation, cost no
+    /// request.
     async fn one(&self, key: &str) -> Result<Outcome<Blob>, BatchError> {
         let ctx = self.0;
         let (Some(conv_uuid), Some((_, file_uuid))) = (
@@ -257,10 +260,7 @@ impl Files<'_> {
             .map_err(BatchError::Abort)?
         {
             ctx.counts.skipped_blobs.fetch_add(1, Ordering::Relaxed);
-            return Ok(Outcome::Got(Blob {
-                blake3: Some(blake3),
-                fetched: None,
-            }));
+            return Ok(Outcome::Got(Blob::Held(blake3)));
         }
         let Some(file) = ctx
             .file_object(conv_uuid, file_uuid)
@@ -271,19 +271,28 @@ impl Files<'_> {
             // with the refetch, or will.
             return Ok(Outcome::Gone);
         };
-        let Some(path) = preview_path(&file) else {
-            return Ok(gone("the file has no preview URL".to_string()));
+        let org = ctx
+            .db
+            .org_of_conversation(conv_uuid)
+            .await
+            .map_err(BatchError::Abort)?;
+        let Some(url) = file_url(&file, org.as_deref(), file_uuid) else {
+            return Ok(gone(
+                "its conversation names no org to ask for the file".to_string(),
+            ));
         };
-        let url = if path.starts_with("http") {
-            path.to_string()
-        } else {
-            format!("{}{path}", super::CLAUDE_ORIGIN)
-        };
+        // For a response that names no type; `file_kind` ("image",
+        // "blob") is not one.
         let declared = file
-            .get("file_kind")
+            .get("mime_type")
             .and_then(Value::as_str)
-            .or_else(|| file.get("mime_type").and_then(Value::as_str))
-            .map(String::from);
+            .map(String::from)
+            .or_else(|| {
+                file.get("file_name")
+                    .and_then(Value::as_str)
+                    .and_then(|name| mime_guess::from_path(name).first_raw())
+                    .map(String::from)
+            });
         let req = HttpRequest::get(HttpService::Claude, &url)
             .latchkey(ctx.client.latchkey().clone())
             .timeout(ATTACH_FILE_TIMEOUT);
@@ -292,10 +301,7 @@ impl Files<'_> {
                 ctx.client.count(resp.duration_ms);
                 ctx.counts.new_blobs.fetch_add(1, Ordering::Relaxed);
                 let header = resp.header("content-type").map(String::from);
-                Ok(Outcome::Got(Blob {
-                    blake3: Some(blake3_hex(&resp.body)),
-                    fetched: Some((resp.body, header.or(declared))),
-                }))
+                Ok(Outcome::Got(Blob::Fetched(resp.body, header.or(declared))))
             }
             Ok(resp) if matches!(resp.status, 404 | 410) => Ok(gone(format!(
                 "HTTP {}, claude.ai no longer has it: GET {url}",
@@ -314,34 +320,67 @@ impl Files<'_> {
     }
 }
 
-/// Where a file object says its bytes are: `preview_url`, else the
-/// `document_asset.url`.
-fn preview_path(file: &Value) -> Option<&str> {
-    file.get("preview_url")
+/// Where a file's own bytes are. A document's `document_asset.url` is
+/// the upload exactly; every other file, a picture or one the sandbox
+/// made, is served whole at its org's `/contents`. The `preview_url` a
+/// picture names is a re-encoded copy, and a sandbox file names no URL.
+pub(crate) fn file_url(file: &Value, org: Option<&str>, file_uuid: &str) -> Option<String> {
+    let original = file
+        .pointer("/document_asset/url")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
-        .or_else(|| {
-            file.get("document_asset")
-                .and_then(|d| d.get("url"))
-                .and_then(Value::as_str)
-                .filter(|s| !s.is_empty())
+        .map(|path| match path.starts_with("http") {
+            true => path.to_string(),
+            false => format!("{}{path}", super::CLAUDE_ORIGIN),
+        });
+    original.or_else(|| {
+        org.map(|org| {
+            format!(
+                "{}/api/organizations/{org}/files/{file_uuid}/contents",
+                super::CLAUDE_ORIGIN
+            )
         })
+    })
 }
 
 /// Nothing to fetch: the edge is held, with a warning, and asked for
 /// again only when its conversation changes.
 fn gone(why: String) -> Outcome<Blob> {
-    Outcome::Unusable(
-        Blob {
-            blake3: None,
-            fetched: None,
-        },
-        Reason::NotFound,
-        why,
-    )
+    Outcome::Unusable(Blob::Missing, Reason::NotFound, why)
 }
 
 /// The file object with `file_uuid` among `files`.
 pub(crate) fn find_file<'a>(files: &'a [Value], file_uuid: &str) -> Option<&'a Value> {
     files.iter().find(|f| file_uuid_of(f) == Some(file_uuid))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// A file the sandbox made names no URL, and a picture's `preview_url`
+    /// is a re-encoded copy: both come whole from the org's `/contents`.
+    /// They used to be held as not found, and pictures stored as webp.
+    #[test]
+    fn a_file_comes_from_its_original() {
+        let org = Some("org-1");
+        let made = json!({"file_kind": "blob", "file_uuid": "f1", "download_source": "files-api"});
+        assert_eq!(
+            file_url(&made, org, "f1").as_deref(),
+            Some("https://claude.ai/api/organizations/org-1/files/f1/contents")
+        );
+        let picture = json!({"file_kind": "image", "preview_url": "/api/org-1/files/f2/preview"});
+        assert_eq!(
+            file_url(&picture, org, "f2").as_deref(),
+            Some("https://claude.ai/api/organizations/org-1/files/f2/contents")
+        );
+        let document = json!({"file_kind": "document",
+                              "document_asset": {"url": "/api/org-1/files/f3/document_pdf"}});
+        assert_eq!(
+            file_url(&document, org, "f3").as_deref(),
+            Some("https://claude.ai/api/org-1/files/f3/document_pdf")
+        );
+        assert_eq!(file_url(&made, None, "f1"), None);
+    }
 }

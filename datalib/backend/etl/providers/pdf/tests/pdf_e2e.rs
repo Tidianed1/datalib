@@ -789,3 +789,78 @@ async fn a_document_no_path_names_goes() -> Result<()> {
     assert_eq!(after.len(), before.len() - 1);
     Ok(())
 }
+
+/// A file rewritten under a hash the host cache still vouched for was
+/// classified from its new bytes and filed under the old bytes' hash. The
+/// document is named by the hash of what was read.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_document_the_scan_misjudged_is_named_by_what_was_read() -> Result<()> {
+    let h = Harness::on_a_copy();
+    h.scan().await?;
+    let path = h.root.join("engineering/hull_survey.pdf");
+    let old = blake3_of(&h, "engineering/hull_survey.pdf").await?;
+
+    let mut bytes = std::fs::read(&path)?;
+    bytes.extend_from_slice(b"\n");
+    std::fs::write(&path, &bytes)?;
+    let cache = FingerprintCache::open(&h.raw_dir.join("fingerprints.sqlite")).await?;
+    cache.restamp_for_test(&path).await?;
+    cache.pool().close().await;
+    // Forget the document, so the scan reads the file rather than taking
+    // the stored document for it.
+    let db = h.db().await;
+    sqlx::query("DELETE FROM pdf_documents WHERE blake3 = ?")
+        .bind(&old)
+        .execute(db.pool())
+        .await?;
+    datalib_etl::doltlite_raw::commit_run(db.pool(), "test: forget a document").await?;
+    db.close().await;
+
+    h.scan().await?;
+    let read = datalib_etl::blob_cas::blake3_hex(&bytes);
+    assert_eq!(blake3_of(&h, "engineering/hull_survey.pdf").await?, read);
+    assert!(documents(&h).await?.contains(&read));
+    Ok(())
+}
+
+/// A file changed since the download read it has no bytes left to convert
+/// under the document's hash. Its document stays, as a page saying so
+/// with a problem row, rather than vanishing or keeping a page a cold
+/// render could not produce.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_document_whose_file_changed_since_the_download_is_a_stand_in() -> Result<()> {
+    let h = Harness::on_a_copy();
+    h.scan().await?;
+    let hull = blake3_of(&h, "engineering/hull_survey.pdf").await?;
+    let path = h.root.join("engineering/hull_survey.pdf");
+    let mut bytes = std::fs::read(&path)?;
+    bytes.extend_from_slice(b"\n");
+    std::fs::write(&path, &bytes)?;
+
+    let (s, emitted) = h.render().await?;
+    assert_eq!(
+        s.changed, 1,
+        "converted={} failed={}",
+        s.converted, s.failed
+    );
+    assert_eq!(s.failed, 0);
+    let doc = emitted
+        .iter()
+        .find(|d| d.bucket_key.as_deref() == Some(hull.as_str()))
+        .expect("the document is still emitted");
+    assert_eq!(doc.rows.len(), 1, "its document row, and no pages");
+    assert_eq!(doc.problems.len(), 1);
+    assert!(
+        doc.problems[0]
+            .sample
+            .starts_with("engineering/hull_survey.pdf: "),
+        "{}",
+        doc.problems[0].sample
+    );
+    let page = std::fs::read_to_string(&doc.md_path)?;
+    assert!(
+        page.contains("has changed since the last sync read it"),
+        "{page}"
+    );
+    Ok(())
+}

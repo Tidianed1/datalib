@@ -351,9 +351,9 @@ and identifies exactly two new items.
 ## What the reconcile does not delete
 
 A path the scan did not read is not a path that is gone. A cloud
-placeholder (above) and a file over `max_bytes` are found by the walk
-and not read; both are in the scan's `present_unread`, and their rows
-stay. A walk that reported an error deletes nothing at all, because an
+placeholder (above), a file over `max_bytes` and a file that will not
+open are found by the walk and not read; all are in the scan's
+`present_unread`, and their rows stay. A walk that reported an error deletes nothing at all, because an
 unreadable folder's files look exactly like deleted ones; the error is
 the source's `listing:files` problem. `a_path_the_scan_passed_over_keeps_its_row`
 in `tests/media_e2e.rs` covers all three, the placeholder as a sparse
@@ -384,12 +384,15 @@ Two things follow:
 The scan goes on, and what it could not do is a `problems` row:
 
 - **An entry the walk could not read** (a folder it may not list, a
-  file that would not hash, a dangling link) means a path the walk did
+  dangling link) means a path the walk did
   not see may only be one it could not see, so **that scan deletes
   nothing** and leaves a `listing:files` row. The next clean walk
   deletes what is really gone and clears the row
   (`a_walk_with_errors_deletes_nothing`).
-- **A media file that would not open or parse** is
+- **A file the walk could not open** is `record:files:<path>`, and
+  holds back no other deletion
+  (`a_file_that_will_not_open_is_its_own_row_and_deletes_go_on`).
+- **A media file that would not open or parse** after the walk hashed it is
   `record:media_files:<path>`, and **a playlist that would not read**
   `record:media_playlists:<path>`; either keeps the rows an earlier scan
   wrote. An item that never identified is not in `media_items`, so every

@@ -524,6 +524,15 @@ programs against:
   (`cards/JsonTree.ce.vue`), the source link at the process's commit,
   the process itself. Its *keep* / *exclude* buttons narrow the log
   beside it through the bus (`log.query`, a token for the query bar).
+- `personView(handle, { seenIn })` — one person (`cards/PersonCard.ce.vue`,
+  its rules in `cards/person.ts`): your contact, when the handle is
+  linked to one, and each source's record of them from `/people`, a
+  section per source, never merged. The source named by `seenIn` —
+  where the chip that opened it was — leads, marked "seen here". A
+  person chip's double-click opens it (`personSource` in
+  `cards/cardSources.ts`); it offers the search for everything from
+  them, and *Create contact* for an unlinked handle where a contacts
+  app is configured.
 - `configView()` — `config.toml` itself, edited directly, saved through
   the backend's loader. Reloads on the root's `config_changed` frame
   and, a beat sooner, on the `config.written` bus topic a card publishes
@@ -613,22 +622,14 @@ its label already looked up, because only the producer can, and the
 viewer decides what the icon token looks like. An action is an *id*,
 never a URL — a URL arriving as data would be a capability.
 
-One layer is joined in the viewer, deliberately: a person. The search
-grid's Author cell arrives as an identity whose id is the author's
-handle as a URI and whose label is the name the source showed; the grid
-draws it as a chip and asks `people`, the one resolver every document
-and grid shares (`cards/resolver.ts`, an instance in `cards/contacts.ts`):
-a cell asks as it is drawn, the questions of one drawing pass go out as
-one request, and when an answer changes — it lands, or a link made in
-any document forgets it — every grid and document showing that handle
-draws it again. The
-producer still resolves what only it can; the contact a person linked
-is live state that moves while the row does not, so it is joined where
-it is live, the same way a document draws its chips. The reasons, and
-what a chip offers on click, are in
-[`plans/chips.md`](plans/chips.md) § "In a grid". A group's or a step's
-identity resolves the same way, from `entities` over datalib-http's
-`POST /api/entities`.
+One layer is joined in the viewer, deliberately: what a chip names. An
+identity cell that is a chip — a person's Author cell, a group's Source
+cell — arrives with what the producer knows, and the viewer asks a
+resolver what it names now: the contact a person linked, the name the
+config gives a group today, a step's status. Those move while the row
+does not, so they are joined where they are live, and one link made in
+a document redraws every grid showing it. How, and what a chip does on
+click: [`chips.md`](chips.md) §"In a grid".
 
 `GET /api/manage/rows` and the `unified_index` applet's `/search` are
 the two producers. The applet resolves the search grid's Source

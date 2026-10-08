@@ -34,6 +34,11 @@ export type NormalizedContact = {
   }[];
   org: string | null;
   title: string | null;
+  note?: string | null;
+  /** Anything else the source says, in its order: an address, a birthday. */
+  details?: { label: string; value: string }[];
+  /** The person's own page at the source, where it has one. */
+  source_url?: string | null;
   seen: { items: number; last_at: string | null } | null;
   /** A photo the app serves, app-relative, where the source has one and
    *  the server can serve it; absent or null otherwise. The chip's lead. */
@@ -158,7 +163,7 @@ export function chipLook(handle: string, shownAs: string, who: Who, canLink: boo
 
 /** What a right-click on a chip offers. An entry is an *id* the surface
  *  binds a handler to — the document view and a grid cell draw the same
- *  menu and act on it their own way (docs/dev/plans/chips.md § Clicks). */
+ *  menu and act on it their own way (docs/dev/chips.md § Clicks). */
 export type ChipMenuId = "copy-name" | "copy-id" | "copy-both" | "search" | "edit";
 export type ChipMenuEntry = { id: ChipMenuId; label: string; separator?: boolean };
 
@@ -284,7 +289,7 @@ export function rewriteChipsForCopy(fragment: DocumentFragment | Element): boole
  *  their href names a handle. Anywhere in the body counts, a mention as
  *  much as the header: a chip shows who the handle resolves to, never
  *  the link text, so a link a sender wrote can only point at a real
- *  person under their real name (docs/dev/plans/chips.md § Trust). */
+ *  person under their real name (docs/dev/chips.md § Trust). */
 export function chipAnchors(root: Element): HTMLElement[] {
   return Array.from(root.querySelectorAll<HTMLElement>("a.chip[data-handle]"));
 }

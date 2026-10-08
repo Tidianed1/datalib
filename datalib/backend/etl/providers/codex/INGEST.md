@@ -122,7 +122,9 @@ A sync that cannot read part of the home goes on and leaves a
 §"When part of a read fails"; the walk is shared): lines stepped over
 inside a rollout are one `file:codex/<dir>:<path>` row per file, a
 torn last line excepted; a rollout that would not open is
-`record:transcripts:<dir>/<path>`; an entry the walk could not read is
+`record:codex/<dir>:<path>` (or `record:transcripts:<dir>/<path>` when
+the walk opened it and the read after failed); an entry the walk could
+not read is
 `listing:codex/<dir>`. A missing `sessions/` fails a first sync and is
 a `listing:codex/sessions` row after that; a missing
 `archived_sessions/` is nothing to report, since only an older Codex

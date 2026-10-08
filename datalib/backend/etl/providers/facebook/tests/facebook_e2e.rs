@@ -554,3 +554,33 @@ async fn reading_an_unchanged_export_again_commits_nothing() {
         "reading an unchanged export again changes nothing in the store"
     );
 }
+
+/// A file named again after a mid-run flush takes the key that flush
+/// stored its bytes under, without a second read. The fixture's media is
+/// a few hundred bytes, so the flush threshold was never crossed and this
+/// path never ran; a 33 MiB photo on the comment that names it first
+/// crosses it before the post that names it again.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_file_named_again_after_a_flush_takes_the_key_its_bytes_went_in_under() {
+    const SHARED: &str = "your_facebook_activity/posts/media/your_posts/200000000000004.png";
+    let e = Export::new().await;
+    let big: Vec<u8> = (0..33 * 1024 * 1024u32).map(|i| (i % 251) as u8).collect();
+    fs::write(e.root.join(SHARED), &big).unwrap();
+
+    let s = e.sync().await;
+    assert_eq!(
+        s.media_stored, 4,
+        "read once, not again after the flush: {s:?}"
+    );
+    let edges: Vec<(String, Option<String>)> =
+        sqlx::query_as("SELECT owner_id, blake3 FROM media_blobs WHERE uri = ? ORDER BY owner_id")
+            .bind(SHARED)
+            .fetch_all(e.db.pool())
+            .await
+            .unwrap();
+    assert!(edges.len() >= 2, "{edges:?}");
+    let key = datalib_etl::blob_cas::blake3_hex(&big);
+    for (owner, blake3) in &edges {
+        assert_eq!(blake3.as_deref(), Some(key.as_str()), "{owner}");
+    }
+}

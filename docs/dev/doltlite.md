@@ -575,7 +575,8 @@ name itself and then switches branches in SQL, so `doltlite -readonly
 ### Merging a branch
 
 How a draft works: edits go to a branch of their own, uncommitted, and
-saving merges that branch into the one readers see.
+saving merges that branch into the one readers see. `datalib_etl::draft`
+is the recipe in code.
 
 - **A branch's uncommitted rows outlive the connection that wrote
   them**, and `dolt_reset('--hard')` / `dolt_clean()` on another branch
@@ -606,8 +607,13 @@ saving merges that branch into the one readers see.
   column of that row is lost. To keep it, write the cells you want
   from `their_<col>` into the table and `DELETE FROM
   dolt_conflicts_<table>`; the commit then holds both sides' changes.
-- **`dolt_merge('--squash', b)` commits at once**, one commit whose one
-  parent is the old head; the branch's own commits never reach the log.
+- **`dolt_merge('--squash', b)` commits at once when the branch it
+  lands on has moved since `b` was cut**, one commit whose one parent
+  is the old head; the branch's own commits never reach the log. When
+  it has not moved, the squash stops with the rows applied and
+  uncommitted. With `'--no-commit'` it stops uncommitted either way, so
+  the commit that follows carries the caller's message.
+- **A branch name may hold a slash** (`draft/riker`).
 - **A merge commit and a squash both revert** with `dolt_revert`.
 - **`dolt_branch('-d', b)` refuses a branch with unmerged commits**
   (`branch is not fully merged`) and drops one whose only change is
@@ -811,7 +817,15 @@ The rows it throws away were written after the last seal and never
 committed, so no reader — every reader pins a commit — was ever
 promised them. Keeping them would have meant committing a state the
 writer never vouched for: an entity row whose blobs never arrived, half
-a channel. The next pass refetches from the cursor.
+a channel. The next pass owes them again.
+
+The other thing a dead writer can leave is a `dolt_commit` on its own
+branch that it never published: the kill landed between `commit_run`'s
+two halves. That commit is a seal the run vouched for, so `open`
+publishes it to `main` rather than discarding it.
+`doltlite_two_process_test` kills a writer at each of the three points
+— inside the transaction, after its SQL commit, after its `dolt_commit`
+— and reads what the next open makes of each.
 
 `commit_run` is tolerant of "nothing to commit, working tree clean": a
 pass that fetched nothing new leaves the working set clean.

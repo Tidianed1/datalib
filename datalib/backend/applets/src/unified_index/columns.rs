@@ -20,7 +20,7 @@ use datalib_unified_index::grid_columns::GridColumn;
 use datalib_unified_index::search::SearchRow;
 use datalib_unified_index::view::{self, View};
 
-/// The Author cell (docs/dev/plans/chips.md § "In a grid"): the handle
+/// The Author cell (docs/dev/chips.md § "In a grid"): the handle
 /// as a URI for its id, so the viewer resolves it as it does a chip link
 /// in a document, the name the source showed for its label, and the
 /// handle kind's mark. A row with neither has no author to draw.

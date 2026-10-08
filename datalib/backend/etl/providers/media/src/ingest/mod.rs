@@ -159,7 +159,7 @@ async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummar
     )
     .await?;
     summary.errors += scan.errors.len();
-    found.extend(scan.walk_problems());
+    scan.report_problems(&found, "files");
     summary.dataless_skipped = dataless.into_inner().unwrap().len();
     // A file the scan found and did not read — evicted to the cloud, or
     // over `max_bytes` — is still there, so its rows stay.

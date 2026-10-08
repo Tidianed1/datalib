@@ -1260,25 +1260,20 @@ async fn store_edges<R: BulkUpsertable + Sync>(
             _ => None,
         })
         .collect();
-    let hashed: Vec<(&str, Option<String>)> = answered
+    let inserts: Vec<CasInsert<'_, &str>> = answered
         .iter()
-        .map(|(key, bytes)| (*key, bytes.map(blake3_hex)))
-        .collect();
-    let inserts: Vec<CasInsert<'_>> = answered
-        .iter()
-        .zip(&hashed)
-        .filter_map(|((_, bytes), (_, blake3))| {
+        .filter_map(|(key, bytes)| {
             Some(CasInsert {
-                blake3: blake3.as_deref()?,
+                id: *key,
                 bytes: (*bytes)?,
                 content_type: Some(content_type),
             })
         })
         .collect();
-    cas.put_many(&inserts).await?;
-    let rows: Vec<R> = hashed
-        .into_iter()
-        .map(|(key, blake3)| edge(key, blake3))
+    let stored = cas.put_many(inserts).await?;
+    let rows: Vec<R> = answered
+        .iter()
+        .map(|(key, _)| edge(key, stored.get(key).cloned()))
         .collect();
     bulk_upsert_entity_in_tx(tx, &rows).await
 }

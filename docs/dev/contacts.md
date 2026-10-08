@@ -59,9 +59,10 @@ above it:
 What is still to build: [`plans/contact_linking.md`](plans/contact_linking.md)
 (merge, groups, `row_handles`, contacts in search, numbers without a
 country code) and [`plans/contact_editing.md`](plans/contact_editing.md)
-(the contact card: its fields, drafts, saving, undo, the export). [`plans/chips.md`](plans/chips.md) covers chips for
-things that are not people: groups and steps are built, system events
-are not. This page says what the tree does.
+(the contact card: its fields, drafts, saving, undo, the export).
+How every chip is written, drawn, resolved and clicked — a person's, a
+group's, a step's — is [`chips.md`](chips.md). This page says what the
+tree does for a person.
 
 ## Words
 
@@ -321,6 +322,9 @@ person's work, so the rules that make it irreplaceable:
 | `members` | `(group_id, member_id)` | `added_at_utc` |
 | `photos` | `contact_id` | `content_type`, `bytes`, `set_at_utc` |
 
+Each table is a row struct in `contacts/src/schema.rs`, and its DDL
+and upsert are derived from it (`#[derive(PortableTable)]`).
+
 Two rules the tables encode: **a handle belongs to exactly one
 contact** (linking one someone else holds is refused, never taken
 over; a shared address belongs to a group contact), and **keys are
@@ -366,7 +370,7 @@ Everything is in `datalib/ui/src/cards/`:
 - `chipLinks.js` is the markdown-it plugin: an explicit link whose
   href `handleFromUri` reads becomes `<a class="chip" data-handle=…>`
   (and one naming a group or step, `data-entity`; see
-  [`plans/chips.md`](plans/chips.md)); a link `linkify` made from a
+  [`chips.md`](chips.md)); a link `linkify` made from a
   bare address in running text is left alone, so a signature's address
   stays an address. Plain JavaScript, so the render preview runs it
   too. It mirrors `to_uri` and `from_uri` over the same test cases.
@@ -377,19 +381,22 @@ Everything is in `datalib/ui/src/cards/`:
   record and the person's other handles), `chipMenu` (copy the name,
   the identifier or both; find everything from the person; link or
   edit), `copyText` and the copy rewrite. `people` is who each handle
-  is, for the whole app: an instance of `resolver.ts`, the one resolver
-  every document and grid asks. A chip asks as it is drawn, one drawing
-  pass is one request to `/people` and the contacts app's `/resolve`,
-  answers are kept, and an edit (create, link, unlink, no longer works)
-  forgets the handles it touched, so every open document and grid draws
-  them again. `decorateHandles` draws a document's chips: it collects
-  the chips under a body, asks `people`, and draws. `chipCell` draws
-  the same chip in a grid cell.
+  is, for the whole app: the resolver ([`chips.md`](chips.md)
+  §"Resolving") over `/people` and the contacts app's `/resolve`; an
+  edit (create, link, unlink, no longer works) forgets the handles it
+  touched. `decorateHandles` draws a document's chips and `chipCell` a
+  grid cell's.
 - `ChatBody.ce.vue` runs the decorate pass over a document's frame and
   owns the popover
   (`HandlePopover.ce.vue`: link to a contact, create one, unlink, mark
   a handle as no longer working) and the right-click menu
   (`ChipMenu.ce.vue`). `chip.css` is the one look.
+- `PersonCard.ce.vue` is the card a person chip's double-click opens
+  (`personView`; its rules are `person.ts`): your contact when the
+  handle is linked to one, then each source's record of the person, a
+  section per source and never merged, the source the chip was seen in
+  first. It reads only, but for *Create contact* on an unlinked handle;
+  linking stays the popover's.
 - The grid's Author column is a chip too: `grid_rows.author_handle`
   (the `author_handle:` filter) comes with each message's row and each
   reaction's, and
@@ -494,7 +501,7 @@ chip in the UI is separate and always uses the latest answer.
 
 ## Not built
 
-The contact card, merge, groups and members, undo, the triage grid of
+Editing a contact on its card, merge, groups and members, undo, the triage grid of
 unresolved handles, `row_handles`, the `contact:` search filter, a
 handle for a number without its country code, a handle that stopped
 working in some apps but not others, mentions outside Slack

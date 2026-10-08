@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use datalib_etl::blob_cas::{blake3_hex, CasEdgeAccumulator, CasEdgeRow as _};
+use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw::WirePayload;
 use datalib_etl::download_problems::{RunProblem, SkippedRecord};
@@ -90,7 +90,9 @@ pub async fn ingest(
 
     let mut message_rows: Vec<VoiceMessageRow> = Vec::new();
     let mut bill_rows: Vec<VoiceBillRow> = Vec::new();
-    let mut greeting_rows: Vec<VoiceGreetingRow> = Vec::new();
+    // Each with the ref its bytes went into the accumulator under, which
+    // names the key the flush gives them.
+    let mut greetings: Vec<(String, VoiceGreetingRow)> = Vec::new();
     let mut done: Vec<&fsscan::ScannedFile> = Vec::new();
     let mut acc = CasEdgeAccumulator::new();
     let mut n_attachments = 0usize;
@@ -181,22 +183,16 @@ pub async fn ingest(
         let greeting_id = ns_id(&format!("voice:greeting:{name}"));
         match std::fs::read(path) {
             Ok(bytes) => {
-                let blake3 = blake3_hex(&bytes);
-                acc.add_fetched(
-                    &greeting_id,
-                    &name,
-                    bytes,
-                    guess_content_type(path),
-                    Some(name.clone()),
-                );
+                acc.add_fetched(&greeting_id, &name, bytes, guess_content_type(path));
                 n_attachments += 1;
-                greeting_rows.push(VoiceGreetingRow {
+                let row = VoiceGreetingRow {
                     id_and_payload: WirePayload {
                         id: greeting_id,
                         payload: json!({ "kind": "greeting", "filename": name }).to_string(),
                     },
-                    blake3: Some(blake3),
-                });
+                    blake3: None,
+                };
+                greetings.push((name, row));
                 done.push(f);
             }
             Err(e) => {
@@ -208,17 +204,24 @@ pub async fn ingest(
 
     let n_messages = message_rows.len();
     let n_bills = bill_rows.len();
-    let n_greetings = greeting_rows.len();
+    let n_greetings = greetings.len();
     progress.set_message(&format!(
         "voice: {n_messages} messages / {n_bills} bills / {n_greetings} greetings",
     ));
 
     // Whether this run may delete what no Voice file holds: only right
-    // after reading every one of them.
+    // after reading every one of them. A Voice file there and unread may
+    // hold any of them.
+    let unread_voice = scan
+        .present_unread
+        .iter()
+        .filter(|rel| fsscan::is_under(rel, "Voice"))
+        .count();
     let deletes = read_all
         && changes.walk_errors == 0
         && super::product_exported(scan, "Voice")
-        && failed == 0;
+        && failed == 0
+        && unread_voice == 0;
     // A rewritten file keeps its old stamp on a run that deleted nothing,
     // so the next run still sees it rewritten and reads every file again.
     let rewritten: HashSet<&str> = changes.modified.iter().map(|f| f.rel.as_str()).collect();
@@ -226,16 +229,24 @@ pub async fn ingest(
 
     // The attachments land before the files that name them are stamped:
     // a flush that fails leaves the files to be read again.
-    let blobs_stored = acc.bundle_mut().cas_inserts().len();
-    acc.flush(db.pool(), db.cas(), |owning, ref_id, blake3| {
-        VoiceAttachmentRow {
-            id: VoiceAttachmentRow::pk_recipe(owning, ref_id),
-            message_id: owning.to_string(),
-            ref_name: ref_id.to_string(),
-            blake3: blake3.map(str::to_string),
-        }
-    })
-    .await?;
+    let blobs_stored = acc.fetched_len();
+    let stored = acc
+        .flush(db.pool(), db.cas(), |owning, ref_id, blake3| {
+            VoiceAttachmentRow {
+                id: VoiceAttachmentRow::pk_recipe(owning, ref_id),
+                message_id: owning.to_string(),
+                ref_name: ref_id.to_string(),
+                blake3: blake3.map(str::to_string),
+            }
+        })
+        .await?;
+    let greeting_rows: Vec<VoiceGreetingRow> = greetings
+        .into_iter()
+        .map(|(name, row)| VoiceGreetingRow {
+            blake3: stored.get(&name).cloned(),
+            ..row
+        })
+        .collect();
 
     let now = IsoOffsetTimestamp::now_local();
     let mut tx = db.pool().begin().await.context("begin google_voice tx")?;
@@ -282,8 +293,8 @@ pub async fn ingest(
         for rel in gone {
             file_checkpoint::forget_file(&mut tx, SCOPE, rel).await?;
         }
-    } else if failed > 0 && changes.may_have_dropped_records() {
-        summary.held_back = Some(fsscan::Scan::deletions_held_back(failed));
+    } else if failed + unread_voice > 0 && changes.may_have_dropped_records() {
+        summary.held_back = Some(fsscan::Scan::deletions_held_back(failed + unread_voice));
     }
     tx.commit().await.context("commit google_voice tx")?;
     found.skipped("google_voice", skipped);
@@ -456,13 +467,7 @@ fn ingest_text_thread(
                 let ref_name = file_name(&blob_path);
                 match std::fs::read(&blob_path) {
                     Ok(bytes) => {
-                        acc.add_fetched(
-                            &id,
-                            &ref_name,
-                            bytes,
-                            guess_content_type(&blob_path),
-                            Some(ref_name.clone()),
-                        );
+                        acc.add_fetched(&id, &ref_name, bytes, guess_content_type(&blob_path));
                         *n_attachments += 1;
                         attachment_refs.push(ref_name);
                     }
@@ -531,13 +536,7 @@ fn ingest_event(
             let ref_name = file_name(&blob_path);
             match std::fs::read(&blob_path) {
                 Ok(bytes) => {
-                    acc.add_fetched(
-                        &id,
-                        &ref_name,
-                        bytes,
-                        guess_content_type(&blob_path),
-                        Some(ref_name.clone()),
-                    );
+                    acc.add_fetched(&id, &ref_name, bytes, guess_content_type(&blob_path));
                     *n_attachments += 1;
                     audio_ref = Some(ref_name);
                 }
@@ -602,13 +601,7 @@ fn ingest_orphan_audio(
     let ref_name = file_name(path);
     match std::fs::read(path) {
         Ok(bytes) => {
-            acc.add_fetched(
-                &id,
-                &ref_name,
-                bytes,
-                guess_content_type(path),
-                Some(ref_name.clone()),
-            );
+            acc.add_fetched(&id, &ref_name, bytes, guess_content_type(path));
             *n_attachments += 1;
         }
         Err(e) => missing.push(format!("read {}: {e}", path.display())),

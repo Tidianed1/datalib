@@ -124,7 +124,7 @@ async fn mirror_inputs(
             let scan = fsscan::scan(cache, dir, &opts, |p| is_zip(p) || is_catalog(p))
                 .await
                 .with_context(|| format!("scan the backups folder {}", dir.display()))?;
-            found.extend(scan.walk_problems_as("backups"));
+            scan.report_problems(found, "backups");
             let plan = backups::plan(backups::entries(&scan.files), &ledger);
             if plan.found.is_empty() {
                 bail!(

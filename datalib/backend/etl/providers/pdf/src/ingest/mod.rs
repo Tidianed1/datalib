@@ -6,11 +6,12 @@ pub mod db;
 pub mod identity;
 pub mod schema_raw;
 
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+use datalib_etl::blob_cas::blake3_hex;
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
@@ -111,7 +112,7 @@ async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummar
     )
     .await?;
     summary.errors += scan.errors.len();
-    found.extend(scan.walk_problems());
+    scan.report_problems(&found, "files");
     // A walk that could not read part of the tree may only have failed to
     // see a path, so the table is not truncated and nothing falls out:
     // what the walk did see is upserted over what was there.
@@ -139,26 +140,31 @@ async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummar
     let mut doc_batch: Vec<PdfDocumentRow> = Vec::new();
     // Documents identified during *this* scan, so N copies of one file
     // are classified once rather than N times.
-    let mut seen_docs: HashMap<String, bool> = HashMap::new();
+    let mut seen_docs: HashSet<String> = HashSet::new();
 
     for f in &scan.files {
         opts.progress.inc(1);
-        let hash_hex = fswalk::to_hex(&f.blake3);
+        let scanned = fswalk::to_hex(&f.blake3);
 
         // ── Classify the document, once per distinct content ─────────
-        if !prev.known_docs.contains(&hash_hex) && !seen_docs.contains_key(&hash_hex) {
-            match identify(&f.path, f.size) {
+        // The scan's hash only decides whether to look. A document read
+        // is named by the hash of the bytes it was classified from, which
+        // differ when the file changed after the scan or the scan's
+        // cached hash was stale.
+        let hash_hex = if prev.known_docs.contains(&scanned) || seen_docs.contains(&scanned) {
+            scanned
+        } else {
+            match identify(&f.path) {
                 Ok(row) => {
-                    let needs_ocr = row.needs_ocr;
-                    seen_docs.insert(hash_hex.clone(), needs_ocr);
-                    summary.documents += 1;
-                    if needs_ocr {
-                        summary.needs_ocr += 1;
+                    let read = row.blake3.clone();
+                    if seen_docs.insert(read.clone()) {
+                        summary.documents += 1;
+                        if row.needs_ocr {
+                            summary.needs_ocr += 1;
+                        }
+                        doc_batch.push(row);
                     }
-                    doc_batch.push(PdfDocumentRow {
-                        blake3: hash_hex.clone(),
-                        ..row
-                    });
+                    read
                 }
                 // Retried every scan: a document that never identified
                 // is not in `pdf_documents`.
@@ -168,7 +174,7 @@ async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummar
                     continue;
                 }
             }
-        }
+        };
 
         path_batch.push(PdfPathRow {
             id: f.rel.clone(),
@@ -203,17 +209,19 @@ fn is_pdf(p: &Path) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
 }
 
-/// Classify one PDF and read its metadata. Returns a row with an empty
-/// `blake3` — the caller fills that in, since it already has the digest.
-fn identify(path: &Path, size: i64) -> Result<PdfDocumentRow> {
+/// Classify one PDF and read its metadata, from one read of the file,
+/// and name it by the hash of those bytes.
+fn identify(path: &Path) -> Result<PdfDocumentRow> {
+    let bytes = std::fs::read(path).context("read")?;
     // Detect-only: we want the classification and page census here, not
     // the markdown. Conversion is the render step's job and happens
     // against a different cache key.
-    let det =
-        pdf_inspector::process_pdf_with_options(path, pdf_inspector::PdfOptions::detect_only())
-            .map_err(|e| anyhow::anyhow!("classify: {e}"))?;
+    let det = pdf_inspector::process_pdf_mem_with_options(
+        &bytes,
+        pdf_inspector::PdfOptions::detect_only(),
+    )
+    .map_err(|e| anyhow::anyhow!("classify: {e}"))?;
 
-    let bytes = std::fs::read(path).context("read")?;
     // One parse feeds both: the metadata fields and the content hash
     // want the same `lopdf::Document`, and building it is the expensive
     // half of each.
@@ -244,8 +252,8 @@ fn identify(path: &Path, size: i64) -> Result<PdfDocumentRow> {
     });
 
     Ok(PdfDocumentRow {
-        blake3: String::new(),
-        size,
+        blake3: blake3_hex(&bytes),
+        size: bytes.len() as i64,
         page_count: i64::from(det.page_count),
         pdf_type: kind,
         confidence: f64::from(det.confidence),

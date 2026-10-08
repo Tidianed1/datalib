@@ -377,14 +377,15 @@ async fn a_failed_attachment_says_why_and_lands_on_a_later_run() {
         acct.problems().await,
         [(
             "claude_attachments:c-a1#f-1".to_string(),
-            "no recorded response: GET https://claude.ai/api/files/f-1/preview".to_string()
+            "no recorded response: GET https://claude.ai/api/organizations/org-a/files/f-1/co…"
+                .to_string()
         )]
     );
 
     acct.answer(
         &HttpRequest::get(
             HttpService::Claude,
-            "https://claude.ai/api/files/f-1/preview",
+            "https://claude.ai/api/organizations/org-a/files/f-1/contents",
         ),
         200,
         b"tricorder",
@@ -514,10 +515,10 @@ fn conv_with_file() -> Value {
     c
 }
 
-fn preview() -> HttpRequest {
+fn contents() -> HttpRequest {
     HttpRequest::get(
         HttpService::Claude,
-        "https://claude.ai/api/files/f-1/preview",
+        "https://claude.ai/api/organizations/org-a/files/f-1/contents",
     )
 }
 
@@ -525,7 +526,7 @@ fn preview() -> HttpRequest {
 async fn a_file_claude_no_longer_has_is_not_asked_for_again() {
     let acct = Account::new(true);
     acct.holds(&[conv_with_file()], &[]);
-    acct.fail(&preview(), 404);
+    acct.fail(&contents(), 404);
     acct.run(|_| {}).await.unwrap();
     let rows = acct
         .query("SELECT scope_key, reason FROM problems ORDER BY scope_key")
@@ -563,7 +564,7 @@ async fn a_rate_limit_ends_the_walk_with_one_row() {
     let acct = Account::new(true);
     acct.holds(&[conv_with_file()], &[]);
     acct.run(|_| {}).await.unwrap();
-    acct.fail(&preview(), 429);
+    acct.fail(&contents(), 429);
     acct.run(|_| {}).await.unwrap();
     assert_eq!(
         acct.keys().await,

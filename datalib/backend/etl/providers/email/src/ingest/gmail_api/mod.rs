@@ -653,7 +653,7 @@ impl MessagesGet<'_> {
             self.filtered.fetch_add(1, Ordering::Relaxed);
             return Outcome::Gone;
         }
-        let mut eml = EmlBlobRow::new(&ingested.email_id, &ingested.blob_id);
+        let eml = EmlBlobRow::new(&ingested.email_id, &ingested.blob_id);
         let bytes = match self.cap.filter(|cap| ingested.raw.len() as u64 > *cap) {
             Some(cap) => {
                 self.blobs_oversize.fetch_add(1, Ordering::Relaxed);
@@ -663,8 +663,6 @@ impl MessagesGet<'_> {
                 ))
             }
             None => {
-                // The blob id is the hash of the bytes (`ingest::ingest`).
-                eml.blake3 = Some(ingested.blob_id.clone());
                 self.blobs_stored.fetch_add(1, Ordering::Relaxed);
                 Ok(ingested.raw)
             }
@@ -733,27 +731,32 @@ impl Fetcher<Stored> for MessagesGet<'_> {
                 Outcome::Failed(_) | Outcome::Skipped(..) => {}
             }
         }
-        let inserts: Vec<CasInsert<'_>> = edges
+        let inserts: Vec<CasInsert<'_, &str>> = edges
             .iter()
             .filter_map(|s| {
-                let bytes = s.bytes.as_ref().ok()?;
                 Some(CasInsert {
-                    blake3: &s.eml.blob_id,
-                    bytes,
+                    id: s.eml.id.as_str(),
+                    bytes: s.bytes.as_ref().ok()?,
                     content_type: Some("message/rfc822"),
                 })
             })
             .collect();
-        self.db.cas().put_many(&inserts).await?;
+        let stored = self.db.cas().put_many(inserts).await?;
         let n = listed::write_batch_in_tx(tx, self.now, got, &gone, email_id_of).await?;
         self.destroyed.fetch_add(n, Ordering::Relaxed);
 
-        let rows: Vec<EmlBlobRow> = edges.iter().map(|s| s.eml.clone()).collect();
-        write_eml_edges_in_tx(tx, &rows).await?;
-        let landed = edges
+        let rows: Vec<EmlBlobRow> = edges
             .iter()
-            .filter(|s| s.eml.blake3.is_some())
-            .map(|s| s.eml.id.as_str());
+            .map(|s| EmlBlobRow {
+                blake3: stored.get(s.eml.id.as_str()).cloned(),
+                ..s.eml.clone()
+            })
+            .collect();
+        write_eml_edges_in_tx(tx, &rows).await?;
+        let landed = rows
+            .iter()
+            .filter(|r| r.blake3.is_some())
+            .map(|r| r.id.as_str());
         bulk_upsert_bookkeeping(tx, EmlBlobRow::TABLE, landed, self.now).await?;
         for s in &edges {
             if let Err(why) = &s.bytes {

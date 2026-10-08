@@ -395,6 +395,9 @@ async fn store_media(
     // when the export left the file out, failed when it is there and
     // would not read.
     let mut unread: HashMap<String, (bool, String)> = HashMap::new();
+    // A `uri` whose bytes are in the accumulator, not yet flushed: the
+    // CAS names them at the flush, and `known` learns the name then.
+    let mut pending: HashSet<String> = HashSet::new();
 
     for rows in by_table.values() {
         for (id, record) in rows {
@@ -408,19 +411,17 @@ async fn store_media(
                     summary.media_known += 1;
                     continue;
                 }
+                if pending.contains(&uri) {
+                    acc.add_again(id, &uri);
+                    summary.media_known += 1;
+                    continue;
+                }
                 if !unread.contains_key(&uri) {
                     match std::fs::read(root.join(&uri)) {
                         Ok(bytes) => {
-                            let hash = datalib_etl::blob_cas::blake3_hex(&bytes);
                             pending_bytes += bytes.len();
-                            acc.add_fetched(
-                                id,
-                                &uri,
-                                bytes,
-                                guess_content_type(&uri),
-                                file_name(&uri),
-                            );
-                            known.insert(uri.clone(), hash);
+                            acc.add_fetched(id, &uri, bytes, guess_content_type(&uri));
+                            pending.insert(uri);
                             summary.media_stored += 1;
                             continue;
                         }
@@ -444,17 +445,23 @@ async fn store_media(
                 }
             }
             if pending_bytes >= MEDIA_FLUSH_BYTES {
-                flush_media(&acc, db, cas).await?;
+                known.extend(flush_media(&acc, db, cas).await?);
+                pending.clear();
                 acc = CasEdgeAccumulator::new();
                 pending_bytes = 0;
                 progress.set_message(&format!("media: {} stored", summary.media_stored));
             }
         }
     }
-    flush_media(&acc, db, cas).await
+    flush_media(&acc, db, cas).await?;
+    Ok(())
 }
 
-async fn flush_media(acc: &CasEdgeAccumulator, db: &RawDb, cas: &BlobCas) -> Result<()> {
+async fn flush_media(
+    acc: &CasEdgeAccumulator,
+    db: &RawDb,
+    cas: &BlobCas,
+) -> Result<HashMap<String, String>> {
     acc.flush(db.pool(), cas, |owning, uri, blake3| MediaBlobRow {
         id: MediaBlobRow::pk_recipe(owning, uri),
         owner_id: owning.to_string(),
@@ -549,13 +556,6 @@ fn relative(root: &Path, path: &Path) -> String {
         .unwrap_or(path)
         .to_string_lossy()
         .replace('\\', "/")
-}
-
-fn file_name(uri: &str) -> Option<String> {
-    uri.rsplit('/')
-        .next()
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
 }
 
 fn guess_content_type(uri: &str) -> Option<String> {

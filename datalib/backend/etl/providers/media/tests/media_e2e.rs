@@ -1,7 +1,7 @@
 //! End-to-end over the fixture corpus: scan → store.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use sqlx::Row;
@@ -67,6 +67,15 @@ impl Harness {
             db,
             _tmp: tmp,
         })
+    }
+
+    /// Have the host cache vouch for `path` as it is now, so the next
+    /// scan does not open it (`FingerprintCache::restamp_for_test`).
+    async fn restamp(&self, path: &Path) -> Result<()> {
+        let cache = FingerprintCache::open(&self.raw_dir.join("fingerprints.sqlite")).await?;
+        cache.restamp_for_test(path).await?;
+        cache.pool().close().await;
+        Ok(())
     }
 
     async fn scan(&self) -> Result<ingest::FetchSummary> {
@@ -1201,8 +1210,8 @@ async fn a_file_that_would_not_open_is_a_row_until_it_does() -> Result<()> {
     h.scan().await?;
     let media = h.root.join("music/untagged_hum.mp3");
     let playlist = h.root.join("playlists/bridge_ambience.m3u");
-    // Forget the item, so the next scan must open the file again; its
-    // bytes are unchanged, so the walk itself does not.
+    // Forget the item, so the next scan must open the file again; the
+    // walk itself does not, once the cache vouches for the new mode.
     let hash = files(&h.db).await?["music/untagged_hum.mp3"].clone();
     sqlx::query("DELETE FROM media_items WHERE blake3 = ?")
         .bind(&hash)
@@ -1216,6 +1225,8 @@ async fn a_file_that_would_not_open_is_a_row_until_it_does() -> Result<()> {
         set_mode(&playlist, 0o644)?;
         return Ok(());
     }
+    h.restamp(&media).await?;
+    h.restamp(&playlist).await?;
     let s = h.scan().await;
     set_mode(&media, 0o644)?;
     set_mode(&playlist, 0o644)?;
@@ -1339,5 +1350,36 @@ async fn a_path_the_scan_passed_over_keeps_its_row() -> Result<()> {
         .fetch_all(h.db.pool())
         .await?;
     assert_eq!(problems, vec!["listing:files".to_string()]);
+    Ok(())
+}
+
+/// A file that will not open was a walk error, so one unreadable file
+/// held back every deletion under the root. It is a row of its own now:
+/// its stored rows stay, a file deleted beside it goes, and the row
+/// clears once the file opens.
+#[tokio::test]
+async fn a_file_that_will_not_open_is_its_own_row_and_deletes_go_on() -> Result<()> {
+    let h = Harness::on_a_copy().await?;
+    h.scan().await?;
+    let locked = h.root.join("music/untagged_hum.mp3");
+    std::fs::remove_file(h.root.join("playlists/bridge_ambience.m3u"))?;
+    set_mode(&locked, 0o000)?;
+    if std::fs::read(&locked).is_ok() {
+        // Root reads through any mode; CI's container runs as root.
+        set_mode(&locked, 0o644)?;
+        return Ok(());
+    }
+    let s = h.scan().await;
+    set_mode(&locked, 0o644)?;
+    let s = s?;
+    assert_eq!(s.removed, 1, "the deleted playlist goes: {s:?}");
+    assert!(files(&h.db).await?.contains_key("music/untagged_hum.mp3"));
+    assert_eq!(
+        problem_keys(&h.db).await?,
+        ["record:files:music/untagged_hum.mp3"]
+    );
+
+    h.scan().await?;
+    assert_eq!(problem_keys(&h.db).await?, Vec::<String>::new());
     Ok(())
 }

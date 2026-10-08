@@ -48,7 +48,7 @@ says what every source knows of the person. The href is load-bearing, like
 written still finds the author. An author with no handle is a plain
 `<span class="msg-author">`. How a handle becomes a person is
 `docs/dev/contacts.md`; the design, and why a chip may appear anywhere
-in a body, is `docs/dev/plans/chips.md`.
+in a body, is `docs/dev/chips.md`.
 
 An item with `recipients` (an email's To and Cc) gets one more line
 straight under the header, a paragraph rather than an HTML block

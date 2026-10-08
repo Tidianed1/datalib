@@ -59,7 +59,7 @@ walk could not read an entry and its last rows stand (below).
 `identity_uuid` is set on `dirs` rows alone, by the post-write
 stamping pass.
 
-The **rescan cursor** — `(mtime_ns, size, inode, dev, stamp_kind)`
+The **rescan cursor** — `(mtime_ns, size, ctime_ns, inode, dev, stamp_kind)`
 per path — is deliberately in neither table. It is host state
 (inodes mean nothing on another machine), so it lives in this
 machine's `datalib_etl_files::fingerprint_cache`, a plain-SQLite file
@@ -128,9 +128,9 @@ Cribbed from Unison's `src/fpcache.ml:243` (`dataClearlyUnchanged`).
 For each known path, before opening the file:
 
 1. Stat the path. Cheap on macOS/Linux — one syscall, no I/O.
-2. Read the cached `(mtime_ns, size, inode, dev, stamp_kind)` and the
+2. Read the cached `(mtime_ns, size, ctime_ns, inode, dev, stamp_kind)` and the
    hash that went with them from this host's fingerprint cache.
-3. If `stamp_kind = inode` and `(mtime, size, inode, dev)` all match
+3. If `stamp_kind = inode` and `(mtime, size, ctime, inode, dev)` all match
    the live stat, the cached digest is still valid — no rehash, no
    file read.
 4. If anything mismatched, open the file, rehash, and write the new
@@ -144,8 +144,8 @@ be nothing there. Holding both means an unchanged tree scans fast into
 8000 files / 64 MB, 0.63s against the 1.6s a cold scan costs.
 
 `stamp_kind = "nostamp"` (some FUSE mounts, some network filesystems)
-drops the inode check and falls back to `(mtime, size)`. Less safe,
-but Unison's own behavior on those filesystems.
+drops the inode check and falls back to `(mtime, size, ctime)`. Less safe,
+and close to Unison's own behavior on those filesystems.
 
 `stamp_kind = "rescan"` forces a rehash regardless of what the triple
 says, and on a directory a real `readdir` where an unchanged one would

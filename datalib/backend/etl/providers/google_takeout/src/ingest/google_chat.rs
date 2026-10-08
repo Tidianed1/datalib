@@ -201,7 +201,7 @@ pub async fn ingest(
 
     // The attachments land before the files that name them are stamped:
     // a flush that fails leaves the files to be read again.
-    let blobs_stored = acc.bundle_mut().cas_inserts().len();
+    let blobs_stored = acc.fetched_len();
     acc.flush(db.pool(), db.cas(), |owning, ref_id, blake3| {
         ChatAttachmentRow {
             id: ChatAttachmentRow::pk_recipe(owning, ref_id),
@@ -312,13 +312,7 @@ fn attach(acc: &mut CasEdgeAccumulator, group_dir: &Path, owning: &str, export_n
             // Truncation keeps the extension, so the resolved name says
             // what the bytes are.
             let ct = guess_content_type(&resolved);
-            acc.add_fetched(
-                owning,
-                export_name,
-                bytes,
-                ct,
-                Some(export_name.to_string()),
-            );
+            acc.add_fetched(owning, export_name, bytes, ct);
         }
         Err(e) => acc.add_failed(
             owning,

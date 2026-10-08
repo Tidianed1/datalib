@@ -662,6 +662,7 @@ watch(
           @hover-edge="onHoverEdge"
           :remote-accept="remoteAccept"
           :remote-context="remoteContext"
+          :source-id="chat.source_ref?.id ?? null"
           @remote-media="remoteRefs = $event"
           @remote-load="allow('url', $event)"
           @frame-link="onFrameLink"

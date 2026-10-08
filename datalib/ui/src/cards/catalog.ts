@@ -124,6 +124,11 @@ export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
     description: "A store's commits, and the difference between two of them.",
     icon: "history",
   },
+  personView: {
+    title: "Person",
+    description: "Your contact and what each source says about one person.",
+    icon: "person",
+  },
   syncDashboardView: {
     title: "Sync dashboard",
     description: "One source's sync: its steps, charts over the run, and its log.",

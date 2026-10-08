@@ -1276,3 +1276,84 @@ async fn reading_an_unchanged_export_again_commits_nothing() {
         "reading an unchanged export again changes nothing in the store"
     );
 }
+
+/// Make `path` unreadable, or `false` where the test cannot: root reads
+/// through any mode, and CI's container runs as root.
+#[cfg(unix)]
+fn lock(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read(path).is_ok() {
+        unlock(path);
+        return false;
+    }
+    true
+}
+
+#[cfg(unix)]
+fn unlock(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644)).unwrap();
+}
+
+/// A Voice file that will not open may hold any record, so a run that
+/// reads the rest deletes nothing while it is unread. It was a walk
+/// error before; once it was not, the prune took what only it held.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_voice_file_that_will_not_open_holds_deletions_back() {
+    let e = Export::new();
+    e.sync().await;
+    let before = e.count("voice_messages").await;
+    let bills = e.count("voice_bills").await;
+
+    e.rewrite(VOICE_MISSED, |html| {
+        html.replace(
+            "2364-03-03T11:00:00.000-08:00",
+            "2364-03-03T12:00:00.000-08:00",
+        )
+    });
+    let locked = e.root.join("Voice/Bills.html");
+    if !lock(&locked) {
+        return;
+    }
+    let s = e.sync().await;
+    unlock(&locked);
+    assert_eq!(s.removed, 0, "{s:?}");
+    assert_eq!(e.count("voice_bills").await, bills);
+    let keys = e.keys().await;
+    assert_eq!(
+        keys,
+        ["listing:removed_records", "record:files:Voice/Bills.html"],
+        "{keys:?}"
+    );
+
+    let s = e.sync().await;
+    assert_eq!(s.removed, 1, "the call the rewrite replaced goes: {s:?}");
+    assert_eq!(e.count("voice_messages").await, before);
+    assert_eq!(e.keys().await, Vec::<String>::new());
+}
+
+/// A photo whose sidecar will not open is there: it keeps its row, with
+/// a row of its own saying why, until the sidecar opens.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_maps_photo_sidecar_that_will_not_open_keeps_its_row() {
+    let e = Export::new();
+    e.sync().await;
+    assert_eq!(e.count("maps_photos").await, 1);
+
+    let rel = "Maps/Photos and videos/2026-06-04-tenfwd.json";
+    let locked = e.root.join(rel);
+    if !lock(&locked) {
+        return;
+    }
+    let s = e.sync().await;
+    unlock(&locked);
+    assert_eq!(s.removed, 0, "{s:?}");
+    assert_eq!(e.count("maps_photos").await, 1);
+    assert_eq!(e.keys().await, [format!("record:files:{rel}")]);
+
+    e.sync().await;
+    assert_eq!(e.keys().await, Vec::<String>::new());
+}

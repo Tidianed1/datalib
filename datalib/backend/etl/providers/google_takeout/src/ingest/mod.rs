@@ -143,7 +143,7 @@ async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
         warn!(event = "takeout_walk_error", path = %e.path.display(), error = %e.error, "an entry of the export could not be walked");
     }
     let scan = &scan;
-    found.extend(scan.walk_problems());
+    scan.report_problems(&found, "files");
 
     if opts.sync.maps_reviews {
         if let Some(n) = found

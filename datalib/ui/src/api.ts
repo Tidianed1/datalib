@@ -63,7 +63,7 @@ export type SearchRow = {
   author: string;
   // The author's handle where the source has one, and the Author cell
   // the applet resolves from it: the handle as a URI for its id, the
-  // author as shown for its label (docs/dev/plans/chips.md).
+  // author as shown for its label (docs/dev/chips.md).
   author_handle: string | null;
   author_ref: Identity | null;
   channel: string;
@@ -192,6 +192,7 @@ export type ProblemReason =
   | "over_size_limit"
   | "not_found"
   | "forbidden"
+  | "no_document"
   | "silent"
   | "noted";
 

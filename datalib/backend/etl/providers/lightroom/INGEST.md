@@ -414,7 +414,8 @@ that backup is a problem on the Manage row until a newer one arrives.
 - **A folder with no backups fails the run**, as does one that cannot
   be read (a backup drive that is not mounted), and so does a
   `catalog.path` that is not there. An entry inside the folder the walk
-  could not read is a `listing:backups` row, and the rest is mirrored.
+  could not read is a `listing:backups` row, a backup it found and could
+  not open a `record:backups:<path>` row, and the rest is mirrored.
 - **A backup that will not mirror is a problem on that backup**, keyed
   `record:lightroom_snapshots:<entry name>` — a zip that will not open,
   a catalog that is not one — and the backups after it are still

@@ -46,12 +46,15 @@ keeps its stamps.
 The scan goes on, and what it could not do is a `problems` row:
 
 - **An entry the walk could not read** (a folder it may not list, a
-  file that would not hash, a dangling link) means a path the walk did
+  dangling link) means a path the walk did
   not see may only be one it could not see, so **that scan does not
   truncate `pdf_paths`**: what it saw is upserted over what was there
   and nothing falls out. It leaves a `listing:files` row; the next
   clean walk truncates as usual and clears it
   (`a_walk_with_errors_drops_no_path`).
+- **A file that would not open** is `record:files:<path>`. It is
+  there, so it keeps its path row and holds back no other deletion; the
+  row goes the scan it opens.
 - **A document that would not identify** is
   `record:pdf_paths:<path>`, with what the parser said. It is retried
   every scan (above), and the scan that identifies it clears the row; a
@@ -59,6 +62,16 @@ The scan goes on, and what it could not do is a `problems` row:
   it.
   The fixture's `holodeck/corrupt.pdf` is one, on purpose. No grid row
   carries it: a document that never identified never renders.
+- **A file that changed after its hash was taken.** The scan's hash only
+  decides whether to look; a document read is named by the hash of the
+  bytes it was classified from
+  (`a_document_the_scan_misjudged_is_named_by_what_was_read`). Render
+  converts only bytes that hash to the document. A file that no longer
+  does renders as a stand-in: its document row, a page saying its pages
+  are missing, and a `problems` row, until the next sync reads it
+  (`a_document_whose_file_changed_since_the_download_is_a_stand_in`).
+  A cold render produces the same stand-in, so nothing depends on what
+  an earlier run left behind.
 
 ## Why no OCR yet
 

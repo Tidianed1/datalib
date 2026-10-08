@@ -542,12 +542,14 @@ mod tests {
         );
     }
 
-    /// The boundary this mechanism does **not** cross, pinned so that "content
-    /// hash" is never read as "always re-reads". The cache decides whether to
-    /// re-hash from Unison's `(mtime, size, inode, dev)` cursor, so an edit
-    /// preserving all four hands back the cached hash and the file is skipped.
+    /// An edit that keeps the length, the inode and the mtime (put back, as
+    /// `cp -p` does) still moves the change time, and the cache compares
+    /// it. Without that the cache vouched for the old bytes' hash and the
+    /// edit was never read. What stays invisible is a second write inside
+    /// one tick of the filesystem clock, which moves neither time.
+    #[cfg(unix)]
     #[tokio::test]
-    async fn an_edit_preserving_the_whole_stat_is_still_invisible() {
+    async fn an_edit_with_its_mtime_put_back_is_seen() {
         let e = env().await;
         e.write("a.txt", b"aaaaa");
         let first = e.scan().await;
@@ -555,30 +557,16 @@ mod tests {
             .await
             .unwrap();
 
-        // Same length, different bytes, mtime put back where it was —
-        // an in-place rewrite, so the inode does not move either.
-        let p = e.tree.join("a.txt");
-        let when = std::fs::metadata(&p).unwrap().modified().unwrap();
-        std::fs::write(&p, b"bbbbb").unwrap();
-        std::fs::File::options()
-            .write(true)
-            .open(&p)
-            .unwrap()
-            .set_modified(when)
-            .unwrap();
+        crate::fswalk::rewrite_keeping_mtime(&e.tree.join("a.txt"), b"bbbbb");
 
         let cursor = load_cursor(&e.pool, "p/feed").await.unwrap();
         let second = e.scan().await;
         assert_eq!(
             second.file("a.txt").unwrap().blake3,
-            first.file("a.txt").unwrap().blake3,
-            "the cache vouched for a stat that did not move",
+            *blake3::hash(b"bbbbb").as_bytes(),
+            "the cache vouched for the old bytes' hash",
         );
-        assert_eq!(
-            second.changes_since(&cursor).needs_reading().count(),
-            0,
-            "so the edit is not seen",
-        );
+        assert_eq!(second.changes_since(&cursor).needs_reading().count(), 1);
     }
 
     #[tokio::test]

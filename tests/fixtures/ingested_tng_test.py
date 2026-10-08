@@ -142,17 +142,7 @@ CLAUDE_ATTACHMENT_WITHOUT_BYTES = (
     "|claude_attachments:c0000004-1701-4d00-8000-00000000c004"
     "#f0000001-1701-4d00-8000-0000000f0001"
     "|00000000-0000-89b3-8bed-0eecc97d45ce"  # conversation c0000004's row
-    "||fetch_failed|no recorded response: GET https://claude.ai/api/fake/files/f0000001-1701-4d00-80…"
-)
-# A file Claude's sandbox made and sent names no URL to fetch it from;
-# how claude.ai serves such a file is not known yet. Real ones say the same.
-CLAUDE_SANDBOX_FILE_WITHOUT_URL = (
-    "a361236d-3cfc-57ee-be26-fdd7c1a9b1da"
-    "|warning|fetch|entity"
-    "|claude_attachments:c0000008-1701-4d00-8000-00000000c008"
-    "#f8000004-1701-4d00-8000-0000000f8004"
-    "|00000000-0000-8c06-8231-9340b6e3de70"  # conversation c0000008's row
-    "||not_found|the file has no preview URL"
+    "||fetch_failed|no recorded response: GET https://claude.ai/api/organizations/0aa00000-1701-4d00…"
 )
 FACEBOOK_VIDEO_NOT_IN_EXPORT = (
     "1c9f7753-ba2d-5a9e-8fbb-b9b6a0d5ad13"
@@ -188,11 +178,7 @@ TAKEOUT_SAVED_PLACE_WITHOUT_KEY = (
     "|http://maps.google.com/?q=Quark%27s+Bar,+Deep+Space+Nine"
 )
 EXPECTED_PROBLEMS = {
-    "claude-api": [
-        POISONED_PROBLEM,
-        CLAUDE_ATTACHMENT_WITHOUT_BYTES,
-        CLAUDE_SANDBOX_FILE_WITHOUT_URL,
-    ],
+    "claude-api": [POISONED_PROBLEM, CLAUDE_ATTACHMENT_WITHOUT_BYTES],
     "facebook": [FACEBOOK_VIDEO_NOT_IN_EXPORT],
     "tng_pdfs": [PDF_THAT_WILL_NOT_IDENTIFY],
     "google-takeout": [

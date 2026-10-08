@@ -108,7 +108,10 @@ sync goes on (the shared walk in `datalib_etl_agent_sessions`, which
   session that is open right now, and the read after it is finished
   keeps it. Bytes that are not UTF-8 are read as U+FFFD and said in the
   same row, so one stray byte does not cost the whole file.
-- **A file that could not be opened** is `record:transcripts:<path>`.
+- **A file that could not be opened** is
+  `record:claude_code/sessions:<path>` when the walk could not open it
+  to hash it, and `record:transcripts:<path>` when the walk could and the
+  read after it failed.
   It is left unstamped, so every sync tries it again and the row goes
   when one reads it. A sync that cannot see the file at all — it is under
   an entry the walk could not read, or the root is missing — keeps the
