@@ -68,20 +68,25 @@ pub struct ChildStatus {
 }
 
 /// The status a group row shows, and which child it is read from.
-/// Running if any child is running; waiting if any child is between
-/// passes; failed if any child failed; queued if any child is; off if
-/// any child is; stopped if any child was; otherwise the last step in
-/// pipeline order — the one whose state says how far the group's data
-/// got. A group with only applets reads its last applet. `children`
-/// must already be in pipeline order.
+/// Running if any child is running; then waiting, failed, queued,
+/// stopped, in that order; otherwise the last step in pipeline order —
+/// the one whose state says how far the group's data got. A child
+/// turned off is passed over (an embed step turned off says nothing
+/// about the source), so the group reads Off only when every child is.
+/// A group with only applets reads its last applet. `children` must
+/// already be in pipeline order.
 pub fn group_status(children: &[ChildStatus]) -> Option<(StatusView, String)> {
-    for key in ["running", "waiting", "failed", "queued", "off", "stopped"] {
-        if let Some(child) = children.iter().find(|c| c.status.key == key) {
+    let on: Vec<&ChildStatus> = children.iter().filter(|c| c.status.key != "off").collect();
+    if on.is_empty() {
+        return children.first().map(read);
+    }
+    for key in ["running", "waiting", "failed", "queued", "stopped"] {
+        if let Some(child) = on.iter().find(|c| c.status.key == key) {
             return Some(read(child));
         }
     }
-    let last_step = children.iter().rfind(|c| c.kind == ChildKind::Step);
-    last_step.or(children.last()).map(read)
+    let last_step = on.iter().rfind(|c| c.kind == ChildKind::Step);
+    last_step.or(on.last()).map(|c| read(c))
 }
 
 /// The child's view, with the child named in the detail so the group's
@@ -334,6 +339,40 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(got.0.key, "queued");
+        assert_eq!(got.1, "s/ingest");
+    }
+
+    /// A source at rest with its embed step turned off read "Off", as
+    /// though the whole source were, when everything it runs had
+    /// succeeded.
+    #[test]
+    fn group_status_passes_over_a_child_that_is_turned_off() {
+        let got = group_status(&[
+            child("s/ingest", "succeeded", Step, None),
+            child("s/render_markdown", "succeeded", Step, None),
+            child("s/keyword_index", "skipped_up_to_date", Step, None),
+            child("s/embed", "off", Step, None),
+        ])
+        .unwrap();
+        assert_eq!(got.0.key, "skipped_up_to_date");
+        assert_eq!(got.1, "s/keyword_index");
+
+        let failed = group_status(&[
+            child("s/ingest", "failed", Step, None),
+            child("s/embed", "off", Step, None),
+        ])
+        .unwrap();
+        assert_eq!(failed.0.key, "failed");
+    }
+
+    #[test]
+    fn group_status_is_off_when_every_child_is() {
+        let got = group_status(&[
+            child("s/ingest", "off", Step, None),
+            child("s/render_markdown", "off", Step, None),
+        ])
+        .unwrap();
+        assert_eq!(got.0.key, "off");
         assert_eq!(got.1, "s/ingest");
     }
 

@@ -313,7 +313,8 @@ to remember, and the Manage screen flags a render step nothing consumes.
 One row per group, its steps and applets under a chevron. The group
 row's rules are in `http/src/manage/group.rs`: children in pipeline
 order; status running if any child is, else waiting, else failed, else
-queued, else off, else stopped, else the last step's; last synced and last
+queued, else stopped, else the last step's, passing over a child turned
+off (the group reads off only when every child is); last synced and last
 success are the ingest step's instants, else the newest child's; bytes
 are the group directory's own measured series, never a sum across
 children; a sync of the group starts at its steps with no inputs (for
