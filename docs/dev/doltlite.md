@@ -355,7 +355,7 @@ The common-use subset:
 | `dolt_diff_<table>` | vtab | row-level diff for one table. Pass two refs, or leave them off for every adjacent pair on the branch. |
 | `dolt_merge(branch)` | scalar fn | merge a branch into the active one; returns the commit, or `Already up to date`. `'--squash'` first makes it one commit with one parent. See [Merging a branch](#merging-a-branch). |
 | `dolt_merge_base(a, b)` | scalar fn | the commit two branches split at. |
-| `dolt_conflicts_resolve('--ours' \| '--theirs', table)` | scalar fn | settles a merge's conflicts in one table, inside the merge's transaction. |
+| `dolt_conflicts_resolve('--ours' \| '--theirs', table)` | scalar fn | settles a merge's conflicts in one table, inside the merge's transaction, a whole row at a time; see [Merging a branch](#merging-a-branch). |
 | `dolt_revert(hash)` | scalar fn | a new commit undoing one; see [Reverting a commit](#reverting-a-commit). |
 | `dolt_at_<table>(ref)` | table-valued fn | one table as it was at a commit. |
 | `dolt_history_<table>` | vtab | every committed version of every row in one table; a primary-key equality seeks per commit. |
@@ -581,19 +581,31 @@ saving merges that branch into the one readers see.
   them**, and `dolt_reset('--hard')` / `dolt_clean()` on another branch
   leave them alone. `dolt_diff_<table>('<commit>', 'WORKING')` on that
   branch reads them as a diff.
+- **A connection on a branch reads another branch without leaving its
+  own**: `dolt_at_<table>('main')`, `dolt_merge_base('draft', 'main')`
+  and `dolt_diff_<table>('<base>', 'main')` all work from it, and its
+  uncommitted rows stay as they were.
 - **A merge takes a branch's commits, not its uncommitted rows**: a
   branch that only has those merges as `Already up to date`. A merge
   *into* a branch with uncommitted rows is refused (`uncommitted
   changes`).
-- **Merges are cell by cell.** Two branches that change different
-  columns of one row merge cleanly, into a commit with two parents.
+- **Merges are cell by cell, until a cell conflicts.** Two branches
+  that change different columns of one row merge cleanly, into a
+  commit with two parents. When both change the same cell, the whole
+  row is in conflict.
 - **A conflict outside a transaction changes nothing** (`conflicts
   detected`, rolled back). Inside `BEGIN`, `dolt_merge` still returns
   an error (`Merge has 1 conflict(s)`), but the transaction stays open:
   `dolt_conflicts_<table>` holds each row's `base_`, `our_` and
-  `their_` columns, `dolt_conflicts_resolve('--theirs', '<table>')`
-  takes the merged branch's side, and `dolt_commit` commits the merge
-  and ends the transaction.
+  `their_` columns for every column, the table itself holds our side,
+  and `dolt_commit` commits the merge and ends the transaction. A
+  squash conflicts and resolves the same way, into one commit with one
+  parent.
+- **`dolt_conflicts_resolve('--theirs', '<table>')` takes the whole
+  row from the merged branch**, so a change on our side to another
+  column of that row is lost. To keep it, write the cells you want
+  from `their_<col>` into the table and `DELETE FROM
+  dolt_conflicts_<table>`; the commit then holds both sides' changes.
 - **`dolt_merge('--squash', b)` commits at once**, one commit whose one
   parent is the old head; the branch's own commits never reach the log.
 - **A merge commit and a squash both revert** with `dolt_revert`.
