@@ -17,7 +17,10 @@ Read this before touching `qmd_indexer/src/lib.rs`,
 `qmd_indexer/src/js/qmd_sdk.mjs` or anything that drives `qmd embed`.
 Finding 6 is why the embed step calls past `store.embed()`. Findings 1
 and 3 are held by `//datalib/backend/qmd_indexer:qmd_indexer_tests`,
-which drives the real qmd through `Index`.
+which drives the real qmd through `Index`. The facts about the search
+side, under "How a running `qmd mcp` behaves" below, are each a test in
+`//datalib/backend/qmd_facts:qmd_facts_test`, named for the fact: run
+it after a qmd bump, and a fact that moved fails by name.
 
 **The CLI and the SDK are not the same program.** `@tobilu/qmd` ships
 both a CLI (`dist/cli/qmd.js`) and a library entry (`dist/index.js`,
@@ -183,13 +186,53 @@ does not carry over to `createStore()` without being re-measured.
     through the SDK rewrites `index.yml` whole, and two of those at once
     would lose one's collection.
 
-One more, about our side rather than qmd's: `QmdDaemon`
-(`unified_index/src/qmd/daemon.rs`) respawns `qmd mcp` whenever
-`index.sqlite`'s mtime differs from the one it spawned against. The
-mtime moves on every embed batch, so during a long embed every search
-reloads the model. Whether a live `qmd mcp` sees rows committed after
-it started (WAL says yes; whether qmd caches a document list is the
-question) was not measured.
+## How a running `qmd mcp` behaves
+
+What the search (`QmdDaemon`, `unified_index/src/qmd/daemon.rs`)
+relies on. Each is a test in `qmd_facts_test`, which builds a small
+index through `Index` and talks to the pinned `qmd mcp` directly, so
+the facts are about qmd and not about our daemon.
+
+1. **A running server reads the index live.** A document keyword
+   indexed after the server started is found by a `lex` query, and one
+   embedded after it started is found by a `vec` query, with no
+   restart. qmd prepares each query's statements against the open
+   database (`dist/store.js`), and nothing it caches holds rows.
+2. **Only the first server after a keyword update writes.** At startup
+   `createStore` reconciles the collection registry with `index.yml`
+   (`syncConfigToDb`) unless the index already holds that file's hash
+   in `store_config.config_hash`, and a keyword update through the SDK
+   leaves the hash stale. So the first server writes the registry and
+   the hash, which reach `index.sqlite` when its WAL is checkpointed
+   on stop; the next server starts, searches and stops without
+   touching the file.
+3. **With no `collections`, a query searches the collections the
+   server read at startup** (`defaultCollectionNames`,
+   `dist/mcp/server.js`). A collection registered later is searched
+   only when a query names it.
+4. **An empty `collections` list is no scope at all.** qmd answers it
+   from every collection, which is why the daemon answers an empty
+   scope itself and never asks.
+5. **A scope applies before the limit.** With room for one hit, a
+   query scoped to a collection gets that collection's best hit even
+   when another collection's ranks above it. This is why `source_id:`
+   is sent to qmd as a scope (`collection_scope` in
+   `applets/src/unified_index/mod.rs`) and not only applied to its
+   answer: a source whose hits would fall outside the global top-N
+   still fills the answer. `source_id_scopes_qmd_before_its_limit` in
+   the applet's tests checks that the scope reaches qmd.
+6. **A keyword query needs no model.** A `lex` query answers with no
+   embedding model anywhere qmd could load one from. Measured on a
+   real root, a `lex` query took 0.07–0.23 s and a hybrid one
+   5.8–10.6 s on a fresh server.
+
+What follows for our side: `QmdDaemon` restarts `qmd mcp` whenever
+`index.sqlite`'s mtime differs from the one it started against. Fact 1
+says it need not restart for new rows. Fact 3 says it must restart for
+a new collection, unless every query names its collections, and fact 2
+says a restart it causes itself can move the mtime once more. The
+mtime moves on every embed batch, so during a long embed nearly every
+search reloads the model.
 
 ## What the shipped steps do with these
 

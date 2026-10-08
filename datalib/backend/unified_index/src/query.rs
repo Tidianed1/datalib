@@ -364,24 +364,20 @@ mod tests {
     }
 
     #[test]
-    fn source_and_kind_keys_recognized() {
-        let q = parse_query("source:Slack kind:Chat");
-        assert_eq!(kept(&q, col("source")), ["Slack"]);
+    fn source_id_and_kind_keys_recognized() {
+        let q = parse_query("source_id:slack kind:Chat");
+        assert_eq!(kept(&q, col("source_id")), ["slack"]);
         assert_eq!(kept(&q, col("kind")), ["Chat"]);
     }
 
-    /// `source_name:` was this filter's only spelling for as long as a
-    /// source had nothing but an id, so it is in users' fingers and in
-    /// saved queries. Both spellings have to reach the same field, or
-    /// one of them silently becomes free text.
+    /// `source:` (the provider's label) and `source_name:` (the old
+    /// spelling of `source_id:`) are gone. A saved query that still names
+    /// one is refused by name, not searched as free text.
     #[test]
-    fn source_id_accepts_its_old_source_name_spelling() {
-        for q in ["source_id:slack", "source_name:slack"] {
+    fn the_retired_source_keys_are_refused() {
+        for q in ["source:Slack", "source_name:slack"] {
             let parsed = parse_query(q);
-            assert_eq!(parsed.terms.len(), 1, "{q}");
-            assert_eq!(parsed.terms[0].field, col("source_id"), "{q}");
-            assert_eq!(parsed.terms[0].value, "slack", "{q}");
-            assert!(parsed.free_text.is_empty(), "{q}: {:?}", parsed.free_text);
+            assert!(parsed.refusal().is_some(), "{q}: {parsed:?}");
         }
     }
 
@@ -436,10 +432,10 @@ mod tests {
     #[test]
     fn qmd_predicate_single_word_unquoted() {
         // Single-word qmd: value doesn't need re-quoting.
-        let q = parse_query("qmd:\"foo\" source:Slack");
+        let q = parse_query("qmd:\"foo\" source_id:slack");
         assert_eq!(q.free_text, "foo");
         assert_eq!(q.free_text_mode, FreeTextMode::Hybrid);
-        assert_eq!(kept(&q, col("source")), ["Slack"]);
+        assert_eq!(kept(&q, col("source_id")), ["slack"]);
     }
 
     #[test]

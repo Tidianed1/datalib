@@ -351,7 +351,7 @@ emitting a handful of rows tagged `provider = "datalib"`, `source_label
 = "Storage"`, kinds `Source Size`, `Store` and `Table`. That is what
 gives a download-only source — `fsindex`, `media` — a place in the grid
 at all: they render no documents, so without this they appear nowhere.
-`source:Storage` is "show me what everything weighs". The code is
+`source_id:datalib` is "show me what everything weighs". The code is
 `datalib/backend/datalib_step/src/introspect.rs`; its header has the
 reasons behind the rules below.
 

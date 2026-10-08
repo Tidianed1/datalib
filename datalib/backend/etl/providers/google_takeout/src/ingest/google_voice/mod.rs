@@ -761,34 +761,34 @@ mod tests {
     #[test]
     fn parse_filename_three_segments() {
         let (label, ty, ts) =
-            parse_filename("Wes Blackwell - Text - 2019-08-01T21_48_33Z").unwrap();
-        assert_eq!(label, "Wes Blackwell");
+            parse_filename("William Riker - Text - 2364-03-01T17_00_00Z").unwrap();
+        assert_eq!(label, "William Riker");
         assert_eq!(ty.as_deref(), Some("Text"));
-        assert_eq!(ts, "2019-08-01T21_48_33Z");
+        assert_eq!(ts, "2364-03-01T17_00_00Z");
     }
 
     #[test]
     fn parse_filename_empty_label() {
-        let (label, ty, _) = parse_filename(" - Missed - 2009-03-06T17_50_34Z").unwrap();
+        let (label, ty, _) = parse_filename(" - Missed - 2364-03-06T17_50_34Z").unwrap();
         assert_eq!(label, "");
         assert_eq!(ty.as_deref(), Some("Missed"));
     }
 
     #[test]
     fn parse_filename_group_conversation_has_no_type() {
-        let (label, ty, ts) = parse_filename("Group Conversation - 2025-12-14T14_01_36Z").unwrap();
+        let (label, ty, ts) = parse_filename("Group Conversation - 2364-12-14T14_01_36Z").unwrap();
         assert_eq!(label, "Group Conversation");
         assert_eq!(ty, None);
-        assert_eq!(ts, "2025-12-14T14_01_36Z");
+        assert_eq!(ts, "2364-12-14T14_01_36Z");
     }
 
     #[test]
     fn derive_channel_keys_on_phone_not_label() {
         // Same number, different filename labels → same channel.
-        let (k1, _) = derive_channel("Wes Blackwell", &["+1410".to_string()]);
-        let (k2, _) = derive_channel("+1410", &["+1410".to_string()]);
+        let (k1, _) = derive_channel("William Riker", &["+12025550102".to_string()]);
+        let (k2, _) = derive_channel("+12025550102", &["+12025550102".to_string()]);
         assert_eq!(k1, k2);
-        assert_eq!(k1, "+1410");
+        assert_eq!(k1, "+12025550102");
     }
 
     #[test]
@@ -801,7 +801,7 @@ mod tests {
 
     #[test]
     fn normalize_ts_canonicalizes_offset() {
-        let out = normalize_ts("2019-08-01T14:49:00.742-07:00").unwrap();
+        let out = normalize_ts("2364-03-01T09:00:00.742-08:00").unwrap();
         // millis precision, valid RFC3339
         assert!(datalib_time::parse_strict(&out).is_ok());
     }

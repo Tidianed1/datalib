@@ -590,8 +590,7 @@ survivor is the `anthropic` search keyword in `ui/src/config/catalog.ts`.
 | **name** | what a person typed in the wizard. Free text, mutable, may repeat. |
 
 Everything that identifies, filters or joins uses the id, and the field
-is `source_id` everywhere. `source_name` survives in one place because a
-**person** types it: the `source_name:` search filter.
+is `source_id` everywhere, the `source_id:` search filter included.
 
 ## A local file or folder: ask `fsscan` what changed
 
