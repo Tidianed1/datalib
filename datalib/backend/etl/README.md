@@ -272,6 +272,20 @@ silently start on a writer's branch.
 `a_fresh_connection_starts_on_main` asserts the default itself for that
 reason.
 
+### Drafts: a record's unsaved edits on a branch of their own
+
+A store a person edits at length (the contacts app) keeps each record's
+unsaved edits on a branch `draft/<key>`, cut from the writer's last
+seal, as uncommitted rows that outlive the connection (`draft.rs`).
+`OnDraft` moves the writer's one connection onto the draft and back;
+dropped without leaving, it closes the connection rather than return
+one to the pool still on a draft. `save` commits the draft, squashes
+it into the writer's branch with `--no-commit`, settles every conflict
+cell by cell with the draft's value winning wherever the draft changed
+it, seals with the caller's message, and deletes the branch. The
+doltlite facts it rests on are in `docs/dev/doltlite.md` § "Merging a
+branch". Nothing but the store's writer touches a draft.
+
 ### A download takes the store; it never opens one
 
 Every provider's `FetchOptions` carries `pub db: RawDb` — a live handle,

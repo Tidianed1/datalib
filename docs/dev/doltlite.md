@@ -575,7 +575,8 @@ name itself and then switches branches in SQL, so `doltlite -readonly
 ### Merging a branch
 
 How a draft works: edits go to a branch of their own, uncommitted, and
-saving merges that branch into the one readers see.
+saving merges that branch into the one readers see. `datalib_etl::draft`
+is the recipe in code.
 
 - **A branch's uncommitted rows outlive the connection that wrote
   them**, and `dolt_reset('--hard')` / `dolt_clean()` on another branch
@@ -606,8 +607,13 @@ saving merges that branch into the one readers see.
   column of that row is lost. To keep it, write the cells you want
   from `their_<col>` into the table and `DELETE FROM
   dolt_conflicts_<table>`; the commit then holds both sides' changes.
-- **`dolt_merge('--squash', b)` commits at once**, one commit whose one
-  parent is the old head; the branch's own commits never reach the log.
+- **`dolt_merge('--squash', b)` commits at once when the branch it
+  lands on has moved since `b` was cut**, one commit whose one parent
+  is the old head; the branch's own commits never reach the log. When
+  it has not moved, the squash stops with the rows applied and
+  uncommitted. With `'--no-commit'` it stops uncommitted either way, so
+  the commit that follows carries the caller's message.
+- **A branch name may hold a slash** (`draft/riker`).
 - **A merge commit and a squash both revert** with `dolt_revert`.
 - **`dolt_branch('-d', b)` refuses a branch with unmerged commits**
   (`branch is not fully merged`) and drops one whose only change is
