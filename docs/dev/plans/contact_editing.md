@@ -95,12 +95,16 @@ One transaction in the applet, on its writer branch:
    lands as one commit with one parent, so the published history has
    one commit per save, and undo works per save.
 3. Where the draft and the published state changed the same cell,
-   take the draft's side: the person saving is the last writer. Doltlite
-   calls the merged-in branch "theirs", so this is
-   `dolt_conflicts_resolve('--theirs', …)`; in our code it is named
-   for what it means, the draft wins. Cells only one side changed
-   merge cleanly, so a rename in the card and a note changed elsewhere
-   both survive.
+   take the draft's side: the person saving is the last writer.
+   Doltlite then puts the whole row in conflict, and the table holds
+   the published side. For each conflicting row the applet writes the
+   cells the draft changed, from the conflict table's `their_<col>`
+   (doltlite's name for the merged-in branch, the draft), and deletes
+   the conflict rows. Not `dolt_conflicts_resolve('--theirs')`: it
+   takes the whole row, and would lose a published change to another
+   cell of it. So a rename in the card and a note changed elsewhere
+   both survive, and which cells the draft wins is the same pure
+   function the card uses below.
 4. Seal (`commit_run`), which publishes, and delete the draft branch.
 
 **A person never overwrites a change they have not seen.** The save
@@ -109,10 +113,6 @@ published state has moved since and the move touched this contact, the
 applet saves nothing and answers with the new state (the `If-Match` /
 `412 Precondition Failed` pattern of HTTP), and the card shows the
 change as below. Saving again then knowingly keeps the draft's values.
-
-Not yet pinned: a squash merge that conflicts inside a transaction.
-The facts cover a conflict resolved in a plain merge and a squash
-without one; this needs its own fact before the save is built.
 
 ## Seeing another writer's change
 
@@ -192,8 +192,7 @@ only ever reads.
 
 ## Order of work
 
-1. **The facts still missing**: a squash merge that conflicts inside a
-   transaction; reading the published state from a draft connection.
+1. **The facts** (#1062, #1065).
 2. **The store**: the `fields` table (a ladder rung), drafts, save,
    history and revert.
 3. **The applet's routes and the live frame.**
