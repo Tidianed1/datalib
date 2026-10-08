@@ -4,7 +4,7 @@
 // the last sync did, notices as strips above the table, and a status
 // column that says its word before its time. Its logic is
 // sourcesCardModel.ts.
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted } from "vue";
 import type { Column } from "@slickgrid-universal/common";
 import type { CardCtx } from "./types";
 import type { Quantity, StatusView } from "@/api";
@@ -113,37 +113,17 @@ function statusCell(s: StatusView | null, row: Row | undefined): HTMLElement {
   return wrap;
 }
 
-// Widths that leave the whole table in view in a card about 850px
-// wide; a width a person drags to is kept with the card (`widths`).
+// Narrower than their types' defaults, so more of the table is in view
+// before it scrolls sideways; Status is wider, for the queue and the ETA.
 const columnOverrides: Record<string, Partial<Column<Row>>> = {
-  name: { width: 230 },
+  name: { width: 270 },
   status: {
     width: 250,
     formatter: (_r, _c, value, _col, row) => statusCell(value as StatusView | null, row),
   },
-  items: { width: 120 },
-  disk: { width: 120 },
+  items: { width: 140 },
+  disk: { width: 140 },
 };
-
-// The widths a person dragged columns to, by column id, kept in the
-// card's state so they outlast a reload.
-function readWidths(state: string): Record<string, number> {
-  const out: Record<string, number> = {};
-  for (const part of (new URLSearchParams(state).get("w") ?? "").split(",")) {
-    const [id, px] = part.split(":");
-    const width = Number(px);
-    if (id && Number.isFinite(width) && width > 0) out[id] = width;
-  }
-  return out;
-}
-const widths = ref(readWidths(props.ctx.initialState));
-function onColumnsResized(next: Record<string, number>) {
-  widths.value = { ...widths.value, ...next };
-  const w = Object.entries(widths.value)
-    .map(([id, px]) => `${id}:${px}`)
-    .join(",");
-  props.ctx.host.setState(new URLSearchParams({ w }).toString());
-}
 
 onMounted(() => {
   if (props.add) openAdd();
@@ -224,8 +204,6 @@ const rowHeight = computed(() => Math.round(28 + 8 * density.value));
         :openByDefault="isGroupOpenByDefault"
         :pinnedColumns="1"
         :columnOverrides="columnOverrides"
-        :widths="widths"
-        @columnsResized="onColumnsResized"
         :rowHeight="rowHeight"
         @ready="onGridReady"
         @cellDoubleClick="onCellDoubleClicked"
