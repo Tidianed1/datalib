@@ -48,6 +48,7 @@ import {
   type EntityMenuEntry,
   type EntityMenuId,
 } from "./entities";
+import { personSource } from "./cardSources";
 import HandlePopover from "./HandlePopover.ce.vue";
 import { copyToClipboard } from "@/clipboard";
 import { pushToast } from "@/toasts";
@@ -102,6 +103,9 @@ const props = defineProps<{
   remoteAccept?: (url: string) => boolean;
   /** What this body is, for the server's answer (`remoteMedia.ts`). */
   remoteContext?: RemoteContext;
+  /** The source this document came from: a person card opened from one
+   *  of its chips leads with that source's record. */
+  sourceId?: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -126,7 +130,8 @@ const emit = defineEmits<{
   (e: "frame-contextmenu", ev: MouseEvent, view: { win: Window; dx: number; dy: number }): void;
   /** A chip asked for everything from its person: the search to open. */
   (e: "open-search", q: string): void;
-  /** A group or step chip asked to open its card: the card source. */
+  /** A chip asked to open its card — a person's, a group's or a
+   *  step's: the card source. */
   (e: "open-card", source: string): void;
 }>();
 
@@ -265,10 +270,7 @@ function onChipDblClick(ev: MouseEvent) {
   ev.preventDefault();
   ev.stopPropagation();
   chipTarget.value = null;
-  emit(
-    "open-search",
-    searchQueryFor(chip.dataset.handle ?? "", chip.dataset.shownAs ?? "", whoIs(chip)),
-  );
+  emit("open-card", personSource(chip.dataset.handle ?? "", { seenIn: props.sourceId ?? null }));
 }
 
 type ChipMenuAt = {

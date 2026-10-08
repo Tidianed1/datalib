@@ -34,6 +34,11 @@ export type NormalizedContact = {
   }[];
   org: string | null;
   title: string | null;
+  note?: string | null;
+  /** Anything else the source says, in its order: an address, a birthday. */
+  details?: { label: string; value: string }[];
+  /** The person's own page at the source, where it has one. */
+  source_url?: string | null;
   seen: { items: number; last_at: string | null } | null;
   /** A photo the app serves, app-relative, where the source has one and
    *  the server can serve it; absent or null otherwise. The chip's lead. */

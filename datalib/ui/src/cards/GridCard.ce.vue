@@ -44,6 +44,7 @@ import {
   entityMenu,
   type EntityMenuEntry,
 } from "./entities";
+import { personSource } from "./cardSources";
 import {
   NOBODY,
   canLinkHandles,
@@ -1956,17 +1957,17 @@ function onClick(e: SlickEventData, args: OnClickEventArgs) {
 }
 
 function onDblClick(e: SlickEventData, args: OnDblClickEventArgs) {
-  // Double-click on a chip is everything from that person: the grid,
-  // narrowed to their handle (docs/dev/plans/chips.md § Clicks).
-  // On a group or step chip, it opens that group's dashboard or that
-  // step's log.
+  // Double-click on a chip opens its card: a person's, led by this
+  // row's source, or a group's dashboard or a step's log
+  // (docs/dev/plans/chips.md § Clicks).
   const chip = chipAt(e);
   if (chip?.dataset.entity) {
     openEntity(chip.dataset.entity);
     return;
   }
   if (chip) {
-    appendFilterToQuery(filterToken("author_handle", chip.dataset.handle ?? "", false));
+    const seenIn = rowData(args.row)?.source_id || null;
+    props.ctx.host.openCards(personSource(chip.dataset.handle ?? "", { seenIn }));
     return;
   }
   const data = rowData(args.row);

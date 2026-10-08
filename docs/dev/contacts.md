@@ -393,6 +393,12 @@ Everything is in `datalib/ui/src/cards/`:
   (`HandlePopover.ce.vue`: link to a contact, create one, unlink, mark
   a handle as no longer working) and the right-click menu
   (`ChipMenu.ce.vue`). `chip.css` is the one look.
+- `PersonCard.ce.vue` is the card a person chip's double-click opens
+  (`personView`; its rules are `person.ts`): your contact when the
+  handle is linked to one, then each source's record of the person, a
+  section per source and never merged, the source the chip was seen in
+  first. It reads only, but for *Create contact* on an unlinked handle;
+  linking stays the popover's.
 - The grid's Author column is a chip too: `grid_rows.author_handle`
   (the `author_handle:` filter) comes with each message's row and each
   reaction's, and
@@ -497,7 +503,7 @@ chip in the UI is separate and always uses the latest answer.
 
 ## Not built
 
-The contact card, merge, groups and members, undo, the triage grid of
+Editing a contact on its card, merge, groups and members, undo, the triage grid of
 unresolved handles, `row_handles`, the `contact:` search filter, a
 handle for a number without its country code, a handle that stopped
 working in some apps but not others, mentions outside Slack

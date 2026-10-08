@@ -197,4 +197,8 @@ export type ViewLibs = {
   // vertically with their actions, charts over the run and the group's
   // log. See cards/SyncDashboardCard.ce.vue.
   syncDashboardView: (opts: { group: string; step?: string }) => CardRender;
+  // A person: your contact when the handle is linked to one, and each
+  // source's record of them, the one the chip was seen in first.
+  // Opened by double-clicking a person chip. See cards/PersonCard.ce.vue.
+  personView: (handle: string, opts?: { seenIn?: string | null }) => CardRender;
 };
