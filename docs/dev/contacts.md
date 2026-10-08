@@ -321,6 +321,7 @@ person's work, so the rules that make it irreplaceable:
 | `handles` | `handle`, as `datalib_handle` spells it | `contact_id`, `linked_how`, `linked_at_utc`, `stopped_working_by` |
 | `members` | `(group_id, member_id)` | `added_at_utc` |
 | `photos` | `contact_id` | `content_type`, `bytes`, `set_at_utc` |
+| `fields` | `field_id`, minted by the card | `contact_id`, `kind` (`FieldKind`), `label`, `value`, `handle`, `position`, `copied_from_source` and `_key` |
 
 Each table is a row struct in `contacts/src/schema.rs`, and its DDL
 and upsert are derived from it (`#[derive(PortableTable)]`).
@@ -362,6 +363,25 @@ is a 409 with the store's words; a handle that does not parse is a
 The config entry is `[[applets]] id = "datalib_contacts"` with
 `command = "datalib-applet datalib_contacts"`; the gateway passes the
 data root in the environment.
+
+### Fields, and editing a contact through a draft
+
+A **field** is a line of what a contact says about the person (a
+number, an address, a title), and a **link** is a handle the contact
+holds. Neither implies the other: a household's landline can be a
+field on two contacts and linked to nobody. A field's `handle` is its
+value as a handle where it is one, so the card can say how the field
+stands against the links; it links nothing.
+
+The card edits a contact's name, note and fields through a **draft**
+(`contacts/src/drafts.rs`, over `datalib_etl::draft`): a branch
+`draft/<contact_id>` where each autosave is an uncommitted write, which
+no reader sees. A save publishes it as one commit, the draft winning
+only the cells it changed, so a link or a rename made meanwhile
+survives. The save names the published commit the card last showed; if
+this contact's name, note or fields have moved since, nothing is saved
+and the card gets the new state to show. Links and photos change at
+once, never through a draft.
 
 ## In the UI
 

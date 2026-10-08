@@ -677,6 +677,7 @@ upstream (block types, MIME types), free-form display text
 | what namespace a handle is in | `HandleKind` | `handle/src/lib.rs` (`datalib_handle`) |
 | a contact is a person or a group; how one is reached | `ContactKind`, `Medium` | `contact_schema/src/lib.rs` (`datalib_contact_schema`) |
 | how a handle was linked | `LinkedHow` | `contacts/src/lib.rs` (`datalib_contacts`) |
+| what a contact's field says | `FieldKind` | `contacts/src/lib.rs` (`datalib_contacts`) |
 
 The TypeScript side mirrors these as string-literal unions in
 `datalib/ui/src/api.ts`, hand-kept — change both halves together.

@@ -5,7 +5,7 @@
 use datalib_contact_schema::ContactKind;
 use datalib_etl_macros::PortableTable;
 
-use crate::LinkedHow;
+use crate::{FieldKind, LinkedHow};
 
 pub mod contacts {
     use super::*;
@@ -97,11 +97,50 @@ pub mod photos {
     }
 }
 
+pub mod fields {
+    use super::*;
+
+    /// One line of what a contact says about a person, as vCard has
+    /// them: a number, an address, a title. A field links nothing, even
+    /// an email or a number; `handle` is its value as a handle, where it
+    /// is one, so the card can say how it stands against the links.
+    #[derive(Debug, Clone, PortableTable)]
+    #[portable_table(
+        table = "fields",
+        primary_key = "field_id",
+        index = "fields_by_contact:contact_id"
+    )]
+    pub struct FieldRow {
+        #[col(sql = "TEXT")]
+        pub field_id: String,
+        #[col(sql = "TEXT")]
+        pub contact_id: String,
+        #[col(sql = "TEXT", enum)]
+        pub kind: FieldKind,
+        #[col(sql = "TEXT")]
+        pub label: Option<String>,
+        #[col(sql = "TEXT")]
+        pub value: String,
+        #[col(sql = "TEXT")]
+        pub handle: Option<String>,
+        #[col(sql = "INTEGER")]
+        pub position: i64,
+        /// The source whose record the value was copied from, and that
+        /// record's key there; empty for a value the person typed.
+        #[col(sql = "TEXT")]
+        pub copied_from_source: Option<String>,
+        #[col(sql = "TEXT")]
+        pub copied_from_key: Option<String>,
+    }
+}
+
 /// Every table, then every index: what the store is opened with.
 pub const DDL: &[&str] = &[
     contacts::DDL[0].1,
     handles::DDL[0].1,
     members::DDL[0].1,
     photos::DDL[0].1,
+    fields::DDL[0].1,
     handles::INDEXES[0].1,
+    fields::INDEXES[0].1,
 ];
