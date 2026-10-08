@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 
 use crate::support::{
     gmail_get_url, gmail_history_url, gmail_list_url, gmail_message, inbox_label, put_gmail,
-    put_gmail_account, Mirror,
+    put_gmail_account, Mirror, GMAIL,
 };
 
 const ACCOUNT: &str = "t@example.test";
@@ -32,6 +32,65 @@ async fn a_gmail_label_row_follows_the_label() {
     a_takeout_import_moves_onto_the_real_label_ids().await;
     a_takeout_import_after_the_api_files_under_the_real_ids().await;
     a_takeout_label_no_message_carries_goes().await;
+    a_label_listing_that_names_nothing_takes_no_label_off_any_mail().await;
+}
+
+/// `labels.list` answering with no `labels` key read as an account with
+/// no labels, and every Gmail mailbox the store held was emptied: every
+/// email lost every label. Every account has the system labels, so a
+/// reply without the list is malformed and fails the run, and a list
+/// that names nothing plans no deletions.
+async fn a_label_listing_that_names_nothing_takes_no_label_off_any_mail() {
+    let m = Mirror::new();
+    put_labels(
+        &m.playback,
+        &[("Label_7", "datalib"), ("Label_9", "travel")],
+    );
+    put_gmail(
+        &m.playback,
+        &gmail_list_url(&[]),
+        &json!({ "messages": [{ "id": UNDER_LIB }, { "id": UNDER_TRAVEL }] }),
+    );
+    for (id, labels) in [
+        (UNDER_LIB, &["INBOX", "Label_7"][..]),
+        (UNDER_TRAVEL, &["INBOX", "Label_9"][..]),
+    ] {
+        put_gmail(
+            &m.playback,
+            &gmail_get_url(id),
+            &gmail_message(id, labels, id),
+        );
+    }
+    run_gmail(&m, &[]).await;
+    let before = State::read(&m).await;
+    assert_eq!(before.mailboxes.len(), 3);
+    put_gmail(
+        &m.playback,
+        &gmail_history_url("1000"),
+        &json!({ "historyId": "1000" }),
+    );
+
+    put_gmail(&m.playback, &format!("{GMAIL}/labels"), &json!({}));
+    let malformed = m.run(|db| gmail_api::fetch(FetchOptions::new(db))).await;
+    assert!(
+        malformed.is_err(),
+        "a reply without its list is not a listing"
+    );
+    let after = State::read(&m).await;
+    assert_eq!(after.mailboxes, before.mailboxes);
+    assert_eq!(after.filed(UNDER_LIB), before.filed(UNDER_LIB));
+
+    put_gmail(
+        &m.playback,
+        &format!("{GMAIL}/labels"),
+        &json!({ "labels": [] }),
+    );
+    let empty = run_gmail(&m, &[]).await;
+    assert_eq!(empty.mailboxes_destroyed, 0, "{empty:?}");
+    let after = State::read(&m).await;
+    assert_eq!(after.mailboxes, before.mailboxes);
+    assert_eq!(after.filed(UNDER_LIB), before.filed(UNDER_LIB));
+    assert_eq!(after.filed(UNDER_TRAVEL), before.filed(UNDER_TRAVEL));
 }
 
 async fn a_takeout_label_no_message_carries_goes() {
