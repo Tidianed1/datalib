@@ -490,7 +490,7 @@ DMs, spaces and bots with their attachments, rendered to markdown.
 
 Request a Takeout with **Chat** ticked and unpack it — see
 [Google Takeout](#google-takeout), which is the source this is one
-feed of. Every feed is off until you turn it on, so set
+feed of. The Add source form ticks it; in a hand-written config, set
 `google_chat = true` beside `export.path`.
 
 ## Google Takeout
@@ -513,10 +513,11 @@ unzip ~/Downloads/takeout-*.zip -d ~/backups/
 
 Useful products: **Chat**, **Voice**, **Maps**, **YouTube history** and
 **Gemini** (read by this source from the unpacked tree), and **Mail**
-(a single `.mbox`, read by the [email](#email) source instead). Every
-feed is off until its flag beside `export.path` turns it on
-(`google_chat = true`, `google_voice = true`, …), because an export
-holds whatever you asked Google for; [Google Chat](#google-chat) and
+(a single `.mbox`, read by the [email](#email) source instead). The
+Add source form ticks every product; untick what you want left out. In
+a hand-written config every feed is off until its flag beside
+`export.path` turns it on (`google_chat = true`, `google_voice = true`,
+…); [Google Chat](#google-chat) and
 [Google Voice](#google-voice) have sections of their own. A Takeout is
 a complete snapshot, so it is also the way to notice what Google has
 deleted since the last one: unpack a newer export in its place, and

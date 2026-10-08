@@ -103,16 +103,19 @@ describe("Google Takeout", () => {
   ];
 
   /// `GoogleTakeoutSync` in google_takeout_config: a feed with no box
-  /// here could be neither turned on nor kept on an edit.
-  it("has a box for every feed the provider reads, each starting off", () => {
+  /// here could be neither turned on nor kept on an edit. The provider
+  /// defaults every feed off, so the form ticks each one and writes it.
+  it("has a box for every feed the provider reads, each starting on", () => {
     const targets = TAKEOUT.fields!.map((f) => f.target);
     for (const feed of FEEDS) expect(targets, feed).toContain(`export.${feed}`);
     const seeded = seedFieldValues(TAKEOUT);
-    for (const feed of FEEDS) expect(seeded[`export.${feed}`], feed).toBe(false);
+    for (const feed of FEEDS) expect(seeded[`export.${feed}`], feed).toBe(true);
+    const added = toml(TAKEOUT, { "export.path": "~/backups/Takeout" });
+    for (const feed of FEEDS) expect(added, feed).toContain(`${feed} = true`);
   });
 
   it("writes the feeds ticked, and the spam switch only under Voice", () => {
-    const off = toml(TAKEOUT, { "export.path": "~/backups/Takeout", "export.google_chat": true });
+    const off = toml(TAKEOUT, { "export.path": "~/backups/Takeout", "export.google_voice": false });
     expect(off).toContain("[steps.params.export]");
     expect(off).toContain("google_chat = true");
     expect(off).toContain("google_voice = false");
