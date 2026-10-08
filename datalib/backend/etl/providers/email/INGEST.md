@@ -92,7 +92,7 @@ writes or deletes one of them.
 
 The store keeps what upstream **listed** apart from what it **holds**,
 and works out what it **owes** from the two each time it is asked
-([`docs/dev/plans/sync_state.md`](/docs/dev/plans/sync_state.md) §2).
+([`data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md#what-is-left-to-fetch-listed-minus-held)).
 The holding and the owing are the shared `datalib_etl_web::owed`; what is
 email's is the listing and how a batch is fetched and written
 (`src/ingest/listed.rs`). The Gmail API mode keeps the same tables.

@@ -56,7 +56,7 @@ growing.
 
 **No walk keeps a cursor.** What a run fetches is what the window lists
 less what the store already holds, worked out from the store each run
-([`sync_state.md`](/docs/dev/plans/sync_state.md)). The shared form is
+([`data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md#what-is-left-to-fetch-listed-minus-held)). The shared form is
 `datalib_etl_web::owed`: a listing is a key and a version per record; what
 a row is held at is `held_version` in its table's `_bookkeeping`
 sidecar, written in the transaction that stores the row; a record is

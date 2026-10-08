@@ -40,7 +40,7 @@ bytes, a page's comments, a commented block, a user. What a table holds
 is `held_version` in its `_bookkeeping` sidecar, written in the
 transaction that wrote the content; what is owed is the difference,
 asked of the store each run and never stored. Nothing is marked done
-(docs/dev/plans/sync_state.md).
+(docs/dev/data_architecture_ingestion.md, "What is left to fetch").
 
 **Listing.** Two modes.
 

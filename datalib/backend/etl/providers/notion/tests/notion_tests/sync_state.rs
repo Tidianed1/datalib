@@ -1,5 +1,5 @@
 //! What is owed is what upstream listed minus what the store holds, and
-//! nothing else stands in for it (docs/dev/plans/sync_state.md §6, the
+//! nothing else stands in for it (docs/dev/plans/completed/sync_state.md §6, the
 //! Notion rows). Each test here was written against the old code and
 //! watched failing before the mechanism it names was replaced.
 

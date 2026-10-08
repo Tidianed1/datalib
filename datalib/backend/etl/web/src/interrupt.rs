@@ -3,7 +3,7 @@
 //!
 //! A download is correct under interruption only if what is left to do
 //! can be worked out from the store alone, wherever the run stopped
-//! (docs/dev/plans/sync_state.md). This cuts a replayed run off at each
+//! (docs/dev/data_architecture_ingestion.md, "What is left to fetch"). This cuts a replayed run off at each
 //! request in turn, two ways, and checks that. It commits the store at
 //! the cut, including what the run had not sealed, so a download that
 //! leans on "the unsealed tail is discarded" fails it.

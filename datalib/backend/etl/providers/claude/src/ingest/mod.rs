@@ -8,7 +8,7 @@
 //! `datalib_etl_web::owed`, which owns the stop, the failure budget, the
 //! flush and what each outcome means for a record. Nothing is marked
 //! done: holding the content at the listed version is done
-//! (docs/dev/plans/sync_state.md).
+//! (docs/dev/data_architecture_ingestion.md, "What is left to fetch").
 
 pub mod api;
 pub mod db;

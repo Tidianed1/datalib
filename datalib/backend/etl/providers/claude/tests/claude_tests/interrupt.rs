@@ -1,5 +1,5 @@
 //! A download cut off at any request, then run again, ends with the
-//! store an uninterrupted run leaves (docs/dev/plans/sync_state.md §8).
+//! store an uninterrupted run leaves (`datalib_etl_web::interrupt`).
 //! The tape is a small TNG org: three conversations, one with two
 //! files, one of which claude.ai no longer serves, and two projects
 //! with knowledge docs. Run from an empty store and from the store an

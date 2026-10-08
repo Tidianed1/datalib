@@ -137,7 +137,7 @@ source and for the `slack-ingest` CLI alike. `0` turns the pass off.
 Nothing in the store is a cursor, and nothing records that a channel,
 a thread or a file is "done". Each run asks the store what it holds
 and fetches the difference
-([`sync_state.md`](/docs/dev/plans/sync_state.md) §2), so a run that is
+([`data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md#what-is-left-to-fetch-listed-minus-held)), so a run that is
 stopped or killed anywhere leaves a store the next run finishes, with
 nothing to remember in between.
 
