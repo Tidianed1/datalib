@@ -175,8 +175,12 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     summary.blobs_stored = acc.fetched_len();
 
     // Whether this run may delete what no file holds: only right after
-    // reading every one of them.
-    let deletes = read_all && changes.walk_errors == 0 && summary.parse_errors == 0;
+    // reading every one of them. A file there and unread may hold any of
+    // them.
+    let deletes = read_all
+        && changes.walk_errors == 0
+        && summary.parse_errors == 0
+        && scan.present_unread.is_empty();
     // A rewritten file keeps its old stamp on a run that deleted nothing,
     // so the next run still sees it rewritten and reads every file again.
     let rewritten: HashSet<&str> = changes.modified.iter().map(|f| f.rel.as_str()).collect();
@@ -232,10 +236,12 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     }
     tx.commit().await.context("commit sms_backup_restore tx")?;
 
-    let mut problems = scan.walk_problems();
-    problems.extend(unread);
+    scan.report_problems(&found, "files");
+    let mut problems = unread;
     if !deletes && read_all && changes.walk_errors == 0 && changes.may_have_dropped_records() {
-        problems.push(fsscan::Scan::deletions_held_back(summary.parse_errors));
+        problems.push(fsscan::Scan::deletions_held_back(
+            summary.parse_errors + scan.present_unread.len(),
+        ));
     }
     found.extend(problems);
 

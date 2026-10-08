@@ -341,7 +341,7 @@ async fn mirror_media_files(
         |_| true,
     )
     .await?;
-    found.extend(scan.walk_problems_as("media"));
+    scan.report_problems(found, "media");
 
     // Bytes first, only for hashes the CAS does not already hold, so the
     // registry below can name each file by the key its bytes went in
@@ -408,13 +408,40 @@ async fn mirror_media_files(
     // Drop-and-refill, like the mirrored tables: a byte-identical refill
     // is not a change to doltlite, and a file gone from `Media/` goes
     // from the registry. Not after a walk that could not read part of the
-    // tree: the files under it are not gone.
+    // tree: the files under it are not gone. A file there and unread
+    // keeps the row it had.
     let mut tx = dst.begin().await.context("begin wa_media_files tx")?;
+    let mut kept: Vec<(String, String, i64, Option<String>)> = Vec::new();
+    for rel in &scan.present_unread {
+        kept.extend(
+            sqlx::query_as(
+                "SELECT blake3, relative_path, size_bytes, mime_type \
+                 FROM wa_media_files WHERE relative_path = ?",
+            )
+            .bind(format!("{MEDIA_DIR}/{rel}"))
+            .fetch_optional(&mut *tx)
+            .await
+            .context("read the row of an unread media file")?,
+        );
+    }
     if scan.errors.is_empty() {
         sqlx::query("DELETE FROM wa_media_files")
             .execute(&mut *tx)
             .await
             .context("clear wa_media_files")?;
+    }
+    for (blake3, relative_path, size, mime_type) in &kept {
+        sqlx::query(
+            "INSERT OR IGNORE INTO wa_media_files \
+                (blake3, relative_path, size_bytes, mime_type) VALUES (?, ?, ?, ?)",
+        )
+        .bind(blake3)
+        .bind(relative_path)
+        .bind(size)
+        .bind(mime_type)
+        .execute(&mut *tx)
+        .await
+        .context("keep the row of an unread media file")?;
     }
     for f in &scan.files {
         let hex = fsscan::hex(&f.blake3);
@@ -644,6 +671,74 @@ mod tests {
         }
         set_mode(&video, 0o755);
         run().await;
+        assert!(problems(&db).await.is_empty());
+        db.close().await;
+    }
+
+    /// A media file that will not open keeps its registry row while one
+    /// deleted beside it loses its own. It was a walk error, which kept
+    /// every row; then, once it was not, the refill dropped its row too.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_media_file_that_will_not_open_keeps_its_registry_row() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let backup_dir = tmp.path().join("WhatsApp");
+        write_media(&backup_dir, "WhatsApp Images/IMG-0010.jpg", b"phaser");
+        write_media(&backup_dir, "WhatsApp Images/IMG-0011.jpg", b"tricorder");
+        let cache = FingerprintCache::open(&tmp.path().join("fp.sqlite"))
+            .await
+            .expect("open fingerprint cache");
+        let db = RawDb::open(&tmp.path().join("wa.doltlite_db"))
+            .await
+            .expect("open raw store");
+        mirror_beside_msgstore(
+            &backup_dir,
+            &[0u8; 32],
+            &db,
+            &cache,
+            &mut Default::default(),
+        )
+        .await
+        .expect("ingest beside msgstore");
+
+        let images = backup_dir.join(MEDIA_DIR).join("WhatsApp Images");
+        std::fs::remove_file(images.join("IMG-0011.jpg")).expect("rm");
+        let locked = images.join("IMG-0010.jpg");
+        if set_mode(&locked, 0o000) {
+            mirror_beside_msgstore(
+                &backup_dir,
+                &[0u8; 32],
+                &db,
+                &cache,
+                &mut Default::default(),
+            )
+            .await
+            .expect("ingest beside msgstore");
+            let paths: Vec<String> = sqlx::query_scalar(
+                "SELECT relative_path FROM wa_media_files ORDER BY relative_path",
+            )
+            .fetch_all(db.pool())
+            .await
+            .expect("read registry");
+            assert_eq!(paths, ["Media/WhatsApp Images/IMG-0010.jpg"]);
+            assert_eq!(
+                problems(&db).await,
+                vec![(
+                    "record:media:WhatsApp Images/IMG-0010.jpg".into(),
+                    "error".into()
+                )]
+            );
+        }
+        set_mode(&locked, 0o644);
+        mirror_beside_msgstore(
+            &backup_dir,
+            &[0u8; 32],
+            &db,
+            &cache,
+            &mut Default::default(),
+        )
+        .await
+        .expect("ingest beside msgstore");
         assert!(problems(&db).await.is_empty());
         db.close().await;
     }

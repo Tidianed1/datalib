@@ -1352,3 +1352,34 @@ async fn a_path_the_scan_passed_over_keeps_its_row() -> Result<()> {
     assert_eq!(problems, vec!["listing:files".to_string()]);
     Ok(())
 }
+
+/// A file that will not open was a walk error, so one unreadable file
+/// held back every deletion under the root. It is a row of its own now:
+/// its stored rows stay, a file deleted beside it goes, and the row
+/// clears once the file opens.
+#[tokio::test]
+async fn a_file_that_will_not_open_is_its_own_row_and_deletes_go_on() -> Result<()> {
+    let h = Harness::on_a_copy().await?;
+    h.scan().await?;
+    let locked = h.root.join("music/untagged_hum.mp3");
+    std::fs::remove_file(h.root.join("playlists/bridge_ambience.m3u"))?;
+    set_mode(&locked, 0o000)?;
+    if std::fs::read(&locked).is_ok() {
+        // Root reads through any mode; CI's container runs as root.
+        set_mode(&locked, 0o644)?;
+        return Ok(());
+    }
+    let s = h.scan().await;
+    set_mode(&locked, 0o644)?;
+    let s = s?;
+    assert_eq!(s.removed, 1, "the deleted playlist goes: {s:?}");
+    assert!(files(&h.db).await?.contains_key("music/untagged_hum.mp3"));
+    assert_eq!(
+        problem_keys(&h.db).await?,
+        ["record:files:music/untagged_hum.mp3"]
+    );
+
+    h.scan().await?;
+    assert_eq!(problem_keys(&h.db).await?, Vec::<String>::new());
+    Ok(())
+}

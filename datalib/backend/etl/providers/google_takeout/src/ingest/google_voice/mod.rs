@@ -210,11 +210,18 @@ pub async fn ingest(
     ));
 
     // Whether this run may delete what no Voice file holds: only right
-    // after reading every one of them.
+    // after reading every one of them. A Voice file there and unread may
+    // hold any of them.
+    let unread_voice = scan
+        .present_unread
+        .iter()
+        .filter(|rel| fsscan::is_under(rel, "Voice"))
+        .count();
     let deletes = read_all
         && changes.walk_errors == 0
         && super::product_exported(scan, "Voice")
-        && failed == 0;
+        && failed == 0
+        && unread_voice == 0;
     // A rewritten file keeps its old stamp on a run that deleted nothing,
     // so the next run still sees it rewritten and reads every file again.
     let rewritten: HashSet<&str> = changes.modified.iter().map(|f| f.rel.as_str()).collect();
@@ -286,8 +293,8 @@ pub async fn ingest(
         for rel in gone {
             file_checkpoint::forget_file(&mut tx, SCOPE, rel).await?;
         }
-    } else if failed > 0 && changes.may_have_dropped_records() {
-        summary.held_back = Some(fsscan::Scan::deletions_held_back(failed));
+    } else if failed + unread_voice > 0 && changes.may_have_dropped_records() {
+        summary.held_back = Some(fsscan::Scan::deletions_held_back(failed + unread_voice));
     }
     tx.commit().await.context("commit google_voice tx")?;
     found.skipped("google_voice", skipped);

@@ -257,6 +257,9 @@ async fn fetch_device(
     );
     s.errors += scan.errors.len();
     found.extend(scan.walk_problems_as(&format!("files {}", who.id)));
+    for u in &scan.unreadable {
+        file_failed(&u.rel, u.error.clone());
+    }
 
     let prev = file_checkpoint::load_cursor(db.pool(), &scope).await?;
     let changes = scan.changes_since(&prev);

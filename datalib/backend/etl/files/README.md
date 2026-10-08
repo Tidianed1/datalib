@@ -144,4 +144,14 @@ the whole thing back over the network. Only the stat can see that, so
 refused file is absent from `files` and leaves the cache untouched, so
 nothing later mistakes "we declined to look" for "we looked and it was empty".
 It is listed in `present_unread`, as is a file over `max_bytes`: both are
-there, so a source keyed by path keeps their rows.
+there, so a source keyed by path keeps their rows, and `changes_since`
+does not count them as removed.
+
+**A file the walk found and could not open** (a mode that will not let us
+read it) is there too: it goes in `present_unread` and in `unreadable`, not
+in `errors`. A walk error says the walk may have missed paths, so it holds
+back every deletion under the root; one unopenable file says nothing about
+any other path. `Scan::report_problems` makes it a `record:<name>:<path>`
+row beside the walk's `listing:<name>` row, and the row goes the run the
+file opens. A source that deletes only after reading every file still
+holds back while one is unread, since that file may hold anything.
