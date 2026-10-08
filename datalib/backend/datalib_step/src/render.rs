@@ -266,11 +266,19 @@ pub fn render_source(
         cursor = raw_cursor.as_deref().unwrap_or("none"),
         "starting the render"
     );
+    // The diff runs from the stored cursor even on a full walk: the
+    // walk renders everything, but what left since the cursor is still
+    // the only evidence that a bucket declared with nothing is gone.
     let ReverseLookup {
         pin: raw_pin,
-        stale: stale_buckets,
+        stale,
         removed: removed_rows,
-    } = reverse_lookup(&store, raw_db.as_deref(), raw_cursor.as_deref())?;
+    } = reverse_lookup(
+        &store,
+        raw_db.as_deref(),
+        stored_cursor.as_ref().map(|c| c.raw_commit.as_str()),
+    )?;
+    let stale_buckets = stale.filter(|_| !render_everything);
 
     let mut checkpointer = datalib_etl::checkpointer::Checkpointer::new(cadence);
     let mut docs = 0usize;
@@ -463,7 +471,7 @@ pub fn render_source(
             let left = last_built_from
                 .get(&bucket)
                 .is_some_and(|inputs| rows_left(inputs, &removed_rows, &moved));
-            let fate = fate(&ended.end, emitted_under.contains(&bucket), left, full_walk);
+            let fate = fate(&ended.end, emitted_under.contains(&bucket), left);
             let ending = Ending {
                 fate,
                 inputs_unwritten: matches!(ended.end, End::Read { empty: true } | End::Excluded),
@@ -624,13 +632,12 @@ pub(crate) enum Kept {
 /// The rule the sweep rests on: a bucket is gone only when the diff says
 /// its rows left. Built, excluded and failed are the renderer's word; a
 /// bucket declared with no rows that emitted nothing is gone only on
-/// that evidence, or on a full walk, whose whole-store sweep takes every
-/// document it did not produce except a failed bucket's.
-pub(crate) fn fate(end: &End, emitted: bool, rows_left: bool, full_walk: bool) -> Fate {
+/// that evidence, on a full walk as on a narrowed run.
+pub(crate) fn fate(end: &End, emitted: bool, rows_left: bool) -> Fate {
     match end {
         End::Failed(why) => Fate::Kept(Kept::Failed(why.clone())),
         End::Excluded | End::Read { empty: false } => Fate::Swept,
-        End::Read { empty: true } if emitted || rows_left || full_walk => Fate::Swept,
+        End::Read { empty: true } if emitted || rows_left => Fate::Swept,
         End::Read { empty: true } => Fate::Kept(Kept::Unexplained),
     }
 }
@@ -1556,22 +1563,20 @@ mod plan_tests {
         let failed = End::Failed("bad payload".into());
         let kept_failed = Fate::Kept(Kept::Failed("bad payload".into()));
         let unexplained = Fate::Kept(Kept::Unexplained);
-        // (end, emitted, rows left, full walk) → fate
-        for (end, emitted, left, walk, want) in [
-            (&silent, false, false, false, &unexplained),
-            (&silent, false, true, false, &Fate::Swept),
-            (&silent, true, false, false, &Fate::Swept),
-            (&silent, false, false, true, &Fate::Swept),
-            (&built, false, false, false, &Fate::Swept),
-            (&End::Excluded, false, false, false, &Fate::Swept),
-            (&failed, false, true, false, &kept_failed),
-            (&failed, false, false, true, &kept_failed),
-            (&failed, true, false, false, &kept_failed),
+        // (end, emitted, rows left) → fate
+        for (end, emitted, left, want) in [
+            (&silent, false, false, &unexplained),
+            (&silent, false, true, &Fate::Swept),
+            (&silent, true, false, &Fate::Swept),
+            (&built, false, false, &Fate::Swept),
+            (&End::Excluded, false, false, &Fate::Swept),
+            (&failed, false, true, &kept_failed),
+            (&failed, true, false, &kept_failed),
         ] {
             assert_eq!(
-                &fate(end, emitted, left, walk),
+                &fate(end, emitted, left),
                 want,
-                "{end:?} emitted={emitted} rows_left={left} full_walk={walk}"
+                "{end:?} emitted={emitted} rows_left={left}"
             );
         }
     }

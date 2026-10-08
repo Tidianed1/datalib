@@ -766,9 +766,11 @@ in the same transaction as the storage report and the cursor
   on its banner, and they clear when the bucket next renders it or
   removes it. A whole-table input is never the evidence: one row of a
   table leaving, or another bucket reading it, says nothing about a
-  bucket that read all of it. A run
-  with no diff to read — no cursor yet, or a range the store cannot
-  resolve — has no evidence, so it removes nothing this way. And a
+  bucket that read all of it. The diff runs from the stored cursor on
+  every run, a full walk included, so a version bump keeps an
+  unexplained bucket's documents too. A run with no diff to read — no
+  cursor yet, or a range the store cannot resolve — has no evidence,
+  so it removes nothing this way. And a
   bucket the run never looked at says nothing about its documents, so
   a narrowed run cannot delete its own steady state.
 - **Whole store, on a full walk only.** A *full walk* is a run that
@@ -776,8 +778,8 @@ in the same transaction as the storage report and the cursor
   every processor reported the raw commit it read
   (`RenderCtx::consumed`). Then a document the walk did not produce —
   a chat re-bucketed under a different period, a uuid minted by the old
-  recipe, a bucket declared with nothing — is gone, except a failed
-  bucket's. A first run with no cursor is not a full walk, and
+  recipe — is gone, except the documents of a bucket the table above
+  keeps. A first run with no cursor is not a full walk, and
   neither is one in which a processor read no store (none on disk,
   nothing committed): it said nothing about what should exist, and
   nothing is swept.

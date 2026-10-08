@@ -1319,6 +1319,61 @@ async fn a_failed_bucket_survives_a_full_walk() {
     assert_eq!(next.docs, 0, "the run after the walk is not another walk");
 }
 
+/// A version bump is a full walk, and common: a bucket declared with
+/// nothing on one keeps its document unless its rows left, as on a
+/// narrowed run, or every silent build failure deletes at the next bump.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_bucket_declared_with_nothing_keeps_its_document_through_a_full_walk() {
+    use datalib_schema::problems::Severity;
+    let td = tempfile::tempdir().unwrap();
+    let mut world = World::new(td.path()).await;
+    if !world.dolt {
+        return;
+    }
+    let synth = SynthRender::new(world.raw_db.clone());
+    two_rendered(&mut world, &synth).await;
+    let before = held(&world);
+
+    synth
+        .broken
+        .lock()
+        .unwrap()
+        .insert("p1".into(), Broken::DeclaredEmpty);
+    synth.version.fetch_add(1, Ordering::SeqCst);
+    let walk = world.render_report(&synth, false).await.unwrap();
+    assert_eq!(walk.removed, 0, "p1's rows are all still upstream");
+    assert_eq!(held(&world).get("p1"), before.get("p1"), "p1 as it was");
+    assert_eq!(walk.problems.get(&Severity::Warning), Some(&1));
+
+    let next = world.render_report(&synth, false).await.unwrap();
+    assert_eq!(next.docs, 0, "the run after the walk is not another walk");
+}
+
+/// On a full walk too, a bucket declared with nothing whose rows the
+/// diff since the cursor reports removed is gone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_bucket_declared_with_nothing_whose_rows_left_goes_on_a_full_walk() {
+    let td = tempfile::tempdir().unwrap();
+    let mut world = World::new(td.path()).await;
+    if !world.dolt {
+        return;
+    }
+    let synth = SynthRender::new(world.raw_db.clone());
+    two_rendered(&mut world, &synth).await;
+
+    synth
+        .broken
+        .lock()
+        .unwrap()
+        .insert("p1".into(), Broken::DeclaredEmpty);
+    world.commit(&[Mutation::DeleteParent("p1".into())]).await;
+    synth.version.fetch_add(1, Ordering::SeqCst);
+    let walk = world.render_report(&synth, false).await.unwrap();
+    assert_eq!(walk.removed, 1);
+    assert!(walk.problems.is_empty(), "{:?}", walk.problems);
+    assert!(!held(&world).contains_key("p1"));
+}
+
 /// A bucket the renderer leaves out on purpose goes, though its rows
 /// are all still upstream: the renderer's word is the evidence.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
