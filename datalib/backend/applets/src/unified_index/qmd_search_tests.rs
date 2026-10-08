@@ -114,6 +114,35 @@ async fn structured_terms_narrow_the_ranking_and_a_sort_reorders_it() {
     assert_eq!(uuids(&worst_first), best_first);
 }
 
+/// `source_id:` scopes qmd's retrieval, not only the rows the grid keeps:
+/// given room for one hit, a source whose best hit ranks below another
+/// source's still gets its own. Filtering qmd's global answer instead
+/// would leave nothing.
+#[tokio::test]
+async fn source_id_scopes_qmd_before_its_limit() {
+    let root = fixture_root();
+    let s = index_over(root.path()).await;
+    let ranked = search(&s, QUERY, None, 1_000, None).await;
+    let leader = &ranked.rows[0].source_id;
+    let other = &ranked
+        .rows
+        .iter()
+        .find(|r| &r.source_id != leader)
+        .expect("the fixture's hits span sources")
+        .source_id;
+
+    let parsed = parse_query(&format!("{QUERY} source_id:{other}"));
+    let top = qmd_ranking(&s.root, &s.repo, &s.qmd, &parsed, 1)
+        .await
+        .unwrap();
+    assert_eq!(top.len(), 1, "{top:?}");
+    let row = s.repo.rows_by_uuids(&[top[0].0.clone()]).await.unwrap();
+    assert_eq!(
+        &row[0].source_id, other,
+        "qmd answered for {leader}, unscoped"
+    );
+}
+
 /// A free-text search groups the rows qmd ranked, and nothing else: the
 /// groups' counts add up to the ranking, and a group's rows are its own.
 #[tokio::test]
