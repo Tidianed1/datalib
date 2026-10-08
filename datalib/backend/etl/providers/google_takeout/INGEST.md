@@ -6,25 +6,24 @@ sit beside it in the same table. There is no API and no network: the
 download step walks a directory tree the user exported and unzipped
 themselves.
 
-## Every feed is opt-in, and off by default
+## A config turns each feed on; the form ticks them all
 
 `SyncFlags` (`src/ingest/mod.rs`) is one boolean per feed, mirrored by
 the `export` table in `google_takeout_config`, and `Default` sets every
-one of them to `false`. A user has to enable each
-feed consciously.
+one of them to `false`. A config that names no feed reads nothing, so a
+feed is never read because a key was left out.
 
-That is deliberate, and it is the one rule to preserve if you touch
-this provider. A Takeout export is whatever the user asked Google for,
-so its subtrees are wildly uneven — an export may hold nine years of
-YouTube history and no Maps data at all — and silently ingesting
-everything present would make "add this source" an unbounded promise.
-`google_voice_include_spam` is a second-level switch under
-`google_voice` for the same reason: spam is bulky and only useful for
-parser hardening.
+The "Add source" form ticks every box, spam included, and writes each
+flag out, because an export holds what its owner asked Google for and
+reading all of it is what they expect; unticking is how to leave a
+product out. `google_voice_include_spam` stays a second switch under
+`google_voice`: spam is bulky and rarely worth searching.
 
 `tests/fixture_walk.rs`'s `sync_flags_default_disables_everything` is
-the regression test: it runs the walk with a default `SyncFlags` and
-asserts that the Maps, YouTube, Chat and Gemini feeds land nothing.
+the regression test for the config side: it runs the walk with a
+default `SyncFlags` and asserts that the Maps, YouTube, Chat and Gemini
+feeds land nothing. `datalib/ui/tests/export_wizards.test.ts` pins the
+form's.
 
 ## The feeds and what they write
 

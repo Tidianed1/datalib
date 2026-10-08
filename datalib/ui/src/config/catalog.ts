@@ -1314,25 +1314,25 @@ export const CATALOG: CatalogEntry[] = [
   {
     type: "google_takeout",
     label: "Google Takeout",
-    blurb: "Google Chat, Voice, Maps and YouTube from an export.",
-    keywords: ["google", "takeout", "chat", "voice", "youtube"],
+    blurb: "Google Chat, Voice, Gemini, Maps and YouTube from an export.",
+    keywords: ["google", "takeout", "chat", "voice", "youtube", "maps", "gemini"],
     kind: "export",
     icon: "google_takeout",
     defaultName: "google-takeout",
     nameHint: "My Google Takeout",
     wizard: true,
-    // Every feed defaults off, here as in the provider: an export holds
-    // whatever was asked of Google, so each feed is ticked on purpose
-    // (providers/google_takeout/INGEST.md).
+    // Every feed starts ticked: an export holds what its owner asked
+    // Google for, so reading all of it is what they expect. The provider
+    // still defaults each feed off, so a config that names none reads
+    // none (providers/google_takeout/INGEST.md).
     sections: [
       { heading: "Takeout folder", fields: ["export.path"] },
       {
-        heading: "Shown as conversations",
+        heading: "Conversations",
         fields: ["export.google_chat", "export.google_voice", "export.google_voice_include_spam"],
       },
       {
-        heading: "Stored only",
-        help: "Kept in this source's own store; not shown as pages yet.",
+        heading: "Activity",
         fields: [
           "export.youtube_watch_history",
           "export.youtube_subscriptions",
@@ -1360,14 +1360,14 @@ export const CATALOG: CatalogEntry[] = [
         kind: "bool",
         target: "export.google_chat",
         label: "Google Chat",
-        default: false,
+        default: true,
         help: "Direct messages and spaces, with their attachments.",
       },
       {
         kind: "bool",
         target: "export.google_voice",
         label: "Google Voice",
-        default: false,
+        default: true,
         help: "Texts, voicemails, calls and bills.",
       },
       {
@@ -1375,44 +1375,44 @@ export const CATALOG: CatalogEntry[] = [
         target: "export.google_voice_include_spam",
         requires: "export.google_voice",
         label: "Include Voice spam",
-        default: false,
+        default: true,
         help: "Also reads Voice/Spam. Bulky, and rarely worth searching.",
       },
       {
         kind: "bool",
         target: "export.youtube_watch_history",
         label: "YouTube watch history",
-        default: false,
+        default: true,
       },
       {
         kind: "bool",
         target: "export.youtube_subscriptions",
         label: "YouTube subscriptions",
-        default: false,
+        default: true,
       },
       {
         kind: "bool",
         target: "export.maps_reviews",
         label: "Maps reviews",
-        default: false,
+        default: true,
       },
       {
         kind: "bool",
         target: "export.maps_saved_places",
         label: "Maps saved places",
-        default: false,
+        default: true,
       },
       {
         kind: "bool",
         target: "export.maps_photos",
         label: "Maps photos and videos",
-        default: false,
+        default: true,
       },
       {
         kind: "bool",
         target: "export.gemini_apps",
         label: "Gemini activity",
-        default: false,
+        default: true,
       },
     ],
   },
