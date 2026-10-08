@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 pub use datalib_contact_schema::ContactKind;
 use datalib_contact_schema::{ContactHandle, Medium, NormalizedContact};
+use datalib_etl::bulk::bulk_upsert_entity_in_tx;
 use datalib_etl::doltlite_raw;
 use datalib_handle::{Handle, HandleKind};
 use datalib_store_meta::{Migration, StoreKind};
@@ -37,45 +38,12 @@ pub fn store_path(data_root: &Path) -> PathBuf {
     data_root.join(CURATED_DIR).join(APP_DIR).join(STORE_FILE)
 }
 
-const DDL: &[&str] = &[
-    "CREATE TABLE IF NOT EXISTS contacts (
-        contact_id TEXT PRIMARY KEY,
-        kind TEXT NOT NULL,
-        name TEXT NOT NULL,
-        note TEXT,
-        merged_into TEXT,
-        created_at_utc TEXT NOT NULL,
-        updated_at_utc TEXT NOT NULL,
-        tz_offset TEXT NOT NULL
-    )",
-    // A handle belongs to one contact for all time; an address two people
-    // share belongs to a group contact.
-    "CREATE TABLE IF NOT EXISTS handles (
-        handle TEXT PRIMARY KEY,
-        contact_id TEXT NOT NULL,
-        linked_how TEXT NOT NULL,
-        linked_at_utc TEXT NOT NULL,
-        tz_offset TEXT NOT NULL,
-        stopped_working_by TEXT
-    )",
-    "CREATE INDEX IF NOT EXISTS handles_by_contact ON handles (contact_id)",
-    "CREATE TABLE IF NOT EXISTS members (
-        group_id TEXT NOT NULL,
-        member_id TEXT NOT NULL,
-        added_at_utc TEXT NOT NULL,
-        tz_offset TEXT NOT NULL,
-        PRIMARY KEY (group_id, member_id)
-    )",
-    // The photo a person put on a contact: one per contact, the bytes
-    // as given. Served by the applet at `/photo/<contact_id>`.
-    "CREATE TABLE IF NOT EXISTS photos (
-        contact_id TEXT PRIMARY KEY,
-        content_type TEXT NOT NULL,
-        bytes BLOB NOT NULL,
-        set_at_utc TEXT NOT NULL,
-        tz_offset TEXT NOT NULL
-    )",
-];
+pub mod schema;
+
+use schema::contacts::ContactRow;
+use schema::handles::HandleRow;
+use schema::photos::PhotoRow;
+use schema::DDL;
 
 /// Where the applet serves a contact's photo, relative to the app's
 /// origin; what [`Store::contact`] answers as `photo_url`.
@@ -429,19 +397,19 @@ impl Store {
         let contact_id = uuid::Uuid::new_v4().to_string();
         let (now, tz) = IsoOffsetTimestamp::now_local().to_utc_and_offset();
         let mut tx = self.pool.begin().await?;
-        sqlx::query(
-            "INSERT INTO contacts (contact_id, kind, name, created_at_utc, updated_at_utc, tz_offset) \
-             VALUES (?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&contact_id)
-        .bind(kind.as_str())
-        .bind(name)
-        .bind(&now)
-        .bind(&now)
-        .bind(&tz)
-        .execute(&mut *tx)
-        .await
-        .context("insert a contact")?;
+        let row = ContactRow {
+            contact_id: contact_id.clone(),
+            kind,
+            name: name.to_string(),
+            note: None,
+            merged_into: None,
+            created_at_utc: now.clone(),
+            updated_at_utc: now.clone(),
+            tz_offset: tz.clone(),
+        };
+        bulk_upsert_entity_in_tx(&mut tx, &[row])
+            .await
+            .context("insert a contact")?;
         for h in handles {
             match plan_link(holder(&mut tx, h).await?.as_deref(), &contact_id) {
                 LinkPlan::Insert => insert_handle(&mut tx, h, &contact_id, &now, &tz).await?,
@@ -578,18 +546,16 @@ impl Store {
         let (now, tz) = IsoOffsetTimestamp::now_local().to_utc_and_offset();
         let mut tx = self.pool.begin().await?;
         let name = name_of_existing(&mut tx, contact_id).await?;
-        sqlx::query(
-            "INSERT OR REPLACE INTO photos (contact_id, content_type, bytes, set_at_utc, tz_offset) \
-             VALUES (?, ?, ?, ?, ?)",
-        )
-        .bind(contact_id)
-        .bind(&ct)
-        .bind(bytes)
-        .bind(&now)
-        .bind(&tz)
-        .execute(&mut *tx)
-        .await
-        .context("store a contact's photo")?;
+        let row = PhotoRow {
+            contact_id: contact_id.to_string(),
+            content_type: ct,
+            bytes: bytes.to_vec(),
+            set_at_utc: now,
+            tz_offset: tz,
+        };
+        bulk_upsert_entity_in_tx(&mut tx, &[row])
+            .await
+            .context("store a contact's photo")?;
         tx.commit().await?;
         self.seal(&format!("contacts: photo for {name:?}")).await
     }
@@ -645,25 +611,23 @@ async fn name_of(tx: &mut sqlx::SqliteConnection, contact_id: &str) -> Result<St
 }
 
 async fn insert_handle(
-    tx: &mut sqlx::SqliteConnection,
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     h: &Handle,
     contact_id: &str,
     now: &str,
     tz: &str,
 ) -> Result<()> {
-    sqlx::query(
-        "INSERT INTO handles (handle, contact_id, linked_how, linked_at_utc, tz_offset) \
-         VALUES (?, ?, ?, ?, ?)",
-    )
-    .bind(h.as_str())
-    .bind(contact_id)
-    .bind(LinkedHow::Manual.as_str())
-    .bind(now)
-    .bind(tz)
-    .execute(&mut *tx)
-    .await
-    .context("link a handle")?;
-    Ok(())
+    let row = HandleRow {
+        handle: h.as_str().to_string(),
+        contact_id: contact_id.to_string(),
+        linked_how: LinkedHow::Manual,
+        linked_at_utc: now.to_string(),
+        tz_offset: tz.to_string(),
+        stopped_working_by: None,
+    };
+    bulk_upsert_entity_in_tx(tx, &[row])
+        .await
+        .context("link a handle")
 }
 
 #[cfg(test)]
@@ -820,6 +784,85 @@ mod tests {
             "the link the rules no longer read is shown as written, not dropped"
         );
         assert_eq!(c.handles[1].medium, Medium::Phone);
+        store.close().await;
+    }
+
+    /// The tables as they were written by hand before they were derived
+    /// from `schema.rs`. A store made with them has to open under the
+    /// derived DDL unchanged: it is a person's own data, and a shape the
+    /// open cannot reach additively is refused.
+    const HAND_WRITTEN_DDL: &[&str] = &[
+        "CREATE TABLE IF NOT EXISTS contacts (
+            contact_id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            name TEXT NOT NULL,
+            note TEXT,
+            merged_into TEXT,
+            created_at_utc TEXT NOT NULL,
+            updated_at_utc TEXT NOT NULL,
+            tz_offset TEXT NOT NULL
+        )",
+        "CREATE TABLE IF NOT EXISTS handles (
+            handle TEXT PRIMARY KEY,
+            contact_id TEXT NOT NULL,
+            linked_how TEXT NOT NULL,
+            linked_at_utc TEXT NOT NULL,
+            tz_offset TEXT NOT NULL,
+            stopped_working_by TEXT
+        )",
+        "CREATE INDEX IF NOT EXISTS handles_by_contact ON handles (contact_id)",
+        "CREATE TABLE IF NOT EXISTS members (
+            group_id TEXT NOT NULL,
+            member_id TEXT NOT NULL,
+            added_at_utc TEXT NOT NULL,
+            tz_offset TEXT NOT NULL,
+            PRIMARY KEY (group_id, member_id)
+        )",
+        "CREATE TABLE IF NOT EXISTS photos (
+            contact_id TEXT PRIMARY KEY,
+            content_type TEXT NOT NULL,
+            bytes BLOB NOT NULL,
+            set_at_utc TEXT NOT NULL,
+            tz_offset TEXT NOT NULL
+        )",
+    ];
+
+    #[tokio::test]
+    async fn a_store_made_with_the_hand_written_tables_opens_under_the_derived_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = store_path(dir.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let pool = doltlite_raw::open_curated(&path, HAND_WRITTEN_DDL, StoreKind::Contacts, LADDER)
+            .await
+            .unwrap();
+        // A row in every table: an empty table is rebuilt whatever its
+        // shape, which would hide a break.
+        for sql in [
+            "INSERT INTO contacts VALUES ('riker', 'person', 'William Riker', 'x', NULL, \
+             '2364-03-01T09:00:00Z', '2364-03-01T09:00:00Z', '+00:00')",
+            "INSERT INTO contacts VALUES ('away', 'group', 'Away team', NULL, NULL, \
+             '2364-03-01T09:00:00Z', '2364-03-01T09:00:00Z', '+00:00')",
+            "INSERT INTO handles VALUES ('email:riker@enterprise.org', 'riker', 'manual', \
+             '2364-03-01T09:00:00Z', '+00:00', NULL)",
+            "INSERT INTO members VALUES ('away', 'riker', '2364-03-01T09:00:00Z', '+00:00')",
+            "INSERT INTO photos VALUES ('riker', 'image/png', x'89504e47', \
+             '2364-03-01T09:00:00Z', '+00:00')",
+        ] {
+            sqlx::query(sql).execute(&pool).await.unwrap();
+        }
+        doltlite_raw::commit_run(&pool, "a store from the hand-written tables")
+            .await
+            .unwrap();
+        pool.close().await;
+
+        let store = Store::open(&path).await.unwrap();
+        let riker = store.contact("riker").await.unwrap().unwrap();
+        assert_eq!(riker.names, ["William Riker"]);
+        assert_eq!(riker.handles.len(), 1);
+        assert_eq!(
+            store.photo("riker").await.unwrap(),
+            Some(("image/png".to_string(), vec![0x89, 0x50, 0x4e, 0x47]))
+        );
         store.close().await;
     }
 

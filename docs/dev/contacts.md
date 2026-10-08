@@ -320,6 +320,9 @@ person's work, so the rules that make it irreplaceable:
 | `members` | `(group_id, member_id)` | `added_at_utc` |
 | `photos` | `contact_id` | `content_type`, `bytes`, `set_at_utc` |
 
+Each table is a row struct in `contacts/src/schema.rs`, and its DDL
+and upsert are derived from it (`#[derive(PortableTable)]`).
+
 Two rules the tables encode: **a handle belongs to exactly one
 contact** (linking one someone else holds is refused, never taken
 over; a shared address belongs to a group contact), and **keys are
