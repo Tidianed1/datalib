@@ -125,9 +125,10 @@ async fn connect(cas_path: &Path, read_only: bool) -> Result<SqlitePool> {
         .with_context(|| format!("open blob cas {}", cas_path.display()))
 }
 
-/// Where the CAS lived while it was a doltlite store. Temporary: remove
-/// it, [`convert_a_doltlite_cas`], the doltlite branch of
-/// [`open_cas_for_render`] and their tests in 0.41.
+/// Where the CAS lived while it was a doltlite store. Kept, with
+/// [`convert_a_doltlite_cas`] and the doltlite branch of
+/// [`open_cas_for_render`], as the forward path for blobs an older build
+/// left there (AGENTS.md § "Keep a forward path for existing data").
 const DOLTLITE_CAS: &str = "blobs.doltlite_db";
 
 /// Moves a CAS an older build left in doltlite's format into the plain
