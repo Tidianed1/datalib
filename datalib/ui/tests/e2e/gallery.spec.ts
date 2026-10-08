@@ -37,7 +37,20 @@ test.describe("new-card gallery (outside edit mode)", () => {
   test("gallery's Logs entry becomes a log card over every run", async ({ page }) => {
     await page.goto(GRID);
     await page.locator(".ct-main .ct-add").click();
-    await page.locator(".gv-row", { hasText: "Logs" }).first().click();
+    // Logs is a developer tool: listed in that section, after the views.
+    const section = page.getByRole("region", { name: "Developer tools" });
+    // Each group is in alphabetical order by title.
+    const titles = await section.locator(".gv-row .gv-title").allTextContents();
+    const listed = titles.slice(0, -1);
+    expect(listed).toContain("Logs");
+    expect(listed).toEqual(
+      [...listed].sort((x, y) => x.localeCompare(y, undefined, { sensitivity: "base" })),
+    );
+    expect(titles.at(-1)).toBe("New component, built by an agent");
+    await expect(
+      page.locator(".gv-row", { hasText: "Markdown Document" }).and(section.locator(".gv-row")),
+    ).toHaveCount(0);
+    await section.locator(".gv-row", { hasText: "Logs" }).click();
     const col = shownCards(page).filter({ has: page.locator(".rl-panel") });
     await expect(col).toBeVisible({ timeout: 10_000 });
     await expect(cardTitle(col)).toHaveText("Log · everything");
@@ -69,16 +82,16 @@ test.describe("new-card gallery (outside edit mode)", () => {
     }
   });
 
-  test("a Dashboard section is listed only once the gallery shows every view", async ({ page }) => {
+  test("a Dashboard section is listed among the developer tools", async ({ page }) => {
     await page.goto(GRID);
     await page.locator(".ct-main .ct-add").click();
     const library = page.locator(".gv-row", {
-      has: page.locator(".gv-title", { hasText: /^Your library$/ }),
+      has: page.locator(".gv-title", { hasText: /^Dashboard: Your library$/ }),
     });
-    await expect(page.locator(".gv-row").first()).toBeVisible();
-    await expect(library).toHaveCount(0);
-    await page.getByLabel("Show every view").check();
     await expect(library).toHaveCount(1);
+    await expect(
+      page.getByRole("region", { name: "Developer tools" }).locator(".gv-row").and(library),
+    ).toHaveCount(1);
     await library.click();
     await expect(cardOf(page, "libraryView()")).toHaveCount(1);
   });

@@ -494,6 +494,10 @@ pub struct PutLibRequest {
     /// `frontend::Meta`), same keep/clear semantics as `title`.
     #[serde(default)]
     pub icon: Option<String>,
+    /// Whether the gallery lists it under "Developer tools" (see
+    /// `frontend::Meta`). Omitted = keep what is stored.
+    #[serde(default)]
+    pub dev_tool: Option<bool>,
 }
 
 /// What a write returns: the name, the content hash, and the metadata
@@ -588,15 +592,22 @@ async fn put_lib(
         Some(v) if v.trim().is_empty() => None,
         Some(v) => Some(v),
     };
-    let (prior_title, prior_desc, prior_args, prior_icon) = match prior {
+    let (prior_title, prior_desc, prior_args, prior_icon, prior_dev_tool) = match prior {
         Some(frontend::Meta::Component {
             title,
             description,
             component_args,
             icon,
+            dev_tool,
             ..
-        }) => (Some(title), Some(description), Some(component_args), icon),
-        _ => (None, None, None, None),
+        }) => (
+            Some(title),
+            Some(description),
+            Some(component_args),
+            icon,
+            dev_tool,
+        ),
+        _ => (None, None, None, None, false),
     };
     let meta = frontend::Meta::Component {
         title: merge(req.title, prior_title).unwrap_or_default(),
@@ -604,6 +615,7 @@ async fn put_lib(
         component_hash: hash.clone(),
         component_args: req.component_args.or(prior_args).unwrap_or_default(),
         icon: merge(req.icon, prior_icon),
+        dev_tool: req.dev_tool.unwrap_or(prior_dev_tool),
     };
     // Writing the metadata also retires any tombstone at this name: the
     // name holds a real component again.

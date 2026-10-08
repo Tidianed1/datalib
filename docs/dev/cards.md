@@ -103,6 +103,18 @@ so nothing that draws a card knows which kind it is. An icon is a
 glyph name from `cards/icons.ts`, a source's mark in `src/assets/`, or
 a `data:image/…` URL; anything else draws the generic component glyph.
 
+A card kind can also say it is a **developer tool** (`devTool` in
+`BUILTIN_META`, `"dev_tool": true` in a `<name>.json`): a tool for
+working on the library or on datalib itself — its logs, its config, its
+pipeline, its components — or a building block of a composite that is
+rarely wanted alone, such as a Dashboard section, rather than a view of
+the data. The gallery
+lists every entry that says so, builtin or custom alike, after the rest
+in a "Developer tools" section with a heading and a shaded ground of
+its own, with the "build a component with an agent" entry last in it.
+Nothing else reads the field: a developer tool opens, pins and saves
+like any card.
+
 The header around each card has two faces, switched by the **Edit**
 toggle in the status bar (`datalib/ui/src/editMode.ts`, persisted in
 localStorage):
@@ -127,21 +139,23 @@ creates a `galleryView()` card — the **new-card gallery**
 (`datalib/ui/src/cards/libs/galleryView.ts`). It lists, each with a
 short description:
 
-1. the composites (`views/composites.ts`), the Dashboard first; picking
-   one replaces the gallery card with a copy of it
-   (`host.becomeComposite`);
-2. the builtins `cards/catalog.ts` offers, `sourcesView` first. A
-   builtin marked `galleryHidden` — a building block such as a
-   Dashboard section — is listed only once the gallery's "Show every
-   view" switch is on (kept in this browser);
+1. the composites (`views/composites.ts`); picking one replaces the
+   gallery card with a copy of it (`host.becomeComposite`);
+2. the builtins `cards/catalog.ts` offers;
 3. every titled component in the frontend store, each expanding to its
    qualified name called with its stored `component_args` — so one
    component appears once per namespace with its own arguments
    (`comp.slack_work.channels("slack_work")`,
-   `comp.slack_personal.channels(…)`);
+   `comp.slack_personal.channels(…)`) — and each with a small mark
+   after its title saying it is a custom component;
 4. a "build a component with an agent" entry that mints a fresh
    component seeded with `agentSeedView` (the in-card hand-off
    instructions) and repoints the card at it.
+
+The first three kinds are listed together, not kind by kind: the views
+of the data, then the developer tools (next section), each group in
+alphabetical order by title (`byAudience` in `cards/catalog.ts`). The
+agent entry is last among the developer tools.
 
 A builtin in the gallery takes no arguments, so one that needs them
 offers a parameter-less stand-in: `documentView`'s is
@@ -420,8 +434,8 @@ programs against:
 
 - The Dashboard's sections, each a card of its own, which the Dashboard
   composite — what a new window opens on — lays out as a solidified
-  Page (`cards/libs/dashboardSections.ts`; hidden from the gallery
-  until it shows every view):
+  Page (`cards/libs/dashboardSections.ts`; the gallery lists each
+  among its developer tools, as a building block of the Dashboard):
   - `syncStatusView()` — when the library last synced, and Sync now /
     Stop syncing; "Start your first sync" when its sources never have;
   - `needsYouView()` — a source whose last sync failed or stopped, or
@@ -503,7 +517,8 @@ programs against:
   `documentView` beside the card. Persists `q`/`by`/`sel`. The pure
   half — colours, view, hit-testing — is `cards/embeddingMap.ts`.
 - `galleryView()` — the new-card gallery (see "Titles, icons and edit mode"
-  above); replaces itself with whatever the user picks.
+  above): the views of the data, then the developer tools; replaces
+  itself with whatever the user picks.
 - `agentSeedView(name)` — the in-card hand-off instructions a freshly
   minted, agent-bound component is seeded with (the gallery's agent
   entry stores `() => agentSeedView("<name>")` as the alias source);

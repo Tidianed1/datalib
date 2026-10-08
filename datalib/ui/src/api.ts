@@ -1460,6 +1460,9 @@ export type Meta =
       component_args: unknown[];
       // A glyph name (cards/icons.ts) or a mark in src/assets/.
       icon?: string;
+      // A tool for working on the library, not a view of the data: the
+      // gallery lists it under "Developer tools".
+      dev_tool?: boolean;
     }
   | { renamed_to: string };
 

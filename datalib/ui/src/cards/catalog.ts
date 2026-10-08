@@ -1,7 +1,8 @@
 // What every card kind says about itself: a title and description for
-// the gallery, and the icon the layouts draw beside its name. A builtin
-// declares it here; a custom component declares the same three fields
-// in its `<name>.json` (api.ts `Meta`). `cardMeta` answers for either,
+// the gallery, the icon the layouts draw beside its name, and whether
+// it is a developer tool. A builtin declares it here; a custom
+// component declares the same fields in its `<name>.json` (api.ts
+// `Meta`, where the last is spelled `dev_tool`). `cardMeta` answers for either,
 // so nothing that draws a card knows which kind it is.
 import type { ViewLibs } from "./types";
 import { cardType } from "./cardId";
@@ -12,15 +13,18 @@ export type CardMeta = {
   description: string;
   // A token cards/icons.ts resolves; null draws the default glyph.
   icon: string | null;
+  // A tool for working on the library or on datalib itself — its logs,
+  // its config, its pipeline, its components — or a building block of
+  // a composite that is rarely wanted alone, such as a Dashboard
+  // section, rather than a view of the data. The gallery lists these
+  // apart, under "Developer tools".
+  devTool?: boolean;
 };
 
 type BuiltinMeta = CardMeta & {
   // The source the gallery's entry expands to; absent when the card
   // needs arguments only another card can supply.
   gallery?: string;
-  // Listed only once the gallery shows every view: a building block of
-  // a composite, such as a Dashboard section, that is rarely wanted alone.
-  galleryHidden?: boolean;
 };
 
 /// Every builtin, in gallery order.
@@ -56,12 +60,14 @@ export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
     description:
       "Every line the runner, the steps and the server wrote; pick a run or a process, narrow with the query bar.",
     icon: "log",
+    devTool: true,
     gallery: "logView()",
   },
   configView: {
     title: "config.toml",
     description: "The config file itself, edited directly.",
     icon: "code",
+    devTool: true,
     gallery: "configView()",
   },
   documentPickerView: {
@@ -74,6 +80,7 @@ export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
     title: "DACTAL explorer",
     description: "Query and pivot your data with the DACTAL table UI.",
     icon: "table",
+    devTool: true,
     gallery: "dactalView()",
   },
   perseusView: {
@@ -86,18 +93,21 @@ export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
     title: "Pipeline DAG",
     description: "See your sources' step graph and watch syncs flow through it live.",
     icon: "dag",
+    devTool: true,
     gallery: "sourceDagView()",
   },
   tableView: {
     title: "Table",
     description: "Any endpoint that declares its columns, drawn as a typed table.",
     icon: "table",
+    devTool: true,
     gallery: 'tableView({ url: "/api/manage/rows" })',
   },
   aliasView: {
     title: "Component library",
     description: "List the custom components stored on this instance.",
     icon: "component",
+    devTool: true,
     gallery: "aliasView()",
   },
   documentView: {
@@ -136,48 +146,59 @@ export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
     icon: "dashboard",
   },
   syncStatusView: {
-    title: "Sync",
-    description: "When the library last synced, and the button that syncs everything.",
+    title: "Dashboard: Sync",
+    description:
+      "When the library last synced, and the button that syncs everything. A building block of the Dashboard.",
     icon: "history",
     gallery: "syncStatusView()",
-    galleryHidden: true,
+    devTool: true,
   },
   needsYouView: {
-    title: "Needs you",
-    description: "Sources whose last sync failed or that hold errors, with the fix beside each.",
+    title: "Dashboard: Needs you",
+    description:
+      "Sources whose last sync failed or that hold errors, with the fix beside each. A building block of the Dashboard.",
     icon: "problem",
     gallery: "needsYouView()",
-    galleryHidden: true,
+    devTool: true,
   },
   libraryView: {
-    title: "Your library",
-    description: "How many items the library holds, and what takes its space on disk.",
+    title: "Dashboard: Your library",
+    description:
+      "How many items the library holds, and what takes its space on disk. A building block of the Dashboard.",
     icon: "book",
     gallery: "libraryView()",
-    galleryHidden: true,
+    devTool: true,
   },
   sourcesOverviewView: {
-    title: "Sources overview",
-    description: "Each source's state, when it last synced, its items and its size.",
+    title: "Dashboard: Sources overview",
+    description:
+      "Each source's state, when it last synced, its items and its size. A building block of the Dashboard.",
     icon: "sources",
     gallery: "sourcesOverviewView()",
-    galleryHidden: true,
+    devTool: true,
   },
   latestActivityView: {
-    title: "Latest activity",
-    description: "The newest documents in the library.",
+    title: "Dashboard: Latest activity",
+    description: "The newest documents in the library. A building block of the Dashboard.",
     icon: "document",
     gallery: "latestActivityView()",
-    galleryHidden: true,
+    devTool: true,
   },
 };
 
-/// The builtins the gallery offers, in order, each with its source;
-/// with `all`, the ones hidden by default too.
-export function galleryBuiltins(all = false): (CardMeta & { source: string })[] {
+/// The builtins the gallery offers, in order, each with its source.
+export function galleryBuiltins(): (CardMeta & { source: string })[] {
   return Object.values(BUILTIN_META).flatMap((m) =>
-    m.gallery && (all || !m.galleryHidden)
-      ? [{ title: m.title, description: m.description, icon: m.icon, source: m.gallery }]
+    m.gallery
+      ? [
+          {
+            title: m.title,
+            description: m.description,
+            icon: m.icon,
+            devTool: m.devTool,
+            source: m.gallery,
+          },
+        ]
       : [],
   );
 }
@@ -194,5 +215,25 @@ export function cardMeta(source: string): CardMeta | null {
   const [, ns, name] = m;
   const meta = frontendManifest.value.get(ns)?.get(followRenames(ns, name) ?? name);
   if (!meta || "renamed_to" in meta) return null;
-  return { title: meta.title, description: meta.description, icon: meta.icon ?? null };
+  return {
+    title: meta.title,
+    description: meta.description,
+    icon: meta.icon ?? null,
+    devTool: meta.dev_tool === true,
+  };
+}
+
+/// `entries` as the gallery lists them: the views of the data, then
+/// the developer tools, each group in alphabetical order by title
+/// (case-blind), whichever kind of entry each one is.
+export function byAudience<E extends { title: string; devTool?: boolean }>(
+  entries: E[],
+): { views: E[]; devTools: E[] } {
+  const sorted = [...entries].sort((a, b) =>
+    a.title.localeCompare(b.title, undefined, { sensitivity: "base" }),
+  );
+  return {
+    views: sorted.filter((e) => !e.devTool),
+    devTools: sorted.filter((e) => e.devTool),
+  };
 }
