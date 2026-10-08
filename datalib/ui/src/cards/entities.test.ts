@@ -10,6 +10,7 @@ import {
   entityLook,
   entityMenu,
   entityTitle,
+  movesEntities,
   type EntityView,
 } from "./entities";
 
@@ -91,5 +92,14 @@ describe("a group or step chip's hover, copy, menu and card", () => {
     ]);
     expect(browseQuery(SLACK)).toBe("source_id:slack is:document");
     expect(browseQuery(INGEST)).toBeNull();
+  });
+});
+
+describe("movesEntities", () => {
+  it("asks again on the frames that can move a status or a name, and on no other", () => {
+    expect(movesEntities({ kind: "table_changed", table: "manage.rows" })).toBe(true);
+    expect(movesEntities({ kind: "config_changed" })).toBe(true);
+    expect(movesEntities({ kind: "table_changed", table: "log" })).toBe(false);
+    expect(movesEntities({ kind: "index_changed" })).toBe(false);
   });
 });

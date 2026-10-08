@@ -6,6 +6,7 @@
 // uses.
 
 import type { StatusView } from "@/api";
+import { changed, subscribeLive, type RootEvent } from "@/live";
 import { pushToast } from "@/toasts";
 import { entityFromUri } from "./chipLinks";
 import { drawChip, type ChipLook } from "./contacts";
@@ -23,6 +24,7 @@ export type EntityView = {
 
 export const entities = new Resolver<EntityView>(
   async (uris) => {
+    followLive();
     const r = await fetch("/api/entities", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -35,6 +37,29 @@ export const entities = new Resolver<EntityView>(
   // The toast dedupes itself, so a page of chips failing says so once.
   (e) => pushToast(`Chips: ${e.message}`),
 );
+
+/** Whether a live frame can have moved what a group or step chip shows:
+ *  its status (the loop's record, which the Manage rows read) or its
+ *  name (the config). */
+export function movesEntities(e: RootEvent): boolean {
+  return changed(e, "manage.rows") || e.kind === "config_changed";
+}
+
+/// A status moves on its own while a sync runs, so the answers held are
+/// asked again on every frame that can have moved one. Subscribed on the
+/// first question, for the life of the page: the toolbar keeps the one
+/// live connection open regardless.
+let following = false;
+function followLive() {
+  if (following) return;
+  following = true;
+  subscribeLive({
+    root: (e) => {
+      if (movesEntities(e)) entities.revalidate();
+    },
+    resync: () => entities.revalidate(),
+  });
+}
 
 /// The status words worth a mark on the chip itself; the rest are on hover.
 const LOUD = new Set(["running", "queued", "failed", "blocked", "interrupted"]);
