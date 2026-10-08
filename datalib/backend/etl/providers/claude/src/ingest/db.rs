@@ -442,6 +442,18 @@ impl RawDb {
             .transpose()
     }
 
+    /// The org a stored conversation was fetched from; `None` for one the
+    /// bulk export filed, which names no org.
+    pub async fn org_of_conversation(&self, id: &str) -> Result<Option<String>> {
+        let org: Option<Option<String>> =
+            sqlx::query_scalar("SELECT org_uuid FROM conversations WHERE id = ?")
+                .bind(id)
+                .fetch_optional(self.pool())
+                .await
+                .context("select one conversation's org")?;
+        Ok(org.flatten())
+    }
+
     pub async fn load_conversations(&self) -> Result<Vec<LoadedConversation>> {
         load_conversations_from(self.pool()).await
     }

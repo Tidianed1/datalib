@@ -123,17 +123,20 @@ fn write_json(path: &Path, v: &Value) {
     fs::write(path, serde_json::to_vec_pretty(v).unwrap()).unwrap();
 }
 
-fn preview(uuid: &str) -> HttpRequest {
+fn contents(uuid: &str) -> HttpRequest {
     HttpRequest::get(
         HttpService::Claude,
-        format!("https://claude.ai/api/files/{uuid}/preview"),
+        format!(
+            "https://claude.ai/api/organizations/{}/files/{uuid}/contents",
+            ORG.0
+        ),
     )
 }
 
 fn serve_bytes(tape: &Path, uuid: &str) {
     write_fixture(
         tape,
-        &preview(uuid),
+        &contents(uuid),
         &HttpResponse {
             status: 200,
             headers: [("content-type".to_string(), "image/png".to_string())].into(),
@@ -147,7 +150,7 @@ fn serve_bytes(tape: &Path, uuid: &str) {
 fn serve_gone(tape: &Path, uuid: &str) {
     write_fixture(
         tape,
-        &preview(uuid),
+        &contents(uuid),
         &HttpResponse {
             status: 404,
             headers: Default::default(),

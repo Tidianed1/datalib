@@ -14,6 +14,7 @@ pub mod api;
 pub mod db;
 pub mod export;
 mod fetchers;
+pub(crate) use fetchers::file_url;
 pub mod normalize;
 pub mod schema_raw;
 
