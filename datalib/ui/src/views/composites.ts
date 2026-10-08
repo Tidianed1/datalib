@@ -69,7 +69,7 @@ export function isBuiltinComposite(name: string): boolean {
 export async function saveComposite(name: string, box: BoxNode): Promise<void> {
   const next = {
     ...savedComposites.value,
-    [name]: { ...box, name, template: name, basis: null, openedBy: null },
+    [name]: { ...box, name, template: name, basis: null, openedBy: null, pinned: false },
   };
   await putUiState(STATE_NAME, next);
   savedComposites.value = next;

@@ -4,8 +4,8 @@
 import { test, expect, type Page } from "@playwright/test";
 import { GRID, tabLabels } from "./grid-helpers";
 
-// The tab GRID opens, after the Dashboard's.
-const gridTab = (page: Page) => tabLabels(page).nth(1);
+// The tab GRID opens, after the three pinned ones.
+const gridTab = (page: Page) => tabLabels(page).nth(3);
 const nameBox = (page: Page) => page.getByLabel("Name", { exact: true });
 
 async function search(page: Page, q: string) {

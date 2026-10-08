@@ -4,8 +4,10 @@ import { SHOWN_CARDS } from "./grid-helpers";
 // The containers layout: tabs down the side, each holding cards or
 // containers. The Dashboard is a solidified composite of five cards, so
 // it looks like one page and a card opened from it gets a tab of its
-// own; unsolidified, the card lands inside it instead. The
-// tree is kept in the library, so these share one saved layout and run
+// own; unsolidified, the card lands inside it instead. A new window has
+// three tabs pinned (the Dashboard, Search, Sources): a card opened from
+// one is a tab after the rest, and an open of a pinned tab's own card
+// shows that tab. The tree is kept in the library, so these share one saved layout and run
 // in order, each starting from a cleared one.
 
 test.describe.configure({ mode: "serial" });
@@ -25,7 +27,11 @@ test.beforeEach(async ({ page }) => {
 const tabs = (page: Page) => page.locator(".ct-tab");
 const mainCards = (page: Page) => page.locator(SHOWN_CARDS);
 
-type SavedTab = { name?: string | null };
+// A document in the Dashboard's latest activity: opening it makes a tab.
+const recentDocument = (page: Page) => mainCards(page).locator(".row.recent").first();
+const PINNED = ["Dashboard", "Search", "Sources"];
+
+type SavedTab = { name?: string | null; pinned?: boolean };
 
 async function savedTabs(page: Page): Promise<SavedTab[] | null> {
   const r = await page.request.get("/api/ui/state/layout");
@@ -40,19 +46,25 @@ async function savedTabCount(page: Page): Promise<number> {
 
 test("the Dashboard is five cards that read as one page", async ({ page }) => {
   await page.goto("/");
-  await expect(tabs(page)).toHaveCount(1);
-  await expect(tabs(page)).toContainText("Dashboard");
+  await expect(page.locator(".ct-tabs-pinned .ct-tab-label")).toHaveText(PINNED);
+  await expect(tabs(page)).toHaveCount(3);
+  await expect(tabs(page).first()).toHaveClass(/is-selected/);
   await expect(mainCards(page)).toHaveCount(5);
   await expect(page.locator(".ct-card-head, .ct-box-head")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Open Sources" })).toBeVisible();
 });
 
-test("a card opened from the Dashboard gets a tab of its own", async ({ page }) => {
+test("a card opened from the Dashboard gets a tab of its own, below the pinned ones", async ({
+  page,
+}) => {
   await page.goto("/");
   await expect(mainCards(page)).toHaveCount(5);
-  await page.getByRole("button", { name: "Open Sources" }).click();
-  await expect(tabs(page)).toHaveCount(2);
-  await expect(tabs(page).nth(1)).toHaveClass(/is-selected/);
+  await recentDocument(page).click();
+  await expect(tabs(page)).toHaveCount(4);
+  await expect(page.locator(".ct-tabs-open .ct-tab")).toHaveCount(1);
+  await expect(tabs(page).nth(3)).toHaveClass(/is-selected/);
+  // A tab of its own, not one under the Dashboard's.
+  await expect(tabs(page).nth(3)).toHaveAttribute("style", /padding-left: 0\.4rem/);
   await expect(mainCards(page)).toHaveCount(1);
   // The card fills the tab: no Columns container around it, so no card
   // header and no "+" strip.
@@ -62,6 +74,45 @@ test("a card opened from the Dashboard gets a tab of its own", async ({ page }) 
   // The Dashboard kept its shape.
   await tabs(page).first().click();
   await expect(mainCards(page)).toHaveCount(5);
+});
+
+test("an open of a pinned tab's card shows that tab", async ({ page }) => {
+  await page.goto("/");
+  await expect(mainCards(page)).toHaveCount(5);
+  await page.getByRole("button", { name: "Open Sources" }).click();
+  await expect(tabs(page).nth(2)).toHaveClass(/is-selected/);
+  await expect(mainCards(page)).toHaveCount(1);
+  await expect(tabs(page)).toHaveCount(3);
+});
+
+test("a tab is pinned from its menu and unpinned by its pin", async ({ page }) => {
+  await page.goto("/");
+  await expect(mainCards(page)).toHaveCount(5);
+  await recentDocument(page).click();
+  await expect(tabs(page)).toHaveCount(4);
+  const pinned = page.locator(".ct-tabs-pinned .ct-tab");
+  await expect(pinned).toHaveCount(3);
+
+  await tabs(page).nth(3).getByTitle("more").click();
+  await page.getByRole("menuitem", { name: "Pin", exact: true }).click();
+  await expect(pinned).toHaveCount(4);
+  // A pinned tab has a pin where the others have a close.
+  await expect(pinned.nth(3).getByTitle("close")).toHaveCount(0);
+  await expect
+    .poll(async () => (await savedTabs(page))?.map((t) => t.pinned), { timeout: 10_000 })
+    .toEqual([true, true, true, true]);
+
+  await page.reload();
+  await expect(pinned).toHaveCount(4);
+  await pinned.nth(1).getByTitle("unpin").click();
+  await expect(pinned.locator(".ct-tab-label")).toHaveText(["Dashboard", "Sources", /./]);
+  await expect(page.locator(".ct-tabs-open .ct-tab-label")).toHaveText(["Search"]);
+  // Unpinned and closed, Search stays gone: the defaults are not put back.
+  await page.locator(".ct-tabs-open .ct-tab").getByTitle("close").click();
+  await expect.poll(() => savedTabCount(page), { timeout: 10_000 }).toBe(3);
+  await page.reload();
+  await expect(tabs(page)).toHaveCount(3);
+  await expect(pinned).toHaveCount(3);
 });
 
 test("in edit mode, unsolidifying the Dashboard opens the card inside it", async ({ page }) => {
@@ -77,39 +128,40 @@ test("in edit mode, unsolidifying the Dashboard opens the card inside it", async
 
   await page.getByRole("button", { name: "Open Sources" }).click();
   await expect(mainCards(page)).toHaveCount(6);
-  await expect(tabs(page)).toHaveCount(1);
+  await expect(tabs(page)).toHaveCount(3);
+  await expect(tabs(page).first()).toHaveClass(/is-selected/);
 });
 
 test("the layout is kept in the library across a reload", async ({ page }) => {
   await page.goto("/");
   await expect(mainCards(page)).toHaveCount(5);
-  await page.getByRole("button", { name: "Open Sources" }).click();
-  await expect(tabs(page)).toHaveCount(2);
-  await expect.poll(() => savedTabCount(page), { timeout: 10_000 }).toBe(2);
+  await recentDocument(page).click();
+  await expect(tabs(page)).toHaveCount(4);
+  await expect.poll(() => savedTabCount(page), { timeout: 10_000 }).toBe(4);
 
   await page.reload();
-  await expect(tabs(page)).toHaveCount(2);
-  await expect(tabs(page).nth(1)).toHaveClass(/is-selected/);
+  await expect(tabs(page)).toHaveCount(4);
+  await expect(tabs(page).nth(3)).toHaveClass(/is-selected/);
 });
 
 test("a tab the person renames keeps its name after a reload", async ({ page }) => {
   await page.goto("/");
   await expect(mainCards(page)).toHaveCount(5);
-  await page.getByRole("button", { name: "Open Sources" }).click();
-  await expect(tabs(page)).toHaveCount(2);
-  await tabs(page).nth(1).getByTitle("more").click();
+  await recentDocument(page).click();
+  await expect(tabs(page)).toHaveCount(4);
+  await tabs(page).nth(3).getByTitle("more").click();
   await page.getByRole("menuitem", { name: "Rename…" }).click();
-  await page.getByLabel("Name").fill("My sources");
+  await page.getByLabel("Name").fill("My reading");
   await page.getByRole("button", { name: "OK" }).click();
-  await expect(tabs(page).nth(1)).toContainText("My sources");
+  await expect(tabs(page).nth(3)).toContainText("My reading");
 
   await expect
-    .poll(async () => (await savedTabs(page))?.[1]?.name, { timeout: 10_000 })
-    .toBe("My sources");
+    .poll(async () => (await savedTabs(page))?.[3]?.name, { timeout: 10_000 })
+    .toBe("My reading");
   await page.reload();
   // The card names itself again as it mounts; the person's name stays.
   await expect(mainCards(page)).toHaveCount(1);
-  await expect(tabs(page).nth(1)).toContainText("My sources");
+  await expect(tabs(page).nth(3)).toContainText("My reading");
 });
 
 test("a composite cannot take a built-in composite's name", async ({ page }) => {
@@ -149,6 +201,7 @@ test("a tab switched away from and back keeps its table drawn", async ({ page })
   await expect.poll(spread).toBe(true);
 
   await tabs(page).filter({ hasText: "Dashboard" }).click();
-  await tabs(page).filter({ hasText: "Sources" }).click();
+  // The tab the URL opened, not the pinned Sources.
+  await tabs(page).filter({ hasText: "Sources" }).last().click();
   await expect.poll(spread).toBe(true);
 });

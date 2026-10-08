@@ -7,16 +7,22 @@ import {
   makeBox,
   makeCard,
   openFrom,
+  move,
   parseTree,
+  pinnedShowing,
+  pinnedTabs,
+  predatesPins,
   remove,
   rename,
   resetTo,
   setBasis,
   setDirection,
+  setPinned,
   setCard,
   setSolidified,
   tabRows,
   unwrap,
+  withPins,
   wrap,
   type BoxNode,
   type TreeNode,
@@ -212,5 +218,110 @@ describe("composites", () => {
     expect(
       parseTree(makeBox("r", "tabs", [{ ...makeCard("c", "x()"), source: 1 } as never])),
     ).toBeNull();
+  });
+});
+
+describe("pinned tabs", () => {
+  // The fixture with its composite pinned, and a card "a" opened from the sandbox.
+  function pinnedFixture(): BoxNode {
+    const root = openFrom(setSolidified(fixture(), "sandbox", true), "s1", [makeCard("a", "x()")]);
+    return setPinned(root, "dash", true) as BoxNode;
+  }
+
+  it("a card opened from a pinned tab is a tab after the rest, under nothing", () => {
+    const root = openFrom(pinnedFixture(), "d1", [
+      makeCard("n1", "y()"),
+      makeCard("n2", "z()"),
+    ]) as BoxNode;
+    expect(pinnedTabs(root).map((t) => t.id)).toEqual(["dash"]);
+    expect(tabRows(root).map((r) => [r.node.id, r.depth])).toEqual([
+      ["sandbox", 0],
+      ["a", 1],
+      ["n1", 0],
+      ["n2", 1],
+    ]);
+    expect(find(root, "n1")?.openedBy).toBeNull();
+    // So closing the pinned tab's own opens never reaches back to it.
+    expect(ids(remove(root, "n1"))).toEqual(["dash", "sandbox", "a"]);
+  });
+
+  it("pinning lifts a tab out of the tree, and what it opened goes under its opener", () => {
+    let root = openFrom(pinnedFixture(), "a", [makeCard("b", "y()")]) as BoxNode;
+    root = setPinned(root, "a", true) as BoxNode;
+    expect(ids(root)).toEqual(["dash", "a", "sandbox", "b"]);
+    expect(find(root, "a")?.openedBy).toBeNull();
+    expect(tabRows(root).map((r) => [r.node.id, r.depth])).toEqual([
+      ["sandbox", 0],
+      ["b", 1],
+    ]);
+  });
+
+  it("unpinning puts a tab first among the rest", () => {
+    const root = setPinned(pinnedFixture(), "dash", false) as BoxNode;
+    expect(pinnedTabs(root)).toEqual([]);
+    expect(ids(root)).toEqual(["dash", "sandbox", "a"]);
+    expect(setPinned(root, "d1", true)).toBe(root);
+  });
+
+  it("a tab does not move across the line between pinned and the rest", () => {
+    const root = setPinned(pinnedFixture(), "a", true) as BoxNode;
+    expect(ids(root)).toEqual(["dash", "a", "sandbox"]);
+    expect(move(root, "a", 1)).toBe(root);
+    expect(move(root, "sandbox", -1)).toBe(root);
+    expect(ids(move(root, "a", -1))).toEqual(["a", "dash", "sandbox"]);
+  });
+
+  it("a container put around a pinned tab is the pinned tab, and its cards are when taken out", () => {
+    const wrapped = wrap(setPinned(pinnedFixture(), "a", true), "a", "columns", "w") as BoxNode;
+    expect(pinnedTabs(wrapped).map((t) => t.id)).toEqual(["dash", "w"]);
+    expect(find(wrapped, "a")?.pinned).toBe(false);
+    const out = unwrap(wrapped, "w") as BoxNode;
+    expect(pinnedTabs(out).map((t) => t.id)).toEqual(["dash", "a"]);
+  });
+
+  it("an open that would make a tab shows the pinned tab that has that card", () => {
+    const root = setPinned(
+      { ...fixture(), children: [...fixture().children, makeCard("src", "sourcesView()")] },
+      "src",
+      true,
+    );
+    expect(pinnedShowing(root, "d1", "sourcesView()")).toBe("src");
+    expect(pinnedShowing(root, "d1", 'sourcesView({"add":true})')).toBeNull();
+    // Inside an unsolidified container the card lands beside its opener.
+    expect(pinnedShowing(root, "s1", "sourcesView()")).toBeNull();
+    // An unpinned tab is not a destination.
+    expect(pinnedShowing(setPinned(root, "src", false), "d1", "sourcesView()")).toBeNull();
+  });
+
+  it("withPins pins the tab that already shows a pin, and adds the ones missing", () => {
+    const dash = { ...fixture().children[0], template: "Dashboard" } as BoxNode;
+    const kept = makeBox("root", "tabs", [
+      makeCard("mine", "x()"),
+      dash,
+      makeCard("src", "sourcesView()"),
+    ]);
+    const pins = [
+      makeBox("p-dash", "page", [], { template: "Dashboard" }),
+      makeCard("p-search", "searchView()"),
+      makeCard("p-src", "sourcesView()"),
+    ].map((p) => ({ ...p, pinned: true }));
+    const root = withPins(kept, pins);
+    expect(ids(root)).toEqual(["dash", "p-search", "src", "mine"]);
+    expect(pinnedTabs(root).map((t) => t.id)).toEqual(["dash", "p-search", "src"]);
+    expect(root.selected).toBe("mine");
+  });
+
+  it("only a stored tree that says nothing of pins predates them", () => {
+    const stored = JSON.parse(JSON.stringify(fixture())) as { children: { pinned?: boolean }[] };
+    expect(predatesPins(stored)).toBe(false);
+    expect(parseTree(stored)?.children.map((c) => c.pinned)).toEqual([false, false]);
+    for (const c of stored.children) delete c.pinned;
+    expect(predatesPins(stored)).toBe(true);
+    expect(predatesPins(null)).toBe(false);
+  });
+
+  it("a stored pin is read back", () => {
+    const stored: unknown = JSON.parse(JSON.stringify(pinnedFixture()));
+    expect(pinnedTabs(parseTree(stored)!).map((t) => t.id)).toEqual(["dash"]);
   });
 });

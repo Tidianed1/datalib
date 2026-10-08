@@ -4,8 +4,10 @@
 // solidified, which holds for everything inside it too. A card opened
 // from a card lands in the nearest container above the opener that is
 // not solidified, so a solidified subtree keeps its shape and an
-// unsolidified one grows. The decisions are pure functions here;
-// ContainersView applies them.
+// unsolidified one grows. A tab of the outermost container can be
+// pinned: the pinned tabs come first, and a card opened from one gets a
+// tab of its own after the rest instead of one under it. The decisions
+// are pure functions here; ContainersView applies them.
 
 export const LAYOUTS = ["tabs", "page", "split", "columns"] as const;
 export type Layout = (typeof LAYOUTS)[number];
@@ -49,6 +51,10 @@ type Common = {
   // The sibling this one was opened from, so a tabs container can list
   // its children as a tree, and closing a tab closes what it opened.
   openedBy: string | null;
+  // A tab of the outermost container that is kept at the top of the
+  // sidebar. The pinned tabs are the first of its children, and none
+  // has an opener. False everywhere else in the tree.
+  pinned: boolean;
 };
 
 export type CardNode = Common & {
@@ -96,6 +102,7 @@ export function makeCard(id: string, source: string, state = ""): CardNode {
     name: null,
     basis: null,
     openedBy: null,
+    pinned: false,
   };
 }
 
@@ -117,6 +124,7 @@ export function makeBox(
     template: opts.template ?? null,
     basis: opts.basis ?? null,
     openedBy: null,
+    pinned: false,
   };
 }
 
@@ -176,13 +184,19 @@ export function landing(
   return null;
 }
 
-// What a tabs container lists, top to bottom: each child under the one
-// it was opened from, siblings in the order they came.
+export function pinnedTabs(box: BoxNode): TreeNode[] {
+  return box.children.filter((c) => c.pinned);
+}
+
+// What a tabs container lists below its pinned tabs, top to bottom:
+// each child under the one it was opened from, siblings in the order
+// they came.
 export function tabRows(box: BoxNode): { node: TreeNode; depth: number }[] {
-  const ids = new Set(box.children.map((c) => c.id));
+  const open = box.children.filter((c) => !c.pinned);
+  const ids = new Set(open.map((c) => c.id));
   const out: { node: TreeNode; depth: number }[] = [];
   const walk = (parent: string | null, depth: number) => {
-    for (const c of box.children) {
+    for (const c of open) {
       const top = c.openedBy === null || !ids.has(c.openedBy);
       if (parent === null ? !top : c.openedBy !== parent) continue;
       out.push({ node: c, depth });
@@ -191,6 +205,15 @@ export function tabRows(box: BoxNode): { node: TreeNode; depth: number }[] {
   };
   walk(null, 0);
   return out;
+}
+
+// The pinned tab that already shows `source`, when a card opened from
+// `fromId` would get a tab of its own: the open shows that tab instead
+// of making a second one.
+export function pinnedShowing(root: TreeNode, fromId: string, source: string): string | null {
+  if (root.kind !== "box" || landing(root, fromId)?.boxId !== root.id) return null;
+  const tab = root.children.find((c) => c.pinned && c.kind === "card" && c.source === source);
+  return tab?.id ?? null;
 }
 
 // ---- changing ----
@@ -231,15 +254,16 @@ export function reveal(root: TreeNode, id: string): TreeNode {
 // opener's branch, each next one by the one before. Where they go
 // within the landing container is the container's layout's call:
 // columns drop what was right of the opener, tabs take each card as a
-// tab of its own under the one that opened it, and the others insert
-// beside it. Returns the tree unchanged when nothing is unsolidified
-// above.
+// tab of its own under the one that opened it (after every tab, with no
+// opener, when that one is pinned), and the others insert beside it.
+// Returns the tree unchanged when nothing is unsolidified above.
 export function openFrom(root: TreeNode, fromId: string, nodes: TreeNode[]): TreeNode {
   const land = landing(root, fromId);
   if (!land || nodes.length === 0) return root;
+  const fromPinned = find(root, land.branchId)?.pinned === true;
   const chained = nodes.map((n, i) => ({
     ...n,
-    openedBy: i === 0 ? land.branchId : nodes[i - 1].id,
+    openedBy: i === 0 ? (fromPinned ? null : land.branchId) : nodes[i - 1].id,
   }));
   const next = mapBox(root, land.boxId, (box) => {
     const i = box.children.findIndex((c) => c.id === land.branchId);
@@ -358,7 +382,7 @@ function replace(root: TreeNode, id: string, next: TreeNode): TreeNode {
   const parent = parentOf(root, id);
   const old = find(root, id);
   if (!parent || !old) return root;
-  const placed = { ...next, basis: old.basis, openedBy: old.openedBy };
+  const placed = { ...next, basis: old.basis, openedBy: old.openedBy, pinned: old.pinned };
   return mapBox(root, parent.id, (b) => ({
     ...b,
     selected: b.selected === id ? placed.id : b.selected,
@@ -372,7 +396,8 @@ function replace(root: TreeNode, id: string, next: TreeNode): TreeNode {
 export function wrap(root: TreeNode, id: string, layout: Layout, boxId: string): TreeNode {
   const node = find(root, id);
   if (!node) return root;
-  return replace(root, id, makeBox(boxId, layout, [{ ...node, basis: null, openedBy: null }]));
+  const inner = { ...node, basis: null, openedBy: null, pinned: false };
+  return replace(root, id, makeBox(boxId, layout, [inner]));
 }
 
 // Replace container `id` with its children, in place.
@@ -384,6 +409,7 @@ export function unwrap(root: TreeNode, id: string): TreeNode {
     ...c,
     basis: null,
     openedBy: i === 0 ? box.openedBy : (c.openedBy ?? box.openedBy),
+    pinned: box.pinned,
   }));
   const at = parent.children.findIndex((c) => c.id === id);
   const children = [...parent.children.slice(0, at), ...lifted, ...parent.children.slice(at + 1)];
@@ -391,16 +417,52 @@ export function unwrap(root: TreeNode, id: string): TreeNode {
   return mapBox(root, parent.id, (b) => ({ ...b, children, selected }));
 }
 
-// Move `id` one place earlier (-1) or later (+1) among its siblings.
+// Move `id` one place earlier (-1) or later (+1) among its siblings. A
+// pinned tab stays among the pinned ones, and the others below them.
 export function move(root: TreeNode, id: string, delta: -1 | 1): TreeNode {
   const parent = parentOf(root, id);
   if (!parent) return root;
   const i = parent.children.findIndex((c) => c.id === id);
   const j = i + delta;
   if (j < 0 || j >= parent.children.length) return root;
+  if (parent.children[i].pinned !== parent.children[j].pinned) return root;
   const children = [...parent.children];
   [children[i], children[j]] = [children[j], children[i]];
   return mapBox(root, parent.id, (b) => ({ ...b, children }));
+}
+
+// Pin or unpin a tab of the outermost container. Either way it lands
+// where the pinned tabs end: the last of them once pinned, the first
+// below them once not. A pinned tab has no opener and is nothing's
+// opener, so what it had opened goes under its own opener.
+export function setPinned(root: TreeNode, id: string, pinned: boolean): TreeNode {
+  if (root.kind !== "box") return root;
+  const tab = root.children.find((c) => c.id === id);
+  if (!tab || tab.pinned === pinned) return root;
+  const rest = root.children
+    .filter((c) => c.id !== id)
+    .map((c) => (c.openedBy === id ? { ...c, openedBy: tab.openedBy } : c));
+  const at = rest.filter((c) => c.pinned).length;
+  const moved = { ...tab, pinned, openedBy: null };
+  return { ...root, children: [...rest.slice(0, at), moved, ...rest.slice(at)] };
+}
+
+// `root` with each of `pins` a pinned tab, in that order after the tabs
+// already pinned. A tab that shows the same thing — a card of the same
+// source, a container made from the same composite — is the one
+// pinned; only a pin with no such tab is added.
+export function withPins(root: BoxNode, pins: TreeNode[]): BoxNode {
+  const same = (pin: TreeNode, tab: TreeNode) =>
+    pin.kind === "card"
+      ? tab.kind === "card" && tab.source === pin.source
+      : tab.kind === "box" && pin.template !== null && tab.template === pin.template;
+  let next = root;
+  for (const pin of pins) {
+    const have = next.children.find((c) => same(pin, c));
+    if (!have) next = { ...next, children: [...next.children, { ...pin, pinned: false }] };
+    next = setPinned(next, (have ?? pin).id, true) as BoxNode;
+  }
+  return next;
 }
 
 // ---- composites ----
@@ -427,7 +489,7 @@ export function instantiate(node: TreeNode, freshId: () => string): TreeNode {
       children: n.children.map(copy),
     };
   };
-  return { ...copy(node), openedBy: null };
+  return { ...copy(node), openedBy: null, pinned: false };
 }
 
 // Put a fresh copy of `template` where `id` is, keeping its size and
@@ -454,7 +516,12 @@ function readNode(v: unknown): TreeNode | null {
   const n = v as Record<string, unknown>;
   const id = str(n.id);
   if (id === null) return null;
-  const common = { id, basis: num(n.basis), openedBy: str(n.openedBy) };
+  const common = {
+    id,
+    basis: num(n.basis),
+    openedBy: str(n.openedBy),
+    pinned: n.pinned === true,
+  };
   if (n.kind === "card") {
     const source = str(n.source);
     if (source === null) return null;
@@ -491,6 +558,16 @@ function readNode(v: unknown): TreeNode | null {
 export function parseTree(v: unknown): BoxNode | null {
   const node = readNode(v);
   return node?.kind === "box" ? node : null;
+}
+
+// Whether a stored tree was written by a build that could not pin a
+// tab: none of its tabs says whether it is pinned. Such a tree is given
+// the default pinned tabs once; a tree written since says `pinned` on
+// every tab, so tabs a person unpinned stay unpinned.
+export function predatesPins(v: unknown): boolean {
+  const children = (v as { children?: unknown } | null)?.children;
+  if (!Array.isArray(children)) return false;
+  return children.every((c) => typeof c !== "object" || c === null || !("pinned" in c));
 }
 
 export function parseComposites(v: unknown): Record<string, BoxNode> {

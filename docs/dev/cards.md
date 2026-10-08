@@ -293,8 +293,9 @@ layout is a tree of **containers** whose leaves are cards, and each
 container lays out its own children:
 
 - **Tabs** shows one child at a time. The outermost container is always
-  Tabs, drawn as the sidebar: each tab under the tab it was opened
-  from, as in Firefox's Tree Style Tab.
+  Tabs, drawn as the sidebar: the pinned tabs first (below), then each
+  other tab under the tab it was opened from, as in Firefox's Tree
+  Style Tab.
 - **Page** puts children one after another at their natural height and
   scrolls. A card there is as tall as its content (`ShadowCard`'s
   `natural`, honoured by `vueCard`).
@@ -314,6 +315,31 @@ container is never solidified, so an open always lands somewhere. A
 card opened from the toolbar (Logs, Data sources, a search) is a tab of
 its own. A link opens its cards as one tab holding a Columns container,
 so what they open lands beside them.
+
+**Pinned tabs.** A tab of the outermost container can be pinned (its
+panel's Pin; the pin on its row unpins it). The pinned tabs are listed
+first, above a line, and stay there while the list below scrolls. Three
+things follow from a tab being pinned:
+
+- A card opened from it gets a tab after every other tab, with no
+  opener, instead of a tab under it. So nothing is ever closed along
+  with a pinned tab, and pinning a tab moves what it had opened under
+  its own opener.
+- It has no Close: unpin it first.
+- An open that would make a new tab for a card a pinned tab already
+  shows — the same source, exactly — shows that tab instead
+  (`pinnedShowing`). The Dashboard's "Open Sources" goes to the pinned
+  Sources tab; `sourcesView({"add":true})` is another source and gets a
+  tab.
+
+A main window with no kept tree starts with three pinned tabs
+(`defaultPins` in `ContainersView.vue`): the Dashboard, Search
+(`searchView()`) and Sources (`sourcesView()`). A kept tree written
+before tabs could be pinned says `pinned` on none of its tabs
+(`predatesPins`), and is given the same three once, pinning a tab it
+already has for one rather than adding a second. A tree written since
+says `pinned` on every tab, so a default the person unpinned or closed
+stays that way.
 
 **What shows.** Outside edit mode a solidified subtree shows no card
 chrome, so a composite such as the Dashboard (a Page of its five
