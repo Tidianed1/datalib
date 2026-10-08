@@ -77,13 +77,14 @@ function onInitialized() {
 }
 
 // The launch's re-render offer, asked once per page: a launch of the
-// desktop app is a page load, and the next launch asks again if the
-// stores are still in the old shape.
+// desktop app is a page load, and the next launch asks again while the
+// steps have not run. A step the pass could not ask does not open it on
+// its own: that is a failed run on the step's row and in its log.
 const rerenderAnswered = ref(false);
 const rerenderAsked = computed(() => {
   const u = config.value?.upgrade;
   if (!u || gate.value || rerenderAnswered.value) return false;
-  return u.rerender.length > 0 || u.stores.some((s) => s.state === "failed");
+  return u.rerender.length > 0;
 });
 
 async function onRerender(yes: boolean) {

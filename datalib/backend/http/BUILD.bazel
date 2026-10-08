@@ -187,7 +187,6 @@ rust_test(
         "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/runs:datalib_runs",
         "//datalib/backend/schema:datalib_schema",
-        "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:axum",
         "@datalib_crates//:futures",

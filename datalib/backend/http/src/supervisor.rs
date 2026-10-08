@@ -2,8 +2,9 @@
 //! §2.8): it holds `runner-lock` for as long as it is up, runs the loop
 //! whenever a request is open, and between busy periods settles a step
 //! turned off or on into the record, runs a reset and deletes a removed
-//! group's tree. Before its first request it migrates the raw stores
-//! another build wrote (`docs/dev/plans/upgrade_on_launch.md`).
+//! group's tree. The first time a build runs on the root it asks every
+//! step to migrate before the first request
+//! (`docs/dev/plans/upgrade_on_launch.md`).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -51,8 +52,11 @@ const PURGE_WAIT: Duration = Duration::from_secs(5);
 pub struct Upgrade {
     /// The pass is running: nothing syncs until it is done.
     pub migrating: bool,
-    /// Every raw store the pass took on, in the order it takes them.
-    pub stores: Vec<MigrateRow>,
+    /// This server has run its pass, or found it had none to run. False
+    /// until it holds the runner lock, which another process may hold.
+    pub settled: bool,
+    /// Every step the pass asks, in the order it asks them.
+    pub steps: Vec<MigrateRow>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -62,7 +66,7 @@ pub struct MigrateRow {
     pub error: Option<String>,
 }
 
-/// How the migrate pass stands with one raw store. Mirrored by hand in
+/// How the migrate pass stands with one step. Mirrored by hand in
 /// `datalib/ui/src/api.ts`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -253,7 +257,15 @@ async fn host(cfg: &HostConfig) {
         }
         Err(e) => tracing::error!("supervisor: could not take over from the last loop: {e:#}"),
     }
-    migrate_on_launch(cfg).await;
+    migrate_on_launch(cfg, &store).await;
+    cfg.control
+        .upgrade
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .settled = true;
+    if let Some(tx) = &cfg.announce {
+        let _ = tx.send(crate::watch::RootEvent::UpgradeChanged.into());
+    }
     tracing::info!("supervisor: running the loop on {}", root.display());
     host::run_idle(&store, &mut listener, &mut ServerPeriods { cfg }, &mut stop).await;
     store.close().await;
@@ -317,23 +329,32 @@ impl host::Periods for ServerPeriods<'_> {
     }
 }
 
-/// Migrate every raw store another build wrote, one at a time, before
-/// the loop takes any request: no render then reads a raw store in an old
-/// shape. A request opened meanwhile waits for the loop. A store that
-/// fails is reported and the rest go on.
-async fn migrate_on_launch(cfg: &HostConfig) {
+/// The first time this build runs on the root, ask every step that takes
+/// the verb to migrate, one at a time, before the loop takes any request:
+/// no render then reads a raw store in an old shape. What a step cannot
+/// migrate in place it answers `needs_rerun`, which the page offers to run.
+/// A request opened meanwhile waits for the loop. A step that fails is
+/// reported and the rest go on.
+async fn migrate_on_launch(cfg: &HostConfig, store: &Store) {
     let root = cfg.control.root.clone();
     let Ok(checked) = load_config(&root) else {
         return;
     };
-    let build = datalib_dag::supervisor::upgrade::Build::this();
-    let targets =
-        datalib_dag::supervisor::upgrade::raw_stores_to_migrate(&root, &checked.graph, &build)
-            .await;
-    if targets.is_empty() {
-        return;
+    let build = datalib_dag::supervisor::upgrade::this_build();
+    match store.launch_pass_done(&build).await {
+        Ok(false) => {}
+        Ok(true) => return,
+        Err(e) => {
+            tracing::error!("supervisor: could not read the launch passes, so none runs: {e:#}");
+            return;
+        }
     }
-    tracing::info!(stores = ?targets, "supervisor: migrating the raw stores another build wrote");
+    let asked = datalib_dag::supervisor::upgrade::steps_to_ask(&checked.graph);
+    tracing::info!(
+        build,
+        steps = asked.len(),
+        "supervisor: asking each step to migrate for this build"
+    );
     let set = |f: &dyn Fn(&mut Upgrade)| {
         f(&mut cfg
             .control
@@ -347,7 +368,8 @@ async fn migrate_on_launch(cfg: &HostConfig) {
     set(&|u| {
         *u = Upgrade {
             migrating: true,
-            stores: targets
+            settled: false,
+            steps: asked
                 .iter()
                 .map(|step| MigrateRow {
                     step: step.clone(),
@@ -375,32 +397,38 @@ async fn migrate_on_launch(cfg: &HostConfig) {
         };
         Runner::new(root.as_path()).sink(sink).child_env(env.vars)
     });
-    for (i, step) in targets.iter().enumerate() {
-        set(&|u| u.stores[i].state = MigrateState::Running);
-        let error = match &runner {
+    for (i, step) in asked.iter().enumerate() {
+        set(&|u| u.steps[i].state = MigrateState::Running);
+        let answer = match &runner {
             Ok(runner) => match runner
                 .migrate(&checked.graph, std::slice::from_ref(step))
                 .await
             {
-                Ok(done) => done.into_iter().next().and_then(|m| m.error),
-                Err(e) => Some(format!("{e:#}")),
+                Ok(done) => done
+                    .into_iter()
+                    .next()
+                    .map(|m| m.answer)
+                    .unwrap_or(Ok(false)),
+                Err(e) => Err(format!("{e:#}")),
             },
-            Err(e) => Some(format!("{e:#}")),
+            Err(e) => Err(format!("{e:#}")),
         };
-        match &error {
-            None => tracing::info!(step, "supervisor: migrated the raw store"),
-            Some(why) => {
-                tracing::error!(step, "supervisor: could not migrate the raw store: {why}")
-            }
+        match &answer {
+            Ok(false) => {}
+            Ok(true) => tracing::info!(step, "supervisor: needs to run again for this build"),
+            Err(why) => tracing::error!(step, "supervisor: could not migrate: {why}"),
         }
         set(&|u| {
-            u.stores[i].state = if error.is_none() {
-                MigrateState::Done
-            } else {
-                MigrateState::Failed
+            (u.steps[i].state, u.steps[i].error) = match &answer {
+                Ok(_) => (MigrateState::Done, None),
+                Err(why) => (MigrateState::Failed, Some(why.clone())),
             };
-            u.stores[i].error = error.clone();
         });
+    }
+    if let Err(e) = store.record_launch_pass(&build).await {
+        tracing::error!(
+            "supervisor: could not record the launch pass, so the next launch asks again: {e:#}"
+        );
     }
     cfg.control.busy.store(false, Ordering::SeqCst);
     set(&|u| u.migrating = false);
@@ -562,7 +590,7 @@ async fn fail_open_requests(store: &Store, why: &str) {
 }
 
 /// A reset, between busy periods: each target's step invoked with
-/// `DATALIB_DAG_RESET`, in a run of its own; then a request rooted at what
+/// `--reset store`, in a run of its own; then a request rooted at what
 /// reads them, opened for whoever asked, which the loop takes on next.
 async fn run_reset(
     cfg: &HostConfig,

@@ -37,9 +37,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use datalib_dag::subprocess::{
-    ENV_CHECKPOINT_CADENCE, ENV_DATA_ROOT, ENV_MIGRATE, ENV_NOW, ENV_RESET, ENV_STEP,
-};
+use datalib_dag::subprocess::{ENV_CHECKPOINT_CADENCE, ENV_DATA_ROOT, ENV_NOW, ENV_STEP};
 use datalib_dag::FailureKind;
 
 use crate::events::Emitter;
@@ -83,6 +81,15 @@ struct Cli {
     /// `embed` only: directory where qmd caches its embedding model.
     #[arg(long)]
     models_dir: Option<PathBuf>,
+    /// Appended by `datalib-dag --reset`: empty this part of what the step
+    /// wrote (`store`) and do nothing else (`step_protocol.md` § Reset).
+    #[arg(long, value_name = "PART", conflicts_with = "migrate")]
+    reset: Option<String>,
+    /// Appended by a launch after an upgrade: bring what the step wrote to
+    /// this build's shape where that can be done in place, fetch nothing,
+    /// and say when it cannot (`step_protocol.md` § Migrate).
+    #[arg(long)]
+    migrate: bool,
     #[command(flatten)]
     obs: datalib_obs::ObsArgs,
 }
@@ -405,11 +412,11 @@ async fn run(
         }
         None => {
             let env = StepEnv::from_env()?;
-            if let Ok(part) = std::env::var(ENV_RESET) {
-                return reset::run(&env, data_root, &part, emitter).await;
+            if let Some(part) = &cli.reset {
+                return reset::run(&env, data_root, part, emitter).await;
             }
-            if let Ok(part) = std::env::var(ENV_MIGRATE) {
-                return migrate::run(&env, data_root, &part).await;
+            if cli.migrate {
+                return migrate::run(&env, data_root, emitter).await;
             }
             run_function(
                 env,

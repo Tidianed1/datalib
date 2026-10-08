@@ -34,7 +34,7 @@ async fn a_reset_download_reports_the_emptied_stores_problems() {
         .env("DATALIB_DAG_GROUP_TYPE", "slack")
         .env("DATALIB_DAG_FUNCTION", "ingest")
         .env("DATALIB_DAG_DATA_ROOT", root)
-        .env("DATALIB_DAG_RESET", "store")
+        .args(["--reset", "store"])
         .stdin(Stdio::null())
         .output()
         .expect("spawn datalib-step");

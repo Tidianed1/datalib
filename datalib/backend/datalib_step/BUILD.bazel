@@ -115,6 +115,7 @@ rust_binary(
         "//datalib/backend/fetch:datalib_fetch",
         "//datalib/backend/qmd_models:datalib_qmd_models",
         "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/source_common:datalib_source_common",
         "//datalib/backend/time:datalib_time",
         "//datalib/backend/unified_index:datalib_unified_index",
@@ -156,7 +157,6 @@ rust_test(
     # Stub `DataProcessor`s for the render-version staleness tests.
     proc_macro_deps = ["@datalib_crates//:async-trait"],
     deps = [
-        "//datalib/backend/store_meta:datalib_store_meta",
         "@datalib_crates//:runfiles",
         "@datalib_crates//:serde",
         "@datalib_crates//:tempfile",

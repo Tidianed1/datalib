@@ -1,6 +1,7 @@
-//! A launch on a root another build wrote: the server migrates the raw
-//! stores that build left, with no download, before its loop takes any
-//! request (`docs/dev/plans/upgrade_on_launch.md`).
+//! The first launch of a build on a root: the server asks every step that
+//! takes the verb to `--migrate` before its loop takes any request, offers
+//! to run the ones that answer `needs_rerun`, and asks nobody on the next
+//! launch of the same build (`docs/dev/plans/upgrade_on_launch.md`).
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -8,68 +9,42 @@ use std::time::{Duration, Instant};
 use axum::body::Body;
 use axum::http::Request;
 use datalib_http::{router, ApiToken, AppState};
-use datalib_store_meta::{StoreKind, Versions};
 use tower::ServiceExt;
 
 const TOKEN: &str = "upgrade-on-launch-test-token";
 
-/// Stands in for `datalib-step`: says which mode it was invoked in, and
-/// writes its tree only when it syncs.
+/// Stands in for `datalib-step` on the binary path: logs how it was
+/// invoked, and as `b`'s render answers that it needs to run again.
 const FAKE_STEP: &str = r#"#!/bin/sh
-if [ -n "$DATALIB_DAG_MIGRATE" ]; then mode=migrate; else mode=sync; fi
+case " $* " in *" --migrate "*) mode=migrate ;; *) mode=sync ;; esac
 echo "$mode $DATALIB_DAG_STEP" >> "$DATALIB_DAG_DATA_ROOT/invoked"
-if [ "$mode" = sync ]; then
-    mkdir -p "$DATALIB_DAG_DATA_ROOT/$DATALIB_DAG_STEP"
-    echo x > "$DATALIB_DAG_DATA_ROOT/$DATALIB_DAG_STEP/f"
+if [ "$mode" = migrate ]; then
+    if [ "$DATALIB_DAG_STEP" = b/render_markdown ]; then
+        echo '{"event":"outcome","needs_rerun":true,"outputs":[]}'
+    fi
+    exit 0
 fi
+mkdir -p "$DATALIB_DAG_DATA_ROOT/$DATALIB_DAG_STEP"
+echo x > "$DATALIB_DAG_DATA_ROOT/$DATALIB_DAG_STEP/f"
 "#;
 
-fn fake_step(dir: &Path) -> PathBuf {
+fn bin_dir_with_fake_step(dir: &Path) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
-    let path = dir.join("datalib-step");
+    let bin = dir.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let path = bin.join("datalib-step");
     std::fs::write(&path, FAKE_STEP).unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    path
+    bin
 }
 
-fn ingest_group(group: &str, step: &Path) -> String {
+fn source(group: &str) -> String {
     format!(
-        "[[groups]]\nid = \"{group}\"\n\n\
-         [[steps]]\ngroup = \"{group}\"\nfunction = \"ingest\"\ncommand = \"{}\"\n\n",
-        step.display()
+        "[[groups]]\nid = \"{group}\"\ntype = \"calendar\"\n\n\
+         [[steps]]\ngroup = \"{group}\"\nfunction = \"ingest\"\n\n\
+         [[steps]]\ngroup = \"{group}\"\nfunction = \"render_markdown\"\n\
+         inputs = [\"{group}/ingest\"]\n\n"
     )
-}
-
-/// A raw store whose `_datalib_meta` names `version`, or this build.
-async fn raw_store(root: &Path, group: &str, version: Option<&str>) {
-    let dir = root.join(group).join("ingest");
-    std::fs::create_dir_all(&dir).unwrap();
-    let url = format!(
-        "sqlite://{}?mode=rwc",
-        dir.join("entities.doltlite_db").display()
-    );
-    let pool = sqlx::sqlite::SqlitePoolOptions::new()
-        .max_connections(1)
-        .idle_timeout(None)
-        .max_lifetime(None)
-        .connect(&url)
-        .await
-        .unwrap();
-    datalib_store_meta::write(&pool, StoreKind::Raw, "shape", Versions::default())
-        .await
-        .unwrap();
-    if let Some(version) = version {
-        sqlx::query("UPDATE _datalib_meta SET value = ? WHERE key = 'datalib_version'")
-            .bind(version)
-            .execute(&pool)
-            .await
-            .unwrap();
-    }
-    sqlx::query("SELECT dolt_commit('-Am', 'a raw store')")
-        .execute(&pool)
-        .await
-        .unwrap();
-    pool.close().await;
 }
 
 fn invoked(root: &Path) -> Vec<String> {
@@ -78,6 +53,42 @@ fn invoked(root: &Path) -> Vec<String> {
         .lines()
         .map(str::to_string)
         .collect()
+}
+
+async fn boot(root: &Path, bin: &Path) -> AppState {
+    datalib_http::build_state(
+        root.to_path_buf(),
+        Some(bin.to_path_buf()),
+        None,
+        ApiToken::from_value(TOKEN, root),
+    )
+    .await
+    .expect("the server boots")
+}
+
+/// A sync of `a`, opened before the server is up, and how long to wait
+/// for its render to have run.
+async fn sync_a_and_wait(root: &Path) {
+    let mailbox = datalib_dag::supervisor::store::Store::open(root)
+        .await
+        .unwrap();
+    mailbox
+        .open_request(&["a/ingest".to_string()], "ui")
+        .await
+        .unwrap();
+    mailbox.close().await;
+}
+
+async fn until_invoked(root: &Path, line: &str) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !invoked(root).iter().any(|l| l == line) {
+        assert!(
+            Instant::now() < deadline,
+            "never saw {line:?}: {:?}",
+            invoked(root)
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 async fn config(state: &AppState) -> serde_json::Value {
@@ -93,51 +104,77 @@ async fn config(state: &AppState) -> serde_json::Value {
     serde_json::from_slice(&bytes).unwrap()
 }
 
-/// The sync opened before the server came up runs only once `a`'s store,
-/// which another build wrote, is migrated; `b`'s, which this build wrote,
-/// is left alone. `/api/config` then reports the pass as done.
+/// Every step is asked, producers first, before the sync opened at boot
+/// runs. `b`'s render, which said it needs to run again, is left alone by
+/// `a`'s sync and offered; the next launch of the same build asks nobody.
 #[tokio::test]
-async fn a_launch_migrates_another_builds_raw_stores_before_any_sync() {
+async fn a_launch_asks_every_step_once_per_build_before_any_sync() {
     let td = tempfile::tempdir().unwrap();
     let root = td.path().join("root");
     std::fs::create_dir_all(&root).unwrap();
-    let step = fake_step(td.path());
-    std::fs::write(
-        root.join("config.toml"),
-        ingest_group("a", &step) + &ingest_group("b", &step),
-    )
-    .unwrap();
-    raw_store(&root, "a", Some("0.0.1")).await;
-    raw_store(&root, "b", None).await;
-    let mailbox = datalib_dag::supervisor::store::Store::open(&root)
-        .await
-        .unwrap();
-    mailbox
-        .open_request(&["a/ingest".to_string()], "ui")
-        .await
-        .unwrap();
-    mailbox.close().await;
+    let bin = bin_dir_with_fake_step(td.path());
+    std::fs::write(root.join("config.toml"), source("a") + &source("b")).unwrap();
 
-    let state =
-        datalib_http::build_state(root.clone(), None, None, ApiToken::from_value(TOKEN, &root))
-            .await
-            .expect("the server boots");
-
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !invoked(&root).contains(&"sync a/ingest".to_string()) {
+    sync_a_and_wait(&root).await;
+    let state = boot(&root, &bin).await;
+    until_invoked(&root, "sync a/render_markdown").await;
+    let lines = invoked(&root);
+    let at = |line: &str| {
+        lines
+            .iter()
+            .position(|l| l == line)
+            .unwrap_or_else(|| panic!("no {line:?} in {lines:?}"))
+    };
+    let (asked, ran) = lines.split_at(4);
+    let mut asked = asked.to_vec();
+    asked.sort();
+    assert_eq!(
+        asked,
+        [
+            "migrate a/ingest",
+            "migrate a/render_markdown",
+            "migrate b/ingest",
+            "migrate b/render_markdown",
+        ],
+        "every step is asked before anything syncs: {lines:?}"
+    );
+    assert_eq!(ran, ["sync a/ingest", "sync a/render_markdown"]);
+    for group in ["a", "b"] {
         assert!(
-            Instant::now() < deadline,
-            "the sync never ran: {:?}",
-            invoked(&root)
+            at(&format!("migrate {group}/ingest"))
+                < at(&format!("migrate {group}/render_markdown")),
+            "a render is asked after its raw store: {lines:?}"
         );
-        tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    assert_eq!(invoked(&root), ["migrate a/ingest", "sync a/ingest"]);
     let upgrade = &config(&state).await["upgrade"];
     assert_eq!(upgrade["migrating"], false, "{upgrade}");
+    assert_eq!(upgrade["settled"], true, "{upgrade}");
+    assert!(
+        upgrade["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s["state"] == "done"),
+        "{upgrade}"
+    );
     assert_eq!(
-        upgrade["stores"],
-        serde_json::json!([{ "step": "a/ingest", "state": "done", "error": null }])
+        upgrade["rerender"],
+        serde_json::json!(["b/render_markdown"])
+    );
+    assert!(state.sync.shutdown(Duration::from_secs(10)).await);
+
+    std::fs::remove_file(root.join("invoked")).unwrap();
+    sync_a_and_wait(&root).await;
+    let state = boot(&root, &bin).await;
+    until_invoked(&root, "sync a/render_markdown").await;
+    assert!(
+        !invoked(&root).iter().any(|l| l.starts_with("migrate")),
+        "the same build asks once: {:?}",
+        invoked(&root)
+    );
+    assert_eq!(
+        config(&state).await["upgrade"]["steps"],
+        serde_json::json!([])
     );
     state.sync.shutdown(Duration::from_secs(10)).await;
 }

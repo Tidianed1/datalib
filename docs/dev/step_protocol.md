@@ -67,6 +67,13 @@ declared fields to your argv, each only when present/non-empty:
 | --- | --- |
 | `--params-file <path>` | a JSON file holding the entry's `params` subtree, converted TOML → JSON (TOML dates/times arrive as their string form) |
 | `--inputs <json>` | the entry's `inputs`, as a JSON string array |
+| `--reset <part>` | only on a reset, and then this invocation is a reset, not a run: see § Reset |
+| `--migrate` | only on the first launch of a build, to a step that takes it, and then this invocation fetches nothing: see § Migrate |
+
+A verb (`--reset`, `--migrate`) rides on the command line rather than in
+the environment so that a command which has never heard of it refuses it
+instead of running a sync, and so that nothing the step starts inherits
+it.
 
 So the entry above runs
 `fetch-weather --station KSFO --params-file <root>/system/params/weather_ingest.XXXX.json`,
@@ -96,8 +103,6 @@ its id, which arrives in the environment.
 | `DATALIB_DAG_CHANGED_INPUTS` | the subset of the above whose version moved since this step's last success; empty when there is no last success to compare against (never completed, or the step's own config changed) — do all your work |
 | `DATALIB_READS` | a JSON object, input path → the version the runner started this invocation against; an input with no version yet is absent. A version for what you *read*, where the output's own would say less (the qmd index reports a hash of this) |
 | `DATALIB_DAG_NOW` | the run's pinned timestamp (RFC 3339). Stamp times with this instead of sampling your own clock, so one run's outputs agree |
-| `DATALIB_DAG_RESET` | set only by a reset, and then this invocation is a reset, not a run: see § Reset |
-| `DATALIB_DAG_MIGRATE` | set only on an ingest step, by the launch's migrate pass, and then this invocation fetches nothing: see § Migrate |
 | `DATALIB_DAG_CHECKPOINT_CADENCE` | set when the config has `checkpoint_cadence`: the most seconds you should let pass between checkpoints |
 | `RUST_LOG` | the run's log filter, in `tracing-subscriber`'s grammar, built from the config's `log_level` ([`logging.md`](logging.md) § "Where a line comes from"). A `RUST_LOG` already set where the runner was started is passed through instead. A step in another language may honor it or ignore it; what it prints is kept regardless |
 
@@ -464,7 +469,7 @@ the log card that reads them: [`logging.md`](logging.md).
 `datalib-dag --reset <step-id>[,<step-id>…]` (or the app's
 Reset, `POST /api/reset`) empties what a step wrote so the next run
 does its work from the start: the
-runner invokes the step once with `DATALIB_DAG_RESET` set to `store`,
+runner invokes the step once with `--reset store` appended,
 then forgets the step ever succeeded and records
 the version the reset reports, or a new one if it reports none, so
 everything reading the tree runs again. Empty that part of your tree, keep whatever
@@ -487,19 +492,38 @@ the file **and** reset the ingest step, together. Deleting the file
 alone leaves edge rows naming bytes that are gone, and the download
 does not fetch what its edge rows say it already has.
 
-## Migrate (built-in ingest steps)
+## Migrate
 
-Before the loop takes any request, the process that holds the runner
-lock invokes each built-in ingest step whose raw store another build
-wrote, once, with `DATALIB_DAG_MIGRATE` set to `store`
-([dag README](../../datalib/backend/dag/README.md) § "Upgrading a
-root"). `datalib-step` then opens the raw store with the provider's
-migration ladder and closes it: every rung, the additive DDL and an
-old blob store's conversion run, and each is sealed to `main`. It reads
-no params and reaches no network or file; a source with no raw store
-yet is left without one. It reports the store's head as the step's
-version, and the runner records that and keeps the step's last success.
-A custom command is never invoked this way.
+The first time a build runs on a root, before the loop takes any
+request, the process that holds the runner lock invokes every step that
+takes the verb once, producers before their readers, with `--migrate`
+appended ([dag README](../../datalib/backend/dag/README.md) §
+"Upgrading a root"). The runner knows nothing of what a step wrote; the
+step decides, and answers in its outcome line:
+
+* **nothing to do** — what it wrote is in this build's shape, or it has
+  written nothing yet: exit 0, report nothing.
+* **migrated** — it brought what it wrote to this build's shape in
+  place, fetching nothing: report the output's new version as a run
+  would. The runner records it and keeps the step's last success, so
+  what reads the output is stale.
+* **needs a rerun** — what it wrote is in a shape it cannot reach in
+  place: add `"needs_rerun": true` to the outcome. The runner holds the
+  step due until it next succeeds, and the app offers to run it; a sync
+  that does not reach it leaves it alone.
+
+```json
+{"event":"outcome","needs_rerun":true,"outputs":[]}
+```
+
+Only `datalib-step`'s own steps take the verb today (the loader sets
+`StepSpec::migrates` for a step with no `command`). An ingest step opens
+its raw store with the provider's migration ladder and closes it: every
+rung, the additive DDL and an old blob store's conversion run, and each
+is sealed to `main`. A render step and the grid index compare their
+store's `_datalib_meta.schema_hash` with this build's and answer
+`needs_rerun` when it differs; a derived store is rebuilt, never
+migrated. The qmd steps have nothing to answer.
 
 ## Signals: graceful cancellation (optional)
 
@@ -588,7 +612,7 @@ step carries the provider's download config (`common` envelope, the method table
 block, …), the render step only the render knobs (nothing for most
 providers; beeper/signal `period`, perseus `alignment_pairs`, email
 `outlink_format`/`only_render_labels`) — honors `DATALIB_DAG_NOW`,
-`DATALIB_DAG_RESET` and `DATALIB_DAG_MIGRATE`, stops at its next consistent point on SIGINT and
+`--reset` and `--migrate`, stops at its next consistent point on SIGINT and
 commits there, and emits versions where it has them (the grid index claims its dolt commit hash). Use it as the
 reference implementation.
 

@@ -47,9 +47,6 @@ pub struct StepShape {
     /// False for a step that reads its inputs off disk rather than at a
     /// pinned commit: it and a writer of what it reads never overlap.
     pub pins_reads: bool,
-    /// The shape of the store it writes, for a built-in step that writes
-    /// one of ours (`StepSpec::store_shape`).
-    pub store_shape: Option<String>,
 }
 
 /// What people have asked for: the open requests and the steps turned off.
@@ -82,9 +79,9 @@ pub struct StepFacts {
     /// Whether the step said its consumers may read its sink before it
     /// finishes.
     pub streams_output: bool,
-    /// The store shape it last succeeded under; `None` when the record
-    /// does not say.
-    pub success_shape: Option<String>,
+    /// It answered a launch's `--migrate` with `needs_rerun`, and has not
+    /// succeeded since: due whatever it read.
+    pub needs_rerun: bool,
 }
 
 /// What an invocation was started against.
@@ -196,12 +193,6 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts) -> Tick {
         }
     }
 
-    let old_shape: Vec<bool> = shape
-        .steps
-        .iter()
-        .zip(&facts.steps)
-        .map(|(s, f)| in_old_shape(s.store_shape.as_deref(), &s.fingerprint, f))
-        .collect();
     let scopes: Vec<Vec<bool>> = intent
         .requests
         .iter()
@@ -244,7 +235,7 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts) -> Tick {
             states[i] = StepState::Off;
             continue;
         }
-        let stale = stale_by_inputs(f, &now);
+        let stale = f.needs_rerun || stale_by_inputs(f, &now);
         if wanting[i].is_empty() {
             states[i] = match (&f.last_attempt, stale) {
                 (Some(a), _) if a.failed => StepState::Failed,
@@ -280,7 +271,7 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts) -> Tick {
             continue;
         }
 
-        if let Some(w) = blocking_producer(i, shape, facts, &states, &old_shape) {
+        if let Some(w) = blocking_producer(i, shape, facts, &states) {
             pending[i] = true;
             states[i] = StepState::Waiting(Wait::Upstream(w));
             continue;
@@ -372,9 +363,6 @@ impl Held {
 }
 
 /// The roots and everything that reads, transitively, what they write.
-/// A writer whose store is in an old shape is not pulled in: the re-render
-/// a launch offers is what brings it up to date
-/// (`docs/dev/plans/upgrade_on_launch.md`).
 fn scope(readers: &[Vec<StepIx>], roots: &[StepIx]) -> Vec<bool> {
     let mut seen = vec![false; readers.len()];
     let mut stack: Vec<StepIx> = roots.to_vec();
@@ -385,16 +373,6 @@ fn scope(readers: &[Vec<StepIx>], roots: &[StepIx]) -> Vec<bool> {
         stack.extend(readers[i].iter().copied());
     }
     seen
-}
-
-/// Its store is in a shape this build does not write: it last succeeded
-/// under another definition, and that definition wrote another shape, or
-/// one the record does not name.
-pub(crate) fn in_old_shape(store_shape: Option<&str>, fingerprint: &str, f: &StepFacts) -> bool {
-    let (Some(now), Some(last)) = (store_shape, &f.last_success) else {
-        return false;
-    };
-    last.fingerprint != fingerprint && f.success_shape.as_deref() != Some(now)
 }
 
 fn consumed_now(step: &StepShape, facts: &Facts) -> Consumed {
@@ -441,22 +419,17 @@ fn nothing_to_read(step: &StepShape, facts: &Facts) -> Option<StepIx> {
 /// and will rewrite what `i` would read. A producer that is
 /// itself waiting on something upstream may not run for a long time, and a
 /// fan-in that waited on it would wait for its slowest source. A step that
-/// reads unpinned treats even a streaming producer as half-written, and so
-/// does any step reading a store in an old shape: what it has sealed so
-/// far may still be in that shape.
+/// reads unpinned treats even a streaming producer as half-written.
 fn blocking_producer(
     i: StepIx,
     shape: &Shape,
     facts: &Facts,
     states: &[StepState],
-    old_shape: &[bool],
 ) -> Option<StepIx> {
     shape.steps[i].reads.iter().copied().find(|&w| {
         w != i
             && match states[w] {
-                StepState::Running => {
-                    !facts.steps[w].streams_output || !shape.steps[i].pins_reads || old_shape[w]
-                }
+                StepState::Running => !facts.steps[w].streams_output || !shape.steps[i].pins_reads,
                 StepState::Waiting(Wait::Lock(_) | Wait::Reader(_)) => true,
                 _ => false,
             }
@@ -493,7 +466,6 @@ mod tests {
                 fingerprint: format!("fp{i}"),
                 locks: vec![(if r.is_empty() { NETWORK } else { CPU }, Hold::Shared)],
                 pins_reads: true,
-                store_shape: None,
             })
             .collect();
         Shape {
@@ -533,7 +505,7 @@ mod tests {
                     }),
                     running: None,
                     streams_output: false,
-                    success_shape: st.store_shape.clone(),
+                    needs_rerun: false,
                 }
             })
             .collect();
@@ -1092,112 +1064,22 @@ mod tests {
         assert_eq!(started(&t), vec![1]);
     }
 
-    //  a 0 → render 1 ┐
-    //                  ├→ index 4
-    //  b 2 → render 3 ┘
-    /// Every step fresh, except that this build's render store has a new
-    /// shape and `b`'s render last succeeded under the build before it.
-    fn b_rendered_in_an_old_shape() -> (Shape, Facts) {
-        let mut s = shape(&[&[], &[0], &[], &[2], &[1, 3]]);
-        s.steps[4].locks = vec![(INDEX, Hold::Shared)];
-        for i in [1, 3] {
-            s.steps[i].store_shape = Some("shape-2".into());
-        }
+    /// A step that answered a launch's `--migrate` with `needs_rerun` is due
+    /// for the request that reaches it, though nothing it reads moved, and
+    /// is left alone by a request that does not: a sync of one source never
+    /// re-renders another.
+    #[test]
+    fn a_step_that_needs_a_rerun_runs_only_for_a_request_that_reaches_it() {
+        let s = shape(&[&[], &[0], &[], &[2]]);
         let mut facts = all_fresh(&s, 1);
-        s.steps[3].fingerprint = "fp3-under-shape-2".into();
-        facts.steps[3].success_shape = Some("shape-1".into());
-        (s, facts)
-    }
+        facts.steps[3].needs_rerun = true;
 
-    /// A sync of `a` re-renders `a` and runs the index, and leaves `b`'s
-    /// render in its old shape alone: the index reads `b`'s store as it
-    /// is, and the re-render a launch offers is what brings it up to date.
-    /// Pulling it in made one source's sync re-render every source after
-    /// an upgrade.
-    #[test]
-    fn a_sync_of_one_source_leaves_another_in_an_old_shape_alone() {
-        let (s, mut facts) = b_rendered_in_an_old_shape();
-        let intent = request(&[0], 5);
-
-        let t = tick(&s, &intent, &facts);
-        assert_eq!(started(&t), vec![0], "{t:?}");
-        assert!(!t.scopes[0][3]);
+        let t = tick(&s, &request(&[0], 5), &facts);
+        assert_eq!(started(&t), vec![0]);
         assert_eq!(t.states[3], StepState::Stale);
-        let c0 = start_of(&t, 0);
-        run(&mut facts, 0, 6);
-        finish(&mut facts, 0, c0, Ok("v0'"));
-        let c1 = start_of(&tick(&s, &intent, &facts), 1);
-        run(&mut facts, 1, 7);
-        finish(&mut facts, 1, c1, Ok("v1'"));
 
-        let t = tick(&s, &intent, &facts);
-        assert_eq!(started(&t), vec![4], "the index does not wait for b");
-    }
-
-    /// Rule 6 still holds a reader back from a writer re-rendering an
-    /// old-shape store, streaming or not: what it has sealed so far may
-    /// still be in the old shape, and the index would only run again.
-    #[test]
-    fn a_reader_waits_for_a_running_rerender_of_an_old_shape_store() {
-        let (s, mut facts) = b_rendered_in_an_old_shape();
-        facts.steps[3].streams_output = true;
-        let intent = Intent {
-            requests: vec![
-                Request {
-                    roots: vec![3],
-                    opened: Seq(5),
-                },
-                Request {
-                    roots: vec![0],
-                    opened: Seq(5),
-                },
-            ],
-            turned_off: BTreeSet::new(),
-        };
-        let t = tick(&s, &intent, &facts);
-        assert_eq!(started(&t), vec![0, 3], "{t:?}");
-        let (c0, c3) = (start_of(&t, 0), start_of(&t, 3));
-        run(&mut facts, 0, 6);
-        run(&mut facts, 3, 6);
-        finish(&mut facts, 0, c0, Ok("v0'"));
-        let c1 = start_of(&tick(&s, &intent, &facts), 1);
-        run(&mut facts, 1, 7);
-        finish(&mut facts, 1, c1, Ok("v1'"));
-        facts.sinks[3] = Some("v3-sealed-mid-run".into());
-
-        let t = tick(&s, &intent, &facts);
-        assert_eq!(t.states[4], StepState::Waiting(Wait::Upstream(3)));
-
-        finish(&mut facts, 3, c3, Ok("v3'"));
-        facts.steps[3].success_shape = Some("shape-2".into());
-        let t = tick(&s, &intent, &facts);
-        assert_eq!(started(&t), vec![4]);
-    }
-
-    /// A store is in an old shape when its writer's definition moved since
-    /// its last success and that success was under another shape, or under
-    /// one the record does not name. An edit that kept the shape is not.
-    fn old(s: &Shape, facts: &Facts, i: StepIx) -> bool {
-        in_old_shape(
-            s.steps[i].store_shape.as_deref(),
-            &s.steps[i].fingerprint,
-            &facts.steps[i],
-        )
-    }
-
-    #[test]
-    fn a_store_is_in_an_old_shape_only_if_its_definition_moved_to_another() {
-        let (mut s, mut facts) = b_rendered_in_an_old_shape();
-        assert!(old(&s, &facts, 3));
-        assert!(!old(&s, &facts, 1), "unmoved");
-
-        facts.steps[3].success_shape = Some("shape-2".into());
-        assert!(!old(&s, &facts, 3), "edited, same shape");
-
-        facts.steps[3].success_shape = None;
-        assert!(old(&s, &facts, 3), "shape not recorded");
-        s.steps[3].fingerprint = "fp3".into();
-        assert!(!old(&s, &facts, 3), "and not moved");
+        let t = tick(&s, &request(&[3], 5), &facts);
+        assert_eq!(started(&t), vec![3]);
     }
 
     #[test]

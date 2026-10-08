@@ -1,12 +1,11 @@
 <script setup lang="ts">
-// Asked once a launch has migrated the raw stores: the rendered
-// documents of the sources listed are in a shape this build does not
-// write, and re-rendering them reads what is already downloaded.
-// Also says which raw stores could not be migrated, since that is news
-// from the same launch.
+// Asked once a launch's migrate pass is over: the steps listed answered
+// that what they wrote is in a shape this build cannot reach in place, and
+// re-running them reads what is already downloaded. Also says which steps
+// could not be migrated, since that is news from the same launch.
 import { computed, onMounted, ref } from "vue";
 import type { Upgrade } from "@/api";
-import { failedStores, rerenderSources } from "@/upgrade";
+import { failedSources, rerenderSources } from "@/upgrade";
 
 const props = defineProps<{ upgrade: Upgrade }>();
 
@@ -15,7 +14,7 @@ const emit = defineEmits<{
 }>();
 
 const sources = computed(() => rerenderSources(props.upgrade));
-const failed = computed(() => failedStores(props.upgrade));
+const failed = computed(() => failedSources(props.upgrade));
 const rerenderButton = ref<HTMLButtonElement | null>(null);
 
 onMounted(() => rerenderButton.value?.focus());
@@ -37,21 +36,19 @@ function onKeydown(e: KeyboardEvent) {
         <h2>Your rendered documents are out of date</h2>
       </header>
       <div class="rerender-body dialog-body">
-        <template v-if="sources.length">
-          <p>
-            This version of datalib lays out rendered documents differently. Until they are rendered
-            again, these sources show what the older version wrote, and a sync re-renders only the
-            source it syncs:
-          </p>
-          <ul class="sources">
-            <li v-for="s in sources" :key="s">{{ s }}</li>
-          </ul>
-          <p>Re-rendering reads what is already downloaded. Nothing is downloaded.</p>
-        </template>
+        <p>
+          This version of datalib lays out rendered documents differently. Until they are rendered
+          again, these sources show what the older version wrote, and a sync re-renders only the
+          source it syncs:
+        </p>
+        <ul class="sources">
+          <li v-for="s in sources" :key="s">{{ s }}</li>
+        </ul>
+        <p>Re-rendering reads what is already downloaded. Nothing is downloaded.</p>
         <template v-if="failed.length">
           <p class="failed-lead">
-            These sources' downloads could not be updated for this version, so their syncs will fail
-            until they are reset:
+            These sources could not be brought up to date for this version; their rows on the
+            Sources card say so too:
           </p>
           <ul class="sources failed">
             <li v-for="f in failed" :key="f.source">
@@ -62,15 +59,8 @@ function onKeydown(e: KeyboardEvent) {
         </template>
       </div>
       <footer class="dialog-foot">
-        <button class="btn ghost" @click="emit('answer', false)">
-          {{ sources.length ? "Not now" : "Close" }}
-        </button>
-        <button
-          v-if="sources.length"
-          ref="rerenderButton"
-          class="btn primary"
-          @click="emit('answer', true)"
-        >
+        <button class="btn ghost" @click="emit('answer', false)">Not now</button>
+        <button ref="rerenderButton" class="btn primary" @click="emit('answer', true)">
           Re-render now
         </button>
       </footer>

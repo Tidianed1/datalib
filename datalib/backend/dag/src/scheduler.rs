@@ -134,7 +134,7 @@ impl Runner {
 impl Runner {
     /// Empty what the named steps wrote and forget that they ever ran, so
     /// the next run does their work from the start. Each step is invoked
-    /// once with `DATALIB_DAG_RESET=store`; what that empties is the
+    /// once with `--reset store` appended; what that empties is the
     /// step's to say (`step_protocol.md` § Reset).
     /// Nothing else runs: the caller holds the runner lock, which is what
     /// makes emptying a store safe.
@@ -152,10 +152,11 @@ impl Runner {
         store: &crate::supervisor::store::Store,
     ) -> Result<()> {
         for step in steps {
-            let (i, reported) = self
-                .invoke_once(graph, step, crate::subprocess::ENV_RESET)
+            let (i, outcome) = self
+                .invoke_once(graph, step, &[crate::subprocess::RESET_FLAG, "store"])
                 .await
                 .map_err(|e| anyhow::anyhow!("reset {step}: {e}"))?;
+            let reported = outcome.outputs;
             // Emptied, not gone: what reads it sees a new version and runs,
             // which is how the emptiness reaches the grid; and the step
             // keeps no history, so its next run starts from nothing.
@@ -181,42 +182,43 @@ impl Runner {
         Ok(())
     }
 
-    /// Bring the named ingest steps' raw stores to this build's shape,
-    /// fetching nothing: each is invoked once with
-    /// `DATALIB_DAG_MIGRATE=store` (`step_protocol.md` § Migrate). One
-    /// that fails is reported and the rest go on: a store this build
-    /// cannot open costs that source, not the launch.
+    /// Ask each named step to bring what it wrote to this build's shape,
+    /// fetching nothing: each is invoked once with `--migrate` appended
+    /// (`step_protocol.md` § Migrate). What a step can migrate in place it
+    /// does, and reports its new version; what it cannot it answers
+    /// `needs_rerun`, which the record keeps until the step next succeeds.
+    /// One that fails is reported and the rest go on.
     pub async fn migrate(&self, graph: &Graph, steps: &[StepId]) -> Result<Vec<Migrated>> {
         let store = crate::supervisor::store::Store::open(&self.data_root).await?;
         let mut out = Vec::new();
         for step in steps {
-            let error = match self
-                .invoke_once(graph, step, crate::subprocess::ENV_MIGRATE)
+            let answer = match self
+                .invoke_once(graph, step, &[crate::subprocess::MIGRATE_FLAG])
                 .await
             {
-                Ok((i, reported)) => record_migrated(graph, i, &reported, &store)
-                    .await
-                    .err()
-                    .map(|e| format!("{e:#}")),
-                Err(e) => Some(e),
+                Ok((i, outcome)) => match record_migrated(graph, i, &outcome, &store).await {
+                    Ok(()) => Ok(outcome.needs_rerun),
+                    Err(e) => Err(format!("{e:#}")),
+                },
+                Err(e) => Err(e),
             };
             out.push(Migrated {
                 step: step.clone(),
-                error,
+                answer,
             });
         }
         store.close().await;
         Ok(out)
     }
 
-    /// One invocation of `step` with `env_key=store`, outside any run of
-    /// the loop: no inputs, no retries, no stop.
+    /// One invocation of `step` with `verb` appended to its argv, outside
+    /// any run of the loop: no inputs, no retries, no stop.
     async fn invoke_once(
         &self,
         graph: &Graph,
         step: &StepId,
-        env_key: &str,
-    ) -> std::result::Result<(usize, Vec<ArtifactState>), String> {
+        verb: &[&str],
+    ) -> std::result::Result<(usize, StepOutcome), String> {
         let &i = graph
             .by_id
             .get(step)
@@ -238,8 +240,11 @@ impl Runner {
             checkpoint: crate::step::CheckpointSink::disconnected(),
             stop: StopSignal::never(),
         };
-        let mut child_env = (*self.child_env).clone();
-        child_env.insert(env_key.to_string(), "store".to_string());
+        let argv: Vec<String> = argv
+            .iter()
+            .cloned()
+            .chain(verb.iter().map(|a| a.to_string()))
+            .collect();
         self.sink.emit(&Event::StepStart {
             step: spec.id.clone(),
             attempt: 1,
@@ -247,10 +252,21 @@ impl Runner {
                 .first()
                 .is_some_and(|prog| crate::config::is_datalib_step(prog)),
         });
-        let result =
-            crate::subprocess::run_subprocess(argv, env, None, &child_env, 1, &ctx, &self.sink)
-                .await;
+        let result = crate::subprocess::run_subprocess(
+            &argv,
+            env,
+            None,
+            &self.child_env,
+            1,
+            &ctx,
+            &self.sink,
+        )
+        .await;
         let error = result.as_ref().err().map(|e| format!("{:#}", e.error));
+        let exit = match &result {
+            Ok(o) => o.exit,
+            Err(e) => e.exit,
+        };
         self.sink.emit(&Event::StepFinish {
             step: spec.id.clone(),
             status: if error.is_none() {
@@ -259,46 +275,49 @@ impl Runner {
                 RunState::Failed
             },
             error: error.clone(),
-            exit_code: None,
-            signal: None,
+            exit_code: exit.and_then(|x| x.code),
+            signal: exit.and_then(|x| x.signal),
         });
         match result {
-            Ok(o) => Ok((i, o.outputs)),
+            Ok(o) => Ok((i, o)),
             Err(_) => Err(error.unwrap_or_default()),
         }
     }
 }
 
-/// The store's new head is the step's version, so what reads it is
-/// stale; everything else the record says of the step stands.
+/// A step that reports a new version is recorded at it, so what reads it
+/// is stale; one that answers `needs_rerun` is marked so, and the tick
+/// treats it as due until it next succeeds. Everything else the record
+/// says of the step stands.
 async fn record_migrated(
     graph: &Graph,
     i: usize,
-    reported: &[ArtifactState],
+    outcome: &StepOutcome,
     store: &crate::supervisor::store::Store,
 ) -> Result<()> {
-    let Some(version) = reported_version(&graph.steps[i], &graph.fingerprints[i], reported)? else {
-        return Ok(());
-    };
+    let version = reported_version(&graph.steps[i], &graph.fingerprints[i], &outcome.outputs)?;
     let saved = store.load_record().await.context("load the record")?;
     let mut state = saved.clone();
     let entry = state.steps.entry(graph.steps[i].id.clone()).or_default();
-    if entry.version.as_deref() == Some(version.as_str()) {
+    if let Some(version) = version {
+        entry.version = Some(version);
+    }
+    entry.needs_rerun |= outcome.needs_rerun;
+    if state == saved {
         return Ok(());
     }
-    entry.version = Some(version);
     store
         .save_record(&saved, &state)
         .await
         .context("save the record")
 }
 
-/// How one step's migrate went: `error` is `None` when its store is now
-/// in this build's shape.
+/// How one step answered `--migrate`: whether it needs to run again, or
+/// why it could not answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Migrated {
     pub step: StepId,
-    pub error: Option<String>,
+    pub answer: std::result::Result<bool, String>,
 }
 
 /// Terminal state of one step in one run.
@@ -794,6 +813,7 @@ mod tests {
                     Ok(StepOutcome {
                         outputs: vec![ArtifactState::versioned(&pat, version)],
                         exit: None,
+                        needs_rerun: false,
                     })
                 }
             }),
@@ -955,6 +975,7 @@ mod tests {
                     Ok(StepOutcome {
                         outputs: vec![ArtifactState::versioned(&pat, "final")],
                         exit: None,
+                        needs_rerun: false,
                     })
                 }
             }),
@@ -996,6 +1017,7 @@ mod tests {
                 Ok(StepOutcome {
                     outputs: vec![ArtifactState::versioned(&pat, version)],
                     exit: None,
+                    needs_rerun: false,
                 })
             }),
         )
@@ -1028,6 +1050,7 @@ mod tests {
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "c1")],
                             exit: None,
+                            needs_rerun: false,
                         })
                     }
                 }
@@ -1077,6 +1100,7 @@ mod tests {
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "final").with_rows(5)],
                             exit: None,
+                            needs_rerun: false,
                         })
                     }
                 }),
@@ -1219,6 +1243,7 @@ mod tests {
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "final")],
                             exit: None,
+                            needs_rerun: false,
                         })
                     }
                 }),
@@ -1296,6 +1321,7 @@ mod tests {
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "final")],
                             exit: None,
+                            needs_rerun: false,
                         })
                     }
                 }),
@@ -1348,6 +1374,7 @@ mod tests {
                 Ok(StepOutcome {
                     outputs: vec![ArtifactState::versioned(&pat, "final")],
                     exit: None,
+                    needs_rerun: false,
                 })
             }),
         );
@@ -1435,6 +1462,7 @@ mod tests {
                     Ok(StepOutcome {
                         outputs: vec![ArtifactState::versioned(&pat, "final")],
                         exit: None,
+                        needs_rerun: false,
                     })
                 }),
             )
@@ -1518,6 +1546,7 @@ mod tests {
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "final")],
                             exit: None,
+                            needs_rerun: false,
                         })
                     }
                 }),
@@ -1681,6 +1710,7 @@ mod tests {
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "final")],
                             exit: None,
+                            needs_rerun: false,
                         })
                     }
                 }),
@@ -1926,6 +1956,7 @@ mod tests {
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "final")],
                             exit: None,
+                            needs_rerun: false,
                         })
                     }
                 }),
@@ -2033,6 +2064,7 @@ mod tests {
                 Ok(StepOutcome {
                     outputs: vec![ArtifactState::versioned(&pat, "fast-v1")],
                     exit: None,
+                    needs_rerun: false,
                 })
             }),
         )
@@ -2062,6 +2094,7 @@ mod tests {
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "slow-v1")],
                             exit: None,
+                            needs_rerun: false,
                         })
                     }
                 }),
@@ -2123,6 +2156,7 @@ mod tests {
                     Ok(StepOutcome {
                         outputs: vec![ArtifactState::versioned(&pat, version)],
                         exit: None,
+                        needs_rerun: false,
                     })
                 }
             }),
@@ -2171,6 +2205,7 @@ mod tests {
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "slow-v1")],
                             exit: None,
+                            needs_rerun: false,
                         })
                     }
                 }),
@@ -2251,6 +2286,7 @@ mod tests {
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "slow-v1")],
                             exit: None,
+                            needs_rerun: false,
                         })
                     }
                 }),
@@ -2307,6 +2343,7 @@ mod tests {
                     Ok(StepOutcome {
                         outputs: vec![ArtifactState::versioned(&pat, "stable")],
                         exit: None,
+                        needs_rerun: false,
                     })
                 }),
             )
@@ -2391,6 +2428,7 @@ mod tests {
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "early-final")],
                             exit: None,
+                            needs_rerun: false,
                         })
                     }
                 }),
@@ -2419,6 +2457,7 @@ mod tests {
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "late-final")],
                             exit: None,
+                            needs_rerun: false,
                         })
                     }
                 }),
@@ -2514,6 +2553,7 @@ mod tests {
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "v-final")],
                             exit: None,
+                            needs_rerun: false,
                         })
                     }
                 }
@@ -3423,6 +3463,7 @@ mod tests {
                             .into_iter()
                             .collect(),
                         exit: None,
+                        needs_rerun: false,
                     })
                 }),
             )

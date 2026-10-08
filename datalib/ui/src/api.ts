@@ -666,9 +666,12 @@ export type MigrateState = "waiting" | "running" | "done" | "failed";
 export type Upgrade = {
   // The migrate pass is running: nothing syncs until it is done.
   migrating: boolean;
-  stores: { step: string; state: MigrateState; error: string | null }[];
-  // Writers whose store is in a shape this build does not write: the
-  // roots of the re-render the app offers. Empty while migrating.
+  // The server has run its pass, or found it had none to run.
+  settled: boolean;
+  // Every step the pass asks, in the order it asks them.
+  steps: { step: string; state: MigrateState; error: string | null }[];
+  // The steps that answered that they need to run again: the roots of
+  // the re-render the app offers. Empty while migrating.
   rerender: string[];
 };
 

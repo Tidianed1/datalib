@@ -364,21 +364,25 @@ async fn main() -> Result<()> {
         if let Some(p) = parallelism {
             runner = runner.parallelism(p);
         }
-        // Before any step runs, the raw stores another build wrote are
-        // brought to this one's shape (docs/dev/plans/upgrade_on_launch.md);
-        // the http server does the same when it takes the lock.
-        let build = datalib_dag::supervisor::upgrade::Build::this();
-        let behind =
-            datalib_dag::supervisor::upgrade::raw_stores_to_migrate(&data_root, &graph, &build)
-                .await;
-        #[allow(clippy::disallowed_macros)]
-        for m in runner.migrate(&graph, &behind).await? {
-            if let Some(error) = &m.error {
-                eprintln!(
-                    "datalib-dag: could not migrate {}'s raw store: {error}",
-                    m.step
-                );
+        // The first time this build runs on the root, every step that takes
+        // the verb is asked to migrate before anything else runs
+        // (docs/dev/plans/upgrade_on_launch.md); the http server does the
+        // same when it takes the lock.
+        let build = datalib_dag::supervisor::upgrade::this_build();
+        if !store.launch_pass_done(&build).await? {
+            let asked = datalib_dag::supervisor::upgrade::steps_to_ask(&graph);
+            #[allow(clippy::disallowed_macros)]
+            for m in runner.migrate(&graph, &asked).await? {
+                match &m.answer {
+                    Ok(true) => eprintln!(
+                        "datalib-dag: {} needs to run again for this build; --sync it",
+                        m.step
+                    ),
+                    Ok(false) => {}
+                    Err(error) => eprintln!("datalib-dag: could not migrate {}: {error}", m.step),
+                }
             }
+            store.record_launch_pass(&build).await?;
         }
         if !reset.is_empty() {
             runner.reset(&graph, &reset).await?;

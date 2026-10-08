@@ -1,34 +1,58 @@
-//! The migrate verb: bring an ingest step's raw store to this build's
-//! shape and seal it, fetching nothing. The runner invokes the step with
-//! `DATALIB_DAG_MIGRATE` once per build, before it takes any request
-//! (`docs/dev/step_protocol.md` § Migrate), so no render ever reads a raw
-//! store in a shape an older build left.
+//! The migrate verb (`--migrate`): bring what this step wrote to this
+//! build's shape where that can be done in place, fetching nothing, and say
+//! when it cannot. A launch asks every built-in step once per build,
+//! before it takes any request (`docs/dev/step_protocol.md` § Migrate).
+//! What each function writes is its own business: the runner only hears
+//! the answer.
 
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use datalib_etl::raw_layout::entities_db;
 
-use crate::events::OutputClaim;
+use crate::events::{Emitter, OutputClaim};
 use crate::function::Function;
 use crate::source::StepEnv;
 
-pub async fn run(env: &StepEnv, data_root: &Path, part: &str) -> Result<Vec<OutputClaim>> {
-    anyhow::ensure!(
-        (env.function, part) == (Function::Ingest, "store"),
-        "`{}` has no {part:?} to migrate",
-        env.function
-    );
+pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<Vec<OutputClaim>> {
     let tree = data_root.join(&env.step);
+    match env.function {
+        Function::Ingest => migrate_raw_store(env, &tree).await,
+        // A derived store is a function of another; one in another shape is
+        // rebuilt by running the step, never migrated in place.
+        Function::RenderMarkdown => {
+            let store = datalib_etl_render::indexed_markdown::path_for(&tree);
+            let shape = datalib_etl_render::indexed_markdown::schema_hash();
+            ask_for_a_rerun_if(env, emitter, &store, &shape).await?;
+            Ok(Vec::new())
+        }
+        Function::GridIndex => {
+            let store = datalib_core::layout::grid_index_db(data_root);
+            let shape = datalib_etl_render::grid_index::schema_hash();
+            ask_for_a_rerun_if(env, emitter, &store, &shape).await?;
+            Ok(Vec::new())
+        }
+        // The qmd index is qmd's, and the map is redrawn from it.
+        Function::QmdAggregator
+        | Function::KeywordIndex
+        | Function::Embed
+        | Function::EmbeddingMap => {
+            tracing::info!(step = %env.step, "migrate: nothing of ours to bring up to date");
+            Ok(Vec::new())
+        }
+    }
+}
+
+async fn migrate_raw_store(env: &StepEnv, tree: &Path) -> Result<Vec<OutputClaim>> {
     // A source that has never downloaded is created at this build's shape
     // by its first download; opening it here would only make it empty.
-    if !entities_db(&tree).exists() {
+    if !entities_db(tree).exists() {
         tracing::info!(step = %env.step, "migrate: no raw store yet");
         return Ok(Vec::new());
     }
-    crate::dispatch::migrate(env.source_type()?, &tree).await?;
+    crate::dispatch::migrate(env.source_type()?, tree).await?;
     tracing::info!(step = %env.step, "migrate: the raw store is in this build's shape");
-    Ok(crate::ingest::raw_store_version(&tree)
+    Ok(crate::ingest::raw_store_version(tree)
         .await?
         .map(|version| OutputClaim {
             path: env.step.clone(),
@@ -37,6 +61,31 @@ pub async fn run(env: &StepEnv, data_root: &Path, part: &str) -> Result<Vec<Outp
         })
         .into_iter()
         .collect())
+}
+
+/// Answer `needs_rerun` when `store` exists and its `_datalib_meta` names
+/// another shape than `shape`, or none. A store not written yet is in no
+/// shape at all.
+async fn ask_for_a_rerun_if(
+    env: &StepEnv,
+    emitter: &Emitter,
+    store: &Path,
+    shape: &str,
+) -> Result<()> {
+    if !store.exists() {
+        tracing::info!(step = %env.step, "migrate: no store yet");
+        return Ok(());
+    }
+    let meta = datalib_store_meta::guard::read_at(store)
+        .await
+        .with_context(|| format!("read {}'s _datalib_meta", store.display()))?;
+    if meta.is_none_or(|m| m.schema_hash != shape) {
+        tracing::info!(step = %env.step, "migrate: the store is in another shape; it needs a rerun");
+        emitter.needs_rerun();
+    } else {
+        tracing::info!(step = %env.step, "migrate: the store is in this build's shape");
+    }
+    Ok(())
 }
 
 /// The raw-store shape of every source type, by release: what a store a
@@ -370,6 +419,100 @@ mod tests {
         }
     }
 
+    fn env_of(step: &str, function: Function) -> StepEnv {
+        let (group, _) = step.split_once('/').unwrap();
+        StepEnv {
+            step: step.into(),
+            group: group.into(),
+            group_type: Some("email".into()),
+            source_group: None,
+            source_group_type: None,
+            function,
+            inputs: Vec::new(),
+        }
+    }
+
+    /// What `_datalib_meta` says this store's shape is, as an older build
+    /// would have left it.
+    async fn written_by_an_older_build(db: &Path) {
+        let pool = plain_pool(db).await;
+        sqlx::query("UPDATE _datalib_meta SET value = 'an older shape' WHERE key = 'schema_hash'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("SELECT dolt_commit('-Am', 'an older build')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+    }
+
+    /// A render store in this build's shape answers nothing; one an older
+    /// build wrote in another shape answers `needs_rerun`, and is not
+    /// touched. A render that has never run has no shape to be behind in.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_render_store_in_another_shape_asks_for_a_rerun() {
+        let root = tempfile::tempdir().unwrap();
+        let env = env_of("mail/render_markdown", Function::RenderMarkdown);
+        let ask = || async {
+            let emitter = Emitter::new(env.step.clone());
+            run(&env, root.path(), &emitter).await.unwrap();
+            emitter.asked_for_a_rerun()
+        };
+        assert!(!ask().await, "no store yet");
+
+        let tree = root.path().join(&env.step);
+        tokio::task::spawn_blocking({
+            let tree = tree.clone();
+            move || {
+                datalib_etl_render::indexed_markdown::IndexedMarkdownStore::open(&tree)
+                    .unwrap()
+                    .close()
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!ask().await, "this build's shape");
+
+        let db = datalib_etl_render::indexed_markdown::path_for(&tree);
+        written_by_an_older_build(&db).await;
+        assert!(ask().await, "an older build's shape");
+    }
+
+    /// The same for the grid index, whose store sits at its own fixed path.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_grid_index_in_another_shape_asks_for_a_rerun() {
+        let root = tempfile::tempdir().unwrap();
+        let env = env_of("unified_index/grid_index", Function::GridIndex);
+        let ask = || async {
+            let emitter = Emitter::new(env.step.clone());
+            run(&env, root.path(), &emitter).await.unwrap();
+            emitter.asked_for_a_rerun()
+        };
+        assert!(!ask().await, "no index yet");
+
+        let db = datalib_core::layout::grid_index_db(root.path());
+        std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+        let pool = plain_pool(&db).await;
+        datalib_store_meta::write(
+            &pool,
+            StoreKind::GridIndex,
+            &datalib_etl_render::grid_index::schema_hash(),
+            Versions::default(),
+        )
+        .await
+        .unwrap();
+        sqlx::query("SELECT dolt_commit('-Am', 'an index')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+        assert!(!ask().await, "this build's shape");
+
+        written_by_an_older_build(&db).await;
+        assert!(ask().await, "an older build's shape");
+    }
+
     /// A source that has never downloaded gets no store from a migrate:
     /// its first download creates one.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -384,7 +527,9 @@ mod tests {
             function: Function::Ingest,
             inputs: Vec::new(),
         };
-        let claims = run(&env, root.path(), "store").await.unwrap();
+        let claims = run(&env, root.path(), &Emitter::new(env.step.clone()))
+            .await
+            .unwrap();
         assert!(claims.is_empty());
         assert!(!root.path().join("mail").exists());
     }

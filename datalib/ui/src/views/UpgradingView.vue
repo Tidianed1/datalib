@@ -1,12 +1,14 @@
 <script setup lang="ts">
-// The blocking screen while a launch migrates the raw stores an older
-// datalib wrote (docs/dev/plans/upgrade_on_launch.md). Nothing syncs
-// until it is done; the page drops it on the `upgrade_changed` that says
-// so.
+// The blocking screen while the first launch of a build asks every step
+// to migrate (docs/dev/plans/upgrade_on_launch.md), one row per source.
+// Nothing syncs until it is done; the page drops it on the
+// `upgrade_changed` that says so.
+import { computed } from "vue";
 import type { ConfigResponse, MigrateState } from "@/api";
-import { stepSource } from "@/upgrade";
+import { sourceRows } from "@/upgrade";
 
-defineProps<{ config: ConfigResponse }>();
+const props = defineProps<{ config: ConfigResponse }>();
+const rows = computed(() => sourceRows(props.config.upgrade));
 
 const said: Record<MigrateState, string> = {
   waiting: "Waiting",
@@ -21,12 +23,12 @@ const said: Record<MigrateState, string> = {
     <div class="card" role="status" aria-live="polite">
       <h2>Updating your data for this version of datalib</h2>
       <p>
-        This version stores some sources' downloads differently, so it is updating them before
-        anything syncs. Nothing is downloaded while this runs.
+        This is the first time this version has opened this library, so each source is bringing what
+        it stored up to date before anything syncs. Nothing is downloaded while this runs.
       </p>
       <ul class="stores">
-        <li v-for="s in config.upgrade.stores" :key="s.step" :data-state="s.state">
-          <span class="source">{{ stepSource(s.step) }}</span>
+        <li v-for="s in rows" :key="s.source" :data-state="s.state">
+          <span class="source">{{ s.source }}</span>
           <span class="state">{{ said[s.state] }}</span>
           <span v-if="s.error" class="error">{{ s.error }}</span>
         </li>

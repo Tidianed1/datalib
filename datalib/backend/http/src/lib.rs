@@ -809,8 +809,8 @@ pub struct ConfigResponse {
     /// else `npx -y latchkey@<pin>`. The Setup UI splices it into its
     /// copy-pasteable snippets.
     pub latchkey_cli: String,
-    /// The launch's upgrade: the raw stores being migrated, and the
-    /// derived stores in an old shape the page offers to re-render.
+    /// The launch's upgrade: the steps being asked to migrate, and the ones
+    /// that answered they need to run again, which the page offers to run.
     pub upgrade: UpgradeView,
 }
 
@@ -819,9 +819,9 @@ pub struct ConfigResponse {
 pub struct UpgradeView {
     #[serde(flatten)]
     pub pass: supervisor::Upgrade,
-    /// The writers whose store is in a shape this build does not write
-    /// (`round::old_shape_writers`), not turned off. Empty while the pass
-    /// runs: the offer comes after it.
+    /// The steps that answered the pass with `needs_rerun` and have not run
+    /// since (`round::rerun_offer`). Empty while the pass runs: the offer
+    /// comes after it.
     pub rerender: Vec<String>,
 }
 
@@ -891,7 +891,7 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
     };
     let pass = s.sync.upgrade();
     let rerender = match &checked {
-        Some(c) if !pass.migrating && app_ready => old_shape_writers(&c.graph, &s.sync).await,
+        Some(c) if !pass.migrating => rerun_offer(&c.graph, &s.sync).await,
         _ => Vec::new(),
     };
     Json(ConfigResponse {
@@ -909,16 +909,13 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
     })
 }
 
-async fn old_shape_writers(
-    graph: &datalib_dag::Graph,
-    sync: &supervisor::SyncControl,
-) -> Vec<String> {
+async fn rerun_offer(graph: &datalib_dag::Graph, sync: &supervisor::SyncControl) -> Vec<String> {
     let record = match sync.mailbox().await {
         Ok(store) => store.load_record().await,
         Err(e) => Err(e),
     };
     match record {
-        Ok(record) => datalib_dag::supervisor::round::old_shape_writers(graph, &record),
+        Ok(record) => datalib_dag::supervisor::round::rerun_offer(graph, &record),
         Err(e) => {
             tracing::warn!(
                 "could not read the loop's record, so nothing is offered to re-render: {e:#}"
