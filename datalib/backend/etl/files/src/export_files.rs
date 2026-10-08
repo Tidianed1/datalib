@@ -103,8 +103,8 @@ impl ExportFiles {
             .map(PathBuf::as_path)
     }
 
-    /// The `listing:files` row a walk with errors leaves, for
-    /// [`datalib_etl::download_problems::report_run`]; empty for a clean walk.
+    /// The `listing:files` row a walk with errors leaves, for the run's
+    /// `RunProblems` (`extend`); empty for a clean walk.
     pub fn walk_problems(&self) -> Vec<RunProblem> {
         let Some((path, error)) = self.errors.first() else {
             return Vec::new();
