@@ -90,7 +90,7 @@ function docSource(md: string, anchor: string | null): string {
 
 export function perseusView(): CardRender {
   return (root, ctx) => {
-    const { fetchSearch } = cardApi(ctx);
+    const { fetchManageRows, fetchSearch } = cardApi(ctx);
     ctx.setTitle("Perseus reader");
     const style = document.createElement("style");
     style.textContent = `
@@ -402,19 +402,27 @@ export function perseusView(): CardRender {
 
     paint();
 
-    // One structured search returns every Perseus row; limit is set
-    // high enough for the full Histories across all editions (8 books ×
-    // chapters × sections × ~13 editions). The free-text portion is
-    // empty, so this routes through the SQL filter path, not qmd ranking.
+    // One structured search per Perseus source returns its every row;
+    // limit is set high enough for the full Histories across all editions
+    // (8 books × chapters × sections × ~13 editions). The free-text
+    // portion is empty, so this routes through the SQL filter path, not
+    // qmd ranking.
     const ac = new AbortController();
-    void fetchSearch("source:Perseus", 200000, ac.signal)
-      .then((resp) => {
-        ingest(resp.rows);
+    void fetchManageRows(false, ac.signal)
+      .then(({ rows }) =>
+        Promise.all(
+          rows
+            .filter((r) => r.kind === "group" && r.type?.id === "perseus")
+            .map((g) => fetchSearch(`source_id:${g.id}`, 200000, ac.signal)),
+        ),
+      )
+      .then((found) => {
+        for (const resp of found) ingest(resp.rows);
         loading = false;
         paint();
       })
       .catch(() => {
-        // fetchSearch already surfaces a toast; just drop the spinner.
+        // Both fetches already surface a toast; just drop the spinner.
         loading = false;
         paint();
       });

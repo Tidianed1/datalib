@@ -219,12 +219,9 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
     assert_eq!(rows[0].kind, "User Input");
     assert_eq!(rows[1].kind, "Chat");
 
-    let filtered = repo
-        .search(&parse_query("source:Claude"), 100)
-        .await
-        .unwrap();
+    let filtered = repo.search(&parse_query("kind:Chat"), 100).await.unwrap();
     assert!(!filtered.is_empty());
-    assert!(filtered.iter().all(|r| r.source == "Claude"));
+    assert!(filtered.iter().all(|r| r.kind == "Chat"));
 
     let meta = repo
         .chat_meta("c-1")

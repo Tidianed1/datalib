@@ -29,7 +29,6 @@ use serde::{Deserialize, Serialize};
     // for nothing: `every_filter_key_is_served_by_an_index` names both.
     index = "grid_rows_by_touched:touched_at_utc,is_document,uuid",
     index = "grid_rows_by_source_id:source_id,touched_at_utc,is_document,uuid",
-    index = "grid_rows_by_source_label:source_label,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_kind:kind,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_channel:channel,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_conversation:conversation_uuid,touched_at_utc,is_document,uuid",
@@ -61,7 +60,7 @@ pub struct GridRow {
     #[col(sql = "VARCHAR(32)", search)]
     pub kind: String,
     /// Human-friendly provider name for the Source column.
-    #[col(sql = "VARCHAR(32)", search = "source")]
+    #[col(sql = "VARCHAR(32)")]
     pub source_label: String,
     /// When the thing this row describes came into being, as the source
     /// wrote it: ISO-8601 with explicit offset. A message's own stamp; for
@@ -195,7 +194,7 @@ pub struct GridRow {
     /// filed under, which the `source_id:` filter matches
     /// (`GridRow::derived_source_id`).
     #[col(sql = "VARCHAR(512)")]
-    #[derived(name = "source_id", sql = "VARCHAR(96)", search, alias = "source_name")]
+    #[derived(name = "source_id", sql = "VARCHAR(96)", search)]
     pub qmd_path: Option<String>,
     /// Canonical link back to the provider's own web UI. Null for providers
     /// with no stable public link.

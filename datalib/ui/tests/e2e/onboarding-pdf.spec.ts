@@ -398,7 +398,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
 
     // ── 6. and the Signal messages are searchable ────────────────────
     await openExplore(page);
-    await searchAndSettle(page, "source:Signal");
+    await searchAndSettle(page, "source_id:signal");
     const signalRows = await gridRows(page);
     expect(signalRows.length, "the Signal messages should be indexed").toBeGreaterThan(0);
     expect(

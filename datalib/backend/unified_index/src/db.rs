@@ -216,16 +216,7 @@ mod tests {
         assert!(params.is_empty(), "{params:?}");
     }
 
-    #[test]
-    fn source_filter_emits_equality_clause() {
-        let (sql, params) = build_where(&parse_query("source:Claude"));
-        assert_eq!(sql, " WHERE source_label = ?");
-        assert_eq!(params, vec!["Claude"]);
-    }
-
-    /// `source:` and `source_id:` answer different questions: the
-    /// provider label vs. the configured source. Two Slack workspaces are
-    /// one `source` and two `source_id`s. What a row's `source_id` is,
+    /// What a row's `source_id` is,
     /// storage rows filed under datalib included, is decided once at index
     /// time (`GridRow::derived_source_id`); the filter only compares, so
     /// the `(source_id, …)` index can serve it.
@@ -238,17 +229,6 @@ mod tests {
         let (sql, params) = build_where(&parse_query("-source_id:datalib"));
         assert_eq!(sql, " WHERE (source_id IS NULL OR source_id != ?)");
         assert_eq!(params, vec!["datalib"]);
-    }
-
-    /// The old spelling has to reach the same SQL, not merely the same
-    /// field: this is the assertion that a saved `source_name:` query
-    /// keeps returning what it returned before the rename.
-    #[test]
-    fn the_old_source_name_spelling_builds_the_same_clause() {
-        assert_eq!(
-            build_where(&parse_query("source_name:slack")),
-            build_where(&parse_query("source_id:slack")),
-        );
     }
 
     #[test]
