@@ -740,7 +740,8 @@ impl std::error::Error for SchemaBreak {}
 /// detached connection whose plain table names read that commit, whose
 /// schema is that commit's, and which the engine refuses to write
 /// (`attempt to write a readonly database`). A store with nothing readable
-/// committed — no commit, or none holding a table — yields `None` rather
+/// committed — a file its writer has only just created, no commit, or none
+/// holding a table — yields `None` rather
 /// than a reader onto its working set; the caller decides what that means
 /// (a consumer does nothing that pass).
 ///
@@ -752,6 +753,11 @@ pub async fn open_reader(db_path: &Path, commit: Option<&str>) -> Result<Option<
     let pin = match commit {
         Some(commit) => crate::pin::Pin::at(commit)?,
         None => {
+            // Its writer creates the file before writing a page, and a
+            // read-only open of an empty file fails.
+            if std::fs::metadata(db_path).is_ok_and(|m| m.len() == 0) {
+                return Ok(None);
+            }
             let main = connect_pool(db_path, Access::ReadOnly, false).await?;
             let head = datalib_pin::head(&main).await;
             main.close().await;
