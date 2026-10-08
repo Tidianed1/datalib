@@ -16,6 +16,7 @@ pub mod doltlite_raw;
 pub mod download_metrics;
 pub mod download_problems;
 pub mod download_run;
+pub mod draft;
 pub mod entity_store;
 pub mod event_store;
 pub mod event_tape;

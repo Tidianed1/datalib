@@ -1135,6 +1135,67 @@ mod drafts {
             ["main"]
         );
     }
+
+    /// The draft renames Riker and commits, leaving `main` where it was.
+    async fn only_the_draft_moved(s: &Store) {
+        let mut d = on_draft(s).await;
+        ok(&mut d, "UPDATE p SET name = 'Will Riker' WHERE id = 'r'").await;
+        commit(&mut d, "rename").await;
+        d.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_squash_onto_a_branch_that_has_not_moved_stops_uncommitted() {
+        let (s, cut) = store_with_draft().await;
+        only_the_draft_moved(&s).await;
+        let mut m = s.rw().await;
+        ok(&mut m, "SELECT dolt_merge('--squash', 'draft')").await;
+        assert_eq!(head(&mut m).await, cut, "nothing committed");
+        assert_eq!(name_of(&mut m, "r").await.as_deref(), Some("Will Riker"));
+        assert_eq!(
+            texts(&mut m, "SELECT table_name FROM dolt_status").await,
+            ["p"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_squash_with_no_commit_stops_uncommitted_whether_or_not_main_moved() {
+        for main_moved in [false, true] {
+            let (s, _) = store_with_draft().await;
+            if main_moved {
+                both_edit_riker(&s, "note", "first officer").await;
+            } else {
+                only_the_draft_moved(&s).await;
+            }
+            let mut m = s.rw().await;
+            let before = head(&mut m).await;
+            ok(
+                &mut m,
+                "SELECT dolt_merge('--squash', '--no-commit', 'draft')",
+            )
+            .await;
+            assert_eq!(head(&mut m).await, before, "main moved: {main_moved}");
+            assert_eq!(
+                name_of(&mut m, "r").await.as_deref(),
+                Some("Will Riker"),
+                "main moved: {main_moved}"
+            );
+            commit(&mut m, "saved Riker").await;
+            assert_eq!(parents_of_head(&mut m).await, 1, "main moved: {main_moved}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_branch_name_may_hold_a_slash() {
+        let (s, _) = store_with_rows().await;
+        let mut c = s.rw().await;
+        ok(&mut c, "SELECT dolt_branch('draft/riker')").await;
+        ok(&mut c, "SELECT dolt_connect_branch('draft/riker')").await;
+        assert_eq!(
+            text(&mut c, "SELECT active_branch()").await.as_deref(),
+            Some("draft/riker")
+        );
+    }
 }
 
 // ── Query plans and indexes ─────────────────────────────────────────

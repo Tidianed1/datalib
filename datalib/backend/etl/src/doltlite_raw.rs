@@ -351,10 +351,10 @@ async fn checkout_writer_branch(
 
 /// The commit a branch names, or `None` when this build has no doltlite
 /// or the branch does not exist yet.
-async fn branch_head(pool: &SqlitePool, branch: &str) -> Option<String> {
+async fn branch_head(conn: &mut sqlx::SqliteConnection, branch: &str) -> Option<String> {
     sqlx::query_scalar("SELECT dolt_hashof(?)")
         .bind(branch)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *conn)
         .await
         .unwrap_or(None)
         .flatten()
@@ -377,8 +377,17 @@ async fn branch_head(pool: &SqlitePool, branch: &str) -> Option<String> {
 /// not report build time. Such a caller commits by hand and then calls
 /// this — a commit nobody can see is not a seal.
 pub async fn publish_to_main(pool: &SqlitePool) -> Result<()> {
+    let mut conn = pool
+        .acquire()
+        .await
+        .context("take the store's connection to publish")?;
+    publish_on(&mut conn).await
+}
+
+/// [`publish_to_main`] on a connection the caller already holds.
+async fn publish_on(conn: &mut sqlx::SqliteConnection) -> Result<()> {
     let active: Option<String> = sqlx::query_scalar("SELECT active_branch()")
-        .fetch_optional(pool)
+        .fetch_optional(&mut *conn)
         .await
         .unwrap_or(None);
     if active.as_deref() != Some(WRITER_BRANCH) {
@@ -388,12 +397,12 @@ pub async fn publish_to_main(pool: &SqlitePool) -> Result<()> {
     // few hundred bytes, on a store nobody touched. Only
     // `reopening_an_untouched_store_does_not_grow_it` would notice: the
     // leak leaves `dolt_log` unchanged and `dolt_status` clean.
-    if branch_head(pool, WRITER_BRANCH).await == branch_head(pool, "main").await {
+    if branch_head(conn, WRITER_BRANCH).await == branch_head(conn, "main").await {
         return Ok(());
     }
     sqlx::query("SELECT dolt_branch('-f', 'main', ?)")
         .bind(WRITER_BRANCH)
-        .execute(pool)
+        .execute(&mut *conn)
         .await
         .context("fast-forward main to the writer branch")?;
     Ok(())
@@ -1631,10 +1640,17 @@ pub async fn finish_run(
 /// Whether this connection's libsqlite3 is doltlite rather than stock, so
 /// callers can skip commits silently in builds that don't link it.
 pub async fn has_dolt_extensions(pool: &SqlitePool) -> bool {
+    match pool.acquire().await {
+        Ok(mut conn) => has_dolt_extensions_on(&mut conn).await,
+        Err(_) => false,
+    }
+}
+
+async fn has_dolt_extensions_on(conn: &mut sqlx::SqliteConnection) -> bool {
     let res = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM pragma_function_list WHERE name = 'dolt_commit'",
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *conn)
     .await;
     matches!(res, Ok(n) if n > 0)
 }
@@ -1648,7 +1664,7 @@ pub const DATA_ROOT_ENV: &str = "DATALIB_DAG_DATA_ROOT";
 
 /// A store's path as a log line names it: under the data root when the
 /// runner said where that is, since every store's is the same prefix.
-fn store_label(pool: &SqlitePool) -> String {
+pub(crate) fn store_label(pool: &SqlitePool) -> String {
     path_label(pool.connect_options().get_filename())
 }
 
@@ -1684,11 +1700,26 @@ pub async fn commit_run_dated(
     msg: &str,
     date: Option<&str>,
 ) -> Result<Option<String>> {
-    if !has_dolt_extensions(pool).await {
+    let mut conn = pool
+        .acquire()
+        .await
+        .context("take the store's connection to commit")?;
+    commit_on(&mut conn, &store_label(pool), msg, date).await
+}
+
+/// [`commit_run_dated`] on a connection the caller already holds: for a
+/// seal that ends a transaction the caller opened on it, as a draft's
+/// save does (`crate::draft`). `store` names the file in the log line.
+pub(crate) async fn commit_on(
+    conn: &mut sqlx::SqliteConnection,
+    store: &str,
+    msg: &str,
+    date: Option<&str>,
+) -> Result<Option<String>> {
+    if !has_dolt_extensions_on(conn).await {
         return Ok(None);
     }
     let started = std::time::Instant::now();
-    let store = store_label(pool);
     let query = match date {
         None => sqlx::query_scalar::<_, Option<String>>("SELECT dolt_commit('-Am', ?)")
             .bind(stamp_run(msg)),
@@ -1700,7 +1731,7 @@ pub async fn commit_run_dated(
     };
     // "nothing to commit" is a legitimate outcome: a pass that fetched
     // nothing new leaves the working set clean.
-    let hash = match query.fetch_optional(pool).await {
+    let hash = match query.fetch_optional(&mut *conn).await {
         Ok(opt) => opt.flatten(),
         Err(e) if e.to_string().contains("nothing to commit") => None,
         Err(e) => return Err(anyhow::Error::new(e).context("dolt_commit")),
@@ -1709,7 +1740,7 @@ pub async fn commit_run_dated(
     // cannot see is not a seal. Between the two a crash leaves the
     // branch ahead of `main`, which the next `open` finishes.
     if hash.is_some() {
-        publish_to_main(pool).await?;
+        publish_on(conn).await?;
     }
     let elapsed_ms = started.elapsed().as_millis() as u64;
     // `message` is the sentence's own field name in tracing, so the
