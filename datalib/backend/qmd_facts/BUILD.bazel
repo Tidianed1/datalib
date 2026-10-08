@@ -28,4 +28,5 @@ rust_test(
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",
     ],
+    tags = ["cpu:2"],
 )

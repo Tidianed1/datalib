@@ -618,6 +618,17 @@ fn manual_e2e_live_sync_golden() {
         assert_json_snapshot!("qmd_collections", qmd_collections_report(&data_root, &cfg_out));
     });
 
+    // The terms file: what each row answers to when an id or a handle is
+    // pasted into the search. Derived from `grid_rows`, so a change here
+    // with no change above is a change in the derivation.
+    insta::with_settings!({
+        snapshot_path => snap_base().join("unified_index").display().to_string(),
+        prepend_module_to_snapshot => false,
+        description => "unified_index/grid_index/terms.sqlite, one term a line: kind, value, uuid",
+    }, {
+        assert_snapshot!("terms", index_terms(&data_root));
+    });
+
     // ── The contacts app: links a person made, which nothing rebuilds ──
     //
     // Made once run 1 has put the handles in the index, and checked after
@@ -1399,6 +1410,38 @@ fn index_problems(data_root: &Path) -> Value {
     };
     strip_volatile(&mut rows);
     rows
+}
+
+/// Every term in the grid's terms file, decoded from its dictionary, one
+/// line each as `kind<TAB>value<TAB>uuid`, sorted.
+fn index_terms(data_root: &Path) -> String {
+    let path = datalib_runtime::layout::grid_terms_db(data_root);
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime for the terms read");
+    let coded: Vec<(i64, String, String)> = rt.block_on(async {
+        let pool = open_readonly(&path).await;
+        let rows = sqlx::query_as(
+            "SELECT t.kind, v.value, r.uuid FROM terms t \
+             JOIN vals v ON v.val_id = t.val_id JOIN rows r ON r.row_id = t.row_id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        pool.close().await;
+        rows
+    });
+    let mut lines: Vec<String> = coded
+        .into_iter()
+        .map(|(code, value, uuid)| {
+            let kind = datalib_schema::terms::TermKind::from_code(code)
+                .map_or_else(|| format!("kind {code}"), |k| k.as_str().to_string());
+            format!("{kind}\t{value}\t{uuid}")
+        })
+        .collect();
+    lines.sort();
+    lines.join("\n")
 }
 
 /// One contact the bake makes, as `contacts.toml` beside the config

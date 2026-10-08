@@ -199,6 +199,7 @@ rust_test(
         "//datalib/backend/handle:datalib_handle",
         "//datalib/backend/qmd_indexer:datalib_qmd_indexer",
         "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/schema:datalib_schema",
         "@datalib_crates//:insta",
         "@datalib_crates//:runfiles",
         "@datalib_crates//:serde_json",

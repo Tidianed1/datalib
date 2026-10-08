@@ -122,17 +122,23 @@ A row answers to more than its columns hold. An email has one
 `author_handle` in `grid_rows`, but also its To, Cc and Bcc, its
 labels, its subject and its own ids. Those sets do not belong in
 `grid_rows`, which keeps one value per column; they belong in one tall
-table beside it, one row per term:
+table beside it, one row per term, dictionary-encoded so a term is three
+integers:
 
 ```
-grid_row_terms (term_id INTEGER PRIMARY KEY, markdown_uuid, uuid, kind, value)
-grid_row_terms_fts  USING fts5(value, content='', contentless_delete=1,
-                    tokenize="unicode61 tokenchars '@.-_+:'")
+rows  (row_id INTEGER PRIMARY KEY, uuid UNIQUE, touched_at_utc)
+vals  (val_id INTEGER PRIMARY KEY, value UNIQUE)
+terms (val_id, kind, row_id)  PRIMARY KEY (val_id, kind, row_id), index (row_id)
+vals_fts  USING fts5(value, content='', contentless_delete=1,
+                     tokenize="unicode61 tokenchars '@.-_+:/'")
 ```
 
-indexed by `markdown_uuid`, with the FTS5 index over `value` alone,
-linked by rowid. The tokenizer keeps `@ . - _ + :` inside a word, so a
-uuid, an email address or `slack:T…/U…` is one token, matched exactly.
+`kind` is the `TermKind` enum's code. The FTS5 index covers the
+distinct values alone, linked to `vals` by rowid. The tokenizer keeps
+`@ . - _ + : /` inside a word, so a uuid, an email address or
+`slack:T…/U…` is one token, matched exactly. On a real root the
+dictionary took the file from 131 MB (a uuid, a value and a timestamp
+on every term) to 58 MB: there are 4.6 terms per distinct value.
 
 **The terms live in a plain SQLite file beside the grid index,** not
 in it: `unified_index/grid_index/terms.sqlite`, written by `grid_index`
@@ -243,7 +249,12 @@ and could fold in later too.
    the facts in `doltlite_facts_test`, the write cost in
    `doltlite.md`, and the attached terms file beside a sealing writer
    in `doltlite_two_process_test`.
-1. **`grid_row_terms`, derived terms only.** The terms file, the
+1. **`grid_row_terms`, derived terms only.** Built in this step's PR,
+   with one narrowing: only a query made entirely of identifiers is
+   answered from the terms; words still go to qmd until the tabs give
+   their answer a place. On a real root (122,579 rows) the first pass
+   wrote 674,672 terms, 58 MB, with the whole step taking 4.3 s, and a
+   pasted uuid's lookup took 1.5 ms. The terms file, the
    `TermKind` enum, the derivation in `grid_index`, and bare words and
    identifiers searched through it. An identifier-only query does not
    ask qmd. Test: a uuid search answers without asking qmd at all (the

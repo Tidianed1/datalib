@@ -42,6 +42,7 @@ write the one index file under `unified_index/qmd_aggregator/`):
 │   └── indexed_markdown.doltlite_db  #   its rows, edges + render problems
 ├── unified_index/                  # derived; carries a CACHEDIR.TAG
 │   ├── grid_index/db.doltlite_db   # the grid_rows SQL index — query this
+│   ├── grid_index/terms.sqlite     # each row's ids, handles and names, full-text (plain SQLite)
 │   └── qmd_aggregator/qmd/index.sqlite  # semantic search index
 └── system/                         # the server's own state
     ├── supervisor.sqlite           # sync requests, steps turned off, and the loop's record (plain SQLite)
@@ -306,7 +307,12 @@ Pick the surface that fits the question:
   (`org_name:`, `byte_size:`, `created_at:`, …); `before:`/`after:`;
   `is:document` for the one row per rendered document and
   `-is:document` for the rows inside them. A key the search does not
-  have is refused by name, in `refused`, rather than ignored. It answers a page: `limit=` rows from `offset=`, with `total`
+  have is refused by name, in `refused`, rather than ignored. Free text
+  made only of uuids and handles (an email address, `tel:+…`,
+  `slack:T…/U…`) is looked up in `grid_index/terms.sqlite`, not sent to
+  qmd: every row that answers to each one, best match first, with
+  `score` saying how (5 its own id, 4 its author, 3 what it is in,
+  2 its title, 1 a name it shows) and `snippet` naming the match. It answers a page: `limit=` rows from `offset=`, with `total`
   and the `next_offset`; `sort=created_at:desc,author` orders by grid
   columns in turn. `GET /applet/unified_index/search/groups?q=…&by=kind`
   counts the groups, and `within=[["kind","Chat"]]` on `search` lists

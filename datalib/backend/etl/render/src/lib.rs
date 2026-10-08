@@ -11,6 +11,7 @@
 pub mod diff;
 pub mod front_matter;
 pub mod grid_index;
+pub mod grid_terms;
 pub mod html;
 pub mod indexed_markdown;
 pub mod inputs;
