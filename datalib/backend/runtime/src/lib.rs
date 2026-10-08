@@ -4,7 +4,6 @@
 pub mod atomic;
 pub mod build_id;
 pub mod layout;
-pub mod legacy_qmd_dir;
 pub mod node_runtime;
 pub mod plain_sqlite;
 pub mod qmd;
