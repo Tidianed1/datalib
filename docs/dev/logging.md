@@ -18,7 +18,7 @@ for the life of the server. The tables:
 |---|---|
 | `processes` | a process that took part (below) |
 | `runs` | a run of the runner |
-| `step_runs` | a step in a run: state, attempt, error, message. While a run is live every step of the config is here, `pending` until reached; when it ends, the ones it never started go, so a closed run holds the steps it ran |
+| `step_runs` | a step in a run: state, attempt, error, message. While a run is live every step of the config is here, `pending` until reached; when it ends, the ones no request reached go, so a closed run holds the steps it ran. A run whose runner died keeps them, as `stopped`: nothing settled them, so any might have been about to run |
 | `log` | a line |
 | `metrics`, `metric_samples` | a step's numbers — the newest value, and a sparse timeseries |
 | `store_changes` | a part of the store a reader can depend on (`runs`, `step_runs`, `metrics`, a run's lines, the server's lines), with a counter each write bumps |
