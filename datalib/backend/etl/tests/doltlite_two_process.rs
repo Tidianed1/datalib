@@ -1094,6 +1094,67 @@ fn rows_a_killed_writer_committed_at_the_sql_level_are_discarded_by_the_next_ope
     );
 }
 
+/// The last point a writer can die inside a seal: its `dolt_commit` landed
+/// on the writer's branch, and the kill came before `publish_to_main`. That
+/// commit is a seal the run meant to make, so the next `open` publishes it
+/// rather than leaving it where no reader looks. Until then `main` has not
+/// moved, and the open commits nothing of its own.
+#[test]
+fn a_seal_a_killed_writer_committed_but_never_published_is_published_by_the_next_open() {
+    let t = Scratch::new();
+    let mut writer = t.spawn(&[
+        "hang",
+        "--db",
+        &t.db(),
+        "--rows",
+        "5",
+        "--commit",
+        "--dolt-commit",
+        "--ready-out",
+        &t.path("ready"),
+        "--out",
+        &t.path("hang.json"),
+    ]);
+    if t.await_file("ready", &mut writer) == "no-dolt" {
+        writer.kill().expect("kill");
+        return;
+    }
+    writer
+        .kill()
+        .expect("kill -9 the writer between its dolt_commit and its publish");
+    writer.wait().expect("reap");
+
+    let stranded = t.probe();
+    assert_eq!(
+        stranded["committed_rows"].as_i64(),
+        Some(SEED_ROWS),
+        "a reader on main does not see the unpublished seal: {stranded:?}"
+    );
+
+    let r = t.reopen();
+    assert_eq!(
+        r["working_set_rows"].as_i64(),
+        Some(SEED_ROWS + 5),
+        "the sealed rows are the working set, with nothing to discard: {r:?}"
+    );
+    assert_eq!(
+        r["committed_rows"].as_i64(),
+        Some(SEED_ROWS + 5),
+        "and HEAD is the stranded seal: {r:?}"
+    );
+    assert!(
+        !committed_a_rescue(&r),
+        "open published; it must not commit anything of its own: {r:?}"
+    );
+
+    let published = t.probe();
+    assert_eq!(
+        published["committed_rows"].as_i64(),
+        Some(SEED_ROWS + 5),
+        "the next open published the seal to main: {published:?}"
+    );
+}
+
 /// The rows `grid_index` loads on a pass, as a reader in another process
 /// sees them at each step of that pass. The writer deletes every row and
 /// loads a different number back inside one SQL transaction, `COMMIT`s
