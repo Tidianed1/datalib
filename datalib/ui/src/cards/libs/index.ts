@@ -1,5 +1,5 @@
 import type { ViewLibs } from "../types";
-import { gridView } from "./gridView";
+import { gridView, searchView } from "./gridView";
 import { documentView } from "./documentView";
 import { documentPickerView } from "./documentPickerView";
 import { galleryView } from "./galleryView";
@@ -23,7 +23,6 @@ import {
   sourcesOverviewView,
   syncStatusView,
 } from "./dashboardSections";
-import { searchView } from "./searchView";
 import { personView } from "./personView";
 
 // The names in scope when card source is evaluated (cardSource.ts).

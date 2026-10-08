@@ -122,7 +122,7 @@ async function writeConfig(page: Page, text: string) {
   //
   // Saving re-derives the table from the config text at once — that is
   // the point of the Advanced editor — but the per-step history behind
-  // the Last update column comes from `GET /api/dag`, which
+  // the Status column comes from `GET /api/dag`, which
   // is refetched separately. Between the two, a row that has run before
   // paints as "Never run": it exists because the config declares it,
   // and nothing has yet said what it did. Mounting the page afresh
@@ -211,7 +211,7 @@ command = "'${STEP_BIN}'"
 path = "${dataRoot}/fsindex_scan"
 
 # Declared and never synced by any test in this file, so "never run" is
-# a state the grid can be observed handling — a Last update with no time, and
+# a state the grid can be observed handling — a Status with no time, and
 # a row that has to stay at the bottom of that column whichever way it
 # is sorted. Without a row like this the sort test passes with the
 # comparator deleted, because same-offset ISO stamps happen to sort
@@ -302,8 +302,9 @@ ${applets()}`;
       .toContain("Running");
 
     // Syncing a source takes on everything downstream of it, so the
-    // render is in flight too: Queued behind its download, or Running on
-    // what the download has published, since the download streams.
+    // render is in flight too: Queued behind its download, Running on
+    // what the download has published, since the download streams, or
+    // Waiting for its next seal.
     // This is the assertion a download-only source could not support.
     await expect
       .poll(async () => (await since(TAPED_DOWN, beforeDown)).length, {
@@ -316,7 +317,7 @@ ${applets()}`;
     expect(
       statusWord(downstream[0]),
       `downstream sequence was ${JSON.stringify(downstream)}`,
-    ).toMatch(/^(Queued|Running)$/);
+    ).toMatch(/^(Queued|Running|Waiting)$/);
     // ...while the unrelated source is not claimed at all.
     expect(await statusOf(page, "docs/ingest")).not.toBe("Queued");
     // Only the hold keeps it here; if the step has finished anyway, the
@@ -398,7 +399,7 @@ ${applets()}`;
     await settleRunner(page);
   });
 
-  test("Last update's time holds still under a minute, then crosses to 1 minute ago", async ({
+  test("Status's time holds still under a minute, then crosses to 1 minute ago", async ({
     page,
   }) => {
     // What only a browser can answer about this column. The arithmetic
@@ -455,7 +456,7 @@ ${applets()}`;
     // column used to do, they would have read 3, 4, 5 — this is the
     // assertion that fails if the countup ever comes back.
     await page.clock.runFor(4000);
-    await expect(cell, "Last update ticked while nothing happened").toHaveText("seconds ago");
+    await expect(cell, "Status ticked while nothing happened").toHaveText("seconds ago");
 
     // The crossing to "1 minute ago" — the only self-repaint this
     // column does, and the reason the loop exists. It went untested
@@ -489,7 +490,7 @@ ${applets()}`;
     await page.clock.resume();
   });
 
-  test("sorting Last update orders by time, not by how the cell reads", async ({ page }) => {
+  test("sorting Status orders by time, not by how the cell reads", async ({ page }) => {
     // The column shows "5 minutes ago" and sorts on the underlying
     // stamp. Those two orders genuinely disagree here, which is what
     // makes this worth asserting through the real header rather than

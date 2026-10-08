@@ -106,8 +106,8 @@ What goes into the look is each kind's own rule, pure and unit-tested:
   `entities.ts`: the name the config gives it now (a step is named
   under its group: "Work Slack · Ingest"), or the producer's until the
   answer lands; its type's mark or its phase's glyph; and a dot after
-  the name for a status worth noticing — running, queued, failed,
-  blocked or interrupted. The words are in the tooltip.
+  the name for a status worth noticing — running, waiting, queued,
+  failed, blocked or interrupted. The words are in the tooltip.
 
 `chip.css` is the one look. The document frame, the search and
 problems grids, the log card, the sync dashboard and the render
@@ -152,7 +152,7 @@ The two instances:
 | keyed by | handle (`email:…`) | entity URI (`datalib:group/…`) |
 | asks | the unified index's `POST /people` and the contacts app's `POST /resolve` | datalib-http's `POST /api/entities` (`manage::post_entities`, from the rows the Manage table reads) |
 | answer | each source's record of the person, and the contact a person made | label, icon token, detail, status |
-| goes stale when | a person edits a contact (create, link, unlink, no longer works): the call forgets the handles it changed | a sync moves a status, or the config changes: `entities` follows the live connection and revalidates on every frame `movesEntities` names, and on a resync |
+| goes stale when | a person edits a contact (create, link, unlink, no longer works): in this page the call forgets the handles it changed; from anywhere else — another window, an agent — the contacts app's commit reaches every page as a `curated` frame, on which `people` revalidates (`movesPeople`), as on a resync | a sync moves a status, or the config changes: `entities` follows the live connection and revalidates on every frame `movesEntities` names, and on a resync |
 
 Why the viewer joins this itself rather than the producer sending
 finished chips: the producer still resolves what only it can (the name

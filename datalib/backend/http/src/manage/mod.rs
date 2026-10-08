@@ -111,12 +111,8 @@ pub fn columns() -> Vec<ColumnSpec> {
             .badges("problems"),
         ColumnSpec::new("actions", "Actions", ColumnType::Actions)
             .describe("Browse this row's data, sync it \u{2014} or stop the sync in progress \u{2014} and open its sync dashboard."),
-        ColumnSpec::new("status", "Last update", ColumnType::Status)
-            .describe("What it is doing now, or did last, and when it got there. Hover for why; double-click for the log."),
-        ColumnSpec::new("queue", "Queue", ColumnType::Quantity)
-            .describe("How much work the step says is still ahead of it; a group's is the sum of its steps'. Hover for where it came from; double-click for the sync dashboard."),
-        ColumnSpec::new("eta", "ETA", ColumnType::Quantity)
-            .describe("When the queued work is done, at the pace work has come off the queue over the last two minutes (or since the step started); a group waits on its slowest step. A word instead of a time when there is no pace to go by \u{2014} stalled, measuring, growing, flat. Double-click for the sync dashboard."),
+        ColumnSpec::new("status", "Status", ColumnType::Status)
+            .describe("What it is doing now, or did last, and when it got there. While it has work queued: how much the step says is still ahead of it (a group's is the sum of its steps'), then when that is done at the pace work has come off the queue over the last two minutes (or since the step started; a group waits on its slowest step) \u{2014} or a word when there is no pace to go by: stalled, measuring, growing, flat. Hover any part for why; double-click for the log."),
         ColumnSpec::new("items", "Items", ColumnType::Timeseries)
             .describe("How many things this source holds \u{2014} messages, readings, events \u{2014} whole store, as of its last render, with the last few days of syncs behind it. Hover for how many documents they sit in. Blank means it has never counted."),
         ColumnSpec::new("last_synced", "Last synced", ColumnType::Timestamp)
@@ -1120,11 +1116,14 @@ impl RowCtx<'_> {
             ),
         };
 
+        let activity = match status.key.as_str() {
+            "running" => queue::Activity::Running,
+            "waiting" => queue::Activity::BetweenPasses,
+            _ => queue::Activity::Idle,
+        };
         let cells = match e {
-            Entry::Step(_) => {
-                queue::step_cells(self.snap.record.progress.get(&id), status.key == "running")
-            }
-            Entry::Applet(_) => queue::step_cells(None, false),
+            Entry::Step(_) => queue::step_cells(self.snap.record.progress.get(&id), activity),
+            Entry::Applet(_) => queue::step_cells(None, queue::Activity::Idle),
         };
         let problems = match e {
             Entry::Step(_) => problems::chips(self.snap.record.problems.get(&id)),

@@ -230,6 +230,8 @@ pub struct AppletRegistry {
     /// See [`ENV_APPLET_SECRET`]. One per registry, so every applet this
     /// process starts answers to the same one.
     secret: String,
+    /// Told after every write this gateway forwards: see [`crate::watch::Nudge`].
+    after_writes: std::sync::OnceLock<crate::watch::Nudge>,
 }
 
 fn mint_secret() -> String {
@@ -326,7 +328,13 @@ impl AppletRegistry {
             }),
             supervisor,
             secret,
+            after_writes: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Nudge the watch after every write forwarded from now on.
+    pub fn nudge_after_writes(&self, nudge: crate::watch::Nudge) {
+        let _ = self.after_writes.set(nudge);
     }
 
     pub fn from_data_root(data_root: &Path, binary_dir: Option<PathBuf>) -> Self {
@@ -489,19 +497,29 @@ impl AppletRegistry {
                 ))
             }
         };
-        forward(
+        let answer = forward(
             port,
             method,
             path_and_query,
             content_type,
             body,
             Some(&self.secret),
-        )
-        .map_err(|e| match e {
+        );
+        if answer.is_ok() && is_write(method) {
+            if let Some(nudge) = self.after_writes.get() {
+                nudge.an_applet_wrote();
+            }
+        }
+        answer.map_err(|e| match e {
             ProxyError::TimedOut(why) => ProxyError::TimedOut(format!("applet {id:?} {why}")),
             other => other,
         })
     }
+}
+
+/// Whether a request can have changed what an applet holds.
+fn is_write(method: &str) -> bool {
+    !matches!(method, "GET" | "HEAD" | "OPTIONS")
 }
 
 /// The whole frontend, as one document.

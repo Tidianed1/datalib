@@ -56,12 +56,13 @@ export const browseAction = (r: ManageRow) => r.actions.find((a) => a.id === "br
 function groupBrowse(g: ManageRow): string | null {
   if (!browseAction(g)?.enabled) return null;
   const type = g.type?.id ?? null;
-  if (!type) return "gridView()";
+  if (!type) return "searchView()";
   const columns = browseColumns(type);
   const args: string[] = [`q: ${JSON.stringify(browseQuery(g.id, type))}`];
-  if (columns) args.push(`columns: ${JSON.stringify(columns)}`);
+  // A set of columns is something only the table shows.
+  if (columns) args.push(`columns: ${JSON.stringify(columns)}`, `view: "table"`);
   args.push(`name: ${JSON.stringify(browseName(g.name.label, type))}`);
-  return `gridView({ ${args.join(", ")} })`;
+  return `searchView({ ${args.join(", ")} })`;
 }
 
 /// A row's Browse: `system/` browses the run log, a group its view, a

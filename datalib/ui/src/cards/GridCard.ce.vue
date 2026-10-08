@@ -7,6 +7,13 @@
 // opens and whether qmd ranks its free text, the server declares
 // (`RowsSpec`).
 //
+// Over the search itself the card is the Search card, with two views of
+// the one query: a list with a preview (SearchList.ce.vue) and this
+// table, picked by the tabs above them. A new search opens on the view
+// picked last (searchViewPref.ts). Both stay mounted once shown, so
+// switching keeps each one's selection and scroll. The source chips and "Meaning only" rewrite the
+// query (cards/search.ts) rather than keep state beside it.
+//
 // Selecting a row opens the row's document as a new card via
 // ctx.host.openCards — structural changes never go through the bus.
 // Double-clicking a row opens that document as a standalone
@@ -61,6 +68,7 @@ import {
   type AccountsMap,
   type ColumnSpec,
   type QmdDocState,
+  type RowGroup,
   type RowsResponse,
   type RowsSpec,
   type SearchRow,
@@ -115,6 +123,10 @@ import {
 } from "@/grid/serverGroups";
 import { searchFailure, type SearchFailure } from "./searchFailure";
 import { DEFAULT_QUERY, PLAIN_HINT, searchPlaceholder } from "./searchDefaults";
+import SearchList from "./SearchList.ce.vue";
+import { freeText, meaningOnly, pickedSource, setMeaningOnly, setSource } from "./search";
+import { iconUrl } from "@/config/icons";
+import { lastSearchView, rememberSearchView, type SearchViewId } from "./searchViewPref";
 import { pushToast } from "@/toasts";
 import type { CardCtx } from "./types";
 
@@ -140,17 +152,62 @@ const props = defineProps<{
   // documents"})`). Without one the card is named for its live query.
   name?: string;
   // The table the card pages (`gridView({url: "/applet/unified_index/problems"})`);
-  // the search when absent. Its groups are at `${url}/groups`.
+  // the search when absent (`searchView()`). Its groups are at `${url}/groups`.
   url?: string;
   // What the empty search bar suggests typing.
   placeholder?: string;
+  // The view a search opens in when the card source insists on one
+  // (a Browse names columns, which only the table has). Without it the
+  // search opens on the view picked last; the persisted state's wins
+  // over both.
+  view?: SearchViewId;
 }>();
 
 const url = props.url ?? SEARCH;
+// The search itself, not another table that pages the way it does.
+const isSearch = url === SEARCH;
+
+// Each view's tab: its name and its glyph, a stroked path on a 24px grid.
+const VIEWS: { id: SearchViewId; label: string; icon: string }[] = [
+  { id: "list", label: "List and preview", icon: "M3 4h18v16H3zM10 4v16M5 8h3M5 12h3M5 16h3" },
+  { id: "table", label: "Table", icon: "M3 4h18v16H3zM3 10h18M3 15h18M9 4v16M15 4v16" },
+];
 
 const initialState = new URLSearchParams(props.ctx.initialState);
 
 const query = ref(initialState.get("q") ?? props.q ?? "");
+
+const view = ref<SearchViewId>(
+  isSearch
+    ? (VIEWS.find((v) => v.id === initialState.get("view"))?.id ?? props.view ?? lastSearchView())
+    : "table",
+);
+// Kept with the card once the person has picked one, so a change of
+// the view the next search opens on does not move this one.
+let viewPicked = initialState.has("view");
+// The list mounts the first time it is shown, and stays.
+const listSeen = ref(view.value === "list");
+// `query` once typing has paused: what the list and the chips ask for.
+const settledQuery = ref(query.value);
+// The table has not asked for the query on screen: it was hidden.
+let tableBehind = false;
+
+props.ctx.setHelp(
+  isSearch
+    ? `
+<p>Type what you are looking for. Plain words are matched by the words they contain and
+by what they mean; tick <b>Meaning only</b> to match on meaning alone. Filters narrow the
+search: <code>author:worf</code>, <code>before:2371-01-01</code>, <code>-kind:contact</code>.</p>
+<p>The chips under the box say which sources the results come from, and how many each;
+pick one to see only its results. A chip and the tick box write a filter into the search
+box, the same one you could type.</p>
+<p>The two tabs above the results are two ways to see them. <b>List and preview</b> shows
+each result with your words marked, and the picked one to read beside it. <b>Table</b>
+shows the same results with every column, sorting and grouping. A new search opens on
+the one you picked last.</p>
+`
+    : null,
+);
 
 // An unnamed card's name tracks the live query, not just the factory
 // argument — searching from inside the card renames it.
@@ -420,6 +477,7 @@ function saveState() {
   if (query.value !== (props.q ?? "")) params.set("q", query.value);
   if (sel.value) params.set("sel", sel.value);
   if (colsEncoded) params.set("cols", colsEncoded);
+  if (viewPicked) params.set("view", view.value);
   props.ctx.host.setState(params.toString());
 }
 
@@ -706,6 +764,11 @@ function searchPage(r: RowsResponse<Row>): Page<Row, number> {
 /// screen, for every row through the last one held, so nobody scrolled
 /// along the list loses their place.
 async function runSearch(q: string, refresh = false) {
+  if (view.value === "list") {
+    tableBehind = true;
+    loading.value = false;
+    return;
+  }
   if (groupedBy().length > 0) return runGrouped(q, refresh);
   grouped = null;
   inflight?.abort();
@@ -967,9 +1030,60 @@ watch(query, (q, before) => {
   // Show the spinner immediately on input change — otherwise the
   // debounce leaves the user staring at the old rows with no feedback.
   loading.value = true;
-  debounceTimer = setTimeout(() => runSearch(q), searchDelay(before, q, qmd()));
+  // Before the table's first answer says so, the search is known to be ranked.
+  const ranked = rowsSpec === null ? isSearch : qmd();
+  debounceTimer = setTimeout(
+    () => {
+      settledQuery.value = q;
+      void runSearch(q);
+    },
+    searchDelay(before, q, ranked),
+  );
   saveState();
 });
+
+watch(view, (v) => {
+  viewPicked = true;
+  rememberSearchView(v);
+  saveState();
+  if (v === "list") listSeen.value = true;
+  if (v === "table" && tableBehind) {
+    tableBehind = false;
+    void runSearch(query.value);
+  }
+});
+
+// --- the source chips and "Meaning only": views of the query ---------
+
+/// The sources the search hits and how many rows each, whichever source
+/// the query is narrowed to.
+const sources = ref<RowGroup<Row>[]>([]);
+const sourcesQuery = computed(() => setSource(settledQuery.value, null));
+let sourcesAsked = 0;
+async function loadSources() {
+  if (!isSearch) return;
+  const asked = ++sourcesAsked;
+  try {
+    const r = await fetchGroups<Row>(sourcesQuery.value, "source_ref");
+    if (asked === sourcesAsked) sources.value = r.groups;
+  } catch {
+    /* the chips are a convenience; the search says what went wrong */
+  }
+}
+watch(sourcesQuery, loadSources);
+onMounted(loadSources);
+
+const allCount = computed(() => sources.value.reduce((n, g) => n + g.count, 0));
+const source = computed(() => pickedSource(query.value));
+const meaning = computed(() => meaningOnly(query.value));
+const hasFreeText = computed(() => freeText(query.value) !== "");
+
+function pickSource(id: string | null) {
+  query.value = setSource(query.value, id);
+}
+function setMeaning(on: boolean) {
+  query.value = setMeaningOnly(query.value, on);
+}
 
 // Restore the selected row from persisted state after rows load (or
 // after the grid is first created, whichever happens last — creation
@@ -1175,6 +1289,7 @@ onMounted(() => {
       root: (e) => {
         if (e.kind !== "index_changed") return;
         refreshRows();
+        void loadSources();
         if (!namesASource()) void nameSourcesInPlaceholder();
       },
     },
@@ -2015,71 +2130,150 @@ onBeforeUnmount(() => {
 
 <template>
   <div ref="cardEl" class="grid-column">
-    <div ref="searchWrapEl" class="search-input-wrap">
-      <input
-        v-model="query"
-        :placeholder="hint"
-        class="search-input"
-        data-testid="search-input"
-        autofocus
-        @contextmenu="openFeedbackForSearchBar"
-      />
-      <button
-        v-if="query.length > 0"
-        type="button"
-        class="search-clear"
-        aria-label="Clear search"
-        title="Clear search"
-        data-testid="search-clear"
-        @click="query = ''"
+    <div class="search-bar">
+      <div ref="searchWrapEl" class="search-input-wrap">
+        <input
+          v-model="query"
+          :placeholder="hint"
+          class="search-input"
+          data-testid="search-input"
+          autofocus
+          @contextmenu="openFeedbackForSearchBar"
+        />
+        <button
+          v-if="query.length > 0"
+          type="button"
+          class="search-clear"
+          aria-label="Clear search"
+          title="Clear search"
+          data-testid="search-clear"
+          @click="query = ''"
+        >
+          ×
+        </button>
+      </div>
+      <label
+        v-if="isSearch"
+        class="meaning-check"
+        :class="{ 'is-off': !hasFreeText }"
+        :title="
+          hasFreeText
+            ? 'Match on meaning alone, not on the words themselves'
+            : 'Type some words first: this ranks them by meaning alone'
+        "
       >
-        ×
-      </button>
+        <input
+          type="checkbox"
+          :checked="meaning"
+          :disabled="!hasFreeText"
+          @change="setMeaning(($event.target as HTMLInputElement).checked)"
+        />
+        Meaning only
+      </label>
     </div>
 
-    <div class="status">
-      {{ rows.length }} rows (of {{ total }})
-      <span v-if="qmdCoverage" class="qmd-summary" :title="qmdCoverage.title">
-        · {{ qmdCoverage.text }}
-      </span>
-    </div>
-
-    <p v-if="qmdError" class="qmd-error" role="alert">Free-text search failed: {{ qmdError }}</p>
-    <p v-if="unfinished" class="query-unread" role="status">
-      {{ unfinished }}
-      <template v-if="showingStale">The rows below are from the previous search.</template>
-    </p>
-    <p v-if="qmdIndexMissing" class="qmd-unbuilt" role="status">
-      Free-text search starts working once the first sync builds the search index.
-    </p>
-
-    <p v-if="error" class="error" role="alert" :title="error.detail">
-      {{ error.message }}
-      <template v-if="showingStale">The rows below are from the previous search.</template>
-      <button type="button" class="error-retry" @click="runSearch(query)">Retry</button>
-    </p>
-
-    <div class="grid-wrap" :data-shown-query="shownQuery">
-      <!-- The grid is built into this box by `createGrid`, once the
-           applet has declared its columns. -->
-      <!-- Two elements: the grid adds classes of its own to the box it
-           is built in (its theme's dark mode among them), and a Vue
-           class binding on that same element would wipe them on every
-           change. -->
-      <div class="grid" :class="{ 'grid--loading': loading, 'grid--stale': showingStale }">
-        <div ref="boxEl" class="grid-box" />
+    <!-- The chips change the search; the switch, at the row's end and
+         last before the results, changes only how they are shown. -->
+    <div v-if="isSearch" class="view-row">
+      <div v-if="sources.length > 0" class="source-chips" role="group" aria-label="Sources">
+        <button
+          type="button"
+          class="source-chip"
+          :class="{ 'is-on': source === null }"
+          :aria-pressed="source === null"
+          @click="pickSource(null)"
+        >
+          All {{ allCount.toLocaleString() }}
+        </button>
+        <button
+          v-for="g in sources"
+          :key="g.sample.source_id"
+          type="button"
+          class="source-chip"
+          :class="{ 'is-on': source === g.sample.source_id }"
+          :aria-pressed="source === g.sample.source_id"
+          @click="pickSource(g.sample.source_id ?? null)"
+        >
+          <img
+            v-if="iconUrl(g.sample.source_ref?.icon)"
+            :src="iconUrl(g.sample.source_ref?.icon)!"
+            alt=""
+          />
+          {{ g.sample.source_ref?.label ?? g.sample.source_id }} {{ g.count.toLocaleString() }}
+        </button>
       </div>
-      <div v-if="loading" class="grid-spinner" aria-label="searching">
-        <div class="grid-spinner__ring" />
-        <div class="grid-spinner__label">searching…</div>
+      <div class="view-tabs" role="tablist" aria-label="View">
+        <button
+          v-for="v in VIEWS"
+          :key="v.id"
+          type="button"
+          class="view-tab"
+          :class="{ 'is-on': view === v.id }"
+          role="tab"
+          :aria-selected="view === v.id"
+          @click="view = v.id"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path :d="v.icon" /></svg>
+          {{ v.label }}
+        </button>
       </div>
     </div>
-    <p
-      v-if="!loading && rows.length === 0 && !error && !qmdError && !qmdIndexMissing"
-      class="empty"
-    >
-      no matches.
-    </p>
+
+    <SearchList
+      v-if="listSeen"
+      v-show="view === 'list'"
+      :ctx="ctx"
+      :query="settledQuery"
+      :active="view === 'list'"
+    />
+
+    <!-- The table stays laid out while the list shows, so the grid
+         never measures a box of no size. -->
+    <div class="table-view" :class="{ 'is-off': view !== 'table' }">
+      <div class="status">
+        {{ rows.length }} rows (of {{ total }})
+        <span v-if="qmdCoverage" class="qmd-summary" :title="qmdCoverage.title">
+          · {{ qmdCoverage.text }}
+        </span>
+      </div>
+
+      <p v-if="qmdError" class="qmd-error" role="alert">Free-text search failed: {{ qmdError }}</p>
+      <p v-if="unfinished" class="query-unread" role="status">
+        {{ unfinished }}
+        <template v-if="showingStale">The rows below are from the previous search.</template>
+      </p>
+      <p v-if="qmdIndexMissing" class="qmd-unbuilt" role="status">
+        Free-text search starts working once the first sync builds the search index.
+      </p>
+
+      <p v-if="error" class="error" role="alert" :title="error.detail">
+        {{ error.message }}
+        <template v-if="showingStale">The rows below are from the previous search.</template>
+        <button type="button" class="error-retry" @click="runSearch(query)">Retry</button>
+      </p>
+
+      <div class="grid-wrap" :data-shown-query="shownQuery">
+        <!-- The grid is built into this box by `createGrid`, once the
+             applet has declared its columns. -->
+        <!-- Two elements: the grid adds classes of its own to the box it
+             is built in (its theme's dark mode among them), and a Vue
+             class binding on that same element would wipe them on every
+             change. -->
+        <div class="grid" :class="{ 'grid--loading': loading, 'grid--stale': showingStale }">
+          <div ref="boxEl" class="grid-box" />
+        </div>
+        <div v-if="loading" class="grid-spinner" aria-label="searching">
+          <div class="grid-spinner__ring" />
+          <div class="grid-spinner__label">searching…</div>
+        </div>
+      </div>
+      <p
+        v-if="!loading && rows.length === 0 && !error && !qmdError && !qmdIndexMissing"
+        class="empty"
+      >
+        no matches.
+      </p>
+    </div>
 
     <FeedbackModal
       :open="feedbackOpen"
@@ -2104,9 +2298,135 @@ onBeforeUnmount(() => {
   padding: 0.5rem;
   box-sizing: border-box;
 }
+.grid-column {
+  position: relative;
+}
+.search-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
 .search-input-wrap {
   position: relative;
-  width: 100%;
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+/* The chips, then the views' tabs at the row's end. The row's rule is
+   the top edge of what the tabs switch; the tab in use is open onto it. */
+.view-row {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-end;
+  gap: 0.75rem;
+  border-bottom: 1px solid var(--datalib-border);
+}
+.source-chips {
+  padding-bottom: 6px;
+}
+.view-tabs {
+  flex: 0 0 auto;
+  margin-left: auto;
+  display: flex;
+  gap: 2px;
+  margin-bottom: -1px;
+}
+.view-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: calc(var(--datalib-control-h) + 2px);
+  padding: 0 10px;
+  font: inherit;
+  white-space: nowrap;
+  color: var(--datalib-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom-color: var(--datalib-border);
+  border-radius: var(--datalib-radius) var(--datalib-radius) 0 0;
+  cursor: pointer;
+}
+.view-tab svg {
+  width: var(--datalib-icon-size);
+  height: var(--datalib-icon-size);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+.view-tab:hover {
+  color: var(--datalib-fg);
+  background: var(--datalib-hover);
+}
+.view-tab.is-on {
+  color: var(--datalib-fg);
+  font-weight: 600;
+  background: var(--datalib-bg);
+  border-color: var(--datalib-border);
+  border-bottom-color: var(--datalib-bg);
+}
+.view-tab.is-on svg {
+  color: var(--datalib-accent);
+}
+.meaning-check {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  color: var(--datalib-muted);
+}
+.meaning-check.is-off {
+  opacity: 0.6;
+}
+.meaning-check input {
+  margin: 0;
+  accent-color: var(--datalib-accent);
+}
+.source-chips {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.source-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: calc(var(--datalib-control-h) - 2px);
+  padding: 0 10px;
+  font: inherit;
+  border: 1px solid var(--datalib-border);
+  border-radius: 999px;
+  background: var(--datalib-bg);
+  color: var(--datalib-fg);
+  cursor: pointer;
+}
+.source-chip img {
+  width: var(--datalib-icon-size);
+  height: var(--datalib-icon-size);
+}
+.source-chip:hover {
+  background: var(--datalib-hover);
+}
+.source-chip.is-on {
+  border-color: var(--datalib-fg);
+  background: var(--datalib-fg);
+  color: var(--datalib-bg);
+}
+.table-view {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.table-view.is-off {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 .search-input {
   width: 100%;

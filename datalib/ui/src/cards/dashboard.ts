@@ -11,6 +11,7 @@ export function statusTone(key: string): Tone {
     case "skipped_up_to_date":
       return "ok";
     case "running":
+    case "waiting":
     case "queued":
       return "run";
     case "failed":

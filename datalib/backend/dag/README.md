@@ -145,12 +145,15 @@ a`, `waiting for c, which reads what this writes`, `waiting for lock
 gpu, held by trainer`. Each step writes only the tree its id names, so
 no two steps ever wait on each other as writers of one sink.
 
-Until everything a step reads has settled, its row reads Running between
-passes: the step is not finished, it is waiting for the next seal. A
-producer that is itself between passes has not settled, so the index
-behind a render reads Running for as long as the download does. Each
-pass's process is closed with a `PassEnd`; the `StepFinish` comes once
-its producers are done.
+A step that has read every seal so far is between passes: no process is
+running, but the step is not finished either, because what it reads is
+still being written. The record says it is `waiting` on the first
+producer it reads that has not settled (`waiting for garmin/ingest`),
+and the Manage row reads Waiting rather than Queued, since it has
+already started. A producer that is itself between passes has not
+settled, so the index behind a render waits for as long as the download
+runs. Each pass's process is closed with a `PassEnd`; the `StepFinish`
+comes once its producers are done.
 
 A failed step does not stop its dependents. Whatever it committed and
 reported is a version like any other, and a dependent reads it; a fan-in

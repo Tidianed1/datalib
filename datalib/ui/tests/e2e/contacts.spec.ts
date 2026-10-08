@@ -14,7 +14,8 @@ import {
 // chip in a document, links the other handle to it from a chip in
 // another source's document, and from then on both chips, in documents
 // and in the grid's Author column, show the contact rather than what
-// either source called him (docs/dev/chips.md).
+// either source called him (docs/dev/chips.md). An edit made outside
+// the page reaches the chips it already drew.
 
 const SLACK = "slack:T_NCC1701D/U_RIKER";
 const EMAIL = "email:riker@enterprise.starfleet";
@@ -116,4 +117,14 @@ test("two handles from two sources linked to one contact show it in documents an
     await expect(gridChip(page, handle)).toHaveText(new RegExp(`${CONTACT}$`));
     await expect(await chipIn(page, handle)).toHaveText(new RegExp(`${CONTACT}$`));
   }
+
+  // 5. An edit made outside this page — another window, an agent — reaches
+  //    the chips already drawn, without a reload: the server sees the
+  //    contacts store publish and tells every page to ask again.
+  const renamed = await request.post("/applet/datalib_contacts/rename", {
+    data: { contact_id: who[SLACK]?.key, name: "Will Riker" },
+  });
+  expect(renamed.ok()).toBeTruthy();
+  await expect(gridChip(page, EMAIL)).toHaveText(/Will Riker$/, { timeout: 15_000 });
+  await expect(await chipIn(page, EMAIL)).toHaveText(/Will Riker$/);
 });

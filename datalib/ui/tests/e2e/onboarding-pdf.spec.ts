@@ -230,7 +230,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     expect(stamp, "the relative text must not be the only record").toBeTruthy();
     expect(
       Math.abs(Date.now() - Date.parse(stamp!)),
-      `Last update claims ${stamp}, which is not a moment ago`,
+      `Status claims ${stamp}, which is not a moment ago`,
     ).toBeLessThan(5 * 60_000);
 
     const rawBytes = await bytesOf(page, "pdfs/ingest");

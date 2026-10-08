@@ -485,13 +485,23 @@ impl Runner {
             // A request closing now, or stopped, is closed after the save
             // below: a reader that sees it closed finds no step serving it.
             let closing: BTreeSet<usize> = t.closed.iter().map(|&(r, _)| r).collect();
-            let held: Vec<bool> = slots.iter().map(|s| s.ended.is_some()).collect();
+            // A step between passes waits on the first producer it reads
+            // that has not settled.
+            let held: Vec<Option<usize>> = slots
+                .iter()
+                .enumerate()
+                .map(|(i, s)| {
+                    s.ended
+                        .as_ref()
+                        .and_then(|_| graph.deps_in_order(i).find(|&p| unsettled[p]))
+                })
+                .collect();
             // A step serves a request only while it has work left in it,
             // so a source whose part is done offers Sync again while the
             // index its request also reaches is still running.
             let working: Vec<bool> = (0..slots.len())
                 .map(|i| {
-                    held[i]
+                    held[i].is_some()
                         || match t.states[i] {
                             Row::Running | Row::Waiting(_) => true,
                             Row::Fresh => above_unsettled[i],
@@ -583,13 +593,17 @@ impl Runner {
                 t.states
             );
 
-            // Seals before joins: a step sends its seal before its task can
-            // finish, so a queued seal predates a queued join.
+            // Not `biased`: a producer re-announces its seal until its
+            // consumer has run, so a loop slower than that cadence always
+            // has a seal waiting, and a seal-first select never reaches the
+            // join that would run the consumer.
             tokio::select! {
-                biased;
                 Some(signal) = checkpoints.recv() => {
-                    self.on_signal(graph, signal, &mut facts, &mut state, &mut changed_now,
-                        &mut queue, &mut slots).await;
+                    // Every one queued in one turn, so repeats cost one tick.
+                    for signal in std::iter::once(signal).chain(queued(&mut checkpoints)) {
+                        self.on_signal(graph, signal, &mut facts, &mut state, &mut changed_now,
+                            &mut queue, &mut slots).await;
+                    }
                 }
                 Some(()) = wait_for_stop(&mut stop_rx), if !cancelled => {
                     // The host is going: stop what runs and take nothing
@@ -602,6 +616,13 @@ impl Runner {
                     config_moved |= heard.iter().any(|line| line == CONFIG_CHANGED);
                 }
                 joined = set.join_next() => {
+                    // Seals before joins: a step sends its seal before its
+                    // task can finish, so every seal this join follows is
+                    // queued by now.
+                    for signal in queued(&mut checkpoints) {
+                        self.on_signal(graph, signal, &mut facts, &mut state, &mut changed_now,
+                            &mut queue, &mut slots).await;
+                    }
                     let (id, attempts, res) = joined
                         .expect("a live task implies a joinable one")
                         .context("step task panicked")?;
@@ -655,7 +676,7 @@ impl Runner {
             &shape,
             &mut state,
             &t,
-            &vec![false; slots.len()],
+            &vec![None; slots.len()],
             &turned_off,
             |_| Vec::new(),
         );
@@ -827,7 +848,7 @@ impl Runner {
         };
         let shape = shape_of(graph, &self.lock_slots);
         let t = tick(&shape, &intent, &facts_of(graph, &state));
-        let held = vec![false; graph.steps.len()];
+        let held = vec![None; graph.steps.len()];
         record_states(graph, &shape, &mut state, &t, &held, &turned_off, |_| {
             Vec::new()
         });
@@ -1094,20 +1115,23 @@ fn turned_off_of(graph: &Graph, all: &BTreeMap<String, String>) -> BTreeMap<usiz
 
 /// Write what the tick made of each step into its record. A step between
 /// passes (`held`: its invocation ended, and what it reads has not
-/// settled) is still running. `serving` names the open requests a step
+/// settled) waits for the producer named there. `serving` names the open requests a step
 /// has work left in, oldest first.
 fn record_states(
     graph: &Graph,
     shape: &Shape,
     state: &mut Record,
     t: &Tick,
-    held: &[bool],
+    held: &[Option<usize>],
     turned_off: &BTreeMap<usize, String>,
     serving: impl Fn(usize) -> Vec<String>,
 ) {
     let id = |j: usize| graph.steps[j].id.as_str();
     for (i, &st) in t.states.iter().enumerate() {
-        let st = if held[i] { Row::Running } else { st };
+        let st = match held[i] {
+            Some(p) => Row::Waiting(Wait::Upstream(p)),
+            None => st,
+        };
         let turned_off_by = turned_off.get(&i).cloned();
         let detail = match st {
             Row::Running if t.stops.contains(&i) => Some(match &turned_off_by {
@@ -1182,6 +1206,11 @@ async fn wait_for_stop(rx: &mut Option<watch::Receiver<bool>>) -> Option<()> {
         std::future::pending::<()>().await;
     }
     Some(())
+}
+
+/// What is waiting on the channel now, without waiting for more.
+fn queued<T>(rx: &mut tokio::sync::mpsc::UnboundedReceiver<T>) -> Vec<T> {
+    std::iter::from_fn(|| rx.try_recv().ok()).collect()
 }
 
 /// `v` over a new graph: `from_old[i]` is where step `i` of the new graph
@@ -2019,10 +2048,17 @@ mod tests {
             a.state_detail.as_deref(),
             Some("stopping: no open request wants it")
         );
-        assert_eq!(
-            outcome(&other, &id).await,
-            Some(Some(RequestOutcome::Stopped))
-        );
+        // The loop saves the row before it closes the request, so a closed
+        // request has no step serving it; the reverse order is not promised.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while outcome(&other, &id).await != Some(Some(RequestOutcome::Stopped)) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for the request to close as stopped: {:?}",
+                outcome(&other, &id).await
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
 
         let_go.store(true, Ordering::SeqCst);
         running.await.unwrap().unwrap();
@@ -2196,12 +2232,17 @@ mod tests {
         assert_eq!(outcome, "succeeded");
     }
 
+    /// With nothing asked of it the loop returns rather than waiting for a
+    /// request, and starts no step.
     #[tokio::test]
     async fn a_loop_with_no_open_request_ends_at_once() {
         let f = fixture();
-        tokio::time::timeout(Duration::from_secs(5), serve(&f))
+        // A loop that waited for a request would never return; the deadline
+        // only tells that from slow store I/O on a loaded runner, and stays
+        // under the `small` test timeout so a hang fails here by name.
+        tokio::time::timeout(Duration::from_secs(30), serve(&f))
             .await
-            .expect("returns")
+            .expect("the loop to return with no request open")
             .unwrap()
             .unwrap();
         assert_eq!(f.runs[0].load(Ordering::SeqCst), 0);
