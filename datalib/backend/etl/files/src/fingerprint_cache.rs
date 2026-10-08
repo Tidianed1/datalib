@@ -210,27 +210,37 @@ impl FingerprintCache {
             .connect_with(opts)
             .await
             .with_context(|| format!("open fingerprint cache {}", path.display()))?;
+        // One write transaction, because steps running side by side open
+        // this one file: another's check must not see the old table gone
+        // and the new one not yet made, or drop the table it just made.
+        let mut tx = pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .context("lock fingerprint cache to check its shape")?;
         let version: i64 = sqlx::query_scalar("PRAGMA user_version")
-            .fetch_one(&pool)
+            .fetch_one(&mut *tx)
             .await
             .context("read fingerprint cache version")?;
         if version != SCHEMA_VERSION {
             sqlx::query("DROP TABLE IF EXISTS fingerprints")
-                .execute(&pool)
+                .execute(&mut *tx)
                 .await
                 .context("drop an older fingerprints table")?;
-        }
-        sqlx::query(SCHEMA)
-            .execute(&pool)
+            sqlx::query(SCHEMA)
+                .execute(&mut *tx)
+                .await
+                .context("create fingerprints table")?;
+            // Audited: an integer constant, not input.
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "PRAGMA user_version = {SCHEMA_VERSION}"
+            )))
+            .execute(&mut *tx)
             .await
-            .context("create fingerprints table")?;
-        // Audited: an integer constant, not input.
-        sqlx::query(sqlx::AssertSqlSafe(format!(
-            "PRAGMA user_version = {SCHEMA_VERSION}"
-        )))
-        .execute(&pool)
-        .await
-        .context("stamp fingerprint cache version")?;
+            .context("stamp fingerprint cache version")?;
+        }
+        tx.commit()
+            .await
+            .context("commit fingerprint cache shape")?;
         // Absolute, and resolved after creation so the file exists to
         // canonicalize. A relative `--cache-db fp.sqlite` otherwise
         // reports "fp.sqlite", which does not say where.
@@ -533,6 +543,29 @@ mod tests {
         let tree = cache.load_under(Path::new("/r")).await.unwrap();
         assert_eq!(tree.cursor("a").unwrap().ctime_ns, Some(1_002));
         cache.pool().close().await;
+    }
+
+    /// Steps running side by side open one cache file. One open's shape
+    /// check dropped the table another had just made, and that one's
+    /// first read failed with "no such table".
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn opens_side_by_side_never_see_the_table_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("c.sqlite");
+        let opens: Vec<_> = (0..16)
+            .map(|_| {
+                let path = path.clone();
+                tokio::spawn(async move {
+                    let cache = FingerprintCache::open(&path).await?;
+                    cache.load_under(Path::new("/r")).await?;
+                    cache.pool().close().await;
+                    anyhow::Ok(())
+                })
+            })
+            .collect();
+        for open in opens {
+            open.await.unwrap().unwrap();
+        }
     }
 
     #[tokio::test]

@@ -16,6 +16,7 @@ use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{escape_html_outside_code, escape_md_inline};
 use datalib_etl_render::inputs::{Bucket, Buckets, Input, RawRange};
 use datalib_etl_render::section::{msg_div_open, MSG_DIV_CLOSE};
+use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
 
 pub use convert::RENDER_VERSION;
 use datalib_etl_pdf::ingest::{RawDb, RenderTarget};
@@ -34,9 +35,9 @@ pub fn doc_qmd_path_rel(stanza: &str, blake3: &str) -> String {
 pub struct RenderSummary {
     pub converted: usize,
     pub failed: usize,
-    /// Documents whose file no longer holds the bytes they are named by:
-    /// gone from disk, like a deleted file's, so the processor declares
-    /// them and their pages go.
+    /// Documents whose file no longer holds the bytes they are named by.
+    /// Each is emitted as a stand-in: its document row, a page saying why
+    /// its pages are missing, and a problem row.
     pub changed: usize,
     /// The documents whose conversion failed, by blake3. Their pages are
     /// stale rather than gone, so the processor leaves them undeclared.
@@ -159,24 +160,20 @@ pub fn render_targets(
             grid_rows::document_stamp(t.doc_created_at.as_deref(), t.doc_modified_at.as_deref()),
         )
         .uuid;
-        let rendered = read_document(t).and_then(|bytes| {
-            bytes
-                .map(|b| render_one(t, &b, &md_path, source_id, &doc_uuid))
-                .transpose()
-        });
-        match rendered {
-            Ok(Some(rendered)) => {
-                summary.converted += 1;
+        let content = match read_document(t) {
+            Ok(Some(bytes)) => convert::convert(&bytes, &t.abs_path).map(Content::Pages),
+            Ok(None) => Ok(Content::FileChanged),
+            Err(e) => Err(e),
+        };
+        let changed = matches!(content, Ok(Content::FileChanged));
+        match content.and_then(|c| render_one(t, c, &md_path, source_id, &doc_uuid)) {
+            Ok(rendered) => {
+                if changed {
+                    summary.changed += 1;
+                } else {
+                    summary.converted += 1;
+                }
                 on_doc_complete(rendered)?;
-            }
-            // Like a deleted file: the page goes, with no row, and the
-            // next sync reads the file as it is now.
-            Ok(None) => {
-                summary.changed += 1;
-                tracing::info!(
-                    path = %t.rel_path, blake3 = %t.blake3,
-                    "pdf_render_file_changed_since_download"
-                );
             }
             Err(e) => {
                 // One malformed document must not abort a corpus scan;
@@ -218,14 +215,25 @@ fn read_document(t: &RenderTarget) -> Result<Option<Vec<u8>>> {
     Ok((blake3_hex(&bytes) == t.blake3).then_some(bytes))
 }
 
+/// What a document's page holds.
+enum Content {
+    Pages(Vec<convert::Page>),
+    /// Its file no longer holds the bytes it is named by, so there is
+    /// nothing to convert. The page says so, and so does a problem row,
+    /// until the next sync reads the file as it is now.
+    FileChanged,
+}
+
+const FILE_CHANGED: &str = "This file has changed since the last sync read it, so its pages \
+     are not shown. The next sync reads it as it is now.";
+
 fn render_one(
     t: &RenderTarget,
-    bytes: &[u8],
+    content: Content,
     md_path: &Path,
     source_id: &str,
     doc_uuid: &str,
 ) -> Result<RenderedMarkdown> {
-    let pages = convert::convert(bytes, &t.abs_path)?;
     let title = grid_rows::display_title(t.title.as_deref(), &t.rel_path);
 
     let qmd_rel = doc_qmd_path_rel(source_id, &t.blake3);
@@ -254,8 +262,35 @@ fn render_one(
     let doc_stamp =
         grid_rows::document_stamp(t.doc_created_at.as_deref(), t.doc_modified_at.as_deref());
     let page_uuid = |number| grid_rows::page(source_id, &t.blake3, number, doc_stamp).uuid;
-    let (pages_md, page_rows) = pages_markdown(&title, &pages, page_uuid);
-    body.push_str(&pages_md);
+    let (page_rows, problems) = match content {
+        Content::Pages(pages) => {
+            let (pages_md, page_rows) = pages_markdown(&title, &pages, page_uuid);
+            body.push_str(&pages_md);
+            (page_rows, Vec::new())
+        }
+        Content::FileChanged => {
+            body.push_str(&format!(
+                "# {}
+
+*{FILE_CHANGED}*
+",
+                escape_md_inline(&title)
+            ));
+            let problem = ProblemRow::new(
+                source_id,
+                Stage::Render,
+                Scope::Markdown(doc_uuid),
+                Some(doc_uuid),
+                Outcome::Nulled,
+                Problem::record(
+                    Reason::RenderFailed,
+                    &format!("{}: {FILE_CHANGED}", t.rel_path),
+                ),
+                Some(RENDER_VERSION),
+            );
+            (Vec::new(), vec![problem])
+        }
+    };
 
     if let Some(parent) = md_path.parent() {
         fs::create_dir_all(parent)?;
@@ -288,7 +323,7 @@ fn render_one(
         sections: Vec::new(),
         edges: Vec::new(),
         contacts: Vec::new(),
-        problems: Vec::new(),
+        problems,
     })
 }
 
