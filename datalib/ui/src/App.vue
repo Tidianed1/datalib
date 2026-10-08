@@ -7,7 +7,9 @@ import AgentHandoffModal from "@/components/AgentHandoffModal.vue";
 import FirstRunView from "@/views/FirstRunView.vue";
 import ConfigErrorView from "@/views/ConfigErrorView.vue";
 import NewerRootView from "@/views/NewerRootView.vue";
-import { fetchConfig, type ConfigResponse } from "@/api";
+import UpgradingView from "@/views/UpgradingView.vue";
+import RerenderDialog from "@/components/RerenderDialog.vue";
+import { fetchConfig, openRequest, type ConfigResponse } from "@/api";
 import { subscribeLive } from "@/live";
 import CommandBox from "@/components/CommandBox.vue";
 import LibraryCrumb from "@/components/LibraryCrumb.vue";
@@ -21,17 +23,18 @@ const desktop = isDesktopApp();
 // the window buttons room and its empty areas move the window.
 const underTitleBar = desktop && /Mac/.test(navigator.platform);
 
-// The gate in front of the whole app, for the three states where showing
-// the app would be a lie.
+// The gate in front of the whole app, for the states where showing the
+// app would be a lie.
 const config = ref<ConfigResponse | null>(null);
 const checked = ref(false);
 
-const gate = computed<"first-run" | "newer-root" | "config-error" | null>(() => {
+const gate = computed<"first-run" | "newer-root" | "upgrading" | "config-error" | null>(() => {
   const c = config.value;
   if (!c) return null;
   // A refused root comes first: with no store open, "no config" and
   // "not ready" are both consequences of it, not states of their own.
   if (c.newer_root) return "newer-root";
+  if (c.upgrade.migrating) return "upgrading";
   if (!c.exists) return "first-run";
   return c.app_ready ? null : "config-error";
 });
@@ -73,12 +76,28 @@ function onInitialized() {
   void refresh();
 }
 
+// The launch's re-render offer, asked once per page: a launch of the
+// desktop app is a page load, and the next launch asks again while the
+// steps have not run. A step the pass could not ask does not open it on
+// its own: that is a failed run on the step's row and in its log.
+const rerenderAnswered = ref(false);
+const rerenderAsked = computed(() => {
+  const u = config.value?.upgrade;
+  if (!u || gate.value || rerenderAnswered.value) return false;
+  return u.rerender.length > 0;
+});
+
+async function onRerender(yes: boolean) {
+  rerenderAnswered.value = true;
+  if (yes && config.value) await openRequest(config.value.upgrade.rerender, "upgrade");
+}
+
 let stop: (() => void) | null = null;
 onMounted(() => {
   void refresh();
   stop = subscribeLive({
     root: (e) => {
-      if (e.kind === "config_changed") void refresh();
+      if (e.kind === "config_changed" || e.kind === "upgrade_changed") void refresh();
     },
     resync: () => void refresh(),
   });
@@ -113,6 +132,7 @@ onUnmounted(() => stop?.());
         @initialized="onInitialized"
       />
       <NewerRootView v-else-if="gate === 'newer-root' && config" :config="config" />
+      <UpgradingView v-else-if="gate === 'upgrading' && config" :config="config" />
       <ConfigErrorView
         v-else-if="gate === 'config-error' && config"
         :config="config"
@@ -122,6 +142,7 @@ onUnmounted(() => stop?.());
     <div v-if="cardsShown" v-show="!gate" class="datalib-cards">
       <RouterView />
     </div>
+    <RerenderDialog v-if="rerenderAsked && config" :upgrade="config.upgrade" @answer="onRerender" />
     <ToastStack />
     <!-- Agent hand-off instructions dialog; opened via handoff.ts from
          the card surface and the config editor. -->

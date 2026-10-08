@@ -67,10 +67,10 @@ pub struct StepRecord {
     /// however unchanged its inputs: that is how a config edit takes
     /// effect.
     pub fingerprint: String,
-    /// The shape of the store it writes (`StepSpec::store_shape`) as of
-    /// its last success. A reader of a store whose writer last succeeded
-    /// in another shape pulls that writer into its request.
-    pub store_shape: Option<String>,
+    /// It answered a launch's `--migrate` with `needs_rerun`: what it wrote
+    /// is in a shape this build cannot reach in place. The tick holds it
+    /// due, and the app offers to run it, until it next succeeds.
+    pub needs_rerun: bool,
     /// What happened the last time a run reached it, whatever the
     /// outcome: what "last synced" says.
     pub last_run: Option<LastRun>,
@@ -159,7 +159,7 @@ pub(super) const DDL: [&str; 5] = [
         state_detail TEXT,
         turned_off_by TEXT,
         requests TEXT,
-        store_shape TEXT
+        needs_rerun INTEGER NOT NULL DEFAULT 0
     )",
     // The version each tree was last published at, by its path (a
     // step's tree is its id).
@@ -191,7 +191,7 @@ pub(super) const ADDED_COLUMNS: [(&str, &str, &str); 5] = [
     ("steps", "state_detail", "TEXT"),
     ("steps", "turned_off_by", "TEXT"),
     ("steps", "requests", "TEXT"),
-    ("steps", "store_shape", "TEXT"),
+    ("steps", "needs_rerun", "INTEGER NOT NULL DEFAULT 0"),
 ];
 
 /// A process the loop started, as its row names it.
@@ -289,7 +289,7 @@ impl Store {
                 version: versions.remove(&id),
                 succeeded: r.try_get::<i64, _>("succeeded")? != 0,
                 fingerprint: r.try_get("fingerprint")?,
-                store_shape: r.try_get("store_shape")?,
+                needs_rerun: r.try_get::<i64, _>("needs_rerun")? != 0,
                 last_run,
                 last_success_at: joined("last_success_at_utc")?,
                 state: r
@@ -364,7 +364,7 @@ impl Store {
                         "INSERT OR REPLACE INTO steps (step, succeeded, fingerprint, reads, \
                          last_run_id, last_started_at_utc, last_finished_at_utc, last_status, \
                          last_attempts, last_error, last_success_at_utc, tz_offset, state, \
-                         state_detail, turned_off_by, requests, store_shape) \
+                         state_detail, turned_off_by, requests, needs_rerun) \
                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     )
                     .bind(id)
@@ -387,7 +387,7 @@ impl Store {
                     } else {
                         Some(serde_json::to_string(&st.requests)?)
                     })
-                    .bind(&st.store_shape)
+                    .bind(st.needs_rerun)
                     .execute(&mut *tx)
                     .await?;
                     match &st.version {
@@ -586,7 +586,7 @@ mod tests {
                     version: Some("abc".into()),
                     succeeded: true,
                     fingerprint: "fp-1".into(),
-                    store_shape: Some("shape-1".into()),
+                    needs_rerun: true,
                     last_run: Some(LastRun {
                         run_id: "run-1".into(),
                         started_at: "2026-08-31T10:00:00+01:00".into(),

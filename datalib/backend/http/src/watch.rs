@@ -133,6 +133,8 @@ pub enum RootEvent {
     /// commit, not the file: the applet reads at HEAD, so a write that
     /// has not committed is not something a reader can fetch yet.
     IndexChanged,
+    /// The launch's migrate pass moved: `/api/config`'s `upgrade` is new.
+    UpgradeChanged,
     /// Nothing changed; the stream is open. See [`HEARTBEAT`].
     Heartbeat,
 }

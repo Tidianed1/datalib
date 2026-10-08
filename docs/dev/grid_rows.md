@@ -133,24 +133,18 @@ rather than an error.
    on its `#[col]` so Keep only, Exclude and dropping it on the search
    bar work; `every_filter_key_is_served_by_an_index` then asks for an
    index or a place in its `SCANS` list.
-5. Set the new DDL hashes in `BUILTIN_STORE_SHAPES`
-   (`datalib/backend/dag/src/config.rs`). The test
-   `builtin_store_shapes_are_the_ddl_the_step_writes` in `datalib_step`
-   fails until you do, and prints the hash to paste.
-6. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
+5. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
 
 On an existing root, a render store and the grid index change shape only
-when the step that writes them runs, and the loop runs a step only when
-it is stale. Step 5 is what makes them stale: each store's shape is in
-its writer's fingerprint. The next sync that reaches the grid index —
-whichever source it was for — pulls in every render step whose store is
-in the old shape, runs it before the index, and then runs the index,
-whether or not anything new came in upstream
-([dag README](../../datalib/backend/dag/README.md) § "What the loop
-runs, and what makes a step stale"). The
-render step then sees its own DDL hash moved (it is one of the render
-params, `_store_schema`) and re-renders every document into the new
-shape, and the grid index rebuilds itself from the stores.
+when the step that writes them runs. The first launch of the new build
+asks each of them (`--migrate`); each compares its store's recorded
+shape with this build's and answers that it needs to run again, and the
+app offers to re-render them all, downloading nothing; until then a
+source's own sync re-renders that source
+([dag README](../../datalib/backend/dag/README.md) § "Upgrading a
+root"). The render step then sees its own DDL hash moved (it is one of
+the render params, `_store_schema`) and re-renders every document into
+the new shape, and the grid index rebuilds itself from the stores.
 
 ## Adding a provider
 

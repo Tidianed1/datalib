@@ -56,9 +56,9 @@ impl EntityStore {
     ///
     /// No DDL, and no write of any kind: an ordinary [`Self::open`] would
     /// discard the downloader's in-flight rows, reconcile the schema and
-    /// commit on the way in. So a store the current downloader has not
-    /// touched keeps whatever columns it has; probe with `column_exists`
-    /// and fall back where that matters. See [`dr::open_reader`].
+    /// commit on the way in. The store is in this build's shape because a
+    /// launch migrates every raw store before any render runs
+    /// (`docs/dev/plans/upgrade_on_launch.md`). See [`dr::open_reader`].
     pub async fn open_reader(db_path: &Path, commit: Option<&str>) -> Result<Option<Self>> {
         let Some(reader) = dr::open_reader(db_path, commit).await? else {
             return Ok(None);

@@ -809,6 +809,20 @@ pub struct ConfigResponse {
     /// else `npx -y latchkey@<pin>`. The Setup UI splices it into its
     /// copy-pasteable snippets.
     pub latchkey_cli: String,
+    /// The launch's upgrade: the steps being asked to migrate, and the ones
+    /// that answered they need to run again, which the page offers to run.
+    pub upgrade: UpgradeView,
+}
+
+/// `docs/dev/plans/upgrade_on_launch.md`, as the page needs it.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct UpgradeView {
+    #[serde(flatten)]
+    pub pass: supervisor::Upgrade,
+    /// The steps that answered the pass with `needs_rerun` and have not run
+    /// since (`round::rerun_offer`). Empty while the pass runs: the offer
+    /// comes after it.
+    pub rerender: Vec<String>,
 }
 
 /// A root this build refuses, for the UI: what wrote it, what this is.
@@ -875,6 +889,11 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
         ),
         None => (false, None, 0, Vec::new(), false),
     };
+    let pass = s.sync.upgrade();
+    let rerender = match &checked {
+        Some(c) if !pass.migrating => rerun_offer(&c.graph, &s.sync).await,
+        _ => Vec::new(),
+    };
     Json(ConfigResponse {
         exists: path.exists(),
         path: path.display().to_string(),
@@ -886,7 +905,24 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
         newer_root,
         source_count,
         latchkey_cli: datalib_core::node_runtime::latchkey_cli_hint(),
+        upgrade: UpgradeView { pass, rerender },
     })
+}
+
+async fn rerun_offer(graph: &datalib_dag::Graph, sync: &supervisor::SyncControl) -> Vec<String> {
+    let record = match sync.mailbox().await {
+        Ok(store) => store.load_record().await,
+        Err(e) => Err(e),
+    };
+    match record {
+        Ok(record) => datalib_dag::supervisor::round::rerun_offer(graph, &record),
+        Err(e) => {
+            tracing::warn!(
+                "could not read the loop's record, so nothing is offered to re-render: {e:#}"
+            );
+            Vec::new()
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1048,6 +1084,7 @@ async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
         newer_root: None,
         source_count: 0,
         latchkey_cli: datalib_core::node_runtime::latchkey_cli_hint(),
+        upgrade: UpgradeView::default(),
     })
 }
 

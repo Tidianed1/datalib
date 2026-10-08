@@ -2,7 +2,9 @@
 //! §2.8): it holds `runner-lock` for as long as it is up, runs the loop
 //! whenever a request is open, and between busy periods settles a step
 //! turned off or on into the record, runs a reset and deletes a removed
-//! group's tree.
+//! group's tree. The first time a build runs on the root it asks every
+//! step to migrate before the first request
+//! (`docs/dev/plans/upgrade_on_launch.md`).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -45,6 +47,36 @@ pub enum PurgeAnswer {
 /// long enough for an idle loop, far short of a sync.
 const PURGE_WAIT: Duration = Duration::from_secs(5);
 
+/// The launch's migrate pass, as `/api/config` reports it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct Upgrade {
+    /// The pass is running: nothing syncs until it is done.
+    pub migrating: bool,
+    /// This server has run its pass, or found it had none to run. False
+    /// until it holds the runner lock, which another process may hold.
+    pub settled: bool,
+    /// Every step the pass asks, in the order it asks them.
+    pub steps: Vec<MigrateRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct MigrateRow {
+    pub step: String,
+    pub state: MigrateState,
+    pub error: Option<String>,
+}
+
+/// How the migrate pass stands with one step. Mirrored by hand in
+/// `datalib/ui/src/api.ts`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MigrateState {
+    Waiting,
+    Running,
+    Done,
+    Failed,
+}
+
 /// How the rest of the server reaches the loop: whether a sync is
 /// running, where to write intent, and how to stop it all.
 #[derive(Clone)]
@@ -52,6 +84,7 @@ pub struct SyncControl {
     root: Arc<PathBuf>,
     runs_the_loop: Arc<AtomicBool>,
     busy: Arc<AtomicBool>,
+    upgrade: Arc<Mutex<Upgrade>>,
     /// For what no announcement carries: a reset, queued in memory.
     nudge: Arc<Notify>,
     /// The handlers' own connection, beside the loop's.
@@ -69,6 +102,7 @@ impl SyncControl {
             root,
             runs_the_loop: Arc::new(AtomicBool::new(false)),
             busy: Arc::new(AtomicBool::new(false)),
+            upgrade: Arc::new(Mutex::new(Upgrade::default())),
             nudge: Arc::new(Notify::new()),
             mailbox: Arc::new(OnceCell::new()),
             resets: Arc::new(Mutex::new(Vec::new())),
@@ -87,6 +121,13 @@ impl SyncControl {
         } else {
             datalib_dag::lock::runner_is_held(&self.root)
         }
+    }
+
+    pub fn upgrade(&self) -> Upgrade {
+        self.upgrade
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub async fn mailbox(&self) -> anyhow::Result<&Store> {
@@ -176,6 +217,8 @@ pub struct HostConfig {
     /// `datalib-dag --now` is to one run. For fixtures, whose output must
     /// not depend on the day they were built.
     pub now: Option<String>,
+    /// Where the migrate pass says it moved, so the page asks again.
+    pub announce: Option<crate::watch::RootTx>,
 }
 
 pub async fn run(cfg: HostConfig) {
@@ -213,6 +256,15 @@ async fn host(cfg: &HostConfig) {
             }
         }
         Err(e) => tracing::error!("supervisor: could not take over from the last loop: {e:#}"),
+    }
+    migrate_on_launch(cfg, &store).await;
+    cfg.control
+        .upgrade
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .settled = true;
+    if let Some(tx) = &cfg.announce {
+        let _ = tx.send(crate::watch::RootEvent::UpgradeChanged.into());
     }
     tracing::info!("supervisor: running the loop on {}", root.display());
     host::run_idle(&store, &mut listener, &mut ServerPeriods { cfg }, &mut stop).await;
@@ -275,6 +327,111 @@ impl host::Periods for ServerPeriods<'_> {
     async fn nudged(&self) {
         self.cfg.control.nudge.notified().await;
     }
+}
+
+/// The first time this build runs on the root, ask every step that takes
+/// the verb to migrate, one at a time, before the loop takes any request:
+/// no render then reads a raw store in an old shape. What a step cannot
+/// migrate in place it answers `needs_rerun`, which the page offers to run.
+/// A request opened meanwhile waits for the loop. A step that fails is
+/// reported and the rest go on.
+async fn migrate_on_launch(cfg: &HostConfig, store: &Store) {
+    let root = cfg.control.root.clone();
+    let Ok(checked) = load_config(&root) else {
+        return;
+    };
+    let build = datalib_dag::supervisor::upgrade::this_build();
+    match store.launch_pass_done(&build).await {
+        Ok(false) => {}
+        Ok(true) => return,
+        Err(e) => {
+            tracing::error!("supervisor: could not read the launch passes, so none runs: {e:#}");
+            return;
+        }
+    }
+    let asked = datalib_dag::supervisor::upgrade::steps_to_ask(&checked.graph);
+    tracing::info!(
+        build,
+        steps = asked.len(),
+        "supervisor: asking each step to migrate for this build"
+    );
+    let set = |f: &dyn Fn(&mut Upgrade)| {
+        f(&mut cfg
+            .control
+            .upgrade
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()));
+        if let Some(tx) = &cfg.announce {
+            let _ = tx.send(crate::watch::RootEvent::UpgradeChanged.into());
+        }
+    };
+    set(&|u| {
+        *u = Upgrade {
+            migrating: true,
+            settled: false,
+            steps: asked
+                .iter()
+                .map(|step| MigrateRow {
+                    step: step.clone(),
+                    state: MigrateState::Waiting,
+                    error: None,
+                })
+                .collect(),
+        }
+    });
+    cfg.control.busy.store(true, Ordering::SeqCst);
+    let run_id = datalib_dag::scheduler::new_run_id();
+    let now = now(cfg);
+    let runner = host::step_env(
+        &checked.cfg,
+        cfg.binary_dir.as_deref(),
+        &extra_path(),
+        &now,
+        &run_id,
+    )
+    .map(|env| {
+        let sink: Arc<dyn EventSink> = match host::start_record(&root, &checked.cfg, &run_id, &now)
+        {
+            Some(record) => Arc::new(record),
+            None => Arc::new(datalib_dag::events::NoopSink),
+        };
+        Runner::new(root.as_path()).sink(sink).child_env(env.vars)
+    });
+    for (i, step) in asked.iter().enumerate() {
+        set(&|u| u.steps[i].state = MigrateState::Running);
+        let answer = match &runner {
+            Ok(runner) => match runner
+                .migrate(&checked.graph, std::slice::from_ref(step))
+                .await
+            {
+                Ok(done) => done
+                    .into_iter()
+                    .next()
+                    .map(|m| m.answer)
+                    .unwrap_or(Ok(false)),
+                Err(e) => Err(format!("{e:#}")),
+            },
+            Err(e) => Err(format!("{e:#}")),
+        };
+        match &answer {
+            Ok(false) => {}
+            Ok(true) => tracing::info!(step, "supervisor: needs to run again for this build"),
+            Err(why) => tracing::error!(step, "supervisor: could not migrate: {why}"),
+        }
+        set(&|u| {
+            (u.steps[i].state, u.steps[i].error) = match &answer {
+                Ok(_) => (MigrateState::Done, None),
+                Err(why) => (MigrateState::Failed, Some(why.clone())),
+            };
+        });
+    }
+    if let Err(e) = store.record_launch_pass(&build).await {
+        tracing::error!(
+            "supervisor: could not record the launch pass, so the next launch asks again: {e:#}"
+        );
+    }
+    cfg.control.busy.store(false, Ordering::SeqCst);
+    set(&|u| u.migrating = false);
 }
 
 /// The lock, once whoever holds it lets go. Until then a `datalib-dag`
@@ -433,7 +590,7 @@ async fn fail_open_requests(store: &Store, why: &str) {
 }
 
 /// A reset, between busy periods: each target's step invoked with
-/// `DATALIB_DAG_RESET`, in a run of its own; then a request rooted at what
+/// `--reset store`, in a run of its own; then a request rooted at what
 /// reads them, opened for whoever asked, which the loop takes on next.
 async fn run_reset(
     cfg: &HostConfig,

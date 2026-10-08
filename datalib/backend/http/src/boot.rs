@@ -90,6 +90,7 @@ pub async fn build_state(
         control: sync.clone(),
         binary_dir: binary_dir.clone(),
         now,
+        announce: Some(root_tx.clone()),
     }));
 
     // Bytes on disk, over time: a walk of the root folded into a

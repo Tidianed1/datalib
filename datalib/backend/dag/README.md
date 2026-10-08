@@ -75,8 +75,7 @@ The loop runs what open **requests** want. A request is a row in
 `system/supervisor.sqlite` naming its **roots** — the steps a Sync was
 pressed on, or every step with no inputs for `datalib-dag` with no
 `--sync` — and who opened it (`opened_by`). Its **scope** is the roots and everything
-downstream of them, plus any writer of a store in an old shape that a step
-in it reads (below). Anyone may open one, or ask one to stop, or turn a
+downstream of them. Anyone may open one, or ask one to stop, or turn a
 step off: that is a row too. Only the process holding `runner-lock` runs the
 loop, and it hears of new rows because whoever writes one announces it
 (below, "What wakes the loop"). A **run** is one busy period of the loop — from taking a
@@ -118,55 +117,28 @@ starts** in a tick, visited in topological order, iff:
 
 1. **it is not running**: one instance of a step at a time;
 2. **it is not turned off**;
-3. **an open request wants it**: some request's scope (its roots,
-   everything downstream, and the writers of old-shape stores those
-   read) holds it;
+3. **an open request wants it**: some request's scope (its roots and
+   everything downstream) holds it;
 4. **it has not failed for every request that wants it**: its last run
    failed, after that request opened, on the inputs and definition it has
    now. A run the loop asked to stop, and that stopped, is neither a
    failure nor a run: turned on while a request wants it, the step runs
    again. One that says it failed has failed, whatever it was asked;
 5. **it is due**: it is **stale** (it has never succeeded, an input's
-   version differs from the one it read at its last success, or its
-   fingerprint — its id, group type, argv, params, env, declared inputs,
-   `code_version` and, for a built-in step, the shape of the store it
-   writes — differs from the one recorded then), or it declares no inputs and has not run since the
+   version differs from the one it read at its last success, its
+   fingerprint — its id, group type, argv, params, env, declared inputs
+   and `code_version` — differs from the one recorded then, or it
+   answered a launch's `--migrate` with `needs_rerun` and has not
+   succeeded since), or it declares no inputs and has not run since the
    request opened, since a source's real input is outside the graph;
 6. **no producer it reads holds it**: none is running without streaming
-   (or with this step reading its files, or writing a store in an old
-   shape, below), and none is about to
+   (or with this step reading its files), and none is about to
    run, held only by a lock or a reader, since that one would
    rewrite what this step reads. A producer waiting on its own upstream
    holds nobody back, so a fan-in never waits for its slowest source;
 7. **it has something to read**: a step with inputs none of whose
    producers ever published is `blocked`, or waits if one is about to run;
 8. **every lock it would take is free** (below, "What keeps steps apart").
-
-The store shape is in the fingerprint because a derived store takes a
-new shape only when its writer runs. Without it, a build that adds a
-`grid_rows` column leaves every source with nothing new upstream holding
-a render store in the old shape, and the grid index cannot read it.
-`BUILTIN_STORE_SHAPES` in `src/config.rs` names the shape of each
-built-in function's store; a test in `datalib_step` keeps it equal to the
-real DDL.
-
-Being stale is not enough on its own, because a step runs only when a
-request reaches it (rule 3): a sync of one source would run the grid
-index over every other source's render store in whatever shape the
-build before left it. So **a store in an old shape is pulled into the
-scope of any request that reaches a step reading it.** A store is in an
-old shape when its writer last succeeded under another definition and
-the record (`steps.store_shape`) says that definition wrote another
-shape, or says nothing. Only the writer is pulled in, not its own inputs
-or its other readers, and a reader that is turned off pulls nothing.
-Rule 6 then holds the reader until that writer has finished, streaming
-or not, since what it has sealed so far may still be in the old shape.
-A writer stale for any other reason — its download moved, a params edit
-that kept the shape — still waits for a request of its own. When the
-reader runs over an old store anyway (its writer failed, or is turned
-off), the reader is the backstop: `grid_index` compares a render store's
-`_datalib_meta.schema_hash` with the shape it reads, and leaves a store
-in another shape as the index had it, with a warning.
 
 A step that waits says why, in its row's `state_detail`: `waiting for
 a`, `waiting for c, which reads what this writes`, `waiting for lock
@@ -225,6 +197,32 @@ step that reads something is rebuilt at once, and a reset download is
 not refilled — what reads it runs instead, so its documents leave the
 grid, and its next Sync downloads everything again. The design is
 [`plans/supervisor.md`](../../../docs/dev/plans/supervisor.md).
+
+## Upgrading a root
+
+A new build can change the shape of what a step wrote: a raw store's
+tables, a render store's, the grid index's. The runner does not know
+any of those shapes; each step answers for its own. The first time a
+build runs on a root — the record's `launch_passes` table says which
+builds have — the process that holds `runner-lock` (the http server when
+it starts, `datalib-dag` when it runs on its own) asks every step that
+takes the verb (`StepSpec::migrates`), producers first, before the loop
+takes any request: `Runner::migrate` invokes each once with `--migrate`
+appended (`docs/dev/step_protocol.md` § Migrate). A raw store is
+migrated in place, and the step reports its new head, which the record
+takes as its version while keeping the step's last success. A render
+store or the index in another shape is rebuilt by running the step, so
+that step answers `needs_rerun`: the record keeps the flag
+(`steps.needs_rerun`), the tick holds the step due until it next
+succeeds (rule 5), and `round::rerun_offer` lists it for the app, which
+asks whether to re-render now and opens one request rooted at the list
+if so. A sync that does not reach such a step leaves it alone; the grid
+index reads a render store in another shape as the index had it, with a
+warning. A step that fails to answer costs that source only. The app
+shows a blocking screen while the pass runs.
+`datalib/backend/datalib_step/raw_shapes/` holds the raw shape every
+release left, and a test migrates each one
+([`raw_shapes/README.md`](../datalib_step/raw_shapes/README.md)).
 
 ## What keeps steps apart: locks
 

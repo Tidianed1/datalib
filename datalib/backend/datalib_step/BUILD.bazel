@@ -115,6 +115,7 @@ rust_binary(
         "//datalib/backend/fetch:datalib_fetch",
         "//datalib/backend/qmd_models:datalib_qmd_models",
         "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/source_common:datalib_source_common",
         "//datalib/backend/time:datalib_time",
         "//datalib/backend/unified_index:datalib_unified_index",
@@ -151,15 +152,23 @@ rust_test(
         # The UI's copy of the ingest-method declarations, which
         # `methods.rs` checks is generated from the config crates.
         "//datalib/ui:src/config/ingestMethods.json",
-    ],
+    ] + glob(["raw_shapes/*.json"]),
     edition = "2021",
     # Stub `DataProcessor`s for the render-version staleness tests.
     proc_macro_deps = ["@datalib_crates//:async-trait"],
     deps = [
-        "//datalib/backend/store_meta:datalib_store_meta",
         "@datalib_crates//:runfiles",
+        "@datalib_crates//:serde",
         "@datalib_crates//:tempfile",
     ],
+)
+
+# Rewrites raw_shapes/current.json: the raw-store shape every source type
+# has in this tree, which `migrate.rs` checks and a release copies forward.
+insta_update(
+    name = "raw_shapes.update",
+    test = ":datalib_step_unittests",
+    test_args = ["the_current_raw_shapes_are_recorded"],
 )
 
 # Regenerates datalib/ui/src/config/ingestMethods.json from the provider

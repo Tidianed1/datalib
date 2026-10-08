@@ -50,11 +50,17 @@ pub const ENV_READS: &str = "DATALIB_READS";
 /// step so all stamped outputs agree. Steps that record times should
 /// prefer it over sampling their own clock.
 pub const ENV_NOW: &str = "DATALIB_DAG_NOW";
-/// Set by `datalib-dag --reset`, and then the step does no work: it
-/// empties what the value names — always `store` — commits that, and exits. The
-/// runner then forgets the step ever succeeded, so the next run does its
-/// work from the start.
-pub const ENV_RESET: &str = "DATALIB_DAG_RESET";
+/// Appended, with the part to empty (`store`), by `datalib-dag --reset`:
+/// the step does no work but empty that part, commit and exit. The runner
+/// then forgets the step ever succeeded, so the next run does its work
+/// from the start. A verb rides on argv rather than in the environment so
+/// that a command which does not know it refuses it instead of running.
+pub const RESET_FLAG: &str = "--reset";
+/// Appended by a launch after an upgrade, to a step that takes it
+/// (`StepSpec::migrates`): the step brings what it wrote to this build's
+/// shape where it can do that in place, fetches nothing, and says in its
+/// outcome when it cannot (`needs_rerun`).
+pub const MIGRATE_FLAG: &str = "--migrate";
 /// Seconds between a step's checkpoints, at most — see
 /// `config::CheckpointCadence`.
 pub const ENV_CHECKPOINT_CADENCE: &str = "DATALIB_DAG_CHECKPOINT_CADENCE";
@@ -105,6 +111,10 @@ pub fn write_params_file(
 struct WireOutcome {
     #[serde(default)]
     outputs: Vec<WireArtifactState>,
+    /// A `--migrate` answer: what this step wrote is in a shape it cannot
+    /// reach in place, so it has to run again.
+    #[serde(default)]
+    needs_rerun: bool,
     /// Set (with a non-zero exit) to classify the failure.
     #[serde(default)]
     failure: Option<FailureKind>,
@@ -369,10 +379,10 @@ pub(crate) async fn run_subprocess(
     let stderr_tail = stderr_task.await.unwrap_or_default();
 
     if status.success() {
+        let w = outcome.unwrap_or_default();
         Ok(StepOutcome {
-            outputs: outcome
-                .map(|w| w.into_outputs(sink, &ctx.step_id))
-                .unwrap_or_default(),
+            needs_rerun: w.needs_rerun,
+            outputs: w.into_outputs(sink, &ctx.step_id),
             exit: Some(status.into()),
         })
     } else {
@@ -1344,9 +1354,10 @@ mod tests {
         );
     }
 
-    /// `--reset` invokes the step with `DATALIB_DAG_RESET` naming the
-    /// part, and forgets the step's last success, so the next run runs it
-    /// again with nothing marked as changed.
+    /// `--reset` appends `--reset store` to the step's argv, and forgets
+    /// the step's last success, so the next run runs it again with nothing
+    /// marked as changed. A verb on argv, not in the environment: a command
+    /// that does not know it refuses it rather than running as if synced.
     #[tokio::test]
     async fn a_reset_invokes_the_step_with_the_part_and_forgets_its_success() {
         let root = tempfile::tempdir().unwrap();
@@ -1354,7 +1365,7 @@ mod tests {
             "src/raw",
             sh(r#"
                 mkdir -p src/raw
-                echo "${DATALIB_DAG_RESET:-run}" >> src/raw/log.txt
+                if [ "$0" = --reset ]; then echo "$1"; else echo run; fi >> src/raw/log.txt
             "#),
         );
         let g = Graph::build(vec![spec]).unwrap();
@@ -1381,6 +1392,74 @@ mod tests {
         );
         let err = r.reset(&g, &["nope/raw".to_string()]).await.unwrap_err();
         assert!(err.to_string().contains("no such step"), "{err:#}");
+    }
+
+    /// `--migrate` is appended to argv. A step that migrated in place
+    /// reports its new version, which the record takes and keeps its last
+    /// success; one that cannot answers `needs_rerun`, which the record
+    /// keeps and the rerun offer names until the step next succeeds.
+    #[tokio::test]
+    async fn a_migrate_records_each_steps_answer_and_keeps_its_success() {
+        let root = tempfile::tempdir().unwrap();
+        let answering = |id: &'static str, answer: &'static str| {
+            StepSpec::new(
+                id,
+                sh(&format!(
+                    r#"
+                    mkdir -p {id}
+                    if [ "$0" = --migrate ]; then
+                        echo migrate >> {id}/log.txt
+                        echo '{answer}'
+                    else
+                        echo run >> {id}/log.txt
+                        echo '{{"event":"outcome","outputs":[{{"path":"{id}","version":"v1"}}]}}'
+                    fi
+                "#
+                )),
+            )
+        };
+        let g = Graph::build(vec![
+            answering(
+                "raw/ingest",
+                r#"{"event":"outcome","outputs":[{"path":"raw/ingest","version":"v2"}]}"#,
+            ),
+            answering(
+                "doc/render",
+                r#"{"event":"outcome","needs_rerun":true,"outputs":[]}"#,
+            ),
+        ])
+        .unwrap();
+        let r = Runner::new(root.path());
+        assert!(r.run(&g).await.unwrap().all_ok());
+        let before = crate::supervisor::record::recorded(root.path()).await;
+
+        let asked: Vec<String> = vec!["raw/ingest".into(), "doc/render".into()];
+        let answers = r.migrate(&g, &asked).await.unwrap();
+        assert_eq!(
+            answers.iter().map(|m| m.answer.clone()).collect::<Vec<_>>(),
+            [Ok(false), Ok(true)]
+        );
+        for id in ["raw/ingest", "doc/render"] {
+            assert_eq!(
+                std::fs::read_to_string(root.path().join(id).join("log.txt")).unwrap(),
+                "run\nmigrate\n"
+            );
+        }
+        let after = crate::supervisor::record::recorded(root.path()).await;
+        let (raw, doc) = (&after.steps["raw/ingest"], &after.steps["doc/render"]);
+        assert!(raw.version.as_deref().is_some_and(|v| v.ends_with(":v2")));
+        assert!(!raw.needs_rerun);
+        assert_eq!(
+            (raw.succeeded, &raw.last_success_at),
+            (true, &before.steps["raw/ingest"].last_success_at),
+            "a migrate is not a run"
+        );
+        assert!(doc.needs_rerun);
+        assert_eq!(doc.version, before.steps["doc/render"].version);
+        assert_eq!(
+            crate::supervisor::round::rerun_offer(&g, &after),
+            ["doc/render"]
+        );
     }
 
     /// The error message a stopped or failed step leaves behind is what

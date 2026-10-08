@@ -22,7 +22,7 @@ use crate::scheduler::{
     fresh_version, invoke_with_retry, mark_running, new_run_id, now_stamp, reported_version,
     step_summary, QueueLedger, RunReport, Runner, StepReport, StepStatus,
 };
-use crate::step::{Exit, FailureKind, StepCtx, StepError, StepOutcome, StopSignal};
+use crate::step::{Exit, FailureKind, StepCtx, StepError, StepId, StepOutcome, StopSignal};
 use crate::supervisor::record::{CurrentRun, Record};
 use crate::version::UNKNOWN;
 
@@ -123,9 +123,6 @@ impl LastWanted {
 struct Live {
     invocation: String,
     consumed: Consumed,
-    /// The shape of the store it writes, under the definition it started
-    /// with: what its success records.
-    store_shape: Option<String>,
     /// Taken when the loop tells it to stop: what ends then was asked to.
     stop: Option<watch::Sender<bool>>,
 }
@@ -536,7 +533,6 @@ impl Runner {
                 slots[i].live = Some(Live {
                     invocation: invocation.id,
                     consumed: start.consumed,
-                    store_shape: graph.steps[i].store_shape.clone(),
                     stop: Some(stop),
                 });
                 let run = graph.steps[i].run.clone();
@@ -1057,9 +1053,9 @@ impl Runner {
                 entry.version = Some(v);
                 entry.succeeded = true;
                 entry.fingerprint = fingerprint.clone();
-                entry.store_shape = live.store_shape.clone();
+                entry.needs_rerun = false;
                 facts.steps[i].last_success = Some(consumed.clone());
-                facts.steps[i].success_shape = live.store_shape.clone();
+                facts.steps[i].needs_rerun = false;
                 Ended {
                     status: StepStatus::Succeeded {
                         changed: moved as usize,
@@ -1255,7 +1251,6 @@ fn shape_of(graph: &Graph, slots: &BTreeMap<String, usize>) -> Shape {
             reads: graph.deps_in_order(i).collect(),
             fingerprint: graph.fingerprints[i].clone(),
             pins_reads: spec.reads_pinned,
-            store_shape: spec.store_shape.clone(),
             locks: super::locks::held_by(spec)
                 .iter()
                 .map(|(name, hold)| (lock_ix(name), *hold))
@@ -1297,12 +1292,23 @@ fn facts_of(graph: &Graph, state: &Record) -> Facts {
             last_attempt: None,
             running: None,
             streams_output: graph.steps[i].streams_output,
-            success_shape: recorded(i)
-                .filter(|s| s.succeeded)
-                .and_then(|s| s.store_shape.clone()),
+            needs_rerun: recorded(i).is_some_and(|s| s.needs_rerun),
         })
         .collect();
     Facts { sinks, steps }
+}
+
+/// The steps that answered a launch's `--migrate` with `needs_rerun` and
+/// have not succeeded since, turned-off ones aside: what the app offers to
+/// run after an upgrade.
+pub fn rerun_offer(graph: &Graph, state: &Record) -> Vec<StepId> {
+    graph
+        .steps
+        .iter()
+        .filter_map(|spec| state.steps.get(&spec.id).map(|st| (spec, st)))
+        .filter(|(_, st)| st.needs_rerun && st.turned_off_by.is_none())
+        .map(|(spec, _)| spec.id.clone())
+        .collect()
 }
 
 /// The versions an invocation was started against, keyed the way the
@@ -1773,7 +1779,7 @@ mod tests {
     }
 
     /// A step that counts its runs and writes its tree.
-    fn counted(id: &str, inputs: &[&str], runs: Arc<AtomicU32>, shape: Option<&str>) -> StepSpec {
+    fn counted(id: &str, inputs: &[&str], runs: Arc<AtomicU32>) -> StepSpec {
         let mut spec = StepSpec::new(
             id,
             StepRun::in_process(move |ctx: StepCtx| {
@@ -1790,51 +1796,60 @@ mod tests {
         for i in inputs {
             spec = spec.input(i);
         }
-        spec.store_shape = shape.map(str::to_string);
         spec
     }
 
-    /// #993: a build that moved the render store's shape, then a sync of
-    /// `a` alone. The index read `b`'s render store in the old shape,
-    /// because nothing asked for `b`'s render. It must run first, without
-    /// `b`'s download, and its record must name the shape it wrote.
+    /// After an upgrade `b`'s render answered `--migrate` with
+    /// `needs_rerun`. A sync of `a` leaves it alone; the offer names it; a
+    /// request rooted at the offer runs it without `b`'s download, and its
+    /// success takes it off the offer.
     #[tokio::test]
-    async fn a_sync_of_one_source_re_renders_another_whose_store_is_in_an_old_shape() {
+    async fn a_render_that_needs_a_rerun_waits_for_the_offer() {
         let root = tempfile::tempdir().unwrap();
         let b_raw = Arc::new(AtomicU32::new(0));
         let b_render = Arc::new(AtomicU32::new(0));
-        let build = |shape: &str| {
-            Graph::build(vec![
-                counted("a/raw", &[], Arc::default(), None),
-                counted("a/render", &["a/raw"], Arc::default(), Some(shape)),
-                counted("b/raw", &[], b_raw.clone(), None),
-                counted("b/render", &["b/raw"], b_render.clone(), Some(shape)),
-                counted(
-                    "index/grid",
-                    &["a/render", "b/render"],
-                    Arc::default(),
-                    None,
-                ),
-            ])
-            .unwrap()
-        };
+        let graph = Graph::build(vec![
+            counted("a/raw", &[], Arc::default()),
+            counted("a/render", &["a/raw"], Arc::default()),
+            counted("b/raw", &[], b_raw.clone()),
+            counted("b/render", &["b/raw"], b_render.clone()),
+            counted("index/grid", &["a/render", "b/render"], Arc::default()),
+        ])
+        .unwrap();
         Runner::new(root.path())
-            .run_roots(&build("shape-1"), &["a/raw", "b/raw"])
+            .run_roots(&graph, &["a/raw", "b/raw"])
             .await
             .unwrap();
         assert_eq!(b_render.load(Ordering::SeqCst), 1);
+        let store = Store::open(root.path()).await.unwrap();
+        let saved = store.load_record().await.unwrap();
+        let mut marked = saved.clone();
+        marked.steps.get_mut("b/render").unwrap().needs_rerun = true;
+        store.save_record(&saved, &marked).await.unwrap();
+        store.close().await;
 
         Runner::new(root.path())
-            .run_roots(&build("shape-2"), &["a/raw"])
+            .run_roots(&graph, &["a/raw"])
             .await
             .unwrap();
-        assert_eq!(b_render.load(Ordering::SeqCst), 2, "pulled into a's sync");
-        assert_eq!(b_raw.load(Ordering::SeqCst), 1, "its download was not");
-        let record = crate::supervisor::record::recorded(root.path()).await;
         assert_eq!(
-            record.steps["b/render"].store_shape.as_deref(),
-            Some("shape-2")
+            b_render.load(Ordering::SeqCst),
+            1,
+            "not pulled into a's sync"
         );
+        let record = crate::supervisor::record::recorded(root.path()).await;
+        let offer = rerun_offer(&graph, &record);
+        assert_eq!(offer, ["b/render"]);
+
+        let roots: Vec<&str> = offer.iter().map(String::as_str).collect();
+        Runner::new(root.path())
+            .run_roots(&graph, &roots)
+            .await
+            .unwrap();
+        assert_eq!(b_render.load(Ordering::SeqCst), 2);
+        assert_eq!(b_raw.load(Ordering::SeqCst), 1, "its download did not run");
+        let record = crate::supervisor::record::recorded(root.path()).await;
+        assert!(rerun_offer(&graph, &record).is_empty());
         assert_eq!(
             record.steps["index/grid"].reads.get("b/render"),
             record.steps["b/render"].version.as_ref(),
