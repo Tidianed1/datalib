@@ -359,6 +359,10 @@ is a 409 with the store's words; a handle that does not parse is a
 | `POST /stopped_working` | `{handle, by}`; `by: null` means it works again |
 | `POST /rename` | |
 | `GET`, `PUT`, `DELETE /photo/{id}` | the photo as bytes; put one (the body, with its `Content-Type`: png, jpeg, gif or webp, at most 4 MB; the route reads up to the gateway's 8 MB so the store's rule is the one that answers); drop it |
+| `GET /contact/{id}/edit` | what the card edits, as published: name, note, fields |
+| `POST`, `GET /contact/{id}/draft` | open the contact's draft (cut it if there is none) / read it: `{base, mine, published, published_commit}` |
+| `PUT`, `DELETE /contact/{id}/draft` | autosave the whole edit onto the draft, uncommitted / discard the draft |
+| `POST /contact/{id}/draft/save` | `{seen}`, the published commit the card last showed; `{"outcome": "saved", "commit"}`, or `{"outcome": "stale", "view"}` with nothing saved when the contact moved since |
 
 The config entry is `[[applets]] id = "datalib_contacts"` with
 `command = "datalib-applet datalib_contacts"`; the gateway passes the

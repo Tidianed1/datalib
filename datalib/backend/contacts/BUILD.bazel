@@ -26,6 +26,7 @@ rust_library(
         "@datalib_crates//:serde",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",
+        "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
         "@datalib_crates//:uuid",
     ],
@@ -39,6 +40,5 @@ rust_test(
     deps = [
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
     ],
 )

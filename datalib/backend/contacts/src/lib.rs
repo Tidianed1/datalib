@@ -315,12 +315,19 @@ fn is_partial_date(s: &str) -> bool {
 /// [`Store::close`] before dropping it.
 pub struct Store {
     pool: SqlitePool,
+    /// Held across each draft operation: a save is several steps on the
+    /// one connection (commit the draft, merge it, drop it), and an
+    /// autosave landing between them would be dropped with the branch.
+    drafts: tokio::sync::Mutex<()>,
 }
 
 impl Store {
     pub async fn open(path: &Path) -> Result<Self> {
         let pool = doltlite_raw::open_curated(path, DDL, StoreKind::Contacts, LADDER).await?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            drafts: tokio::sync::Mutex::new(()),
+        })
     }
 
     pub async fn close(self) {

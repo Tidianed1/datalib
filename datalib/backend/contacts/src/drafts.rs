@@ -249,12 +249,22 @@ impl Store {
     /// The contact's draft, cut now if it has none, beside what it was cut
     /// from and what is published.
     pub async fn draft(&self, contact_id: &str) -> Result<DraftView> {
+        let _held = self.drafts.lock().await;
         if self.edit_of(contact_id).await?.is_none() {
             bail!("no contact {contact_id}");
         }
         let b = branch(contact_id);
         draft::cut(&self.pool, &b).await?;
         self.view(contact_id).await
+    }
+
+    /// The contact's draft view, or `None` when it has no draft.
+    pub async fn draft_view(&self, contact_id: &str) -> Result<Option<DraftView>> {
+        let _held = self.drafts.lock().await;
+        if !draft::exists(&self.pool, &branch(contact_id)).await? {
+            return Ok(None);
+        }
+        self.view(contact_id).await.map(Some)
     }
 
     async fn view(&self, contact_id: &str) -> Result<DraftView> {
@@ -278,6 +288,7 @@ impl Store {
     /// Nothing is published; a reader sees none of it until [`Store::save`].
     pub async fn autosave(&self, contact_id: &str, edit: &ContactEdit) -> Result<()> {
         check(edit)?;
+        let _held = self.drafts.lock().await;
         let b = branch(contact_id);
         if !draft::exists(&self.pool, &b).await? {
             bail!("{contact_id} has no draft to save into");
@@ -300,6 +311,7 @@ impl Store {
     /// A save elsewhere in the store does not count; only a change to
     /// this contact's name, note or fields does.
     pub async fn save(&self, contact_id: &str, seen: &str) -> Result<Saved> {
+        let _held = self.drafts.lock().await;
         let b = branch(contact_id);
         if !draft::exists(&self.pool, &b).await? {
             bail!("{contact_id} has no draft to save");
@@ -331,6 +343,7 @@ impl Store {
 
     /// Throw the contact's draft away.
     pub async fn discard(&self, contact_id: &str) -> Result<()> {
+        let _held = self.drafts.lock().await;
         draft::discard(&self.pool, &branch(contact_id)).await
     }
 }
