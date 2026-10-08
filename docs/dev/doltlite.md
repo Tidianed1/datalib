@@ -785,7 +785,8 @@ join back, 27 ms and 6 ms.
   `wal`, and doltlite makes no `-wal` or `-shm` sidecar. **A plain
   SQLite file opened through doltlite answers `wal` too, but keeps a
   rollback journal**: a `-journal` sidecar during a write, its header
-  never marked WAL, and stock `sqlite3` reads its mode as `delete`. By
+  never marked WAL, and stock `sqlite3` reads its mode as `delete`
+  (dolthub/doltlite#3740). By
   SQLite's rules for a rollback journal, a reader of a plain file then
   waits while its writer commits (not measured here). `synchronous`
   at anything above `OFF` syncs every commit (upstream
