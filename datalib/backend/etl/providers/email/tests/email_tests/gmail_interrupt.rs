@@ -1,6 +1,6 @@
 //! A Gmail download cut off at any request, then run again, ends with
-//! the store an uninterrupted run leaves (docs/dev/plans/sync_state.md
-//! §8). Twice: a first sync, whose `messages.list` takes three pages;
+//! the store an uninterrupted run leaves (`datalib_etl_web::interrupt`).
+//! Twice: a first sync, whose `messages.list` takes three pages;
 //! and a later sync from the store the first left, against an upstream
 //! where a message arrived in an existing thread, one gained a label,
 //! one lost a label and one was deleted, over two `history.list` pages.

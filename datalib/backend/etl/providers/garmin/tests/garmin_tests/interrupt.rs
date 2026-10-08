@@ -1,5 +1,5 @@
 //! A download cut off at any request, then run again, ends with the
-//! store an uninterrupted run leaves (docs/dev/plans/sync_state.md §8).
+//! store an uninterrupted run leaves (`datalib_etl_web::interrupt`).
 //! The tape is the TNG account widened until every kind of work has
 //! something to do: several days of three metrics, an activity listing
 //! of more than one page, details and FIT files, an activity with no

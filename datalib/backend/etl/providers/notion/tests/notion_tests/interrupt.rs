@@ -1,5 +1,5 @@
 //! A download cut off at any request, then run again, ends with the
-//! store an uninterrupted run leaves (docs/dev/plans/sync_state.md §8).
+//! store an uninterrupted run leaves (`datalib_etl_web::interrupt`).
 //! The tape is a small TNG workspace that makes the download do every
 //! kind of work it has: a search of two pages, a body with an
 //! attachment, a truncated body with a follow-up, a body that answers

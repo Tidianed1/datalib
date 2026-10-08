@@ -1,6 +1,6 @@
 //! A Fastmail (JMAP) download cut off at any request, then run again,
 //! ends with the store an uninterrupted run leaves
-//! (docs/dev/plans/sync_state.md §8). Twice: a first sync, whose
+//! (`datalib_etl_web::interrupt`). Twice: a first sync, whose
 //! `Email/query` takes three pages and whose `Email/get` takes two
 //! batches; and a later sync from the store the first left, against an
 //! upstream where a mailbox was renamed, a message arrived, one moved

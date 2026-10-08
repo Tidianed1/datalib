@@ -58,7 +58,7 @@ changed upstream. `datalib/backend/etl/README.md` explains the split.
 ## What is owed
 
 The download keeps two facts apart and computes the rest
-(`docs/dev/plans/sync_state.md`):
+([`data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md#what-is-left-to-fetch-listed-minus-held)):
 
 - **Listed:** what the listing names, at its `update_time`.
 - **Held:** a conversation's sidecar `held_version`, the `update_time`

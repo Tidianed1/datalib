@@ -4,7 +4,7 @@
 //! transaction that stores what a stretch held, an empty stretch
 //! included. What is left to fetch is the gaps, walked oldest first in
 //! fixed-stride windows; a window that fails stays a gap for the next
-//! run (docs/dev/plans/sync_state.md).
+//! run (docs/dev/data_architecture_ingestion.md, "What is left to fetch").
 
 pub mod schema_raw;
 

@@ -1,6 +1,6 @@
 //! A CalDAV download cut off at any request, then run again, ends with
-//! the store an uninterrupted run leaves (docs/dev/plans/sync_state.md
-//! §8). The tape lists one object with its data and one without, so a
+//! the store an uninterrupted run leaves (`datalib_etl_web::interrupt`).
+//! The tape lists one object with its data and one without, so a
 //! `multiget` follows the listing; run from an empty store, and from the
 //! store that run left against a calendar where an event was edited, one
 //! deleted and one added.

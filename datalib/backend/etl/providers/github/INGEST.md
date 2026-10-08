@@ -37,7 +37,7 @@ catch incoming review pings on PRs the user otherwise wouldn't touch.
 
 ## What is owed
 
-Nothing is marked done (docs/dev/plans/sync_state.md). Three facts are
+Nothing is marked done (docs/dev/data_architecture_ingestion.md, "What is left to fetch"). Three facts are
 stored, and what to fetch is worked out from them each run:
 
 - **Listed.** Every search result is a row of `listed_change_requests`:
