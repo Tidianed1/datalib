@@ -3822,8 +3822,10 @@ mod tests {
         pool.close().await;
     }
 
-    /// How many WARN lines `doltlite_raw` writes while `f` runs, on this
-    /// thread (the test runtime's only one).
+    /// How many cleared-cursor warnings `doltlite_raw` writes while `f`
+    /// runs, on this thread (the test runtime's only one). Only those: the
+    /// lock-wait warning fires on a busy CI runner between two opens, and
+    /// counting it made this a flake.
     async fn warnings_during<F: std::future::Future>(f: F) -> (F::Output, usize) {
         use tracing_subscriber::layer::SubscriberExt;
         struct Count(std::sync::Arc<std::sync::atomic::AtomicUsize>);
@@ -3834,7 +3836,10 @@ mod tests {
                 _: tracing_subscriber::layer::Context<'_, S>,
             ) {
                 let m = event.metadata();
-                if *m.level() == tracing::Level::WARN && m.target() == "datalib_etl::doltlite_raw" {
+                if *m.level() == tracing::Level::WARN
+                    && m.target() == "datalib_etl::doltlite_raw"
+                    && m.fields().field("cursors_cleared").is_some()
+                {
                     self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 }
             }
