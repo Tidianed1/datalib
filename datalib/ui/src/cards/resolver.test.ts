@@ -104,4 +104,40 @@ describe("Resolver", () => {
     await r.ask(["a"]);
     expect(r.get("a")).toBe("who:a");
   });
+
+  /** A step's status moves while a sync runs: the chip keeps its answer
+   *  on screen while it is asked again, and is redrawn only if it moved. */
+  it("revalidates without dropping an answer, and tells only of changes", async () => {
+    const answers = new Map([
+      ["a", "running"],
+      ["b", "succeeded"],
+    ]);
+    const r = new Resolver<string>(
+      async (keys) => new Map(keys.filter((k) => answers.has(k)).map((k) => [k, answers.get(k)!])),
+      () => {},
+    );
+    await r.ask(["a", "b"]);
+    const told: string[][] = [];
+    r.subscribe((keys) => told.push([...keys].sort()));
+
+    answers.set("a", "succeeded");
+    r.revalidate();
+    expect(r.get("a")).toBe("running");
+    await r.ask(["a", "b"]);
+    expect(r.get("a")).toBe("succeeded");
+    expect(told).toEqual([["a"]]);
+
+    // Nothing moved: nobody is told.
+    r.revalidate();
+    await r.ask(["a", "b"]);
+    expect(told).toEqual([["a"]]);
+
+    // A key that names nothing any more is dropped, and that is a change.
+    answers.delete("b");
+    r.revalidate();
+    await r.ask(["a"]);
+    await tick();
+    expect(r.get("b")).toBeUndefined();
+    expect(told).toEqual([["a"], ["b"]]);
+  });
 });
