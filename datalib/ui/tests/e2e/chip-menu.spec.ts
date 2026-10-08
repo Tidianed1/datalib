@@ -11,8 +11,9 @@ import { EVERY_ROW, selectRowByUuid, inDocFrame, stubClipboard } from "./grid-he
 
 type Row = { uuid: string; kind: string; message_index: number | null; author: string };
 
-// The search box of the Search card an "everything from" opens, not the grid's.
-const SEARCH_INPUT = '.ct-card[data-card-source*="searchView("] [data-testid="search-input"]';
+// The search box of the Search card an "everything from" opens (its source
+// names a query), not that of the search the page opened on.
+const SEARCH_INPUT = '.ct-card[data-card-source*="searchView({"] [data-testid="search-input"]';
 
 async function openADocumentWithAChip(
   page: import("@playwright/test").Page,

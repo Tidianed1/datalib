@@ -50,8 +50,8 @@ test.describe("new-card gallery (outside edit mode)", () => {
     await page
       .locator(".gv-row", { has: page.locator(".gv-title", { hasText: /^Search$/ }) })
       .click();
-    await expect(cardOf(page, "searchView()")).toHaveCount(1);
     // Two search cards now: the one the page opened on and the one picked.
+    await expect(cardOf(page, "searchView()")).toHaveCount(2);
     await expect(page.locator(".grid-box .slickgrid-container")).toHaveCount(2, {
       timeout: 10_000,
     });
