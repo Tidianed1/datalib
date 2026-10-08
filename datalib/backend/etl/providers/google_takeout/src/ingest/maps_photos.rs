@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use datalib_etl::blob_cas::{blake3_hex, CasInsert};
+use datalib_etl::blob_cas::CasInsert;
 use datalib_etl::bulk::{bulk_upsert_entity_in_tx, bulk_upsert_in_tx};
 use datalib_etl::doltlite_raw::{record_object_error, record_object_skipped};
 use datalib_etl::download_problems::SkippedRecord;
@@ -25,10 +25,11 @@ const DIR_REL: &str = "Maps/Photos and videos";
 const SCOPE: &str = "google_takeout/maps_photos";
 const TABLE: &str = "maps_photos";
 
-/// One pending CAS write: `(blake3, bytes, content_type)`. The
+/// One pending CAS write: `(row id, bytes, content_type)`. The
 /// per-photo `ingest_one` produces zero or one of these; the
 /// outer walker collects them into a `Vec` and hands borrows of
-/// each tuple to [`CasInsert`] for the batched `put_many`.
+/// each tuple to [`CasInsert`] for the batched `put_many`, whose keys
+/// become the rows' `blake3`.
 type PendingCas = (String, Vec<u8>, Option<String>);
 
 #[derive(Debug, Default, Clone)]
@@ -105,16 +106,17 @@ pub async fn ingest(
         "maps_photos: {row_count} rows, {blob_count} blobs"
     ));
 
-    if !cas_inserts_owned.is_empty() {
-        let cas: Vec<CasInsert<'_>> = cas_inserts_owned
-            .iter()
-            .map(|(b, bytes, ct)| CasInsert {
-                blake3: b.as_str(),
-                bytes: bytes.as_slice(),
-                content_type: ct.as_deref(),
-            })
-            .collect();
-        db.cas().put_many(&cas).await?;
+    let cas: Vec<CasInsert<'_, &str>> = cas_inserts_owned
+        .iter()
+        .map(|(id, bytes, ct)| CasInsert {
+            id: id.as_str(),
+            bytes: bytes.as_slice(),
+            content_type: ct.as_deref(),
+        })
+        .collect();
+    let stored = db.cas().put_many(cas).await?;
+    for row in &mut complete {
+        row.blake3 = stored.get(row.id_and_payload.id.as_str()).cloned();
     }
     let now = IsoOffsetTimestamp::now_local();
     let mut tx = db.pool().begin().await.context("begin maps_photos tx")?;
@@ -193,9 +195,8 @@ fn ingest_one(json_path: &Path) -> Result<Option<Photo>> {
         .and_then(|v| v.get("timestamp"))
         .and_then(|v| v.as_str())
         .map(str::to_string);
-    let (blake3, cas, media_problem) = match locate_media_sibling(json_path) {
+    let (cas, media_problem) = match locate_media_sibling(json_path) {
         None => (
-            None,
             None,
             Some(MediaProblem::NotFound(format!(
                 "no photo or video beside {stem}.json in the export"
@@ -203,12 +204,10 @@ fn ingest_one(json_path: &Path) -> Result<Option<Photo>> {
         ),
         Some(media_path) => match std::fs::read(&media_path) {
             Ok(bytes) => {
-                let hash = blake3_hex(&bytes);
                 let ct = content_type_for(&media_path);
-                (Some(hash.clone()), Some((hash, bytes, ct)), None)
+                (Some((stem.clone(), bytes, ct)), None)
             }
             Err(e) => (
-                None,
                 None,
                 Some(MediaProblem::Unreadable(format!(
                     "read {}: {e}",
@@ -225,7 +224,8 @@ fn ingest_one(json_path: &Path) -> Result<Option<Photo>> {
                 payload: payload_str,
             },
             when_ts,
-            blake3,
+            // The CAS's key for the media, once `ingest` has stored it.
+            blake3: None,
         },
         cas,
         media_problem,

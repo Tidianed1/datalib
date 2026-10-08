@@ -789,3 +789,36 @@ async fn a_document_no_path_names_goes() -> Result<()> {
     assert_eq!(after.len(), before.len() - 1);
     Ok(())
 }
+
+/// A file rewritten under a hash the host cache still vouched for was
+/// classified from its new bytes and filed under the old bytes' hash. The
+/// document is named by the hash of what was read.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_document_the_scan_misjudged_is_named_by_what_was_read() -> Result<()> {
+    let h = Harness::on_a_copy();
+    h.scan().await?;
+    let path = h.root.join("engineering/hull_survey.pdf");
+    let old = blake3_of(&h, "engineering/hull_survey.pdf").await?;
+
+    let mut bytes = std::fs::read(&path)?;
+    bytes.extend_from_slice(b"\n");
+    std::fs::write(&path, &bytes)?;
+    let cache = FingerprintCache::open(&h.raw_dir.join("fingerprints.sqlite")).await?;
+    cache.restamp_for_test(&path).await?;
+    cache.pool().close().await;
+    // Forget the document, so the scan reads the file rather than taking
+    // the stored document for it.
+    let db = h.db().await;
+    sqlx::query("DELETE FROM pdf_documents WHERE blake3 = ?")
+        .bind(&old)
+        .execute(db.pool())
+        .await?;
+    datalib_etl::doltlite_raw::commit_run(db.pool(), "test: forget a document").await?;
+    db.close().await;
+
+    h.scan().await?;
+    let read = datalib_etl::blob_cas::blake3_hex(&bytes);
+    assert_eq!(blake3_of(&h, "engineering/hull_survey.pdf").await?, read);
+    assert!(documents(&h).await?.contains(&read));
+    Ok(())
+}

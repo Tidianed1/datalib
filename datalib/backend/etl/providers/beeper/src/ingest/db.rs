@@ -121,7 +121,8 @@ impl RawDb {
                 blake3: blake3.map(String::from),
             }
         })
-        .await
+        .await?;
+        Ok(())
     }
 
     pub async fn bulk_upsert_media_attachments(

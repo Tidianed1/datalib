@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+use datalib_etl::blob_cas::blake3_hex;
 use datalib_etl::progress::Progress;
 use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::grid_index::RenderedMarkdown;
@@ -33,6 +34,10 @@ pub fn doc_qmd_path_rel(stanza: &str, blake3: &str) -> String {
 pub struct RenderSummary {
     pub converted: usize,
     pub failed: usize,
+    /// Documents whose file no longer holds the bytes they are named by:
+    /// gone from disk, like a deleted file's, so the processor declares
+    /// them and their pages go.
+    pub changed: usize,
     /// The documents whose conversion failed, by blake3. Their pages are
     /// stale rather than gone, so the processor leaves them undeclared.
     pub failed_blake3s: std::collections::HashSet<String>,
@@ -134,6 +139,7 @@ pub fn render_targets(
     let mut summary = RenderSummary {
         converted: 0,
         failed: 0,
+        changed: 0,
         failed_blake3s: Default::default(),
         failures: Vec::new(),
     };
@@ -153,10 +159,24 @@ pub fn render_targets(
             grid_rows::document_stamp(t.doc_created_at.as_deref(), t.doc_modified_at.as_deref()),
         )
         .uuid;
-        match render_one(t, &md_path, source_id, &doc_uuid) {
-            Ok(rendered) => {
+        let rendered = read_document(t).and_then(|bytes| {
+            bytes
+                .map(|b| render_one(t, &b, &md_path, source_id, &doc_uuid))
+                .transpose()
+        });
+        match rendered {
+            Ok(Some(rendered)) => {
                 summary.converted += 1;
                 on_doc_complete(rendered)?;
+            }
+            // Like a deleted file: the page goes, with no row, and the
+            // next sync reads the file as it is now.
+            Ok(None) => {
+                summary.changed += 1;
+                tracing::info!(
+                    path = %t.rel_path, blake3 = %t.blake3,
+                    "pdf_render_file_changed_since_download"
+                );
             }
             Err(e) => {
                 // One malformed document must not abort a corpus scan;
@@ -190,13 +210,22 @@ pub async fn render(
     render_targets(&targets, out_dir, source_id, progress, on_doc_complete)
 }
 
+/// The document's bytes, or `None` when its file no longer holds them. The
+/// document is its hash, so the markdown filed under it must come from
+/// those bytes and no others.
+fn read_document(t: &RenderTarget) -> Result<Option<Vec<u8>>> {
+    let bytes = fs::read(&t.abs_path).with_context(|| format!("read {}", t.abs_path.display()))?;
+    Ok((blake3_hex(&bytes) == t.blake3).then_some(bytes))
+}
+
 fn render_one(
     t: &RenderTarget,
+    bytes: &[u8],
     md_path: &Path,
     source_id: &str,
     doc_uuid: &str,
 ) -> Result<RenderedMarkdown> {
-    let pages = convert::convert(&t.abs_path)?;
+    let pages = convert::convert(bytes, &t.abs_path)?;
     let title = grid_rows::display_title(t.title.as_deref(), &t.rel_path);
 
     let qmd_rel = doc_qmd_path_rel(source_id, &t.blake3);

@@ -10,7 +10,7 @@ use std::sync::atomic::Ordering;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use datalib_etl::blob_cas::{blake3_hex, CasInsert};
+use datalib_etl::blob_cas::CasInsert;
 use datalib_etl_web::http::{latchkey_curl, HttpError, HttpRequest, HttpService};
 use datalib_etl_web::owed::{BatchError, Fetched, Fetcher, Listed, Outcome};
 use serde_json::Value;
@@ -265,12 +265,12 @@ fn signed_by_slot(raw_markdown: &str) -> HashMap<String, String> {
 
 // ── attachments ────────────────────────────────────────────────────────
 
-/// What one edge's fetch came to: the hash its edge gets, with the
-/// bytes behind it when this run fetched them.
-pub struct Blob {
-    blake3: String,
-    /// `None` when the CAS holds the bytes already, under another page.
-    fetched: Option<(Vec<u8>, Option<String>)>,
+/// What one edge's fetch came to.
+pub enum Blob {
+    /// The CAS holds the bytes already, under another page, by this hash.
+    Held(String),
+    /// Bytes this run fetched, and their type. The CAS names them.
+    Fetched(Vec<u8>, Option<String>),
 }
 
 pub(crate) struct Attachments<'a>(pub(crate) &'a Ctx<'a>);
@@ -295,29 +295,27 @@ impl Fetcher<Blob> for Attachments<'_> {
         tx: &mut Transaction<'static, Sqlite>,
         batch: &[Fetched<Blob>],
     ) -> Result<()> {
-        let inserts: Vec<CasInsert<'_>> = batch
+        let inserts: Vec<CasInsert<'_, &str>> = batch
             .iter()
             .filter_map(|f| match &f.outcome {
-                Outcome::Got(blob) | Outcome::Unusable(blob, ..) => {
-                    blob.fetched
-                        .as_ref()
-                        .map(|(bytes, content_type)| CasInsert {
-                            blake3: &blob.blake3,
-                            bytes,
-                            content_type: content_type.as_deref(),
-                        })
-                }
+                Outcome::Got(Blob::Fetched(bytes, content_type))
+                | Outcome::Unusable(Blob::Fetched(bytes, content_type), ..) => Some(CasInsert {
+                    id: f.listed.key.as_str(),
+                    bytes,
+                    content_type: content_type.as_deref(),
+                }),
                 _ => None,
             })
             .collect();
-        self.0.db.cas().put_many(&inserts).await?;
+        let stored = self.0.db.cas().put_many(inserts).await?;
         for f in batch {
             match &f.outcome {
                 Outcome::Got(blob) | Outcome::Unusable(blob, ..) => {
-                    self.0
-                        .db
-                        .store_blob(tx, &f.listed.key, &blob.blake3)
-                        .await?;
+                    let blake3 = match blob {
+                        Blob::Held(held) => held,
+                        Blob::Fetched(..) => &stored[f.listed.key.as_str()],
+                    };
+                    self.0.db.store_blob(tx, &f.listed.key, blake3).await?;
                 }
                 Outcome::Gone => self.0.db.forget_attachment(tx, &f.listed.key).await?,
                 Outcome::Failed(_) | Outcome::Skipped(..) => {}
@@ -327,7 +325,10 @@ impl Fetcher<Blob> for Attachments<'_> {
     }
 
     fn weight(&self, blob: &Blob) -> usize {
-        blob.fetched.as_ref().map_or(0, |(bytes, _)| bytes.len())
+        match blob {
+            Blob::Fetched(bytes, _) => bytes.len(),
+            Blob::Held(_) => 0,
+        }
     }
 }
 
@@ -342,10 +343,7 @@ impl Attachments<'_> {
             return Ok(Outcome::Failed(format!("{key}: not an attachment key")));
         };
         if let Some(blake3) = ctx.db.blake3_of_slot(slot).await.map_err(store_failed)? {
-            return Ok(Outcome::Got(Blob {
-                blake3,
-                fetched: None,
-            }));
+            return Ok(Outcome::Got(Blob::Held(blake3)));
         }
         let Some(url) = self.signed_url(pid, slot).await? else {
             return Ok(Outcome::Gone);
@@ -358,10 +356,7 @@ impl Attachments<'_> {
             Ok(resp) if (200..300).contains(&resp.status) => {
                 let content_type = resp.header("content-type").map(String::from);
                 ctx.counts.new_blobs.fetch_add(1, Ordering::Relaxed);
-                Ok(Outcome::Got(Blob {
-                    blake3: blake3_hex(&resp.body),
-                    fetched: Some((resp.body, content_type)),
-                }))
+                Ok(Outcome::Got(Blob::Fetched(resp.body, content_type)))
             }
             Ok(resp) if matches!(resp.status, 404 | 410) => Ok(Outcome::Gone),
             Ok(resp) => Ok(Outcome::Failed(format!("HTTP {}", resp.status))),

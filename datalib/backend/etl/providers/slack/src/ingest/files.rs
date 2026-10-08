@@ -3,7 +3,7 @@
 //! batch of them is one request's worth of downloads, and `store` puts
 //! a flush's bytes into the CAS before giving each edge its `blake3`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
@@ -13,7 +13,7 @@ use serde_json::Value;
 use sqlx::{Sqlite, Transaction};
 use tracing::debug;
 
-use datalib_etl::blob_cas::{blake3_hex, CasInsert};
+use datalib_etl::blob_cas::CasInsert;
 use datalib_etl::events;
 use datalib_etl::progress::RunBar;
 use datalib_etl_web::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
@@ -40,13 +40,19 @@ pub struct FileFetcher<'a> {
     pub downloaded: AtomicUsize,
 }
 
-/// What one edge's fetch came to: the hash its edge gets, with the
-/// bytes behind it when this run fetched them.
+/// What one edge's fetch came to, for the file it names.
 pub struct File {
     file_id: String,
-    blake3: String,
-    /// `None` when the CAS holds the bytes already.
-    fetched: Option<Bytes>,
+    got: Got,
+}
+
+enum Got {
+    /// The CAS holds the bytes already, by this hash.
+    Held(String),
+    /// Bytes this run fetched. The CAS names them.
+    Fetched(Bytes),
+    /// The same file, fetched for an earlier edge in this batch.
+    FetchedAbove,
 }
 
 struct Bytes {
@@ -68,9 +74,9 @@ impl Fetcher<File> for FileFetcher<'_> {
             .map_err(BatchError::Abort)?;
         let by_key: HashMap<&str, &OwedFile> =
             objects.iter().map(|o| (o.key.as_str(), o)).collect();
-        // Hashes this batch computed, so a file twice in it is fetched
-        // once; later batches learn them from `store`.
-        let mut fresh: HashMap<String, String> = HashMap::new();
+        // Files this batch fetched, so a file twice in it is fetched
+        // once; later batches learn their hashes from `store`.
+        let mut fresh: HashSet<String> = HashSet::new();
         let mut out = Vec::with_capacity(batch.len());
         for listed in batch {
             let outcome = self
@@ -92,23 +98,27 @@ impl Fetcher<File> for FileFetcher<'_> {
             Outcome::Got(file) | Outcome::Unusable(file, ..) => Some(file),
             _ => None,
         });
-        let inserts: Vec<CasInsert<'_>> = files
+        let inserts: Vec<CasInsert<'_, &str>> = files
             .clone()
-            .filter_map(|file| {
-                let fetched = file.fetched.as_ref()?;
-                Some(CasInsert {
-                    blake3: &file.blake3,
+            .filter_map(|file| match &file.got {
+                Got::Fetched(fetched) => Some(CasInsert {
+                    id: file.file_id.as_str(),
                     bytes: &fetched.bytes,
                     content_type: fetched.mime.as_deref(),
-                })
+                }),
+                Got::Held(_) | Got::FetchedAbove => None,
             })
             .collect();
-        self.db.cas().put_many(&inserts).await?;
+        let stored = self.db.cas().put_many(inserts).await?;
+        let blake3_of = |file: &File| match &file.got {
+            Got::Held(held) => held.clone(),
+            Got::Fetched(_) | Got::FetchedAbove => stored[file.file_id.as_str()].clone(),
+        };
         for f in batch {
             match &f.outcome {
                 Outcome::Got(file) | Outcome::Unusable(file, ..) => {
                     sqlx::query("UPDATE slack_attachments SET blake3 = ? WHERE id = ?")
-                        .bind(&file.blake3)
+                        .bind(blake3_of(file))
                         .bind(&f.listed.key)
                         .execute(&mut **tx)
                         .await?;
@@ -125,7 +135,7 @@ impl Fetcher<File> for FileFetcher<'_> {
         self.blake3_by_file
             .lock()
             .unwrap()
-            .extend(files.map(|file| (file.file_id.clone(), file.blake3.clone())));
+            .extend(files.map(|file| (file.file_id.clone(), blake3_of(file))));
         Ok(())
     }
 }
@@ -136,25 +146,24 @@ impl FileFetcher<'_> {
     async fn one(
         &self,
         owed: Option<&OwedFile>,
-        fresh: &mut HashMap<String, String>,
+        fresh: &mut HashSet<String>,
     ) -> Result<Outcome<File>> {
         // An edge whose message no longer carries a file Slack serves
         // points at nothing to fetch.
         let Some((owed, (file_id, url))) = owed.and_then(|o| Some((o, served(&o.file)?))) else {
             return Ok(Outcome::Gone);
         };
-        let known = self
-            .blake3_by_file
-            .lock()
-            .unwrap()
-            .get(file_id)
-            .cloned()
-            .or_else(|| fresh.get(file_id).cloned());
+        let known = self.blake3_by_file.lock().unwrap().get(file_id).cloned();
         if let Some(blake3) = known {
             return Ok(Outcome::Got(File {
                 file_id: file_id.to_string(),
-                blake3,
-                fetched: None,
+                got: Got::Held(blake3),
+            }));
+        }
+        if fresh.contains(file_id) {
+            return Ok(Outcome::Got(File {
+                file_id: file_id.to_string(),
+                got: Got::FetchedAbove,
             }));
         }
         if let (Some(limit), Some(size)) = (
@@ -196,7 +205,6 @@ impl FileFetcher<'_> {
         };
         let bytes = resp.body;
         let len = bytes.len() as u64;
-        let blake3 = blake3_hex(&bytes);
         events::item_fetched(url, len, resp.duration_ms);
         debug!(
             event = "slack_media_downloaded",
@@ -204,12 +212,11 @@ impl FileFetcher<'_> {
             bytes = len,
             "downloaded one file"
         );
-        fresh.insert(file_id.to_string(), blake3.clone());
+        fresh.insert(file_id.to_string());
         self.downloaded.fetch_add(1, Ordering::Relaxed);
         Ok(Outcome::Got(File {
             file_id: file_id.to_string(),
-            blake3,
-            fetched: Some(Bytes {
+            got: Got::Fetched(Bytes {
                 bytes,
                 mime: owed
                     .file

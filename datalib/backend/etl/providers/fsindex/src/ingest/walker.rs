@@ -203,7 +203,7 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
         dir_meta: &std::fs::Metadata,
     ) -> Result<(Blake3, i64, i64)> {
         self.counters.dirs_visited.fetch_add(1, Ordering::Relaxed);
-        let dir_fresh = fresh_stat_for(dir_meta);
+        let dir_fresh = fswalk::fresh_stat(dir_meta);
 
         // Cascade + effective options for files directly in this dir.
         let dir_cascade = cascade_for_dir(
@@ -329,7 +329,7 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                 continue;
             }
 
-            let fresh = fresh_stat_for(&meta);
+            let fresh = fswalk::fresh_stat(&meta);
             let mut entries_below = 0i64;
             let (size, blake3, symlink_target): (i64, Blake3, Option<String>) = match kind {
                 EntryKind::File => {
@@ -579,6 +579,7 @@ fn fp_cursor(stamp_kind: StampKind, size: i64, fresh: &FreshStat) -> StampCursor
     StampCursor {
         mtime_ns: fresh.mtime_ns,
         size,
+        ctime_ns: fresh.ctime_ns,
         stamp_kind,
         inode: if inode_ok { fresh.inode } else { None },
         dev: if inode_ok { fresh.dev } else { None },
@@ -590,7 +591,9 @@ fn same_dir_unmodified(prev: &StampCursor, fresh: &FreshStat) -> bool {
         // A previous run was interrupted here; take the readdir.
         return false;
     }
-    if prev.mtime_ns != fresh.mtime_ns {
+    // A directory's ctime also moves with its entries, and an mtime put
+    // back (`rsync -t`, `tar x`) cannot put it back.
+    if prev.mtime_ns != fresh.mtime_ns || prev.ctime_ns != fresh.ctime_ns {
         return false;
     }
     if matches!(prev.stamp_kind, StampKind::Inode)
@@ -625,39 +628,6 @@ fn ancestor_chain(root: &Path, entry: &Path) -> Vec<PathBuf> {
         chain.push(cur.clone());
     }
     chain
-}
-
-fn fresh_stat_for(meta: &std::fs::Metadata) -> FreshStat {
-    let mtime_ns = meta
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_nanos() as i64)
-        .unwrap_or(0);
-    let ctime_ns = meta
-        .created()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_nanos() as i64);
-    let (inode, dev) = unix_inode_dev(meta);
-    FreshStat {
-        mtime_ns,
-        size: meta.len() as i64,
-        inode,
-        dev,
-        ctime_ns,
-    }
-}
-
-#[cfg(unix)]
-fn unix_inode_dev(meta: &std::fs::Metadata) -> (Option<i64>, Option<i64>) {
-    use std::os::unix::fs::MetadataExt;
-    (Some(meta.ino() as i64), Some(meta.dev() as i64))
-}
-
-#[cfg(not(unix))]
-fn unix_inode_dev(_meta: &std::fs::Metadata) -> (Option<i64>, Option<i64>) {
-    (None, None)
 }
 
 /// Gitignore-shaped matcher backed by the `ignore` crate (same
@@ -739,6 +709,55 @@ mod tests {
     }
     fn has(rows: &[ScanResult], id: &str) -> bool {
         rows.iter().any(|r| r.id() == id)
+    }
+
+    /// Rewrite `path` to `body` in place and put its mtime back, as `cp -p`
+    /// over an existing file does. Rewrites again until the change time
+    /// has moved, which a coarse filesystem clock can take a tick to show.
+    #[cfg(unix)]
+    fn rewrite_keeping_mtime(path: &Path, body: &[u8]) {
+        use std::os::unix::fs::MetadataExt;
+        let before = fs::metadata(path).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            fs::write(path, body).unwrap();
+            fs::File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(before.modified().unwrap())
+                .unwrap();
+            let after = fs::metadata(path).unwrap();
+            if (after.ctime(), after.ctime_nsec()) != (before.ctime(), before.ctime_nsec()) {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the change time of {} never moved",
+                path.display()
+            );
+        }
+    }
+
+    /// An in-place edit that keeps the length, the inode and the mtime is
+    /// caught by the change time. fsindex once took the birth time for it,
+    /// which an edit never moves, so the old bytes' hash was kept.
+    #[cfg(unix)]
+    #[test]
+    fn a_rewrite_with_its_mtime_put_back_is_hashed_again() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write(&root.join("a.txt"), b"AAAA");
+        let (rows1, _) = walk(root, &CachedTree::default());
+
+        rewrite_keeping_mtime(&root.join("a.txt"), b"BBBB");
+        let (rows2, counters) = walk(root, &build_cache(&rows1));
+        assert_eq!(
+            blake_of(&rows2, "a.txt"),
+            Some(*blake3::hash(b"BBBB").as_bytes()),
+            "the AAAA hash was kept for BBBB bytes"
+        );
+        assert_eq!(counters.files_rehashed.load(Ordering::Relaxed), 1);
     }
 
     /// The readdir-skip fast path: an unchanged directory enumerates its
@@ -968,10 +987,10 @@ mod tests {
         let b = tempfile::tempdir().unwrap();
         write(&b.path().join("nested/only_b.txt"), b"bbb");
 
-        // Pretend the previous scan saw a root with B's mtime — so an
-        // mtime-only check passes — but A's identity.
-        let a_root = fresh_stat_for(&std::fs::metadata(a.path()).unwrap());
-        let b_root = fresh_stat_for(&std::fs::metadata(b.path()).unwrap());
+        // Pretend the previous scan saw a root with B's times — so a
+        // time-only check passes — but A's identity.
+        let a_root = fswalk::fresh_stat(&std::fs::metadata(a.path()).unwrap());
+        let b_root = fswalk::fresh_stat(&std::fs::metadata(b.path()).unwrap());
         assert_ne!(
             a_root.inode, b_root.inode,
             "the two temp roots must be distinct directories"
@@ -980,6 +999,7 @@ mod tests {
             let mut cursor = r.fingerprint.cursor;
             if r.id().is_empty() {
                 cursor.mtime_ns = b_root.mtime_ns;
+                cursor.ctime_ns = b_root.ctime_ns;
             }
             (
                 r.id().to_string(),

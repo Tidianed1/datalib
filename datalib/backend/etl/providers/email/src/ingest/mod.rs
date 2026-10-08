@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
-use datalib_etl::blob_cas::{blake3_hex, CasEdgeRow as _, CasInsert};
+use datalib_etl::blob_cas::{CasEdgeRow as _, CasInsert};
 use datalib_etl::bulk::{bulk_upsert_in_tx, BulkUpsertable as _};
 use datalib_etl::download_run::DownloadRun;
 use datalib_etl::progress::{Progress, RunBar};
@@ -1145,38 +1145,27 @@ impl Fetcher<Eml> for EmlDownload<'_> {
         tx: &mut Transaction<'static, Sqlite>,
         batch: &[Fetched<Eml>],
     ) -> Result<()> {
-        let bodies: Vec<(&Eml, String)> = batch
+        let inserts: Vec<CasInsert<'_, &str>> = batch
             .iter()
             .filter_map(|f| match &f.outcome {
-                Outcome::Got(eml) | Outcome::Unusable(eml, ..) => {
-                    Some((eml, blake3_hex(&eml.bytes)))
-                }
+                Outcome::Got(eml) | Outcome::Unusable(eml, ..) => Some(CasInsert {
+                    id: f.listed.key.as_str(),
+                    bytes: &eml.bytes,
+                    content_type: Some(eml.content_type.as_deref().unwrap_or("message/rfc822")),
+                }),
                 Outcome::Gone | Outcome::Failed(_) | Outcome::Skipped(..) => None,
             })
             .collect();
-        let inserts: Vec<CasInsert<'_>> = bodies
-            .iter()
-            .map(|(eml, blake3)| CasInsert {
-                blake3,
-                bytes: &eml.bytes,
-                content_type: Some(eml.content_type.as_deref().unwrap_or("message/rfc822")),
-            })
-            .collect();
-        self.db.cas().put_many(&inserts).await?;
-        let mut hashes = bodies.iter().map(|(_, blake3)| blake3.clone());
+        let stored = self.db.cas().put_many(inserts).await?;
         let rows: Vec<EmlBlobRow> = batch
             .iter()
             .filter_map(|f| {
                 let job = self.jobs.get(&f.listed.key)?;
-                let blake3 = match &f.outcome {
-                    Outcome::Got(_) | Outcome::Unusable(..) => hashes.next(),
-                    Outcome::Gone | Outcome::Failed(_) | Outcome::Skipped(..) => None,
-                };
                 Some(EmlBlobRow {
                     id: f.listed.key.clone(),
                     email_id: job.email_id.clone(),
                     blob_id: job.blob_id.clone(),
-                    blake3,
+                    blake3: stored.get(f.listed.key.as_str()).cloned(),
                 })
             })
             .collect();

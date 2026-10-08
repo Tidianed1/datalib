@@ -1,7 +1,7 @@
 //! End-to-end over the fixture corpus: scan → store.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use sqlx::Row;
@@ -67,6 +67,15 @@ impl Harness {
             db,
             _tmp: tmp,
         })
+    }
+
+    /// Have the host cache vouch for `path` as it is now, so the next
+    /// scan does not open it (`FingerprintCache::restamp_for_test`).
+    async fn restamp(&self, path: &Path) -> Result<()> {
+        let cache = FingerprintCache::open(&self.raw_dir.join("fingerprints.sqlite")).await?;
+        cache.restamp_for_test(path).await?;
+        cache.pool().close().await;
+        Ok(())
     }
 
     async fn scan(&self) -> Result<ingest::FetchSummary> {
@@ -1201,8 +1210,8 @@ async fn a_file_that_would_not_open_is_a_row_until_it_does() -> Result<()> {
     h.scan().await?;
     let media = h.root.join("music/untagged_hum.mp3");
     let playlist = h.root.join("playlists/bridge_ambience.m3u");
-    // Forget the item, so the next scan must open the file again; its
-    // bytes are unchanged, so the walk itself does not.
+    // Forget the item, so the next scan must open the file again; the
+    // walk itself does not, once the cache vouches for the new mode.
     let hash = files(&h.db).await?["music/untagged_hum.mp3"].clone();
     sqlx::query("DELETE FROM media_items WHERE blake3 = ?")
         .bind(&hash)
@@ -1216,6 +1225,8 @@ async fn a_file_that_would_not_open_is_a_row_until_it_does() -> Result<()> {
         set_mode(&playlist, 0o644)?;
         return Ok(());
     }
+    h.restamp(&media).await?;
+    h.restamp(&playlist).await?;
     let s = h.scan().await;
     set_mode(&media, 0o644)?;
     set_mode(&playlist, 0o644)?;

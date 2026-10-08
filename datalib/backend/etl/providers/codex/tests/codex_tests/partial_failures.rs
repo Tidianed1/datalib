@@ -153,7 +153,7 @@ async fn what_a_run_could_not_read_is_a_row_until_it_reads() {
     assert_eq!(env.problem_keys().await, Vec::<String>::new());
 
     // A rollout this source must read again — its stamp forgotten — but
-    // cannot open. The host cache still vouches for its bytes, so the
+    // cannot open. The host cache is made to vouch for its bytes, so the
     // walk itself does not open it.
     let victim =
         "2364/04/13/rollout-2364-04-13T09-15-00-72fb0cda-0eb6-754e-8bfd-a7dcc8d6c8f4.jsonl";
@@ -169,6 +169,7 @@ async fn what_a_run_could_not_read_is_a_row_until_it_reads() {
         set_mode(&path, 0o644);
         return;
     }
+    env.cache.restamp_for_test(&path).await.unwrap();
     let s = env.fetch().await.unwrap();
     let row = format!("record:transcripts:sessions/{victim}");
     assert_eq!(s.unreadable, 1);

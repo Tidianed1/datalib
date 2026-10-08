@@ -97,8 +97,8 @@ impl SourceRender for PdfRender {
             ctx.consumed(head);
         }
         Ok(format!(
-            "converted={} skipped={} failed={}",
-            s.converted, skipped, s.failed
+            "converted={} skipped={} failed={} changed={}",
+            s.converted, skipped, s.failed, s.changed
         ))
     }
 }

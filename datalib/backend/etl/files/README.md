@@ -12,7 +12,7 @@ not link it, so an edit here rebuilds only the sources that do.
 ## The fingerprint cache is host state, and deliberately not versioned
 
 Every tree-scanning provider keeps a Unison-style cursor so a rescan can skip
-hashing a file whose `(mtime, size, inode, dev)` has not moved. It lives in a
+hashing a file whose `(mtime, size, ctime, inode, dev)` has not moved. It lives in a
 host-local cache rather than in the provider's versioned store:
 
 - **It is host state.** An inode number means nothing on another machine, so
@@ -125,10 +125,17 @@ whole thing though not one byte moved. The cache makes hashing cheap enough
 that the cursor can be the content.
 
 **What it does not fix**, because "content hash" invites the wrong assumption:
-the cache still decides whether to re-hash from Unison's
-`(mtime, size, inode, dev)` cursor, so an edit preserving all four is still
-invisible — in one place rather than once per provider.
-`an_edit_preserving_the_whole_stat_is_still_invisible` pins it.
+the cache still decides whether to re-hash from the stat. It compares the
+change time as well as Unison's `(mtime, size, inode, dev)`, because ctime
+moves on every write and cannot be set back, so an edit whose mtime was put
+back (`cp -p`, `touch -r`) is seen (`an_edit_with_its_mtime_put_back_is_seen`).
+A second write inside one tick of the filesystem clock moves neither time
+and is still invisible, in one place rather than once per provider. So a
+scan's hash decides what to skip reading; whoever stores bytes names them by
+the hash of what it read (`etl/README.md` §"Blob CAS and per-provider edge
+tables"). A chmod or an xattr write also moves ctime, and costs a re-hash.
+The cache file carries its shape in `user_version`; one in another shape is
+dropped and refilled.
 
 **Some files must not be read at all.** A macOS file evicted to iCloud is
 "dataless": it has a size and an mtime, and reading one byte silently pulls

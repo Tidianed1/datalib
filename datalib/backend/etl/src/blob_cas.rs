@@ -56,14 +56,13 @@ pub struct CasObject {
     pub bytes: Vec<u8>,
 }
 
-/// One pre-hashed entry to bulk-insert via [`BlobCas::put_many`]. The
-/// caller is responsible for computing `blake3` (use [`blake3_hex`])
-/// before calling; this struct exists so put_many doesn't have to
-/// re-hash the same bytes the caller has already hashed for its own
-/// `blob_refs` row.
+/// One entry for [`BlobCas::put_many`]: bytes, and the caller's own name
+/// for them (`id`), which is what `put_many` answers by. It carries no
+/// hash: the CAS names bytes by hashing them itself, so a key can never
+/// disagree with the bytes stored under it.
 #[derive(Debug, Clone, Copy)]
-pub struct CasInsert<'a> {
-    pub blake3: &'a str,
+pub struct CasInsert<'a, K> {
+    pub id: K,
     pub bytes: &'a [u8],
     pub content_type: Option<&'a str>,
 }
@@ -279,32 +278,34 @@ impl BlobCas {
     }
 
     pub async fn put(&self, bytes: &[u8], content_type: Option<&str>) -> Result<String> {
-        let hash = blake3_hex(bytes);
-        sqlx::query(
-            "INSERT OR IGNORE INTO cas_objects (blake3, byte_len, content_type, bytes) \
-             VALUES (?, ?, ?, ?)",
-        )
-        .bind(&hash)
-        .bind(bytes.len() as i64)
-        .bind(content_type)
-        .bind(bytes)
-        .execute(&self.pool)
-        .await
-        .context("cas put")?;
-        crate::download_metrics::record_upserts("cas_objects", 1);
-        Ok(hash)
+        let mut keys = self
+            .put_many(vec![CasInsert {
+                id: (),
+                bytes,
+                content_type,
+            }])
+            .await?;
+        Ok(keys.remove(&()).expect("put_many answers every id"))
     }
 
-    /// Bulk-insert pre-hashed bytes in a single transaction, using
-    /// chunked multi-row `INSERT OR IGNORE`. The transaction's `COMMIT` is
-    /// the blobs' commit: a caller writing edge rows after this returns
-    /// names only bytes already on disk.
-    pub async fn put_many(&self, items: &[CasInsert<'_>]) -> Result<()> {
+    /// Store each item under the hash of its bytes, in one transaction of
+    /// chunked multi-row `INSERT OR IGNORE`, and answer each item's `id`
+    /// with the key its bytes are under. The transaction's `COMMIT` is the
+    /// blobs' commit: a caller writing edge rows after this returns names
+    /// only bytes already on disk.
+    pub async fn put_many<K: Eq + Hash>(
+        &self,
+        items: Vec<CasInsert<'_, K>>,
+    ) -> Result<HashMap<K, String>> {
         if items.is_empty() {
-            return Ok(());
+            return Ok(HashMap::new());
         }
+        let keys: Vec<String> = items.iter().map(|it| blake3_hex(it.bytes)).collect();
         let mut tx = self.pool.begin().await.context("begin cas put_many tx")?;
-        for chunk in items.chunks(crate::bulk::SQL_CHUNK) {
+        for (chunk, chunk_keys) in items
+            .chunks(crate::bulk::SQL_CHUNK)
+            .zip(keys.chunks(crate::bulk::SQL_CHUNK))
+        {
             let mut sql = String::from(
                 "INSERT OR IGNORE INTO cas_objects (blake3, byte_len, content_type, bytes) VALUES ",
             );
@@ -313,9 +314,9 @@ impl BlobCas {
             // `&'static str` prefix plus a `(?,?,?),...` run that `push_placeholders`
             // builds from `chunk.len()`. Every value is bound.
             let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
-            for it in chunk {
+            for (it, key) in chunk.iter().zip(chunk_keys) {
                 q = q
-                    .bind(it.blake3)
+                    .bind(key)
                     .bind(it.bytes.len() as i64)
                     .bind(it.content_type)
                     .bind(it.bytes);
@@ -330,7 +331,7 @@ impl BlobCas {
         // INSERT-OR-IGNORE dupes, so rows_after - rows_before is the
         // real net-new figure.
         crate::download_metrics::record_upserts("cas_objects", items.len());
-        Ok(())
+        Ok(items.into_iter().map(|it| it.id).zip(keys).collect())
     }
 
     pub async fn get(&self, blake3_hash: &str) -> Result<Option<CasObject>> {
@@ -466,23 +467,11 @@ impl Blob {
     }
 }
 
-/// One fetched-but-not-yet-flushed entry on the download side, exposed
-/// through [`BlobBundle::fetched_refs`] so the per-provider flush code
-/// can build edge-table rows from it.
-#[derive(Debug, Clone, Copy)]
-pub struct FetchedRef<'a> {
-    pub ref_id: &'a str,
-    pub blake3: &'a str,
-    pub content_type: Option<&'a str>,
-    pub upstream_name: Option<&'a str>,
-}
-
 /// Per-doc bundle of attachment data. Travels through the whole
 /// pipeline:
 #[derive(Debug, Clone, Default)]
 pub struct BlobBundle {
     by_ref: HashMap<String, Blob>,
-    errors: Vec<(String, String)>,
     /// Refs whose edge names bytes the CAS does not hold: fetched once,
     /// and lost or never readable since.
     missing: BTreeSet<String>,
@@ -509,10 +498,7 @@ impl BlobBundle {
         self.by_ref.iter().map(|(k, v)| (k.as_str(), v))
     }
 
-    // ── download side ─────────────────────────────────────────────────
-
-    /// Record one fetched attachment. `bytes` is hashed lazily —
-    /// caller does NOT need to pre-compute blake3.
+    /// Record one attachment held in memory, named by its hash.
     pub fn add(
         &mut self,
         ref_id: impl Into<String>,
@@ -530,36 +516,6 @@ impl BlobBundle {
                 upstream_name,
             },
         );
-    }
-
-    pub fn add_error(&mut self, ref_id: impl Into<String>, error: impl Into<String>) {
-        self.errors.push((ref_id.into(), error.into()));
-    }
-
-    pub fn cas_inserts(&self) -> Vec<CasInsert<'_>> {
-        self.by_ref
-            .values()
-            .map(|b| CasInsert {
-                blake3: b.blake3.as_str(),
-                bytes: b.bytes.as_slice(),
-                content_type: b.content_type.as_deref(),
-            })
-            .collect()
-    }
-
-    /// Iterator over fetched refs in arbitrary order — caller maps
-    /// these into per-provider edge-table row structs.
-    pub fn fetched_refs(&self) -> impl Iterator<Item = FetchedRef<'_>> {
-        self.by_ref.iter().map(|(ref_id, b)| FetchedRef {
-            ref_id: ref_id.as_str(),
-            blake3: b.blake3.as_str(),
-            content_type: b.content_type.as_deref(),
-            upstream_name: b.upstream_name.as_deref(),
-        })
-    }
-
-    pub fn errors(&self) -> &[(String, String)] {
-        &self.errors
     }
 
     /// Whether `ref_id`'s edge says its bytes were stored, though the
@@ -919,10 +875,11 @@ pub async fn load_blake3_index(
 /// channel of messages) and decides per file: did we just fetch
 /// bytes, did we discover bytes were already in the CAS, or did
 /// the fetch fail? This struct collects those outcomes, then
-/// [`Self::flush`] hands them to [`flush_cas_edges`] via a row
-/// builder the caller supplies.
+/// [`Self::flush`] stores the bytes, then hands the edges to
+/// [`flush_cas_edges`] via a row builder the caller supplies.
 pub struct CasEdgeAccumulator {
-    bundle: BlobBundle,
+    /// Bytes fetched, by ref. Unhashed: the CAS names them at the flush.
+    fetched: BTreeMap<String, (Vec<u8>, Option<String>)>,
     edges: Vec<EdgePending>,
     /// Per blob: why it has no bytes. A failure and a deliberate skip
     /// both land here, and they are told apart by the `Reason`.
@@ -949,7 +906,7 @@ pub struct BlobNotFetched {
 impl CasEdgeAccumulator {
     pub fn new() -> Self {
         Self {
-            bundle: BlobBundle::new(),
+            fetched: BTreeMap::new(),
             edges: Vec::new(),
             errors: Vec::new(),
             seen: std::collections::HashSet::new(),
@@ -957,12 +914,9 @@ impl CasEdgeAccumulator {
         }
     }
 
-    /// Direct mutable access to the underlying [`BlobBundle`] —
-    /// rarely needed; here for callers that want to set
-    /// upstream_name / content_type via the bundle's own helpers
-    /// without round-tripping through [`Self::add_fetched`].
-    pub fn bundle_mut(&mut self) -> &mut BlobBundle {
-        &mut self.bundle
+    /// How many distinct refs this accumulator holds bytes for.
+    pub fn fetched_len(&self) -> usize {
+        self.fetched.len()
     }
 
     fn push_edge(&mut self, owning_id: &str, ref_id: &str) -> bool {
@@ -985,10 +939,16 @@ impl CasEdgeAccumulator {
         ref_id: &str,
         bytes: Vec<u8>,
         content_type: Option<String>,
-        upstream_name: Option<String>,
     ) {
         self.push_edge(owning_id, ref_id);
-        self.bundle.add(ref_id, bytes, content_type, upstream_name);
+        self.fetched
+            .insert(ref_id.to_string(), (bytes, content_type));
+    }
+
+    /// Another record naming a ref this accumulator already holds bytes
+    /// for: its edge gets the same key at the flush.
+    pub fn add_again(&mut self, owning_id: &str, ref_id: &str) {
+        self.push_edge(owning_id, ref_id);
     }
 
     pub fn add_known(&mut self, owning_id: &str, ref_id: &str, blake3: String) {
@@ -1005,7 +965,6 @@ impl CasEdgeAccumulator {
             detail: err.into(),
             reason: datalib_problems::Reason::FetchFailed,
         });
-        self.bundle.add_error(ref_id, "fetch failed");
     }
 
     /// A blob the download declined to fetch, because a rule in the
@@ -1028,23 +987,39 @@ impl CasEdgeAccumulator {
             detail: detail.into(),
             reason,
         });
-        self.bundle.add_error(ref_id, "not fetched");
     }
 
+    /// Store the fetched bytes, then write every edge. Returns the key
+    /// each fetched ref was stored under, for a caller that meets the
+    /// same ref again after this flush.
     pub async fn flush<T, F>(
         &self,
         pool: &sqlx::SqlitePool,
         cas: &BlobCas,
         build_row: F,
-    ) -> Result<()>
+    ) -> Result<HashMap<String, String>>
     where
         T: crate::bulk::BulkUpsertable,
         F: Fn(&str, &str, Option<&str>) -> T,
     {
-        let mut blake3_by_ref: HashMap<&str, &str> = HashMap::new();
-        for f in self.bundle.fetched_refs() {
-            blake3_by_ref.insert(f.ref_id, f.blake3);
-        }
+        let inserts: Vec<CasInsert<'_, &str>> = self
+            .fetched
+            .iter()
+            .map(|(ref_id, (bytes, content_type))| CasInsert {
+                id: ref_id.as_str(),
+                bytes,
+                content_type: content_type.as_deref(),
+            })
+            .collect();
+        let stored = cas
+            .put_many(inserts)
+            .await
+            .with_context(|| format!("put the blobs of {}", T::TABLE))?;
+
+        let mut blake3_by_ref: HashMap<&str, &str> = stored
+            .iter()
+            .map(|(ref_id, key)| (*ref_id, key.as_str()))
+            .collect();
         for (ref_id, hash) in &self.known_blake3 {
             blake3_by_ref
                 .entry(ref_id.as_str())
@@ -1082,7 +1057,11 @@ impl CasEdgeAccumulator {
             }
         }
 
-        flush_cas_edges(pool, cas, &self.bundle.cas_inserts(), rows, &error_stamps).await
+        flush_cas_edges(pool, rows, &error_stamps).await?;
+        Ok(stored
+            .into_iter()
+            .map(|(ref_id, key)| (ref_id.to_string(), key))
+            .collect())
     }
 }
 
@@ -1094,7 +1073,9 @@ impl Default for CasEdgeAccumulator {
 
 // CAS-edge flush primitive
 
-/// End-of-bucket CAS-edge flush. Every caller reads local files, whole or
+/// End-of-bucket CAS-edge flush, for edges whose bytes are already in the
+/// CAS: put them first ([`BlobCas::put_many`]) and take each edge's hash
+/// from the keys it returns. Every caller reads local files, whole or
 /// by what changed, so an edge's sidecar is stamped the first time it
 /// lands, and the same failure recorded again changes nothing
 /// ([`crate::bulk::bulk_stamp_first_seen`],
@@ -1102,18 +1083,11 @@ impl Default for CasEdgeAccumulator {
 /// input commits nothing, a standing failure included.
 pub async fn flush_cas_edges<T: crate::bulk::BulkUpsertable>(
     pool: &SqlitePool,
-    cas: &BlobCas,
-    cas_inserts: &[CasInsert<'_>],
     rows: Vec<T>,
     errors: &[BlobNotFetched],
 ) -> Result<()> {
-    if rows.is_empty() && cas_inserts.is_empty() && errors.is_empty() {
+    if rows.is_empty() && errors.is_empty() {
         return Ok(());
-    }
-    if !cas_inserts.is_empty() {
-        cas.put_many(cas_inserts)
-            .await
-            .with_context(|| format!("flush_cas_edges put_many {}", T::TABLE))?;
     }
     let now = datalib_time::IsoOffsetTimestamp::now_local();
     let mut tx = pool
@@ -1325,6 +1299,42 @@ mod tests {
         assert!(!d.path().join(DOLTLITE_CAS).exists());
     }
 
+    /// The key is the hash of the bytes stored under it, whatever the
+    /// caller believed about them: a caller that once supplied its own
+    /// key could file one file's bytes under another's hash.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn put_many_names_each_blob_by_the_hash_of_its_own_bytes() {
+        let d = tempdir().unwrap();
+        let cas = BlobCas::open(&d.path().join("blobs.sqlite")).await.unwrap();
+        let keys = cas
+            .put_many(vec![
+                CasInsert {
+                    id: "a",
+                    bytes: b"AAAA",
+                    content_type: None,
+                },
+                CasInsert {
+                    id: "b",
+                    bytes: b"BBBB",
+                    content_type: Some("text/plain"),
+                },
+            ])
+            .await
+            .unwrap();
+        assert_eq!(keys["a"], blake3_hex(b"AAAA"));
+        assert_eq!(keys["b"], blake3_hex(b"BBBB"));
+        let stored: Vec<(String, Vec<u8>)> =
+            sqlx::query_as("SELECT blake3, bytes FROM cas_objects ORDER BY bytes")
+                .fetch_all(cas.pool())
+                .await
+                .unwrap();
+        for (key, bytes) in &stored {
+            assert_eq!(key, &blake3_hex(bytes), "a key names its own bytes");
+        }
+        assert_eq!(stored.len(), 2);
+        cas.close().await;
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn cas_put_is_idempotent() {
         let d = tempdir().unwrap();
@@ -1360,19 +1370,6 @@ mod tests {
         assert_eq!(got.blake3.len(), 64);
         assert_eq!(got.bytes, b"hello");
         assert_eq!(got.content_type.as_deref(), Some("text/plain"));
-    }
-
-    #[test]
-    fn bundle_cas_inserts_round_trip() {
-        let mut b = BlobBundle::new();
-        b.add("r1", b"aaa".to_vec(), Some("image/png".into()), None);
-        b.add("r2", b"bbb".to_vec(), None, Some("x.bin".into()));
-        let inserts = b.cas_inserts();
-        assert_eq!(inserts.len(), 2);
-        // ensure both blake3s are 64-hex
-        for i in &inserts {
-            assert_eq!(i.blake3.len(), 64);
-        }
     }
 
     #[test]
@@ -1664,14 +1661,60 @@ mod tests {
         }
     }
 
-    async fn flush_widget_blobs(pool: &SqlitePool, cas: &BlobCas, acc: &CasEdgeAccumulator) {
+    async fn flush_widget_blobs(
+        pool: &SqlitePool,
+        cas: &BlobCas,
+        acc: &CasEdgeAccumulator,
+    ) -> HashMap<String, String> {
         acc.flush(pool, cas, |owner, ref_id, blake3| WidgetBlob {
             id: format!("{owner}#{ref_id}"),
             owner: owner.to_string(),
             blake3: blake3.map(String::from),
         })
         .await
-        .unwrap();
+        .unwrap()
+    }
+
+    async fn widget_store(dir: &Path) -> SqlitePool {
+        crate::doltlite_raw::open(
+            &dir.join("x.doltlite_db"),
+            &[
+                "CREATE TABLE IF NOT EXISTS widget_blobs \
+                 (id TEXT PRIMARY KEY, owner TEXT, blake3 TEXT)",
+                &crate::doltlite_raw::bookkeeping_ddl_for("widget_blobs"),
+            ],
+        )
+        .await
+        .unwrap()
+    }
+
+    /// Every edge to one file gets the key the CAS stored its bytes
+    /// under: a second record in the same flush, and one in a later
+    /// flush that knows the key from the first.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_ref_met_again_gets_the_key_the_cas_chose() {
+        let d = tempdir().unwrap();
+        let pool = widget_store(d.path()).await;
+        let cas = BlobCas::open(&d.path().join("blobs.sqlite")).await.unwrap();
+
+        let mut acc = CasEdgeAccumulator::new();
+        acc.add_fetched("w1", "f", b"bytes".to_vec(), None);
+        acc.add_again("w2", "f");
+        let stored = flush_widget_blobs(&pool, &cas, &acc).await;
+        assert_eq!(stored["f"], blake3_hex(b"bytes"));
+
+        let mut acc = CasEdgeAccumulator::new();
+        acc.add_known("w3", "f", stored["f"].clone());
+        flush_widget_blobs(&pool, &cas, &acc).await;
+
+        let edges: Vec<Option<String>> =
+            sqlx::query_scalar("SELECT blake3 FROM widget_blobs ORDER BY id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(edges, vec![Some(stored["f"].clone()); 3]);
+        cas.close().await;
+        pool.close().await;
     }
 
     async fn fetch_problem(pool: &SqlitePool, id: &str) -> (String, String) {
@@ -1690,21 +1733,12 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_failed_blob_is_an_error_until_it_has_landed_once() {
         let d = tempdir().unwrap();
-        let pool = crate::doltlite_raw::open(
-            &d.path().join("x.doltlite_db"),
-            &[
-                "CREATE TABLE IF NOT EXISTS widget_blobs \
-                 (id TEXT PRIMARY KEY, owner TEXT, blake3 TEXT)",
-                &crate::doltlite_raw::bookkeeping_ddl_for("widget_blobs"),
-            ],
-        )
-        .await
-        .unwrap();
+        let pool = widget_store(d.path()).await;
         let cas = BlobCas::open(&d.path().join("blobs.sqlite")).await.unwrap();
 
         let mut acc = CasEdgeAccumulator::new();
         acc.add_failed("w1", "never", "HTTP 500");
-        acc.add_fetched("w1", "landed", b"bytes".to_vec(), None, None);
+        acc.add_fetched("w1", "landed", b"bytes".to_vec(), None);
         flush_widget_blobs(&pool, &cas, &acc).await;
         assert_eq!(
             fetch_problem(&pool, "w1#never").await,

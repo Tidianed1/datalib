@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use datalib_etl::blob_cas::{blake3_hex, CasEdgeRow as _, CasInsert};
+use datalib_etl::blob_cas::{CasEdgeRow as _, CasInsert};
 use datalib_etl_web::http::{latchkey_curl, HttpError, HttpRequest, HttpService};
 use datalib_etl_web::owed::{BatchError, Fetched, Fetcher, Listed, Outcome};
 use datalib_problems::Reason;
@@ -89,14 +89,15 @@ impl Fetcher<Conversation> for Conversations<'_> {
 
 // ── attachments ────────────────────────────────────────────────────────
 
-/// What one edge's fetch came to: the hash its edge gets, with the
-/// bytes behind it when this run fetched them. No hash for a file
-/// chatgpt.com no longer has.
-pub struct Blob {
-    blake3: Option<String>,
-    /// `None` when the CAS holds the bytes already, under another
-    /// conversation.
-    fetched: Option<(Vec<u8>, Option<String>)>,
+/// What one edge's fetch came to.
+pub enum Blob {
+    /// The CAS holds the bytes already, under another conversation, by
+    /// this hash.
+    Held(String),
+    /// Bytes this run fetched, and their type. The CAS names them.
+    Fetched(Vec<u8>, Option<String>),
+    /// A file chatgpt.com no longer has.
+    Missing,
 }
 
 pub(crate) struct Attachments<'a>(pub(crate) &'a Ctx<'a>);
@@ -117,35 +118,37 @@ impl Fetcher<Blob> for Attachments<'_> {
         tx: &mut Transaction<'static, Sqlite>,
         batch: &[Fetched<Blob>],
     ) -> Result<()> {
-        let inserts: Vec<CasInsert<'_>> = batch
+        let inserts: Vec<CasInsert<'_, &str>> = batch
             .iter()
             .filter_map(|f| match &f.outcome {
-                Outcome::Got(blob) | Outcome::Unusable(blob, ..) => {
-                    match (&blob.blake3, &blob.fetched) {
-                        (Some(blake3), Some((bytes, content_type))) => Some(CasInsert {
-                            blake3,
-                            bytes,
-                            content_type: content_type.as_deref(),
-                        }),
-                        _ => None,
-                    }
-                }
+                Outcome::Got(Blob::Fetched(bytes, content_type))
+                | Outcome::Unusable(Blob::Fetched(bytes, content_type), ..) => Some(CasInsert {
+                    id: f.listed.key.as_str(),
+                    bytes,
+                    content_type: content_type.as_deref(),
+                }),
                 _ => None,
             })
             .collect();
-        self.0.db.cas().put_many(&inserts).await?;
+        let stored = self.0.db.cas().put_many(inserts).await?;
         for f in batch {
-            if let Outcome::Got(blob) | Outcome::Unusable(blob, ..) = &f.outcome {
-                if let Some(blake3) = &blob.blake3 {
-                    self.0.db.store_blob(tx, &f.listed.key, blake3).await?;
+            let blake3 = match &f.outcome {
+                Outcome::Got(Blob::Held(held)) | Outcome::Unusable(Blob::Held(held), ..) => held,
+                Outcome::Got(Blob::Fetched(..)) | Outcome::Unusable(Blob::Fetched(..), ..) => {
+                    &stored[f.listed.key.as_str()]
                 }
-            }
+                _ => continue,
+            };
+            self.0.db.store_blob(tx, &f.listed.key, blake3).await?;
         }
         Ok(())
     }
 
     fn weight(&self, blob: &Blob) -> usize {
-        blob.fetched.as_ref().map_or(0, |(bytes, _)| bytes.len())
+        match blob {
+            Blob::Fetched(bytes, _) => bytes.len(),
+            Blob::Held(_) | Blob::Missing => 0,
+        }
     }
 }
 
@@ -169,10 +172,7 @@ impl Attachments<'_> {
             .map_err(BatchError::Abort)?
         {
             ctx.counts.skipped_blobs.fetch_add(1, Ordering::Relaxed);
-            return Ok(Outcome::Got(Blob {
-                blake3: Some(blake3),
-                fetched: None,
-            }));
+            return Ok(Outcome::Got(Blob::Held(blake3)));
         }
         let Some(file) = ctx
             .file_ref(conv_id, file_id)
@@ -216,10 +216,10 @@ impl Attachments<'_> {
                 ctx.client.count(resp.duration_ms);
                 ctx.counts.new_blobs.fetch_add(1, Ordering::Relaxed);
                 let content_type = resp.header("content-type").map(String::from);
-                Ok(Outcome::Got(Blob {
-                    blake3: Some(blake3_hex(&resp.body)),
-                    fetched: Some((resp.body, file.mime.or(content_type))),
-                }))
+                Ok(Outcome::Got(Blob::Fetched(
+                    resp.body,
+                    file.mime.or(content_type),
+                )))
             }
             Ok(resp) if matches!(resp.status, 404 | 410) => {
                 Ok(gone(format!("signed-URL download HTTP {}", resp.status)))
@@ -238,12 +238,5 @@ impl Attachments<'_> {
 /// A file chatgpt.com no longer has: the edge is held, with a warning,
 /// and asked for again only when its conversation changes.
 fn gone(why: String) -> Outcome<Blob> {
-    Outcome::Unusable(
-        Blob {
-            blake3: None,
-            fetched: None,
-        },
-        Reason::NotFound,
-        why,
-    )
+    Outcome::Unusable(Blob::Missing, Reason::NotFound, why)
 }
