@@ -7,7 +7,7 @@
 // - hovering an edge source advertises the destination on the bus
 //   (`edge.hover`); every doc card subscribes and puts a transient
 //   highlight on the target span when the destination is its own doc.
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
   REMOTE_ALLOW_TABLE,
   REMOTE_FETCHED_TABLE,
@@ -20,6 +20,7 @@ import {
 } from "@/api";
 import { useApi } from "@/cards/cardApi";
 import { copyToClipboard } from "@/clipboard";
+import { oneAtATime, subscribeLive } from "@/live";
 import ChatBody from "./ChatBody.ce.vue";
 import { absoluteRemote, type RemoteRef } from "./remoteMedia";
 import { renderDocument } from "./renderDocument";
@@ -494,6 +495,41 @@ watch(
   { immediate: true },
 );
 
+// The body and the problems banner are both read from the index, so an
+// open card asks again when the index commits. It redraws only when the
+// answer differs: every source's commit moves the index, and a redraw
+// for nothing would throw away the reader's place.
+const cardEl = ref<HTMLElement | null>(null);
+const refresh = oneAtATime(async () => {
+  const uuid = props.markdownUuid;
+  if (!uuid || !chat.value || loading.value) return;
+  try {
+    const doc = await fetchChat(uuid);
+    if (uuid !== props.markdownUuid) return;
+    error.value = null;
+    if (JSON.stringify(doc) === JSON.stringify(chat.value)) return;
+    const covered = await checkRemote(contextOf(doc), remoteUrlsOf(doc));
+    if (uuid !== props.markdownUuid) return;
+    remoteCovered.value = covered;
+    chat.value = doc;
+  } catch (e) {
+    if (uuid === props.markdownUuid) error.value = (e as Error).message;
+  }
+});
+let unsubscribeLive: (() => void) | null = null;
+onMounted(() => {
+  unsubscribeLive = subscribeLive(
+    {
+      root: (e) => {
+        if (e.kind === "index_changed") refresh();
+      },
+      resync: refresh,
+    },
+    { onScreen: cardEl.value ?? undefined },
+  );
+});
+onBeforeUnmount(() => unsubscribeLive?.());
+
 // Chrome title: generic while nothing is loaded (the uuid means
 // nothing to a human), the document's own name once the fetch lands.
 watch(
@@ -505,6 +541,7 @@ watch(
 
 <template>
   <section
+    ref="cardEl"
     class="chat-preview"
     :data-markdown-uuid="chat?.markdown_uuid ?? null"
     @contextmenu="onPaneContextMenu"
