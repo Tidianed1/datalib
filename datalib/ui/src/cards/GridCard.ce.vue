@@ -2141,19 +2141,6 @@ onBeforeUnmount(() => {
           ×
         </button>
       </div>
-      <div v-if="isSearch" class="view-switch" role="group" aria-label="View">
-        <button
-          v-for="v in VIEWS"
-          :key="v.id"
-          type="button"
-          class="view-option"
-          :class="{ 'is-on': view === v.id }"
-          :aria-pressed="view === v.id"
-          @click="view = v.id"
-        >
-          {{ v.label }}
-        </button>
-      </div>
       <label
         v-if="isSearch"
         class="meaning-check"
@@ -2174,37 +2161,49 @@ onBeforeUnmount(() => {
       </label>
     </div>
 
-    <div
-      v-if="isSearch && sources.length > 0"
-      class="source-chips"
-      role="group"
-      aria-label="Sources"
-    >
-      <button
-        type="button"
-        class="source-chip"
-        :class="{ 'is-on': source === null }"
-        :aria-pressed="source === null"
-        @click="pickSource(null)"
-      >
-        All {{ allCount.toLocaleString() }}
-      </button>
-      <button
-        v-for="g in sources"
-        :key="g.sample.source_id"
-        type="button"
-        class="source-chip"
-        :class="{ 'is-on': source === g.sample.source_id }"
-        :aria-pressed="source === g.sample.source_id"
-        @click="pickSource(g.sample.source_id ?? null)"
-      >
-        <img
-          v-if="iconUrl(g.sample.source_ref?.icon)"
-          :src="iconUrl(g.sample.source_ref?.icon)!"
-          alt=""
-        />
-        {{ g.sample.source_ref?.label ?? g.sample.source_id }} {{ g.count.toLocaleString() }}
-      </button>
+    <!-- The chips change the search; the switch, at the row's end and
+         last before the results, changes only how they are shown. -->
+    <div v-if="isSearch" class="view-row">
+      <div v-if="sources.length > 0" class="source-chips" role="group" aria-label="Sources">
+        <button
+          type="button"
+          class="source-chip"
+          :class="{ 'is-on': source === null }"
+          :aria-pressed="source === null"
+          @click="pickSource(null)"
+        >
+          All {{ allCount.toLocaleString() }}
+        </button>
+        <button
+          v-for="g in sources"
+          :key="g.sample.source_id"
+          type="button"
+          class="source-chip"
+          :class="{ 'is-on': source === g.sample.source_id }"
+          :aria-pressed="source === g.sample.source_id"
+          @click="pickSource(g.sample.source_id ?? null)"
+        >
+          <img
+            v-if="iconUrl(g.sample.source_ref?.icon)"
+            :src="iconUrl(g.sample.source_ref?.icon)!"
+            alt=""
+          />
+          {{ g.sample.source_ref?.label ?? g.sample.source_id }} {{ g.count.toLocaleString() }}
+        </button>
+      </div>
+      <div class="view-switch" role="group" aria-label="View">
+        <button
+          v-for="v in VIEWS"
+          :key="v.id"
+          type="button"
+          class="view-option"
+          :class="{ 'is-on': view === v.id }"
+          :aria-pressed="view === v.id"
+          @click="view = v.id"
+        >
+          {{ v.label }}
+        </button>
+      </div>
     </div>
 
     <SearchList
@@ -2300,8 +2299,15 @@ onBeforeUnmount(() => {
   flex: 1 1 16rem;
   min-width: 0;
 }
+.view-row {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-end;
+  gap: 0.75rem;
+}
 .view-switch {
   flex: 0 0 auto;
+  margin-left: auto;
   display: flex;
   border: 1px solid var(--datalib-border);
   border-radius: var(--datalib-radius);
@@ -2343,7 +2349,8 @@ onBeforeUnmount(() => {
   accent-color: var(--datalib-accent);
 }
 .source-chips {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
+  min-width: 0;
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
