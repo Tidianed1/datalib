@@ -106,8 +106,8 @@ What goes into the look is each kind's own rule, pure and unit-tested:
   `entities.ts`: the name the config gives it now (a step is named
   under its group: "Work Slack · Ingest"), or the producer's until the
   answer lands; its type's mark or its phase's glyph; and a dot after
-  the name for a status worth noticing — running, queued, failed,
-  blocked or interrupted. The words are in the tooltip.
+  the name for a status worth noticing — running, waiting, queued,
+  failed, blocked or interrupted. The words are in the tooltip.
 
 `chip.css` is the one look. The document frame, the search and
 problems grids, the log card, the sync dashboard and the render

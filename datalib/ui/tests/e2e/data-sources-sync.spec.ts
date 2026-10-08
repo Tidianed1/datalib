@@ -302,8 +302,9 @@ ${applets()}`;
       .toContain("Running");
 
     // Syncing a source takes on everything downstream of it, so the
-    // render is in flight too: Queued behind its download, or Running on
-    // what the download has published, since the download streams.
+    // render is in flight too: Queued behind its download, Running on
+    // what the download has published, since the download streams, or
+    // Waiting for its next seal.
     // This is the assertion a download-only source could not support.
     await expect
       .poll(async () => (await since(TAPED_DOWN, beforeDown)).length, {
@@ -316,7 +317,7 @@ ${applets()}`;
     expect(
       statusWord(downstream[0]),
       `downstream sequence was ${JSON.stringify(downstream)}`,
-    ).toMatch(/^(Queued|Running)$/);
+    ).toMatch(/^(Queued|Running|Waiting)$/);
     // ...while the unrelated source is not claimed at all.
     expect(await statusOf(page, "docs/ingest")).not.toBe("Queued");
     // Only the hold keeps it here; if the step has finished anyway, the

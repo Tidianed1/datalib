@@ -1116,11 +1116,14 @@ impl RowCtx<'_> {
             ),
         };
 
+        let activity = match status.key.as_str() {
+            "running" => queue::Activity::Running,
+            "waiting" => queue::Activity::BetweenPasses,
+            _ => queue::Activity::Idle,
+        };
         let cells = match e {
-            Entry::Step(_) => {
-                queue::step_cells(self.snap.record.progress.get(&id), status.key == "running")
-            }
-            Entry::Applet(_) => queue::step_cells(None, false),
+            Entry::Step(_) => queue::step_cells(self.snap.record.progress.get(&id), activity),
+            Entry::Applet(_) => queue::step_cells(None, queue::Activity::Idle),
         };
         let problems = match e {
             Entry::Step(_) => problems::chips(self.snap.record.problems.get(&id)),
