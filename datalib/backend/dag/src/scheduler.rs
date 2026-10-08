@@ -1119,6 +1119,9 @@ mod tests {
 
         // Two batches. After sealing each, wait (bounded, so a regression
         // fails rather than hangs) for the sink to have caught up with it.
+        // Each re-announcement is a burst, so a seal is waiting however
+        // quick the loop is: a loop that serves seals before joins starves
+        // here on every machine, not only on a slow disk.
         let producer = {
             let sink_passes = sink_passes.clone();
             let at_end = sink_passes_at_producer_end.clone();
@@ -1136,7 +1139,9 @@ mod tests {
                             while sink_passes.load(Ordering::SeqCst) < k + 1
                                 && std::time::Instant::now() < deadline
                             {
-                                ctx.checkpoint(&format!("v{k}"));
+                                for _ in 0..50 {
+                                    ctx.checkpoint(&format!("v{k}"));
+                                }
                                 tokio::time::sleep(Duration::from_millis(2)).await;
                             }
                         }
