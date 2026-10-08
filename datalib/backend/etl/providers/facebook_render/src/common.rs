@@ -18,7 +18,8 @@ use serde_json::Value;
 /// v2: ids are minted through `datalib_id`, every row carries its
 ///     backpointer, and an item's id carries its stamp in its leading
 ///     bits (`datalib_id`'s v8 layout). Every uuid moved.
-pub const RENDER_VERSION: u32 = 3;
+/// v4: the comments and reactions feeds are one document per year.
+pub const RENDER_VERSION: u32 = 4;
 
 pub const SOURCE_LABEL: &str = "Facebook";
 
@@ -58,13 +59,6 @@ pub fn ts_ms(v: &Value, key: &str) -> Option<i64> {
         .and_then(Value::as_i64)
         .filter(|s| *s > 0)
         .map(|s| s * 1000)
-}
-
-pub fn month_of(ms: Option<i64>) -> String {
-    use chrono::TimeZone;
-    ms.and_then(|ms| chrono::Utc.timestamp_millis_opt(ms).single())
-        .map(|d| d.format("%Y-%m").to_string())
-        .unwrap_or_else(|| "undated".to_string())
 }
 
 /// `data[]` entries are one-key objects; this is every entry's `key`.
@@ -249,7 +243,6 @@ mod tests {
         assert_eq!(ts_ms(&json!({"timestamp": 0}), "timestamp"), None);
         assert_eq!(ts_ms(&json!({"timestamp": 12}), "timestamp"), Some(12_000));
         assert_eq!(ts_ms(&json!({}), "timestamp"), None);
-        assert_eq!(month_of(None), "undated");
     }
 
     #[test]

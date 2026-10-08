@@ -1,11 +1,13 @@
-//! Render the chat-shaped Takeout feeds into markdown via the shared
-//! chat renderer.
+//! Render the Takeout feeds into markdown via the shared chat renderer:
+//! Google Chat spaces and Google Voice conversations a document per
+//! month, the activity feeds (Gemini, YouTube, Google Maps — see
+//! [`crate::feeds`]) a document per year.
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{BlobBundle, CasEdgeRow};
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::changed_chats;
@@ -22,7 +24,8 @@ use datalib_handle::Handle;
 use datalib_schema::problems::Problem;
 use serde_json::Value;
 
-use crate::ids;
+use crate::feeds::{self, Row};
+use crate::{gemini, ids, maps, youtube};
 
 use datalib_etl_google_takeout::ingest::google_voice::schema_raw::VoiceAttachmentRow;
 use datalib_etl_google_takeout::ingest::{db_path_for, RawDb};
@@ -37,7 +40,8 @@ use datalib_schema::providers::Provider;
 ///     among them.
 /// v5: the author span carries the author's handle as `data-handle`.
 /// v6: a `+1` number without ten digits after the 1 has no handle.
-pub const RENDER_VERSION: u32 = 6;
+/// v7: Gemini, YouTube and Google Maps render, a document per year.
+pub const RENDER_VERSION: u32 = 7;
 
 /// Projection for [`BlobBundle::load_many`] over the Voice CAS edge: the
 /// `ref_name` (attachment filename) is the bundle key; `content_type`
@@ -75,6 +79,34 @@ fn voice_profile() -> RenderProfile {
     }
 }
 
+/// The Gemini attachment edge's row id is the bundle key.
+const GEMINI_BLOB_PROJECTION: &str = "SELECT id AS ref_id, blake3, \
+            NULL AS content_type, filename AS upstream_name \
+     FROM gemini_attachments \
+     WHERE id IN ({placeholders}) AND blake3 IS NOT NULL";
+
+/// A Maps photo row holds its own bytes' key; its id is the bundle key.
+const MAPS_PHOTO_BLOB_PROJECTION: &str = "SELECT id AS ref_id, blake3, \
+            NULL AS content_type, id AS upstream_name \
+     FROM maps_photos \
+     WHERE id IN ({placeholders}) AND blake3 IS NOT NULL";
+
+/// Everything one pass reads off the store, read while it is open.
+struct Loaded {
+    messages: Vec<(String, Value)>,
+    groups: Vec<(String, Value)>,
+    voice_messages: Vec<(String, Value)>,
+    gemini: Vec<Row>,
+    watches: Vec<Row>,
+    subscriptions: Vec<Row>,
+    reviews: Vec<Row>,
+    saved: Vec<Row>,
+    photos: Vec<Row>,
+    /// Per chat id, the bytes its attachments reference.
+    blobs: HashMap<String, BlobBundle>,
+    scan: datalib_etl::doltlite_raw::DiffScan,
+}
+
 /// What one render pass did: the buckets to declare and the commit read.
 #[derive(Debug, Default)]
 pub struct RenderOutcome {
@@ -96,50 +128,46 @@ pub fn render(
     if !db_path.exists() {
         return Ok(RenderOutcome::default());
     }
-    let Some((messages, groups, voice_messages, voice_blobs, scan)) =
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                // Pinned at open: the driver's pin when it made one, else
-                // HEAD. No commit means nothing has been committed here to
-                // render, which is emptiness rather than a reason to read
-                // the working set.
-                let Some(db) = RawDb::open_reader(&db_path, range.pin).await? else {
-                    return Ok(None);
-                };
-                let pin = db.pin().expect("a reader is pinned at open").clone();
-                let loaded = async {
-                    let messages = db.load_payloads_with_id("chat_messages").await?;
-                    // (dir name, group_info payload) — the directory name
-                    // carries the space id, which `group_info.json` itself
-                    // does not.
-                    let groups = db.load_payloads_with_id("chat_groups").await?;
-                    let voice_messages = db.load_payloads_with_id("voice_messages").await?;
-                    let voice_blobs = load_voice_blobs(&db, &voice_messages).await?;
-                    let scan = scan_diff(db.pool(), range.cursor, &pin).await?;
-                    anyhow::Ok(Some((messages, groups, voice_messages, voice_blobs, scan)))
-                }
-                .await;
-                // Closed, not dropped: the next open of this store is a
-                // second connection until this one is actually gone.
-                db.close().await;
-                loaded
-            })
-        })?
+    let Some(l) = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            // Pinned at open: the driver's pin when it made one, else
+            // HEAD. No commit means nothing has been committed here to
+            // render, which is emptiness rather than a reason to read
+            // the working set.
+            let Some(db) = RawDb::open_reader(&db_path, range.pin).await? else {
+                return Ok(None);
+            };
+            let pin = db.pin().expect("a reader is pinned at open").clone();
+            let loaded = load(&db, range.cursor, &pin).await;
+            // Closed, not dropped: the next open of this store is a
+            // second connection until this one is actually gone.
+            db.close().await;
+            loaded.map(Some)
+        })
+    })?
     else {
         return Ok(RenderOutcome::default());
     };
 
-    let mut all_chats = build_chats(source_id, &messages, &groups);
-    all_chats.extend(build_voice_chats(source_id, &voice_messages));
-    let changed = changed_chats(all_chats, range, scan.render.as_ref(), |id| {
+    let mut all_chats = build_chats(source_id, &l.messages, &l.groups);
+    all_chats.extend(build_voice_chats(source_id, &l.voice_messages));
+    all_chats.extend(gemini::build(source_id, &l.gemini));
+    all_chats.extend(youtube::build_history(source_id, &l.watches));
+    all_chats.extend(youtube::build_subscriptions(source_id, &l.subscriptions));
+    all_chats.extend(maps::build(source_id, &l.reviews, &l.saved, &l.photos));
+    let changed = changed_chats(all_chats, range, l.scan.render.as_ref(), |id| {
         chat_uuid_for(source_id, id)
     });
     let mut outcome = RenderOutcome {
         buckets: changed.buckets,
-        new_head: scan.new_head,
+        new_head: l.scan.new_head,
     };
+    let (feed_chats, chats): (Vec<NormalizedChat>, Vec<NormalizedChat>) = changed
+        .chats
+        .into_iter()
+        .partition(|c| feeds::is_feed(&c.id));
     let (voice_chats, chats): (Vec<NormalizedChat>, Vec<NormalizedChat>) =
-        changed.chats.into_iter().partition(|c| is_voice(&c.id));
+        chats.into_iter().partition(|c| is_voice(&c.id));
 
     if !chats.is_empty() {
         let blobs: HashMap<String, BlobBundle> = HashMap::new();
@@ -161,7 +189,20 @@ pub fn render(
             &voice_chats,
             out_root,
             source_id,
-            &voice_blobs,
+            &l.blobs,
+            progress,
+            on_doc_complete,
+        )?;
+        outcome.buckets.extend(s.buckets);
+    }
+
+    for feed in feed_chats {
+        let s = cc_render_all(
+            &feeds::profile(&feed.id),
+            std::slice::from_ref(&feed),
+            out_root,
+            source_id,
+            &l.blobs,
             progress,
             on_doc_complete,
         )?;
@@ -170,11 +211,82 @@ pub fn render(
     Ok(outcome)
 }
 
+async fn load(db: &RawDb, cursor: Option<&str>, pin: &datalib_etl::pin::Pin) -> Result<Loaded> {
+    let messages = db.load_payloads_with_id("chat_messages").await?;
+    // (dir name, group_info payload) — the directory name carries the
+    // space id, which `group_info.json` itself does not.
+    let groups = db.load_payloads_with_id("chat_groups").await?;
+    let voice_messages = db.load_payloads_with_id("voice_messages").await?;
+    let gemini = load_rows(db, "gemini_activity", Dated::Yes).await?;
+    let photos = load_rows(db, "maps_photos", Dated::Yes).await?;
+    let mut blobs = load_voice_blobs(db, &voice_messages).await?;
+    let gemini_refs: Vec<String> = gemini.iter().flat_map(gemini::attachment_ids).collect();
+    let photo_refs: Vec<String> = photos.iter().map(|p| p.id.clone()).collect();
+    for (chat_id, projection, refs) in [
+        (feeds::GEMINI, GEMINI_BLOB_PROJECTION, gemini_refs),
+        (feeds::MAPS, MAPS_PHOTO_BLOB_PROJECTION, photo_refs),
+    ] {
+        blobs.extend(
+            BlobBundle::load_many(
+                db.pool(),
+                Some(db.cas().pool()),
+                projection,
+                [(chat_id.to_string(), refs)],
+            )
+            .await?,
+        );
+    }
+    Ok(Loaded {
+        messages,
+        groups,
+        voice_messages,
+        gemini,
+        watches: load_rows(db, "youtube_watch_history", Dated::Yes).await?,
+        subscriptions: load_rows(db, "youtube_subscriptions", Dated::No).await?,
+        reviews: load_rows(db, "maps_reviews", Dated::Yes).await?,
+        saved: load_rows(db, "maps_saved_places", Dated::Yes).await?,
+        photos,
+        blobs,
+        scan: scan_diff(db.pool(), cursor, pin).await?,
+    })
+}
+
+enum Dated {
+    Yes,
+    No,
+}
+
+async fn load_rows(db: &RawDb, table: &'static str, dated: Dated) -> Result<Vec<Row>> {
+    let when = match dated {
+        Dated::Yes => "when_ts",
+        Dated::No => "NULL",
+    };
+    // Audited: `table` is a literal at every call, `when` one of two.
+    let sql = format!("SELECT id, json(payload), {when} FROM {table} ORDER BY id");
+    let rows: Vec<(String, Option<String>, Option<String>)> =
+        sqlx::query_as(sqlx::AssertSqlSafe(sql))
+            .fetch_all(db.pool())
+            .await
+            .with_context(|| format!("select {table}"))?;
+    rows.into_iter()
+        .map(|(id, payload, when)| {
+            let payload = match payload {
+                Some(p) => serde_json::from_str(&p).with_context(|| format!("{table} {id}"))?,
+                None => Value::Null,
+            };
+            Ok(Row { id, payload, when })
+        })
+        .collect()
+}
+
 /// The chat uuid a conversation id mints to, for a conversation the diff
-/// named that no longer has a message: a Google Chat space, or a Google
-/// Voice conversation carrying its `voice:` prefix.
+/// named that no longer has a message: a Google Chat space, a Google
+/// Voice conversation carrying its `voice:` prefix, or an activity feed
+/// carrying its `feed:` one.
 fn chat_uuid_for(source_id: &str, id: &str) -> String {
-    if is_voice(id) {
+    if feeds::is_feed(id) {
+        ids::feed(source_id, id).uuid
+    } else if is_voice(id) {
         ids::voice_conversation(source_id, id).uuid
     } else {
         ids::space(source_id, id).uuid
@@ -188,7 +300,7 @@ fn is_voice(chat_id: &str) -> bool {
 /// Which conversations a new or changed row maps to: a Google Chat
 /// message names its space (the first segment of its id), a group's
 /// members the spaces of the messages filed under it, a Google Voice
-/// message or attachment its conversation. Everything a rendered
+/// message or attachment its conversation, an activity row its feed. Everything a rendered
 /// conversation read is declared, so this only has to catch what the
 /// declarations cannot — rows that were not there to declare.
 async fn scan_diff(
@@ -226,6 +338,27 @@ async fn scan_diff(
                       FROM dolt_diff_voice_attachments d
                       JOIN voice_messages m ON m.id = coalesce(d.to_message_id, d.from_message_id)
                      WHERE d.from_ref = ?1 AND d.to_ref = ?2 AND d.diff_type != 'unchanged'
+                    UNION
+                    SELECT 'feed:gemini' FROM dolt_diff_gemini_activity
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                    UNION
+                    SELECT 'feed:gemini' FROM dolt_diff_gemini_attachments
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                    UNION
+                    SELECT 'feed:youtube_history' FROM dolt_diff_youtube_watch_history
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                    UNION
+                    SELECT 'feed:youtube_subscriptions' FROM dolt_diff_youtube_subscriptions
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                    UNION
+                    SELECT 'feed:maps' FROM dolt_diff_maps_reviews
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                    UNION
+                    SELECT 'feed:maps' FROM dolt_diff_maps_saved_places
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                    UNION
+                    SELECT 'feed:maps' FROM dolt_diff_maps_photos
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                 )
                 WHERE bucket IS NOT NULL AND bucket != '' AND bucket != 'voice:'
             ",
@@ -543,7 +676,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
     let attachments: Vec<NormalizedAttachment> = voice_attachment_refs(m)
         .into_iter()
         .map(|ref_name| NormalizedAttachment {
-            mime_type: voice_mime(&ref_name),
+            mime_type: mime_of(&ref_name),
             file_name: Some(ref_name.clone()),
             rel_path: None,
             byte_len: None,
@@ -713,7 +846,7 @@ fn month_of(ms: Option<i64>) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-fn voice_mime(name: &str) -> Option<String> {
+pub(crate) fn mime_of(name: &str) -> Option<String> {
     let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase())?;
     let ct = match ext.as_str() {
         "jpg" | "jpeg" => "image/jpeg",
@@ -726,6 +859,10 @@ fn voice_mime(name: &str) -> Option<String> {
         "m4a" => "audio/mp4",
         "3gp" | "3gpp" => "video/3gpp",
         "mp4" => "video/mp4",
+        "mov" => "video/quicktime",
+        "heic" => "image/heic",
+        "pdf" => "application/pdf",
+        "txt" => "text/plain",
         _ => return None,
     };
     Some(ct.to_string())

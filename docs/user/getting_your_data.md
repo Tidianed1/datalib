@@ -496,10 +496,13 @@ feed of. Every feed is off until you turn it on, so set
 ## Google Takeout
 
 `type = "google_takeout"` — an unpacked Takeout tree on disk
-(`export`). Mirrors Google Chat and Voice messages (rendered to
-markdown); Maps reviews, saved places and photos, YouTube watch history
-and subscriptions, and Gemini Apps activity (extracted to the raw
-store, not yet rendered).
+(`export`). Mirrors Google Chat and Voice messages; Maps reviews, saved
+places and photos; YouTube watch history and subscriptions; and Gemini
+Apps activity, each prompt with Gemini's response and the files and
+images either one carried. Everything is rendered to markdown: a
+conversation as a page per month, and Gemini, YouTube and Maps as a
+page per year (subscriptions are one list). Voice bills and greetings
+are kept in the raw store only.
 
 Self-service export at <https://takeout.google.com>. Deselect all, then
 tick just what you want, request a `.zip`, and unpack it:

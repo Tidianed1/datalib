@@ -1,9 +1,10 @@
 //! The owner's comments and reactions. Neither names the post it was
 //! left on in any way the export lets us resolve, so each feed is one
-//! chat bucketed by month rather than a thread per post.
+//! chat bucketed by year rather than a thread per post.
 
 use std::collections::BTreeMap;
 
+use datalib_etl_chat_common::period::by_year;
 use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{
     NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
@@ -16,8 +17,8 @@ use datalib_etl_render::inputs::Inputs;
 use serde_json::Value;
 
 use crate::common::{
-    attachment_entries, chat_item, data_values, label_value, media_attachment, month_of, profile,
-    str_field, strip_mentions, ts_ms,
+    attachment_entries, chat_item, data_values, label_value, media_attachment, profile, str_field,
+    strip_mentions, ts_ms,
 };
 use crate::processor::Owner;
 
@@ -79,13 +80,7 @@ pub fn build_comments(comments: &[(String, Value)], owner: &Owner) -> Vec<Normal
             attachments,
         ));
     }
-    vec![monthly_chat(
-        COMMENTS_CHAT,
-        "Comments",
-        items,
-        inputs,
-        owner,
-    )]
+    vec![yearly_chat(COMMENTS_CHAT, "Comments", items, inputs, owner)]
 }
 
 /// The export ships reactions in two shapes, sometimes both for one
@@ -160,7 +155,7 @@ pub fn build_reactions(reactions: &[(String, Value)], owner: &Owner) -> Vec<Norm
             }
         })
         .collect();
-    vec![monthly_chat(
+    vec![yearly_chat(
         REACTIONS_CHAT,
         "Reactions",
         items,
@@ -217,23 +212,15 @@ fn capitalize(s: &str) -> String {
     }
 }
 
-fn monthly_chat(
+fn yearly_chat(
     id: &str,
     display: &str,
-    mut items: Vec<NormalizedChatItem>,
+    items: Vec<NormalizedChatItem>,
     inputs: Inputs,
     owner: &Owner,
 ) -> NormalizedChat {
     for input in &owner.inputs {
         inputs.read(&input.table, &input.id);
-    }
-    items.sort_by_key(|i| i.date_ms);
-    let mut by_month: BTreeMap<String, Vec<NormalizedChatItem>> = BTreeMap::new();
-    for item in items {
-        by_month
-            .entry(month_of(item.date_ms))
-            .or_default()
-            .push(item);
     }
     let feed = ids::feed(&owner.source_id, id);
     NormalizedChat {
@@ -252,14 +239,14 @@ fn monthly_chat(
         upstream_account: None,
         org_uuid: None,
         org_name: None,
-        buckets: by_month
+        buckets: by_year(items)
             .into_iter()
             .map(|(period_key, items)| {
-                let month = ids::feed_month(&owner.source_id, id, &period_key);
+                let year = ids::feed_year(&owner.source_id, id, &period_key);
                 NormalizedDoc {
                     orphan_reactions: Vec::new(),
-                    markdown_uuid: month.uuid,
-                    source_ref: Some(UpstreamRef::new(month.entity_kind, month.natural_key)),
+                    markdown_uuid: year.uuid,
+                    source_ref: Some(UpstreamRef::new(year.entity_kind, year.natural_key)),
                     period_key,
                     items,
                 }
@@ -283,12 +270,13 @@ mod tests {
         }
     }
 
-    // 2369-03 and 2369-04, in seconds.
+    // 2369-03, 2369-04 and 2370-03, in seconds.
     const MARCH: i64 = 12_598_000_000;
     const APRIL: i64 = 12_600_000_000;
+    const NEXT_YEAR: i64 = MARCH + 365 * 86_400;
 
     #[test]
-    fn comments_bucket_by_month_and_keep_the_title() {
+    fn comments_bucket_by_year_and_keep_the_title() {
         let rows = vec![
             (
                 "c1".to_string(),
@@ -301,16 +289,21 @@ mod tests {
             (
                 "c2".to_string(),
                 json!({
-                    "timestamp": APRIL,
+                    "timestamp": NEXT_YEAR,
                     "attachments": [{"data": [{"media": {"uri": "m/4.png"}}]}],
-                    "data": [{"comment": {"timestamp": APRIL, "comment": "Same view.", "author": "Jean-Luc Picard"}}],
+                    "data": [{"comment": {"timestamp": NEXT_YEAR, "comment": "Same view.", "author": "Jean-Luc Picard"}}],
                     "title": "Jean-Luc Picard commented on his own photo.",
                 }),
             ),
         ];
         let chats = build_comments(&rows, &owner());
         assert_eq!(chats.len(), 1);
-        assert_eq!(chats[0].buckets.len(), 2, "one document per month");
+        let years: Vec<&str> = chats[0]
+            .buckets
+            .iter()
+            .map(|b| b.period_key.as_str())
+            .collect();
+        assert_eq!(years, ["2369", "2370"], "one document per year");
         let first = &chats[0].buckets[0].items[0];
         assert_eq!(
             first.text.as_deref(),
