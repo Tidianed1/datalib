@@ -142,7 +142,7 @@ bug it closes.
   rule covers a bucket declared with **no rows** that emitted nothing
   (one declared with rows and no document is still swept, as before),
   and a removed row is not the only evidence: every row it was built
-  from now read by a bucket the run built is a re-key, and gone too.
+  from now read by a bucket new this run is a re-key, and gone too.
   Moved: email's label filter to `exclude_bucket`, pdf's failed
   conversion to `fail_bucket`. The reference is
   `data_architecture_parse_and_render.md` §"The sweep".

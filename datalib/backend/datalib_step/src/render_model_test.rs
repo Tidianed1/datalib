@@ -177,6 +177,9 @@ struct SynthRender {
     unparsed: Mutex<Vec<Unparsed>>,
     /// Parents whose build fails, and how the renderer ends each one.
     broken: Mutex<BTreeMap<String, Broken>>,
+    /// A parent whose bucket also reads another parent's row, as a
+    /// calendar series reads the rows of its changed occurrences.
+    also_reads: Mutex<BTreeMap<String, String>>,
 }
 
 /// How a renderer ends a bucket it built nothing for.
@@ -201,6 +204,7 @@ impl SynthRender {
             fail_after: AtomicUsize::new(NEVER),
             unparsed: Mutex::new(Vec::new()),
             broken: Mutex::new(BTreeMap::new()),
+            also_reads: Mutex::new(BTreeMap::new()),
         }
     }
     fn params(&self) -> Params {
@@ -272,6 +276,7 @@ impl RenderProcessor for SynthRender {
         let version = self.version.load(Ordering::SeqCst);
         let fail_after = self.fail_after.load(Ordering::SeqCst);
         let broken = self.broken.lock().unwrap().clone();
+        let also_reads = self.also_reads.lock().unwrap().clone();
         let docs = expected(&model, params);
         let mut rendered = 0usize;
         // Every bucket this run looks at, present in the store or not: a
@@ -303,6 +308,9 @@ impl RenderProcessor for SynthRender {
                 None => {}
             }
             let mut inputs = vec![Input::new("parents", &id)];
+            if let Some(other) = also_reads.get(&id) {
+                inputs.push(Input::new("parents", other));
+            }
             if let Some(parent) = model.parents.get(&id) {
                 inputs.push(Input::new("authors", &parent.author_id));
                 for (cid, c) in &model.children {
@@ -836,6 +844,7 @@ impl SynthRender {
             fail_after: AtomicUsize::new(other.fail_after.load(Ordering::SeqCst)),
             unparsed: Mutex::new(other.unparsed.lock().unwrap().clone()),
             broken: Mutex::new(other.broken.lock().unwrap().clone()),
+            also_reads: Mutex::new(other.also_reads.lock().unwrap().clone()),
         }
     }
 }
@@ -1372,6 +1381,73 @@ async fn a_bucket_declared_with_nothing_whose_rows_left_goes_on_a_full_walk() {
     assert_eq!(walk.removed, 1);
     assert!(walk.problems.is_empty(), "{:?}", walk.problems);
     assert!(!held(&world).contains_key("p1"));
+}
+
+/// Another bucket that already read every row of a bucket declared with
+/// nothing is not evidence it is gone: a calendar series reads all of a
+/// changed occurrence's rows, and the occurrence's failed build must
+/// not delete it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rows_another_bucket_already_read_are_no_evidence() {
+    use datalib_schema::problems::Severity;
+    let td = tempfile::tempdir().unwrap();
+    let mut world = World::new(td.path()).await;
+    if !world.dolt {
+        return;
+    }
+    let synth = SynthRender::new(world.raw_db.clone());
+    synth
+        .also_reads
+        .lock()
+        .unwrap()
+        .insert("p2".into(), "p1".into());
+    two_rendered(&mut world, &synth).await;
+    let before = held(&world);
+
+    synth
+        .broken
+        .lock()
+        .unwrap()
+        .insert("p1".into(), Broken::DeclaredEmpty);
+    world
+        .commit(&[Mutation::Retitle("p1".into(), "retitled".into())])
+        .await;
+    let report = world.render_report(&synth, false).await.unwrap();
+    assert_eq!(report.removed, 0, "p2 read p1's rows before this run too");
+    assert_eq!(held(&world).get("p1"), before.get("p1"), "p1 as it was");
+    assert_eq!(report.problems.get(&Severity::Warning), Some(&1));
+}
+
+/// A re-key: a bucket new this run reads every row a bucket declared
+/// with nothing was built from, so those rows left it, and it goes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rows_a_new_bucket_took_over_are_evidence() {
+    let td = tempfile::tempdir().unwrap();
+    let mut world = World::new(td.path()).await;
+    if !world.dolt {
+        return;
+    }
+    let synth = SynthRender::new(world.raw_db.clone());
+    two_rendered(&mut world, &synth).await;
+
+    synth
+        .broken
+        .lock()
+        .unwrap()
+        .insert("p1".into(), Broken::DeclaredEmpty);
+    synth
+        .also_reads
+        .lock()
+        .unwrap()
+        .insert("p3".into(), "p1".into());
+    world
+        .commit(&[parent(3), Mutation::Retitle("p1".into(), "retitled".into())])
+        .await;
+    let report = world.render_report(&synth, false).await.unwrap();
+    assert_eq!(report.removed, 1);
+    assert!(report.problems.is_empty(), "{:?}", report.problems);
+    assert!(!held(&world).contains_key("p1"));
+    assert!(held(&world).contains_key("p3"));
 }
 
 /// A bucket the renderer leaves out on purpose goes, though its rows

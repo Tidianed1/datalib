@@ -435,17 +435,19 @@ impl IndexedMarkdownStore {
 
     /// Record what `bucket_key` was rendered from, replacing what it
     /// declared last time. Joins the open batch, so a bucket's documents
-    /// and its inputs reach the store together.
-    pub fn put_inputs(&self, bucket_key: &str, inputs: &[Input]) -> Result<()> {
+    /// and its inputs reach the store together. Says whether the bucket
+    /// had any before.
+    pub fn put_inputs(&self, bucket_key: &str, inputs: &[Input]) -> Result<bool> {
         self.transaction(|| {
             blocking(async {
                 let mut guard = self.write_lock.acquire().await?;
                 let conn = guard.conn();
-                sqlx::query("DELETE FROM render_inputs WHERE bucket_key = ?")
+                let prior = sqlx::query("DELETE FROM render_inputs WHERE bucket_key = ?")
                     .bind(bucket_key)
                     .execute(&mut **conn)
                     .await
-                    .context("clear prior render_inputs")?;
+                    .context("clear prior render_inputs")?
+                    .rows_affected();
                 for chunk in inputs.chunks(datalib_etl::bulk::SQL_CHUNK / 3) {
                     let mut sql = String::from(
                         "INSERT OR IGNORE INTO render_inputs (bucket_key, input_table, input_id) VALUES ",
@@ -466,7 +468,7 @@ impl IndexedMarkdownStore {
                         .await
                         .with_context(|| format!("write render_inputs for {bucket_key}"))?;
                 }
-                Ok(())
+                Ok(prior > 0)
             })
         })
     }

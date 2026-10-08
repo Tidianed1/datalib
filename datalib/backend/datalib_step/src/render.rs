@@ -345,13 +345,20 @@ pub fn render_source(
     // the seal decides it is gone, because the evidence that it is gone
     // is in them.
     let mut ends: BTreeMap<String, Ended> = BTreeMap::new();
+    // Buckets this run built that held no inputs before it: where a
+    // re-keyed bucket's rows go.
+    let mut put_this_run: HashSet<String> = HashSet::new();
+    let mut new_buckets: HashSet<String> = HashSet::new();
     let running_version: Mutex<Option<u32>> = Mutex::new(None);
     let mut on_declare = |bucket: &str, end: BucketEnd<'_>| -> Result<()> {
         if let BucketEnd::Read(inputs) = end {
             if !inputs.is_empty() {
-                store
+                let had_inputs = store
                     .put_inputs(bucket, inputs)
                     .with_context(|| format!("record inputs of bucket {bucket}"))?;
+                if put_this_run.insert(bucket.to_string()) && !had_inputs {
+                    new_buckets.insert(bucket.to_string());
+                }
             }
         }
         let ended = Ended::of(end, *running_version.lock().unwrap());
@@ -443,11 +450,15 @@ pub fn render_source(
         .map(|(bucket, _)| bucket.as_str())
         .collect();
     let last_built_from = store.inputs_of(&silent)?;
-    // Which of those rows a bucket this run built now reads: where they
-    // went when the key a bucket is minted from changed.
+    // Which of those rows a bucket new this run now reads: where they
+    // went when the key a bucket is minted from changed. A bucket that
+    // read them before is no evidence (a calendar series reads all of a
+    // changed occurrence's rows).
     let built: BTreeSet<&str> = ends
         .iter()
-        .filter(|(_, e)| e.end == End::Read { empty: false })
+        .filter(|(bucket, e)| {
+            e.end == End::Read { empty: false } && new_buckets.contains(bucket.as_str())
+        })
         .map(|(bucket, _)| bucket.as_str())
         .collect();
     let asked: Vec<Input> = last_built_from
@@ -644,7 +655,7 @@ pub(crate) fn fate(end: &End, emitted: bool, rows_left: bool) -> Fate {
 
 /// Whether the rows a bucket was last built from left it: the diff
 /// reports one of them removed, or every one of them is now read by a
-/// bucket this run built (`moved`) — the bucket's key is minted from a
+/// bucket new this run (`moved`) — the bucket's key is minted from a
 /// value that changed, and its rows build that bucket instead. A
 /// whole-table input is never evidence: one row of a table leaving, or
 /// another bucket reading it, says nothing about a bucket that read all
