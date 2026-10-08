@@ -62,7 +62,7 @@ function followLive() {
 }
 
 /// The status words worth a mark on the chip itself; the rest are on hover.
-const LOUD = new Set(["running", "queued", "failed", "blocked", "interrupted"]);
+const LOUD = new Set(["running", "waiting", "queued", "failed", "blocked", "interrupted"]);
 
 /** How a group or step chip looks: the name the config gives it now (or,
  *  until the answer lands, the one the producer sent), the mark of its

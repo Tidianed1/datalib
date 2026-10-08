@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use datalib_dag::supervisor::store::RequestOutcome;
+use datalib_dag::supervisor::tick::StateKind;
 use datalib_dag::Event;
 
 use crate::harness::{reads, source, Clocks, Harness, Seen, State, Step};
@@ -293,6 +294,32 @@ async fn a_step_dropped_between_passes_finishes_when_the_config_drops_it() {
     h.run("a", "ok s2").await;
     assert_eq!(h.closed(&sync).await, RequestOutcome::Done);
     assert_eq!(h.closed(&other).await, RequestOutcome::Done);
+    h.finish().await;
+}
+
+/// A consumer that has read every seal so far, with its producer still
+/// writing, has no process working: its record says it waits for that
+/// producer, not that it runs, until the next seal starts it again.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_step_between_passes_is_recorded_waiting_for_its_producer() {
+    let mut h = Harness::new(&chain()).await;
+    let sync = h.sync(&["a"]).await;
+    h.started("a").await;
+    h.run("a", "streams").await;
+    h.run("a", "seal s1").await;
+    h.started("c").await;
+    h.run("c", "ok c1").await;
+    h.ended("c", 1).await;
+    h.until("c to wait for a's next seal", |s| {
+        let c = s.record.steps.get("c")?;
+        (c.state == Some(StateKind::Waiting) && c.state_detail.as_deref() == Some("waiting for a"))
+            .then_some(())
+    })
+    .await;
+    h.run("a", "ok s2").await;
+    h.started("c").await;
+    h.run("c", "ok c2").await;
+    assert_eq!(h.closed(&sync).await, RequestOutcome::Done);
     h.finish().await;
 }
 

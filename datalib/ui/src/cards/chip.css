@@ -72,6 +72,7 @@ a.chip {
   color: var(--datalib-muted, #94a3b8);
 }
 .entity-running::after,
+.entity-waiting::after,
 .entity-queued::after,
 .entity-failed::after,
 .entity-blocked::after,
@@ -83,6 +84,7 @@ a.chip {
   background: var(--datalib-muted, #94a3b8);
 }
 .entity-running::after,
+.entity-waiting::after,
 .entity-queued::after {
   background: var(--datalib-accent, #4f46e5);
 }

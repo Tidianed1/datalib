@@ -485,13 +485,23 @@ impl Runner {
             // A request closing now, or stopped, is closed after the save
             // below: a reader that sees it closed finds no step serving it.
             let closing: BTreeSet<usize> = t.closed.iter().map(|&(r, _)| r).collect();
-            let held: Vec<bool> = slots.iter().map(|s| s.ended.is_some()).collect();
+            // A step between passes waits on the first producer it reads
+            // that has not settled.
+            let held: Vec<Option<usize>> = slots
+                .iter()
+                .enumerate()
+                .map(|(i, s)| {
+                    s.ended
+                        .as_ref()
+                        .and_then(|_| graph.deps_in_order(i).find(|&p| unsettled[p]))
+                })
+                .collect();
             // A step serves a request only while it has work left in it,
             // so a source whose part is done offers Sync again while the
             // index its request also reaches is still running.
             let working: Vec<bool> = (0..slots.len())
                 .map(|i| {
-                    held[i]
+                    held[i].is_some()
                         || match t.states[i] {
                             Row::Running | Row::Waiting(_) => true,
                             Row::Fresh => above_unsettled[i],
@@ -666,7 +676,7 @@ impl Runner {
             &shape,
             &mut state,
             &t,
-            &vec![false; slots.len()],
+            &vec![None; slots.len()],
             &turned_off,
             |_| Vec::new(),
         );
@@ -838,7 +848,7 @@ impl Runner {
         };
         let shape = shape_of(graph, &self.lock_slots);
         let t = tick(&shape, &intent, &facts_of(graph, &state));
-        let held = vec![false; graph.steps.len()];
+        let held = vec![None; graph.steps.len()];
         record_states(graph, &shape, &mut state, &t, &held, &turned_off, |_| {
             Vec::new()
         });
@@ -1105,20 +1115,23 @@ fn turned_off_of(graph: &Graph, all: &BTreeMap<String, String>) -> BTreeMap<usiz
 
 /// Write what the tick made of each step into its record. A step between
 /// passes (`held`: its invocation ended, and what it reads has not
-/// settled) is still running. `serving` names the open requests a step
+/// settled) waits for the producer named there. `serving` names the open requests a step
 /// has work left in, oldest first.
 fn record_states(
     graph: &Graph,
     shape: &Shape,
     state: &mut Record,
     t: &Tick,
-    held: &[bool],
+    held: &[Option<usize>],
     turned_off: &BTreeMap<usize, String>,
     serving: impl Fn(usize) -> Vec<String>,
 ) {
     let id = |j: usize| graph.steps[j].id.as_str();
     for (i, &st) in t.states.iter().enumerate() {
-        let st = if held[i] { Row::Running } else { st };
+        let st = match held[i] {
+            Some(p) => Row::Waiting(Wait::Upstream(p)),
+            None => st,
+        };
         let turned_off_by = turned_off.get(&i).cloned();
         let detail = match st {
             Row::Running if t.stops.contains(&i) => Some(match &turned_off_by {
