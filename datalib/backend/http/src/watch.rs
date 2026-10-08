@@ -103,6 +103,12 @@ pub enum Table {
     #[serde(rename = "storage")]
     #[strum(serialize = "storage")]
     Storage,
+    /// What a person curated: a store under `datalib_curated/` (the
+    /// contacts app's) published a new commit. A draft's autosave is no
+    /// commit, so it sends none.
+    #[serde(rename = "curated")]
+    #[strum(serialize = "curated")]
+    Curated,
 }
 
 impl Table {
@@ -170,6 +176,8 @@ enum Moved {
     RunStore,
     Frontend,
     GridIndex,
+    /// A store under `datalib_curated/`, or that tree appearing.
+    Curated,
     /// The watch's own marker: it delivers.
     Ready,
 }
@@ -207,8 +215,15 @@ fn classify(root: &Path, path: &Path) -> Option<Moved> {
     {
         return Some(Moved::GridIndex);
     }
+    let curated = datalib_core::layout::curated_dir(root);
+    if path == curated || (path.starts_with(&curated) && name.contains(STORE_SUFFIX)) {
+        return Some(Moved::Curated);
+    }
     None
 }
+
+/// What a doltlite store's file name ends with.
+const STORE_SUFFIX: &str = ".doltlite_db";
 
 /// The datasets a part of the run store feeds.
 fn tables_of(part: StorePart) -> &'static [Table] {
@@ -244,6 +259,8 @@ struct Seen {
     runs: BTreeMap<StorePart, i64>,
     /// The grid index's HEAD as of the last burst.
     index_head: Option<String>,
+    /// Each curated store's `main` as of the last burst.
+    curated_heads: BTreeMap<PathBuf, String>,
     /// The last log line read for its chain.
     log_seq: i64,
 }
@@ -253,6 +270,7 @@ impl Seen {
         Seen {
             runs: datalib_runs::versions(root).await,
             index_head: index_head(root).await.unwrap_or(None),
+            curated_heads: curated_heads(root).await,
             log_seq: datalib_runs::last_log_seq(root).await,
         }
     }
@@ -396,6 +414,58 @@ async fn index_head(root: &Path) -> anyhow::Result<Option<String>> {
     Ok(head?.map(|pin| pin.commit().to_string()))
 }
 
+/// The published head of every store under `datalib_curated/`, by file:
+/// one directory per app, its stores directly in it. A store whose head
+/// cannot be read is left out, which says nothing about whether it
+/// moved; the same read-only look as [`index_head`].
+async fn curated_heads(root: &Path) -> BTreeMap<PathBuf, String> {
+    let mut out = BTreeMap::new();
+    let Ok(apps) = std::fs::read_dir(datalib_core::layout::curated_dir(root)) else {
+        return out;
+    };
+    for app in apps.flatten() {
+        let Ok(files) = std::fs::read_dir(app.path()) else {
+            continue;
+        };
+        for file in files.flatten() {
+            let path = file.path();
+            if !path.to_string_lossy().ends_with(STORE_SUFFIX) {
+                continue;
+            }
+            let head = async {
+                let pool = datalib_pin::open_reader(&path).await?;
+                let head = datalib_pin::head(&pool).await;
+                pool.close().await;
+                anyhow::Ok(head?.map(|pin| pin.commit().to_string()))
+            };
+            match head.await {
+                Ok(Some(head)) => {
+                    out.insert(path, head);
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::debug!("watch: {}'s head is unreadable now: {e:#}", path.display())
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Whether any curated store published since `seen`: a head that moved,
+/// or a store that appeared. One that went missing or turned unreadable
+/// keeps its last head, so reading it again is not a move.
+fn curated_moved(now: BTreeMap<PathBuf, String>, seen: &mut BTreeMap<PathBuf, String>) -> bool {
+    let mut moved = false;
+    for (path, head) in now {
+        if seen.get(&path) != Some(&head) {
+            moved = true;
+            seen.insert(path, head);
+        }
+    }
+    moved
+}
+
 /// The frames one debounced burst of file moves becomes.
 async fn expand(root: &Path, moved: &HashSet<Moved>, seen: &mut Seen) -> HashSet<RootFrame> {
     let mut out = HashSet::new();
@@ -433,6 +503,11 @@ async fn expand(root: &Path, moved: &HashSet<Moved>, seen: &mut Seen) -> HashSet
                 Ok(_) => {}
                 Err(e) => tracing::debug!("watch: the grid index's head is unreadable now: {e:#}"),
             },
+            Moved::Curated => {
+                if curated_moved(curated_heads(root).await, &mut seen.curated_heads) {
+                    out.insert(table(Table::Curated));
+                }
+            }
             Moved::Ready => {}
         }
     }
@@ -457,12 +532,28 @@ impl Ready {
     }
 }
 
-pub fn spawn(root: PathBuf, tx: RootTx) -> Ready {
-    spawn_with(root, tx, Timing::default())
+pub fn spawn(root: PathBuf, tx: RootTx) -> Nudge {
+    start(root, tx, Timing::default(), Ears::Os).2
 }
 
 pub fn spawn_with(root: PathBuf, tx: RootTx, timing: Timing) -> Ready {
     start(root, tx, timing, Ears::Os).0
+}
+
+/// Tells the watch that something may have published a commit the
+/// filesystem will not report: a write to a file its writer holds open,
+/// which the OS reports only once it is closed. The applet gateway
+/// nudges after every write it forwards, since a curated store's one
+/// writer is an applet that holds its store open for its life. The
+/// watch then compares the stores' heads, so a nudge that published
+/// nothing sends nothing.
+#[derive(Clone)]
+pub struct Nudge(tokio::sync::mpsc::UnboundedSender<Moved>);
+
+impl Nudge {
+    pub fn an_applet_wrote(&self) {
+        let _ = self.0.send(Moved::Curated);
+    }
 }
 
 /// The watch with no filesystem watcher: it hears only the paths fed to
@@ -472,7 +563,7 @@ pub fn spawn_with(root: PathBuf, tx: RootTx, timing: Timing) -> Ready {
 /// delivers it; fseventsd has held events back for over a minute on a
 /// busy disk.
 pub fn spawn_fed(root: PathBuf, tx: RootTx, timing: Timing) -> (Ready, Feed) {
-    let (ready, feed) = start(root, tx, timing, Ears::Fed);
+    let (ready, feed, _) = start(root, tx, timing, Ears::Fed);
     (ready, feed.expect("a fed watch has a feed"))
 }
 
@@ -493,6 +584,10 @@ pub struct Feed {
 }
 
 impl Feed {
+    pub fn nudge(&self) -> Nudge {
+        Nudge(self.raw_tx.clone())
+    }
+
     /// `path` moved, as the OS would say: through whichever name the
     /// writer used for it.
     pub fn moved(&self, path: &Path) {
@@ -520,7 +615,7 @@ fn hear(moved: Moved, listeners: &Path, raw_tx: &tokio::sync::mpsc::UnboundedSen
 
 type MakeWatcher = Box<dyn Fn() -> notify::Result<notify::RecommendedWatcher> + Send>;
 
-fn start(root: PathBuf, tx: RootTx, timing: Timing, ears: Ears) -> (Ready, Option<Feed>) {
+fn start(root: PathBuf, tx: RootTx, timing: Timing, ears: Ears) -> (Ready, Option<Feed>, Nudge) {
     let (ready_tx, ready) = tokio::sync::oneshot::channel();
     let heartbeat_tx = tx.clone();
     tokio::spawn(async move {
@@ -555,10 +650,15 @@ fn start(root: PathBuf, tx: RootTx, timing: Timing, ears: Ears) -> (Ready, Optio
     // applet, and a root that has never synced has none. Watched once it
     // exists — see the debounce loop below.
     let grid_index = datalib_core::layout::grid_index_dir(&root);
+    // Likewise `datalib_curated/`, which exists once an app made it; its
+    // own watcher is recursive, since each app keeps a directory of its
+    // own, and holds a handful of files.
+    let curated = datalib_core::layout::curated_dir(&root);
 
     // notify calls back on its own thread, so hand off through an
     // unbounded channel rather than doing any work there.
     let (raw_tx, mut raw_rx) = tokio::sync::mpsc::unbounded_channel::<Moved>();
+    let nudge = Nudge(raw_tx.clone());
     let (listening_tx, listening) = tokio::sync::oneshot::channel();
     tokio::spawn(watch_record(root.clone(), raw_tx.clone(), listening_tx));
     let listeners = datalib_dag::supervisor::announce::listeners_dir(&root);
@@ -567,6 +667,7 @@ fn start(root: PathBuf, tx: RootTx, timing: Timing, ears: Ears) -> (Ready, Optio
     let mut make_watcher: Option<MakeWatcher> = None;
     let mut watcher = None;
     let mut index_watcher = None;
+    let mut curated_watcher = None;
     match ears {
         Ears::Fed => {
             feed = Some(Feed {
@@ -587,7 +688,7 @@ fn start(root: PathBuf, tx: RootTx, timing: Timing, ears: Ears) -> (Ready, Optio
                         "watch: could not create a filesystem watcher ({e}); \
                          the UI will not see external changes to this root"
                     );
-                    return (Ready(ready), None);
+                    return (Ready(ready), None, nudge);
                 }
             };
             // Three watches rather than one recursive watch on the root:
@@ -604,7 +705,8 @@ fn start(root: PathBuf, tx: RootTx, timing: Timing, ears: Ears) -> (Ready, Optio
                     tracing::warn!("watch: {} ({e})", dir.display());
                 }
             }
-            index_watcher = watch_index(&grid_index, &*make);
+            index_watcher = watch_dir(&grid_index, RecursiveMode::NonRecursive, &*make);
+            curated_watcher = watch_dir(&curated, RecursiveMode::Recursive, &*make);
             watcher = Some(w);
             make_watcher = Some(make);
         }
@@ -679,7 +781,10 @@ fn start(root: PathBuf, tx: RootTx, timing: Timing, ears: Ears) -> (Ready, Optio
             // does: on macOS every `watch` call restarts the watcher's
             // stream, and a restarted stream loses what lands meanwhile.
             if let (None, Some(make)) = (&index_watcher, &make_watcher) {
-                index_watcher = watch_index(&grid_index, &**make);
+                index_watcher = watch_dir(&grid_index, RecursiveMode::NonRecursive, &**make);
+            }
+            if let (None, Some(make)) = (&curated_watcher, &make_watcher) {
+                curated_watcher = watch_dir(&curated, RecursiveMode::Recursive, &**make);
             }
             if pending.remove(&Moved::Ready) {
                 if let Some(ready_tx) = ready_tx.take() {
@@ -702,7 +807,7 @@ fn start(root: PathBuf, tx: RootTx, timing: Timing, ears: Ears) -> (Ready, Optio
             }
         }
     });
-    (Ready(ready), feed)
+    (Ready(ready), feed, nudge)
 }
 
 /// A watcher reporting what [`classify`] names under `root`.
@@ -737,6 +842,7 @@ fn moved_by(root: &Path, ev: &notify::Event) -> Vec<Moved> {
             Moved::RunStore,
             Moved::Frontend,
             Moved::GridIndex,
+            Moved::Curated,
         ];
     }
     // Reading something is not changing it, and on Linux this is not a
@@ -748,16 +854,17 @@ fn moved_by(root: &Path, ev: &notify::Event) -> Vec<Moved> {
     ev.paths.iter().filter_map(|p| classify(root, p)).collect()
 }
 
-/// A watcher on the grid index's directory, once there is one.
-fn watch_index(
+/// A watcher on a directory a step or an app makes, once there is one.
+fn watch_dir(
     dir: &Path,
+    mode: RecursiveMode,
     make: &dyn Fn() -> notify::Result<notify::RecommendedWatcher>,
 ) -> Option<notify::RecommendedWatcher> {
     if !dir.is_dir() {
         return None;
     }
     let mut watcher = make().ok()?;
-    watcher.watch(dir, RecursiveMode::NonRecursive).ok()?;
+    watcher.watch(dir, mode).ok()?;
     Some(watcher)
 }
 
@@ -1030,7 +1137,8 @@ mod tests {
                 Moved::Config,
                 Moved::RunStore,
                 Moved::Frontend,
-                Moved::GridIndex
+                Moved::GridIndex,
+                Moved::Curated
             ])
         );
         // The same event without the flag is a directory, which is nothing.
@@ -1276,6 +1384,70 @@ mod tests {
         write_index(&db, 200, true).await;
         feed.moved(&db);
         until(&mut rx, RootEvent::IndexChanged).await;
+    }
+
+    /// A curated store reports when it publishes and not when a draft's
+    /// autosave writes the file: an open contact card refetches on the
+    /// one, and would refetch for nothing on every keystroke of the other.
+    /// It is heard even when `datalib_curated/` appears after the watch
+    /// started.
+    #[tokio::test]
+    async fn a_curated_store_reports_its_commits_and_not_its_writes() {
+        let td = tempfile::tempdir().unwrap();
+        let (mut rx, feed) = watching(td.path()).await;
+        let curated = datalib_core::layout::curated_dir(td.path());
+        let db = curated
+            .join("datalib_contacts")
+            .join("contacts.doltlite_db");
+        std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+        let published = RootEvent::TableChanged {
+            table: Table::Curated,
+        };
+
+        write_index(&db, 1, true).await;
+        feed.moved(&curated);
+        until(&mut rx, published).await;
+        barrier(td.path(), &feed, &mut rx).await;
+        for i in 100..105 {
+            write_index(&db, i, false).await;
+            feed.moved(&db);
+        }
+        let got = barrier(td.path(), &feed, &mut rx).await;
+        assert!(
+            !got.contains(&published),
+            "an uncommitted write was reported as published: {got:?}"
+        );
+        write_index(&db, 200, true).await;
+        feed.moved(&db);
+        until(&mut rx, published).await;
+    }
+
+    /// The contacts applet holds its store open for its life, and the OS
+    /// reports a write to a file held open only once it is closed: the
+    /// commit is heard through the gateway's nudge, never the filesystem.
+    /// A nudge that published nothing sends nothing, so the page's own
+    /// refetch after a frame cannot start another.
+    #[tokio::test]
+    async fn a_nudge_reports_what_a_curated_store_published_and_only_that() {
+        let td = tempfile::tempdir().unwrap();
+        let db = datalib_core::layout::curated_dir(td.path())
+            .join("datalib_contacts")
+            .join("contacts.doltlite_db");
+        std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+        write_index(&db, 1, true).await;
+        let (mut rx, feed) = watching(td.path()).await;
+        let nudge = feed.nudge();
+        let published = RootEvent::TableChanged {
+            table: Table::Curated,
+        };
+
+        nudge.an_applet_wrote();
+        let got = barrier(td.path(), &feed, &mut rx).await;
+        assert!(!got.contains(&published), "nothing was published: {got:?}");
+
+        write_index(&db, 2, true).await;
+        nudge.an_applet_wrote();
+        until(&mut rx, published).await;
     }
 
     /// A head that cannot be read says nothing about whether it moved.
