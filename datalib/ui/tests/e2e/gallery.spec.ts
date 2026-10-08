@@ -79,7 +79,7 @@ test.describe("new-card gallery (outside edit mode)", () => {
     await page.goto(GRID);
     await page.locator(".ct-main .ct-add").click();
     const library = page.locator(".gv-row", {
-      has: page.locator(".gv-title", { hasText: /^Your library$/ }),
+      has: page.locator(".gv-title", { hasText: /^Dashboard: Your library$/ }),
     });
     await expect(library).toHaveCount(1);
     await expect(

@@ -146,7 +146,7 @@ export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
     icon: "dashboard",
   },
   syncStatusView: {
-    title: "Sync",
+    title: "Dashboard: Sync",
     description:
       "When the library last synced, and the button that syncs everything. A building block of the Dashboard.",
     icon: "history",
@@ -154,7 +154,7 @@ export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
     devTool: true,
   },
   needsYouView: {
-    title: "Needs you",
+    title: "Dashboard: Needs you",
     description:
       "Sources whose last sync failed or that hold errors, with the fix beside each. A building block of the Dashboard.",
     icon: "problem",
@@ -162,7 +162,7 @@ export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
     devTool: true,
   },
   libraryView: {
-    title: "Your library",
+    title: "Dashboard: Your library",
     description:
       "How many items the library holds, and what takes its space on disk. A building block of the Dashboard.",
     icon: "book",
@@ -170,7 +170,7 @@ export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
     devTool: true,
   },
   sourcesOverviewView: {
-    title: "Sources overview",
+    title: "Dashboard: Sources overview",
     description:
       "Each source's state, when it last synced, its items and its size. A building block of the Dashboard.",
     icon: "sources",
@@ -178,7 +178,7 @@ export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
     devTool: true,
   },
   latestActivityView: {
-    title: "Latest activity",
+    title: "Dashboard: Latest activity",
     description: "The newest documents in the library. A building block of the Dashboard.",
     icon: "document",
     gallery: "latestActivityView()",

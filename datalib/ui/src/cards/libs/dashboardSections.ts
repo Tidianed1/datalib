@@ -11,9 +11,12 @@ import DashboardLibrary from "../DashboardLibrary.ce.vue";
 import DashboardSources from "../DashboardSources.ce.vue";
 import DashboardActivity from "../DashboardActivity.ce.vue";
 import dashboardCss from "../dashboardCard.css?inline";
+import { BUILTIN_META } from "../catalog";
 import { vueCard } from "../vueCard";
 import type { CardRender } from "../types";
 
+// A section's card is titled as the catalog names it ("Dashboard: …"),
+// which is what its tab reads when it is opened on its own.
 function section(
   component: Component,
   title: string,
@@ -27,21 +30,21 @@ function section(
 }
 
 export function syncStatusView(): CardRender {
-  return section(DashboardSyncBar, "Sync", { flush: true });
+  return section(DashboardSyncBar, BUILTIN_META.syncStatusView.title, { flush: true });
 }
 
 export function needsYouView(): CardRender {
-  return section(DashboardNeedsYou, "Needs you");
+  return section(DashboardNeedsYou, BUILTIN_META.needsYouView.title);
 }
 
 export function libraryView(): CardRender {
-  return section(DashboardLibrary, "Your library");
+  return section(DashboardLibrary, BUILTIN_META.libraryView.title);
 }
 
 export function sourcesOverviewView(): CardRender {
-  return section(DashboardSources, "Sources");
+  return section(DashboardSources, BUILTIN_META.sourcesOverviewView.title);
 }
 
 export function latestActivityView(): CardRender {
-  return section(DashboardActivity, "Latest activity", { recent: true });
+  return section(DashboardActivity, BUILTIN_META.latestActivityView.title, { recent: true });
 }
