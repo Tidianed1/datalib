@@ -135,6 +135,17 @@ on its own. It needs a rung on `schema_raw::LADDER` that forgets that
 feed's stamps (`read_again`); the next sync then reads those files
 whole. `tests/fixture_walk.rs`'s `rung_1_…` is the test to copy.
 
+## What renders
+
+`datalib_etl_google_takeout_render` draws every feed through
+chat-common. A Google Chat space or a Voice conversation is a page per
+month; Gemini, YouTube history and Google Maps are each one activity
+feed (`google_takeout_render/src/feeds.rs`), a page per year, and YouTube
+subscriptions, which have no dates, one page. A Gemini entry is two
+items, the prompt by the account and the response by Gemini, its HTML
+turned to markdown; attached files ride on the prompt and generated
+images on the response. Voice bills and greetings are not rendered.
+
 ## Tests
 
 `tests/fixture_walk.rs` points the downloader at the checked-in

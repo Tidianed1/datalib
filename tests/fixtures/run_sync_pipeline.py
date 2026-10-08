@@ -921,18 +921,19 @@ def _source_config(
         # phase.
         source["export"] = {"path": str(input_path), "fetch_photos": True}
     elif type_str == "google_takeout":
-        # Opt into the rendering feeds, Google Chat and Google Voice
-        # (incl. its Spam folder, to exercise that path), and two that do
-        # not render but whose fixture holds entries the ingest skips, so
-        # their problems rows travel the real pipeline. The other feeds
-        # stay off (their extract is the provider's fixture_walk test).
+        # Every feed renders, so every feed is on, Google Voice's Spam
+        # folder included to exercise that path.
         source["export"] = {
             "path": str(input_path),
             "google_chat": True,
             "google_voice": True,
             "google_voice_include_spam": True,
             "youtube_watch_history": True,
+            "youtube_subscriptions": True,
+            "maps_reviews": True,
             "maps_saved_places": True,
+            "maps_photos": True,
+            "gemini_apps": True,
         }
     elif type_str == "sms_backup_restore":
         source["backup"] = {"path": str(input_path)}

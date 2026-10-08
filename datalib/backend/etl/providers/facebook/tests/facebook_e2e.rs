@@ -133,9 +133,9 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
             render_source(&source, &Progress::noop(), &mut on_doc).context("render")?;
         }
 
-        // 5 posts (4 timeline + 1 on another page) + 1 album + comments
-        // over two months + reactions over two months + 3 friends.
-        assert_eq!(docs.len(), 5 + 1 + 2 + 2 + 3, "documents rendered");
+        // 5 posts (4 timeline + 1 on another page) + 1 album + a year of
+        // comments + a year of reactions + 3 friends.
+        assert_eq!(docs.len(), 5 + 1 + 1 + 1 + 3, "documents rendered");
         let all_rows: Vec<_> = docs.iter().flat_map(|d| d.rows.iter()).collect();
         assert!(
             all_rows
@@ -195,18 +195,18 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
             2
         );
 
-        // Comments: one document per month, the title folded in, the
+        // Comments: one document per year, the title folded in, the
         // mojibake'd 🍸 restored.
         let comments: Vec<_> = docs
             .iter()
             .filter(|d| d.rows.iter().any(|r| r.kind == "Facebook Comment"))
             .collect();
-        assert_eq!(comments.len(), 2, "comments span two months");
-        let april = comments
-            .iter()
-            .find(|d| d.md_path.file_name().unwrap() == "2369-04.md")
-            .expect("April comments");
-        let md = fs::read_to_string(&april.md_path)?;
+        let [year] = comments.as_slice() else {
+            let paths: Vec<_> = comments.iter().map(|d| &d.md_path).collect();
+            panic!("two months of comments are one year's document: {paths:?}")
+        };
+        assert_eq!(year.md_path.file_name().unwrap(), "2369.md");
+        let md = fs::read_to_string(&year.md_path)?;
         assert!(md.contains("Guinan's synthehol never disappoints. 🍸"), "{md}");
         assert!(md.contains("*Jean-Luc Picard commented on his own album.*"), "{md}");
 
@@ -215,7 +215,7 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
             .iter()
             .filter(|d| d.rows.iter().any(|r| r.kind == "Facebook Reaction"))
             .collect();
-        assert_eq!(reactions.len(), 2, "reactions span two months");
+        assert_eq!(reactions.len(), 1, "two months of reactions, one year");
         let reaction_rows: Vec<_> = reactions
             .iter()
             .flat_map(|d| d.rows.iter())

@@ -1,7 +1,7 @@
 //! Program-A `DataProcessor`s for the `google_takeout` source. File-backed:
 //! download walks the unzipped Takeout tree at `export.path` and lands the
-//! opted-in feeds into a provider-owned doltlite raw store; render renders
-//! the chat-shaped feeds (Google Chat / Google Voice). The source owns its raw
+//! opted-in feeds into a provider-owned doltlite raw store, which
+//! `datalib_etl_google_takeout_render` renders. The source owns its raw
 //! store (open/commit/checkpoint); the orchestrator only drives `run`.
 
 use datalib_etl_files::fingerprint_cache::{self, FingerprintCache};
