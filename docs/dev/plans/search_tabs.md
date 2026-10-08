@@ -125,13 +125,39 @@ labels, its subject and its own ids. Those sets do not belong in
 table beside it, one row per term:
 
 ```
-grid_row_terms (markdown_uuid, uuid, kind, value)
+grid_row_terms (term_id INTEGER PRIMARY KEY, markdown_uuid, uuid, kind, value)
+grid_row_terms_fts  USING fts5(value, content='', contentless_delete=1,
+                    tokenize="unicode61 tokenchars '@.-_+:'")
 ```
 
-with FTS5 indexing `value`, under a tokenizer that keeps `@ . - _ + :`
-inside a word, so a uuid, an email address or `slack:T…/U…` is one
-token. Tried on doltlite: an address matched in two kinds at once, a
-uuid matched exactly, `budg*` matched by prefix, and a commit worked.
+indexed by `markdown_uuid`, with the FTS5 index over `value` alone,
+linked by rowid. The tokenizer keeps `@ . - _ + :` inside a word, so a
+uuid, an email address or `slack:T…/U…` is one token, matched exactly.
+
+**The terms live in a plain SQLite file beside the grid index,** not
+in it: `unified_index/grid_index/terms.sqlite`, written by `grid_index`
+and attached read-only by each reader of a grid commit. Nobody needs
+the terms' history, and a doltlite store keeps it: with 732k terms, 200
+one-document replaces each committed grew a store 35.5 MB and a plain
+file 0.7 MB, and the plain file built in half the time at a quarter of
+the size. The facts this rests on, the measurement and the two-process
+test are in [`doltlite.md`](../doltlite.md) § "Full-text search
+(FTS5)" and `doltlite_two_process_test`. What a separate file gives up:
+
+- **No shared snapshot.** A reader pinned to a grid commit reads the
+  terms as they are now. `grid_index` writes a document's terms just
+  after sealing the commit that holds its rows, so the terms are at
+  most one pass ahead or behind: a term whose row is not in the commit
+  drops out of the join, and a brand-new row can be missed for that
+  one pass.
+- **No WAL.** Through doltlite a plain file keeps a rollback journal
+  whatever `journal_mode` answers (dolthub/doltlite#3740), so a reader
+  waits while the writer commits. Terms are written one document at a
+  time, in small transactions: the slowest write in the two-process
+  test took 1 ms.
+- **Rebuildable.** The file holds nothing the render stores and
+  `grid_rows` cannot give again, so a missing or damaged one is
+  rebuilt, not migrated.
 
 **`kind` is an enum** (`TermKind`: `id`, `from`, `to`, `cc`, `bcc`,
 `participant`, `mention`, `label`, `title`, `name`, …) with the usual
@@ -213,14 +239,11 @@ and could fold in later too.
 
 ## Order of work
 
-0. **The doltlite facts FTS5 needs,** as tests in
-   `doltlite_facts_test`, before anything is built on them: a reader
-   pinned to one commit (`<file>@<hash>`, the open `grid_index` and the
-   applet's readers use) can `MATCH`, with `doltlite_two_process_test`
-   run with the new statements; what a full build over a real-sized
-   table and a one-document replace cost to write; and how a
-   document's old terms are removed.
-1. **`grid_row_terms`, derived terms only.** The table, the
+0. **The doltlite facts FTS5 needs.** Done in imbue-ai/datalib#1107:
+   the facts in `doltlite_facts_test`, the write cost in
+   `doltlite.md`, and the attached terms file beside a sealing writer
+   in `doltlite_two_process_test`.
+1. **`grid_row_terms`, derived terms only.** The terms file, the
    `TermKind` enum, the derivation in `grid_index`, and bare words and
    identifiers searched through it. An identifier-only query does not
    ask qmd. Test: a uuid search answers without asking qmd at all (the
