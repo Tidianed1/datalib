@@ -75,16 +75,16 @@ test.describe("new-card gallery (outside edit mode)", () => {
     }
   });
 
-  test("a Dashboard section is listed only once the gallery shows every view", async ({ page }) => {
+  test("a Dashboard section is listed among the developer tools", async ({ page }) => {
     await page.goto(GRID);
     await page.locator(".ct-main .ct-add").click();
     const library = page.locator(".gv-row", {
       has: page.locator(".gv-title", { hasText: /^Your library$/ }),
     });
-    await expect(page.locator(".gv-row").first()).toBeVisible();
-    await expect(library).toHaveCount(0);
-    await page.getByLabel("Show every view").check();
     await expect(library).toHaveCount(1);
+    await expect(
+      page.getByRole("region", { name: "Developer tools" }).locator(".gv-row").and(library),
+    ).toHaveCount(1);
     await library.click();
     await expect(cardOf(page, "libraryView()")).toHaveCount(1);
   });

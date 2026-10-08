@@ -8,8 +8,8 @@
 // to a coding agent. An entry whose metadata says `devTool` — the logs,
 // the config, the pipeline graph, the agent entry — is listed after
 // the rest under "Developer tools", a section with a heading and a
-// shaded ground of its own. A builtin that is a building block (a Dashboard
-// section) is listed only once "Show every view" is on. Picking an
+// shaded ground of its own; a building block of a composite (a
+// Dashboard section) is one of them. Picking an
 // entry REPLACES this card — with the chosen component via
 // ctx.host.setSource, or with a copy of the composite via
 // ctx.host.becomeComposite — so the gallery is a transient "what should
@@ -22,25 +22,6 @@ import { editMode } from "@/editMode";
 import { byAudience, galleryBuiltins, type CardMeta } from "../catalog";
 import { resolveIcon } from "../icons";
 import { galleryComposites, loadComposites, savedComposites } from "@/views/composites";
-
-// Whether the gallery lists every view, the building blocks too; kept
-// in this browser.
-const SHOW_ALL_KEY = "datalib-gallery-all";
-function storedShowAll(): boolean {
-  try {
-    return localStorage.getItem(SHOW_ALL_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-const showAll = ref(storedShowAll());
-watch(showAll, (on) => {
-  try {
-    localStorage.setItem(SHOW_ALL_KEY, on ? "1" : "0");
-  } catch {
-    // Blocked storage: the choice lasts as long as the page.
-  }
-});
 
 type GalleryEntry = CardMeta & {
   // Card source the entry expands to, e.g. `gridView()`.
@@ -78,7 +59,6 @@ export function galleryView(): CardRender {
       .gv { position: absolute; inset: 0; overflow-y: auto; font: var(--datalib-font-size, 13px)/1.5 var(--datalib-font, system-ui, sans-serif); color: var(--datalib-fg, inherit); }
       .gv-head { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-bottom: 1px solid var(--datalib-border, #8884); }
       .gv-head-text { flex: 1 1 auto; opacity: .6; }
-      .gv-all { display: flex; align-items: center; gap: 5px; font-size: 12px; cursor: pointer; white-space: nowrap; }
       .gv-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 12px; cursor: pointer; border-bottom: 1px solid var(--datalib-border, #8882); }
       .gv-icon { flex: 0 0 auto; width: 18px; height: 18px; margin-top: 1px; color: var(--datalib-accent); }
       .gv-text { flex: 1 1 auto; min-width: 0; }
@@ -103,9 +83,8 @@ export function galleryView(): CardRender {
     wrap.className = "gv";
     root.appendChild(wrap);
 
-    function paint([manifest, dev, all]: [
+    function paint([manifest, dev]: [
       Map<string, Map<string, import("@/api").Meta>>,
-      boolean,
       boolean,
       unknown,
     ]) {
@@ -115,14 +94,7 @@ export function galleryView(): CardRender {
       const headText = document.createElement("span");
       headText.className = "gv-head-text";
       headText.textContent = "pick what this card should show";
-      const toggle = document.createElement("label");
-      toggle.className = "gv-all";
-      const box = document.createElement("input");
-      box.type = "checkbox";
-      box.checked = all;
-      box.addEventListener("change", () => (showAll.value = box.checked));
-      toggle.append(box, "Show every view");
-      head.append(headText, toggle);
+      head.append(headText);
       wrap.appendChild(head);
 
       // One row per component in every namespace, with its own stored
@@ -196,7 +168,7 @@ export function galleryView(): CardRender {
       for (const c of galleryComposites()) {
         addRow(wrap, c.name, c.description, c.icon, null, () => ctx.host.becomeComposite(c.name));
       }
-      const { views, devTools } = byAudience([...galleryBuiltins(all), ...custom]);
+      const { views, devTools } = byAudience([...galleryBuiltins(), ...custom]);
       for (const entry of views) addEntry(wrap, entry);
 
       // The tools for working on the library itself, apart from the
@@ -208,7 +180,7 @@ export function galleryView(): CardRender {
       heading.className = "gv-dev-head";
       const note = document.createElement("span");
       note.className = "gv-dev-note";
-      note.textContent = "logs, the config, the pipeline, components";
+      note.textContent = "logs, the config, the pipeline, components, building blocks";
       heading.append("Developer tools", note);
       section.appendChild(heading);
       for (const entry of devTools) addEntry(section, entry);
@@ -237,7 +209,7 @@ export function galleryView(): CardRender {
 
     void ensureFrontend();
     void loadComposites();
-    const stop = watch([frontendManifest, editMode, showAll, savedComposites], paint, {
+    const stop = watch([frontendManifest, editMode, savedComposites], paint, {
       immediate: true,
     });
     return () => stop();

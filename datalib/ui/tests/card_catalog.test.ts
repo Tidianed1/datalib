@@ -25,20 +25,6 @@ describe("the card catalog", () => {
     expect(galleryBuiltins()[0].source).toBe("sourcesView()");
   });
 
-  /** A Dashboard section is a building block: listed only when the gallery shows every view. */
-  it("keeps the views a builtin hides out of the gallery until it shows every view", () => {
-    const hidden = Object.values(BUILTIN_META)
-      .filter((m) => m.galleryHidden)
-      .map((m) => m.gallery);
-    expect(hidden).toContain("libraryView()");
-    const shown = galleryBuiltins().map((e) => e.source);
-    const all = galleryBuiltins(true).map((e) => e.source);
-    for (const source of hidden) {
-      expect(shown).not.toContain(source);
-      expect(all).toContain(source);
-    }
-  });
-
   /** The gallery's two groups come from each entry's own `devTool`, not from a list of names. */
   it("lists the developer tools apart from the views, each in catalog order", () => {
     const { views, devTools } = byAudience(galleryBuiltins());
@@ -51,6 +37,12 @@ describe("the card catalog", () => {
       "sourceDagView()",
       'tableView({ url: "/api/manage/rows" })',
       "aliasView()",
+      // The Dashboard's sections: building blocks, rarely wanted alone.
+      "syncStatusView()",
+      "needsYouView()",
+      "libraryView()",
+      "sourcesOverviewView()",
+      "latestActivityView()",
     ]);
     expect(views.length + devTools.length).toBe(galleryBuiltins().length);
   });

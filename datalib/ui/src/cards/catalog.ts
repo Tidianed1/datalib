@@ -14,8 +14,10 @@ export type CardMeta = {
   // A token cards/icons.ts resolves; null draws the default glyph.
   icon: string | null;
   // A tool for working on the library or on datalib itself — its logs,
-  // its config, its pipeline, its components — rather than a view of
-  // the data. The gallery lists these apart, under "Developer tools".
+  // its config, its pipeline, its components — or a building block of
+  // a composite that is rarely wanted alone, such as a Dashboard
+  // section, rather than a view of the data. The gallery lists these
+  // apart, under "Developer tools".
   devTool?: boolean;
 };
 
@@ -23,9 +25,6 @@ type BuiltinMeta = CardMeta & {
   // The source the gallery's entry expands to; absent when the card
   // needs arguments only another card can supply.
   gallery?: string;
-  // Listed only once the gallery shows every view: a building block of
-  // a composite, such as a Dashboard section, that is rarely wanted alone.
-  galleryHidden?: boolean;
 };
 
 /// Every builtin, in gallery order.
@@ -148,46 +147,49 @@ export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
   },
   syncStatusView: {
     title: "Sync",
-    description: "When the library last synced, and the button that syncs everything.",
+    description:
+      "When the library last synced, and the button that syncs everything. A building block of the Dashboard.",
     icon: "history",
     gallery: "syncStatusView()",
-    galleryHidden: true,
+    devTool: true,
   },
   needsYouView: {
     title: "Needs you",
-    description: "Sources whose last sync failed or that hold errors, with the fix beside each.",
+    description:
+      "Sources whose last sync failed or that hold errors, with the fix beside each. A building block of the Dashboard.",
     icon: "problem",
     gallery: "needsYouView()",
-    galleryHidden: true,
+    devTool: true,
   },
   libraryView: {
     title: "Your library",
-    description: "How many items the library holds, and what takes its space on disk.",
+    description:
+      "How many items the library holds, and what takes its space on disk. A building block of the Dashboard.",
     icon: "book",
     gallery: "libraryView()",
-    galleryHidden: true,
+    devTool: true,
   },
   sourcesOverviewView: {
     title: "Sources overview",
-    description: "Each source's state, when it last synced, its items and its size.",
+    description:
+      "Each source's state, when it last synced, its items and its size. A building block of the Dashboard.",
     icon: "sources",
     gallery: "sourcesOverviewView()",
-    galleryHidden: true,
+    devTool: true,
   },
   latestActivityView: {
     title: "Latest activity",
-    description: "The newest documents in the library.",
+    description: "The newest documents in the library. A building block of the Dashboard.",
     icon: "document",
     gallery: "latestActivityView()",
-    galleryHidden: true,
+    devTool: true,
   },
 };
 
-/// The builtins the gallery offers, in order, each with its source;
-/// with `all`, the ones hidden by default too.
-export function galleryBuiltins(all = false): (CardMeta & { source: string })[] {
+/// The builtins the gallery offers, in order, each with its source.
+export function galleryBuiltins(): (CardMeta & { source: string })[] {
   return Object.values(BUILTIN_META).flatMap((m) =>
-    m.gallery && (all || !m.galleryHidden)
+    m.gallery
       ? [
           {
             title: m.title,
