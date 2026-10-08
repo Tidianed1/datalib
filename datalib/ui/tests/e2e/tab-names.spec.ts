@@ -25,7 +25,7 @@ test("a card's requests name the card and its type", async ({ page }) => {
   await page.goto(GRID);
   const headers = (await search).headers();
   expect(headers["x-datalib-card"]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab]/);
-  expect(headers["x-datalib-card-type"]).toBe("gridView");
+  expect(headers["x-datalib-card-type"]).toBe("searchView");
 });
 
 test("a renamed tab keeps its name through a search and a reload", async ({ page }) => {

@@ -33,11 +33,11 @@ export const SEARCH_ROWS = ".grid-box .slick-row";
 
 /// The search grid on its default query, documents only. `/` opens on
 /// the Dashboard card now, so a spec about the grid goes here.
-export const GRID = "/gridView()";
+export const GRID = "/searchView()";
 
 /// The search grid with its query cleared: every row, the messages
 /// inside a document included. `GRID` opens on documents only.
-export const EVERY_ROW = "/gridView()::q%3D";
+export const EVERY_ROW = "/searchView()::q%3D";
 
 /// The Manage header's sync button, whichever way it faces: Sync
 /// everything, or Stop everything while anything syncs.
@@ -399,20 +399,20 @@ export type RowReading = {
   status: string;
   /// The exact instants, off the stamps' `title`. Not the visible
   /// "5 minutes ago", which drifts on its own. `lastSynced` is the stamp
-  /// beside the Last update glyph, which on a step is its last sync.
+  /// beside the Status glyph, which on a step is its last sync.
   /// Null: the step never ran (or never succeeded), or its column is
   /// hidden — `lastSuccessOf` shows it first.
   lastSynced: string | null;
   lastSuccess: string | null;
   /// The Bytes label over the sparkline, as drawn. Null: nothing on disk.
   disk: string | null;
-  /// The Queue and ETA cells as drawn — a figure, or a word such as
-  /// "stalled"; "" when blank.
+  /// The queue and the ETA as the Status cell draws them after the
+  /// status — a figure, or a word such as "stalled"; "" when absent.
   queue: string;
   eta: string;
 };
 
-/// The time beside the Last update glyph; absent on a row that never ran.
+/// The time beside the Status glyph; absent on a row that never ran.
 export const LAST_UPDATE_AT = '[col-id="status"] .tg-status-at';
 
 /// How long a row may take to be drawn: a remount fetches the rows after
@@ -432,7 +432,9 @@ export async function sampleRow(page: Page, id: string): Promise<RowReading | nu
           ?.getAttribute("aria-label");
         if (!status) return null;
         const quantity = (el: Element, col: string) => {
-          const text = el.querySelector(`[col-id="${col}"] .tg-quantity`)?.textContent?.trim();
+          const text = el
+            .querySelector(`[col-id="status"] .sx-${col} .tg-quantity`)
+            ?.textContent?.trim();
           return !text || text === "—" ? "" : text;
         };
         const stamp = (col: string) =>

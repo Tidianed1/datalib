@@ -141,7 +141,7 @@ async function runCard() {
       }
       intro.textContent = "empty card — type source above and press Enter, e.g.:";
       const examples = [
-        "gridView()",
+        "searchView()",
         'documentView("uuid")',
         "galleryView()",
         "aliasView()",
