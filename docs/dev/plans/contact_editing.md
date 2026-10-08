@@ -20,6 +20,37 @@ It is the first place in datalib where a person edits data rather than
 mirrors it, so it also sets the pattern any later editable record
 follows: drafts, saving, seeing someone else's change, undo.
 
+## The card shows a person; only your contact is editable
+
+The card is a viewer of everything the mirror says about a person:
+each source's record of them (a `NormalizedContact` from `/people`,
+which needs no contacts app) and, when the contacts app is configured,
+your own contact, the one part that can be edited. Without the app the
+card is read-only and still useful: it is what WhatsApp, Slack and the
+address book each say about this person.
+
+- **It opens from any person chip**, resolved or not: double-click, as
+  for a group or step chip (`docs/dev/chips.md` § "Clicks"). The card
+  source names a handle and the source the chip was seen in,
+  `personSource(handle, { seenIn })` in `cardSources.ts`, and the card
+  asks `people` for the rest. "Everything from them" (`searchQueryFor`)
+  becomes a button on the card. A single click still opens the link
+  popover: linking or creating stays one gesture where you are reading.
+- **What it is about depends on the link.** A handle linked to your
+  contact opens that contact's card, whichever of its handles was
+  clicked, headed with its name and "your contact"; it lists each of
+  its handles with the source records for each. An unlinked handle
+  opens a card about the handle itself, headed with the handle and "not
+  linked", with *Create contact* where the app is configured.
+- **Each source's record stays its own section**, headed by the
+  source's mark and name, never merged with another. One `tel:` handle
+  can carry WhatsApp's record, the SMS backup's and Signal's, and they
+  may even be different people (a household landline). Where they
+  disagree the card shows both.
+- **The source the chip was seen in comes first**, marked "seen here",
+  so a double-click in a WhatsApp chat lands on WhatsApp's record of
+  that number with the others below it.
+
 ## Words
 
 [`../contacts.md`](../contacts.md) §"Words" holds. Also:
@@ -223,10 +254,12 @@ only ever reads.
 2. **The store**: the `fields` table (a ladder rung), drafts, save,
    history and revert.
 3. **The applet's routes and the live frame.**
-4. **The card**: viewing; editing with drafts and the three-way marks;
-   copying from sources; the chip's double-click opening it
-   (`onChipDblClick` in `ChatBody.ce.vue`, `onDblClick` in
-   `GridCard.ce.vue`; the card's source builder goes in
-   `cardSources.ts`). An e2e spec on the `contacts` project's root.
-5. **The export.**
-6. **Publishing to CardDAV.**
+4. **The card as a viewer**, which needs nothing above: the chip's
+   double-click opening it (`onChipDblClick` in `ChatBody.ce.vue`,
+   `onDblClick` in `GridCard.ce.vue`, `personSource` in
+   `cardSources.ts`), the person column of `docs/dev/chips.md`
+   § "Clicks". An e2e spec on the `contacts` project's root.
+5. **The card as an editor**: drafts and the three-way marks, copying
+   from sources.
+6. **The export.**
+7. **Publishing to CardDAV.**
