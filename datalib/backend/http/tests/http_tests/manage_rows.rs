@@ -154,8 +154,6 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
             "identity",
             "actions",
             "status",
-            "quantity",
-            "quantity",
             "timeseries",
             "timestamp",
             "timestamp",

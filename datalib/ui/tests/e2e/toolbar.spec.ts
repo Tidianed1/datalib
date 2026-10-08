@@ -4,7 +4,10 @@ import { cardOf, shownCards, shownTabName, stubClipboard, tabLabels } from "./gr
 // The chrome around the cards: the toolbar's search box opens a search
 // card on what was typed, and ⌘K (Ctrl+K) reaches it from anywhere;
 // the status bar's "Logs" reveals the log once. Each opens a tab of
-// its own. A new window opens on the Dashboard.
+// its own. A new window opens on the Dashboard, the first of its three
+// pinned tabs.
+
+const PINNED = ["Dashboard", "Search", "Sources"];
 
 const searchBox = (page: import("@playwright/test").Page) =>
   page.getByRole("searchbox", { name: "Search your data" });
@@ -12,19 +15,20 @@ const searchBox = (page: import("@playwright/test").Page) =>
 test.describe("toolbar", () => {
   test("a new window opens on the Dashboard", async ({ page }) => {
     await page.goto("/");
-    await expect(tabLabels(page)).toHaveText(["Dashboard"]);
+    await expect(tabLabels(page)).toHaveText(PINNED);
+    await expect(shownTabName(page)).toHaveText("Dashboard");
     await expect(shownCards(page)).toHaveCount(5);
   });
 
   test("the search box opens a search card on what was typed", async ({ page }) => {
     await page.goto("/");
-    await expect(tabLabels(page)).toHaveText(["Dashboard"]);
+    await expect(tabLabels(page)).toHaveText(PINNED);
     await searchBox(page).fill("warp");
     await searchBox(page).press("Enter");
     const card = cardOf(page, 'searchView({"q":"warp"})');
     await expect(card).toBeVisible();
     await expect(shownTabName(page)).toHaveText("Search: warp");
-    await expect(tabLabels(page)).toHaveCount(2);
+    await expect(tabLabels(page)).toHaveCount(4);
     // The box empties, ready for the next search.
     await expect(searchBox(page)).toHaveValue("");
   });
@@ -45,7 +49,7 @@ test.describe("toolbar", () => {
     await expect(cardOf(page, "logView()")).toHaveCount(1);
 
     await page.getByRole("button", { name: "Logs" }).click();
-    await expect(tabLabels(page)).toHaveCount(2);
+    await expect(tabLabels(page)).toHaveCount(4);
     await expect(cardOf(page, "logView()")).toHaveCount(1);
   });
 

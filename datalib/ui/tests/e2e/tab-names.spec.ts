@@ -4,8 +4,8 @@
 import { test, expect, type Page } from "@playwright/test";
 import { GRID, tabLabels } from "./grid-helpers";
 
-// The tab GRID opens, after the Dashboard's.
-const gridTab = (page: Page) => tabLabels(page).nth(1);
+// The tab GRID opens, after the three pinned ones.
+const gridTab = (page: Page) => tabLabels(page).nth(3);
 const nameBox = (page: Page) => page.getByLabel("Name", { exact: true });
 
 async function search(page: Page, q: string) {
@@ -25,7 +25,7 @@ test("a card's requests name the card and its type", async ({ page }) => {
   await page.goto(GRID);
   const headers = (await search).headers();
   expect(headers["x-datalib-card"]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab]/);
-  expect(headers["x-datalib-card-type"]).toBe("gridView");
+  expect(headers["x-datalib-card-type"]).toBe("searchView");
 });
 
 test("a renamed tab keeps its name through a search and a reload", async ({ page }) => {

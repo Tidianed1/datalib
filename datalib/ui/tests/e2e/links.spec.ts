@@ -11,8 +11,9 @@ const chatPreview = `${SHOWN_CARDS} .chat-preview`;
 
 test("a URL naming cards opens them as a tab, and the address goes back to /", async ({ page }) => {
   await page.goto(GRID);
-  await expect(cardOf(page, "gridView()")).toHaveCount(1);
-  await expect(tabLabels(page)).toHaveText(["Dashboard", "Search"]);
+  await expect(cardOf(page, "searchView()")).toHaveCount(1);
+  // The three pinned tabs, then the grid's, which also calls itself Search.
+  await expect(tabLabels(page)).toHaveText(["Dashboard", "Search", "Sources", "Search"]);
   await expect.poll(() => page.evaluate(() => location.pathname)).toBe("/");
 });
 

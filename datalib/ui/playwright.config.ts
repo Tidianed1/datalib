@@ -476,7 +476,12 @@ export default defineConfig({
       cookies: [],
       origins: SERVERS.map((s) => ({
         origin: s.url,
-        localStorage: [{ name: "datalib-layout-unsaved", value: "1" }],
+        localStorage: [
+          { name: "datalib-layout-unsaved", value: "1" },
+          // A search opens on the view picked last (searchViewPref.ts);
+          // most specs are about the table, so that is the one picked.
+          { name: "datalib-search-view", value: "table" },
+        ],
       })),
     },
     headless: true,

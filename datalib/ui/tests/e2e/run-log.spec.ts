@@ -48,7 +48,12 @@ async function scrollLogToStart(dialog: Locator) {
             ).__fwRunLogApi.hasOlder(),
           );
       },
-      { message: "the log's first line was never read" },
+      // One older page is read per scroll to the top, and how many pages
+      // there are grows with everything the suite has made this server
+      // log before this spec runs. So the wait is per page, at a steady
+      // pace, with room for a long log; the default backs off to a
+      // second between tries and gives up after a handful of pages.
+      { message: "the log's first line was never read", timeout: 20_000, intervals: [150] },
     )
     .toBe(false);
   await viewport.evaluate((el) => (el.scrollTop = 0));

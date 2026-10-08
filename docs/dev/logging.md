@@ -160,7 +160,7 @@ on screen.
   counts against the rows.
 - **A number** — rows written, requests made, queue depth — is a
   `metric` event, not a sentence with a number in it. The Manage
-  screen's Queue and ETA and the sync dashboard's charts come from
+  screen's queue and ETA (in its Status column) and the sync dashboard's charts come from
   `metric_samples`.
 - **A secret.** The request log drops `?token=`; a line you write must
   not carry a credential either.
