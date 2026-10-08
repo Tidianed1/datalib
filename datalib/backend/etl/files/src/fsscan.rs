@@ -557,6 +557,7 @@ where
             cursor: fswalk::StampCursor {
                 mtime_ns: fresh.mtime_ns,
                 size: fresh.size,
+                ctime_ns: fresh.ctime_ns,
                 stamp_kind: fswalk::stamp_kind_for(&fresh),
                 inode: fresh.inode,
                 dev: fresh.dev,

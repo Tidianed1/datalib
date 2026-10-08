@@ -636,7 +636,7 @@ async fn ingest_attachment(
         Ok(bytes) => {
             media
                 .acc
-                .add_fetched(owning_event_uuid, &blob_id, bytes, mime, None);
+                .add_fetched(owning_event_uuid, &blob_id, bytes, mime);
             summary.blobs += 1;
         }
         // Not cached by the desktop app, most often: a later run with the

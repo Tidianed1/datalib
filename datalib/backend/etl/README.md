@@ -551,6 +551,13 @@ hash and stored exactly once in `cas_objects`; each provider declares its
 own edge table, `(id, <owning>, <ref>, blake3)`, with `#[derive(CasEdgeRow)]`
 ([`macros/README.md`](macros/README.md)).
 
+**The CAS names bytes itself.** `BlobCas::put_many` takes bytes and the
+caller's own id for them (`CasInsert`), hashes each, and answers each id
+with the key its bytes went in under; an edge takes its hash from that
+answer. No caller hands the CAS a key, so no key can name other bytes. A
+hash a caller already had (a scan's, a stored edge's) only decides what
+to skip reading, never what read bytes are called.
+
 The bundle is the common vocabulary at both ends. Download adds bytes as they
 arrive and drains the bundle at end of bucket; parse loads every document's
 bundle at once with `BlobBundle::load_many`; render then consumes an
@@ -568,8 +575,10 @@ two real stores a doltlite CAS was 2.1× and 4.7× its payload
 lock, the writer branch, the seal and the pin do not apply here.
 
 **Bytes commit before the rows that name them, by construction.**
-`BlobCas::put_many` commits its own transaction, and `flush_cas_edges`
-calls it before it writes the edge rows. A reader pinned at any entities
+`BlobCas::put_many` commits its own transaction, and the edge rows are
+built from the keys it returns, so they are written after it
+(`CasEdgeAccumulator::flush` does both; `flush_cas_edges` writes only the
+edges). A reader pinned at any entities
 commit therefore finds every blob that commit names, and a reader of the
 CAS sees committed transactions only, so there is nothing to pin. The
 connection runs `synchronous=FULL` so that order survives a power cut.

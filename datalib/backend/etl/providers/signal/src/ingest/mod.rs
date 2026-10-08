@@ -385,12 +385,13 @@ fn compute_snapshot_blake3(snapshot_dir: &Path) -> Result<(String, u64)> {
 #[derive(Default)]
 struct PendingAttachments {
     /// One row per attempted attachment slot (success + failure
-    /// alike). On success carries `blake3 = Some(hex)`; on
-    /// failure (file missing, decrypt failed) carries
-    /// `blake3 = None` + an `errors` entry below.
+    /// alike). A row whose bytes are in `cas_items` gets its `blake3`
+    /// from the CAS at the flush; a failure (file missing, decrypt
+    /// failed) keeps `blake3 = None` + an `errors` entry below.
     rows: Vec<schema_raw::ChatItemAttachmentRow>,
-    /// Plaintext bytes ready for the CAS, paired with their hash
-    /// and content_type. One entry per successful attachment.
+    /// Plaintext bytes ready for the CAS, with the index of their row
+    /// in `rows` and their content type. One entry per successful
+    /// attachment.
     /// Decrypted bytes can be large; we accumulate them in memory
     /// only between the frame walk and the end-of-fetch flush, then
     /// drop them — no per-row buffer outlives the flush.
@@ -402,7 +403,7 @@ struct PendingAttachments {
 }
 
 struct DecryptedCas {
-    blake3: String,
+    row: usize,
     content_type: Option<String>,
     bytes: Vec<u8>,
 }
@@ -497,17 +498,16 @@ fn ingest_attachment(
         }
     };
 
-    let blake3 = datalib_etl::blob_cas::blake3_hex(&plaintext);
+    pending.cas_items.push(DecryptedCas {
+        row: pending.rows.len(),
+        content_type: att.pointer.as_ref().and_then(|p| p.content_type.clone()),
+        bytes: plaintext,
+    });
     pending.rows.push(schema_raw::ChatItemAttachmentRow {
         id: attachment_id,
         chat_item_id: chat_item_pk.to_string(),
         ref_id: media_name,
-        blake3: Some(blake3.clone()),
-    });
-    pending.cas_items.push(DecryptedCas {
-        blake3,
-        content_type: att.pointer.as_ref().and_then(|p| p.content_type.clone()),
-        bytes: plaintext,
+        blake3: None,
     });
     summary.blobs += 1;
 }
@@ -532,29 +532,29 @@ fn locate(att: &backup::MessageAttachment) -> Result<(Vec<u8>, [u8; 64]), &'stat
     }
 }
 
-/// End-of-fetch flush. Delegates to the shared
-/// [`datalib_etl::blob_cas::flush_cas_edges`] primitive: CAS
-/// `put_many` for newly-decrypted bytes → bulk UPSERT
-/// `chat_item_attachments` → bookkeeping `last_error` stamps.
+/// End-of-fetch flush: CAS `put_many` for newly-decrypted bytes, each
+/// row taking the key its bytes were stored under, then the shared
+/// [`datalib_etl::blob_cas::flush_cas_edges`] (bulk UPSERT
+/// `chat_item_attachments` → bookkeeping `last_error` stamps).
 async fn flush_attachments(db: &RawDb, pending: PendingAttachments) -> Result<()> {
     use datalib_etl::blob_cas::CasInsert;
-    let cas_inserts: Vec<CasInsert<'_>> = pending
-        .cas_items
+    let PendingAttachments {
+        mut rows,
+        cas_items,
+        errors,
+    } = pending;
+    let cas_inserts: Vec<CasInsert<'_, usize>> = cas_items
         .iter()
         .map(|c| CasInsert {
-            blake3: &c.blake3,
+            id: c.row,
             bytes: &c.bytes,
             content_type: c.content_type.as_deref(),
         })
         .collect();
-    datalib_etl::blob_cas::flush_cas_edges(
-        db.pool(),
-        db.cas(),
-        &cas_inserts,
-        pending.rows,
-        &pending.errors,
-    )
-    .await
+    for (row, key) in db.cas().put_many(cas_inserts).await? {
+        rows[row].blake3 = Some(key);
+    }
+    datalib_etl::blob_cas::flush_cas_edges(db.pool(), rows, &errors).await
 }
 
 /// A blob this provider could not read or decrypt. Signal has no

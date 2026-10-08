@@ -42,7 +42,8 @@ pub fn note_for_page(number: u32) -> String {
     )
 }
 
-pub fn convert(path: &Path) -> Result<Vec<Page>> {
+/// `bytes` are the PDF; `path` is where they were read, for messages.
+pub fn convert(bytes: &[u8], path: &Path) -> Result<Vec<Page>> {
     let md = pdf_inspector::MarkdownOptions {
         // We split on these markers to build per-page sections, so they
         // are required, not cosmetic.
@@ -60,7 +61,7 @@ pub fn convert(path: &Path) -> Result<Vec<Page>> {
         markdown: md,
         ..pdf_inspector::PdfOptions::new()
     };
-    let res = pdf_inspector::process_pdf_with_options(path, opts)
+    let res = pdf_inspector::process_pdf_mem_with_options(bytes, opts)
         .map_err(|e| anyhow::anyhow!("convert {}: {e}", path.display()))?;
     let raw = res
         .markdown

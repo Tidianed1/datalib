@@ -172,7 +172,7 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
         ));
     }
 
-    summary.blobs_stored = acc.bundle_mut().cas_inserts().len();
+    summary.blobs_stored = acc.fetched_len();
 
     // Whether this run may delete what no file holds: only right after
     // reading every one of them.
@@ -344,7 +344,6 @@ fn ingest_mms(
             &ref_name,
             blob.bytes.clone(),
             Some(blob.content_type.clone()),
-            Some(blob.name.clone()),
         );
         *n_attachments += 1;
         attachment_refs.push(ref_name);

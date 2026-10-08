@@ -59,6 +59,16 @@ The scan goes on, and what it could not do is a `problems` row:
   it.
   The fixture's `holodeck/corrupt.pdf` is one, on purpose. No grid row
   carries it: a document that never identified never renders.
+- **A file that changed after its hash was taken.** The scan's hash only
+  decides whether to look; a document read is named by the hash of the
+  bytes it was classified from
+  (`a_document_the_scan_misjudged_is_named_by_what_was_read`). Render
+  converts only bytes that hash to the document. A file that no longer
+  does renders as a stand-in: its document row, a page saying its pages
+  are missing, and a `problems` row, until the next sync reads it
+  (`a_document_whose_file_changed_since_the_download_is_a_stand_in`).
+  A cold render produces the same stand-in, so nothing depends on what
+  an earlier run left behind.
 
 ## Why no OCR yet
 

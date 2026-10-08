@@ -118,13 +118,13 @@ appends.
 
 `fsscan` + `file_checkpoint`, the same pair `contacts`' `.vcf` mode and
 `google_takeout` use: the host-wide fingerprint cache decides which
-files to re-hash (`(mtime, size, inode, dev)` unchanged → reuse the
+files to re-hash (`(mtime, size, ctime, inode, dev)` unchanged → reuse the
 hash), and `ingested_files` decides which to re-parse (hash unchanged →
 skip). Measured over the SMB mount: **17 s cold for the 31 files, 3.9 s
 warm with 30 skipped** — the month being written is re-read whole
 every run, which is a few thousand lines. macOS's SMB client
 synthesizes inodes; on a filesystem without them the cursor falls back
-to `(mtime, size)`, and the worst case after a remount is a re-hash of
+to `(mtime, size, ctime)`, and the worst case after a remount is a re-hash of
 8.5 MB, never a re-ingest.
 
 A reset (`datalib-dag --reset <group>/ingest`) empties the store, the

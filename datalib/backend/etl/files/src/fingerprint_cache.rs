@@ -135,10 +135,16 @@ pub const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS fingerprints (
     blake3      BLOB NOT NULL,
     mtime_ns    INTEGER NOT NULL,
     size        INTEGER NOT NULL,
+    ctime_ns    INTEGER,
     stamp_kind  TEXT NOT NULL,
     inode       INTEGER,
     dev         INTEGER
 )";
+
+/// The shape of [`SCHEMA`], kept in the file's `user_version`. A cache in
+/// any other shape is dropped and refilled: it is a cache, so that costs
+/// one rehash of whatever is scanned next, and nothing else.
+const SCHEMA_VERSION: i64 = 2;
 
 pub fn default_cache_path() -> Result<PathBuf> {
     cache_path_from_env(|key| std::env::var_os(key), cfg!(target_os = "macos"))
@@ -206,10 +212,37 @@ impl FingerprintCache {
             .connect_with(opts)
             .await
             .with_context(|| format!("open fingerprint cache {}", path.display()))?;
-        sqlx::query(SCHEMA)
-            .execute(&pool)
+        // One write transaction, because steps running side by side open
+        // this one file: another's check must not see the old table gone
+        // and the new one not yet made, or drop the table it just made.
+        let mut tx = pool
+            .begin_with("BEGIN IMMEDIATE")
             .await
-            .context("create fingerprints table")?;
+            .context("lock fingerprint cache to check its shape")?;
+        let version: i64 = sqlx::query_scalar("PRAGMA user_version")
+            .fetch_one(&mut *tx)
+            .await
+            .context("read fingerprint cache version")?;
+        if version != SCHEMA_VERSION {
+            sqlx::query("DROP TABLE IF EXISTS fingerprints")
+                .execute(&mut *tx)
+                .await
+                .context("drop an older fingerprints table")?;
+            sqlx::query(SCHEMA)
+                .execute(&mut *tx)
+                .await
+                .context("create fingerprints table")?;
+            // Audited: an integer constant, not input.
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "PRAGMA user_version = {SCHEMA_VERSION}"
+            )))
+            .execute(&mut *tx)
+            .await
+            .context("stamp fingerprint cache version")?;
+        }
+        tx.commit()
+            .await
+            .context("commit fingerprint cache shape")?;
         // Absolute, and resolved after creation so the file exists to
         // canonicalize. A relative `--cache-db fp.sqlite` otherwise
         // reports "fp.sqlite", which does not say where.
@@ -233,7 +266,7 @@ impl FingerprintCache {
         let root_s = canonical_root(root).display().to_string();
         let prefix = format!("{}/", root_s.trim_end_matches('/'));
         let rows = sqlx::query(
-            "SELECT abs_path, kind, blake3, mtime_ns, size, stamp_kind, inode, dev \
+            "SELECT abs_path, kind, blake3, mtime_ns, size, ctime_ns, stamp_kind, inode, dev \
              FROM fingerprints WHERE abs_path = ? OR abs_path GLOB ?",
         )
         .bind(&root_s)
@@ -258,6 +291,7 @@ impl FingerprintCache {
             let cursor = StampCursor {
                 mtime_ns: row.try_get("mtime_ns")?,
                 size: row.try_get("size")?,
+                ctime_ns: row.try_get("ctime_ns")?,
                 stamp_kind: StampKind::from_str_or_rescan(&row.try_get::<String, _>("stamp_kind")?),
                 inode: row.try_get("inode")?,
                 dev: row.try_get("dev")?,
@@ -269,6 +303,39 @@ impl FingerprintCache {
         Ok(tree)
     }
 
+    /// Make the cached row for `path` match the file's stat now, keeping
+    /// its hash, so the next scan vouches for the file without opening it.
+    /// Wrong for anything but a test: it stands in for a file that changed
+    /// between a scan and a read of it, which a chmod cannot, since a chmod
+    /// moves the change time.
+    pub async fn restamp_for_test(&self, path: &Path) -> Result<()> {
+        let fresh = crate::fswalk::fresh_stat(
+            &std::fs::metadata(path).with_context(|| format!("stat {}", path.display()))?,
+        );
+        let key = path
+            .canonicalize()
+            .with_context(|| format!("resolve {}", path.display()))?
+            .display()
+            .to_string();
+        let done = sqlx::query(
+            "UPDATE fingerprints SET mtime_ns = ?, size = ?, ctime_ns = ?, inode = ?, dev = ? \
+             WHERE abs_path = ?",
+        )
+        .bind(fresh.mtime_ns)
+        .bind(fresh.size)
+        .bind(fresh.ctime_ns)
+        .bind(fresh.inode)
+        .bind(fresh.dev)
+        .bind(&key)
+        .execute(&self.pool)
+        .await
+        .context("restamp a fingerprint")?;
+        if done.rows_affected() != 1 {
+            bail!("no cached fingerprint for {key}");
+        }
+        Ok(())
+    }
+
     pub async fn store(&self, batch: &[Fingerprint]) -> Result<()> {
         if batch.is_empty() {
             return Ok(());
@@ -277,11 +344,12 @@ impl FingerprintCache {
         for fp in batch {
             sqlx::query(
                 "INSERT INTO fingerprints
-                     (abs_path, kind, blake3, mtime_ns, size, stamp_kind, inode, dev)
-                 VALUES (?,?,?,?,?,?,?,?)
+                     (abs_path, kind, blake3, mtime_ns, size, ctime_ns, stamp_kind, inode, dev)
+                 VALUES (?,?,?,?,?,?,?,?,?)
                  ON CONFLICT(abs_path) DO UPDATE SET
                      kind=excluded.kind, blake3=excluded.blake3,
                      mtime_ns=excluded.mtime_ns, size=excluded.size,
+                     ctime_ns=excluded.ctime_ns,
                      stamp_kind=excluded.stamp_kind,
                      inode=excluded.inode, dev=excluded.dev",
             )
@@ -290,6 +358,7 @@ impl FingerprintCache {
             .bind(&fp.blake3[..])
             .bind(fp.cursor.mtime_ns)
             .bind(fp.cursor.size)
+            .bind(fp.cursor.ctime_ns)
             .bind(fp.cursor.stamp_kind.as_str())
             .bind(fp.cursor.inode)
             .bind(fp.cursor.dev)
@@ -389,6 +458,7 @@ mod tests {
         StampCursor {
             mtime_ns: mtime,
             size,
+            ctime_ns: Some(mtime + 1),
             stamp_kind: if inode.is_some() {
                 StampKind::Inode
             } else {
@@ -431,6 +501,73 @@ mod tests {
             !path.with_extension("sqlite-lock").exists(),
             "a doltlite `.-lock` sidecar appeared beside the cache"
         );
+    }
+
+    /// A cache an older build wrote has no ctime to compare, so its rows
+    /// would vouch for files the current check would rehash. It goes.
+    #[tokio::test]
+    async fn a_cache_in_an_older_shape_is_dropped_not_read() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("c.sqlite");
+        let old = SqlitePoolOptions::new()
+            .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(&path)
+                    .create_if_missing(true),
+            )
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE fingerprints (abs_path TEXT PRIMARY KEY, kind TEXT NOT NULL, \
+             blake3 BLOB NOT NULL, mtime_ns INTEGER NOT NULL, size INTEGER NOT NULL, \
+             stamp_kind TEXT NOT NULL, inode INTEGER, dev INTEGER)",
+        )
+        .execute(&old)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO fingerprints VALUES ('/r/a', 'file', zeroblob(32), 1, 1, 'inode', 1, 1)",
+        )
+        .execute(&old)
+        .await
+        .unwrap();
+        old.close().await;
+
+        let cache = FingerprintCache::open(&path).await.unwrap();
+        assert!(cache.load_under(Path::new("/r")).await.unwrap().is_empty());
+        cache
+            .store(&[fp(Path::new("/r"), "a", EntryKind::File, 1)])
+            .await
+            .unwrap();
+        let tree = cache.load_under(Path::new("/r")).await.unwrap();
+        assert_eq!(tree.cursor("a").unwrap().ctime_ns, Some(1_002));
+        cache.pool().close().await;
+    }
+
+    /// Steps running side by side open one cache file. One open's shape
+    /// check dropped the table another had just made, and that one's
+    /// first read failed with "no such table".
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn opens_side_by_side_never_see_the_table_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("c.sqlite");
+        let opens: Vec<_> = (0..16)
+            .map(|_| {
+                let path = path.clone();
+                tokio::spawn(async move {
+                    let cache = FingerprintCache::open(&path).await?;
+                    cache.load_under(Path::new("/r")).await?;
+                    cache.pool().close().await;
+                    anyhow::Ok(())
+                })
+            })
+            .collect();
+        for open in opens {
+            open.await.unwrap().unwrap();
+        }
     }
 
     #[tokio::test]

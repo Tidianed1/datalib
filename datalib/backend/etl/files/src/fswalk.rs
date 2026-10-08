@@ -76,11 +76,10 @@ pub fn hash_symlink_target(target: &[u8]) -> Blake3 {
 /// this row was recorded from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StampKind {
-    /// `(mtime, size, inode, dev)` all compared. The normal case.
+    /// `(mtime, size, ctime, inode, dev)` all compared. The normal case.
     Inode,
     /// Inode is not stable here (some FUSE mounts, some network
-    /// filesystems), so only `(mtime, size)` are compared. Less safe,
-    /// but it is Unison's own behavior on those filesystems.
+    /// filesystems), so only `(mtime, size, ctime)` are compared.
     NoStamp,
     /// Forces a rehash regardless of what the triple says. Nothing
     /// writes it; a stored `stamp_kind` this build does not recognise
@@ -113,6 +112,7 @@ impl StampKind {
 pub struct StampCursor {
     pub mtime_ns: i64,
     pub size: i64,
+    pub ctime_ns: Option<i64>,
     pub stamp_kind: StampKind,
     pub inode: Option<i64>,
     pub dev: Option<i64>,
@@ -141,7 +141,11 @@ pub fn decide(prev: Option<&StampCursor>, fresh: &FreshStat) -> StampDecision {
     if matches!(prev.stamp_kind, StampKind::Rescan) {
         return StampDecision::Rehash;
     }
-    if prev.mtime_ns != fresh.mtime_ns || prev.size != fresh.size {
+    // ctime moves on every write and nothing can set it back, so it
+    // catches a rewrite whose mtime was restored (`cp -p`, `touch -r`, a
+    // restore tool) that the mtime alone would miss.
+    if prev.mtime_ns != fresh.mtime_ns || prev.size != fresh.size || prev.ctime_ns != fresh.ctime_ns
+    {
         return StampDecision::Rehash;
     }
     if matches!(prev.stamp_kind, StampKind::Inode)
@@ -304,6 +308,40 @@ where
     Ok((files, errors))
 }
 
+/// Rewrite `path` to `body` in place and put its mtime back, as `cp -p`
+/// over an existing file does. Rewrites again until the change time
+/// has moved, which a coarse filesystem clock can take a tick to show.
+#[cfg(all(test, unix))]
+pub(crate) fn rewrite_keeping_mtime(path: &Path, body: &[u8]) {
+    use std::os::unix::fs::MetadataExt;
+    let before = std::fs::metadata(path).unwrap();
+    let stamp = |m: &std::fs::Metadata| (m.ino(), m.len(), m.mtime(), m.mtime_nsec());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        std::fs::write(path, body).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(before.modified().unwrap())
+            .unwrap();
+        let after = std::fs::metadata(path).unwrap();
+        assert_eq!(
+            stamp(&after),
+            stamp(&before),
+            "only the bytes and ctime move"
+        );
+        if (after.ctime(), after.ctime_nsec()) != (before.ctime(), before.ctime_nsec()) {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the change time of {} never moved",
+            path.display()
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,6 +350,7 @@ mod tests {
         StampCursor {
             mtime_ns: mtime,
             size,
+            ctime_ns: None,
             stamp_kind: stamp,
             inode,
             dev: Some(0),
@@ -375,6 +414,21 @@ mod tests {
             decide(Some(&p), &stat(5, 101, Some(7))),
             StampDecision::Rehash
         );
+    }
+
+    /// A file rewritten in place to the same size, its mtime put back:
+    /// only ctime says it changed.
+    #[test]
+    fn a_ctime_change_rehashes_when_everything_else_matches() {
+        let p = StampCursor {
+            ctime_ns: Some(10),
+            ..cursor(StampKind::Inode, 5, 100, Some(7))
+        };
+        let fresh = FreshStat {
+            ctime_ns: Some(11),
+            ..stat(5, 100, Some(7))
+        };
+        assert_eq!(decide(Some(&p), &fresh), StampDecision::Rehash);
     }
 
     #[test]
