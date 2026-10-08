@@ -47,7 +47,7 @@ fn profile() -> RenderProfile {
     RenderProfile {
         stamp_precision: ids::STAMP_PRECISION,
         provider: Provider::SmsBackupRestore,
-        // Drives the grid "Source" column (and `source:SMS` queries); keep
+        // Drives the grid "Source" column; keep
         // it short so it reads cleanly next to the SMS icon.
         source_label: "SMS".to_string(),
         chat_kind: "SMS Conversation".to_string(),

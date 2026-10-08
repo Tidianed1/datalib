@@ -405,6 +405,10 @@ pub(crate) const DOCUMENT_LOOKUP_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS source_contact_handles_by_handle ON source_contact_handles (handle)",
 ];
 
+/// Indexes an older build made and this one no longer reads. Every write
+/// keeps an index current, so one nothing queries is dropped, not left.
+const RETIRED_INDEXES: &[&str] = &["DROP INDEX IF EXISTS grid_rows_by_source_label"];
+
 /// Every `CREATE TABLE` in the grid index, in creation order. One list, so
 /// the DDL pass and the schema check can't drift into covering different
 /// sets of tables.
@@ -453,6 +457,12 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
             .execute(pool)
             .await
             .with_context(|| format!("create index: {ddl}"))?;
+    }
+    for ddl in RETIRED_INDEXES {
+        sqlx::query(*ddl)
+            .execute(pool)
+            .await
+            .with_context(|| format!("drop index: {ddl}"))?;
     }
     Ok(())
 }
@@ -2222,6 +2232,30 @@ mod schema_reconcile_tests {
             "a matching schema must not be rebuilt; the rows that make the \
              index incremental would be thrown away on every run"
         );
+    }
+
+    /// An index an older build made, for a search key since retired, is
+    /// dropped rather than kept current on every write for nobody.
+    #[tokio::test]
+    async fn a_retired_index_is_dropped() {
+        let dir = tempdir().unwrap();
+        let pool = open_pool(&dir.path().join("grid.doltlite_db")).await;
+        init_schema(&pool).await.expect("first init_schema");
+        sqlx::query("CREATE INDEX grid_rows_by_source_label ON grid_rows (source_label)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        init_schema(&pool).await.expect("second init_schema");
+
+        let left: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM sqlite_master \
+             WHERE type = 'index' AND name = 'grid_rows_by_source_label'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(left, 0);
     }
 }
 
