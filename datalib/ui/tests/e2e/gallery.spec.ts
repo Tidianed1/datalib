@@ -39,7 +39,14 @@ test.describe("new-card gallery (outside edit mode)", () => {
     await page.locator(".ct-main .ct-add").click();
     // Logs is a developer tool: listed in that section, after the views.
     const section = page.getByRole("region", { name: "Developer tools" });
-    await expect(section.locator(".gv-row").first()).toContainText("Logs");
+    // Each group is in alphabetical order by title.
+    const titles = await section.locator(".gv-row .gv-title").allTextContents();
+    const listed = titles.slice(0, -1);
+    expect(listed).toContain("Logs");
+    expect(listed).toEqual(
+      [...listed].sort((x, y) => x.localeCompare(y, undefined, { sensitivity: "base" })),
+    );
+    expect(titles.at(-1)).toBe("New component, built by an agent");
     await expect(
       page.locator(".gv-row", { hasText: "Markdown Document" }).and(section.locator(".gv-row")),
     ).toHaveCount(0);

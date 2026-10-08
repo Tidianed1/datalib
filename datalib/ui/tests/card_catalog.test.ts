@@ -26,25 +26,40 @@ describe("the card catalog", () => {
   });
 
   /** The gallery's two groups come from each entry's own `devTool`, not from a list of names. */
-  it("lists the developer tools apart from the views, each in catalog order", () => {
+  it("lists the developer tools apart from the views, each group by title", () => {
     const { views, devTools } = byAudience(galleryBuiltins());
-    expect(views[0].source).toBe("sourcesView()");
-    expect(views.map((e) => e.source)).not.toContain("logView()");
-    expect(devTools.map((e) => e.source)).toEqual([
-      "logView()",
-      "configView()",
-      "dactalView()",
-      "sourceDagView()",
-      'tableView({ url: "/api/manage/rows" })',
-      "aliasView()",
-      // The Dashboard's sections: building blocks, rarely wanted alone.
-      "syncStatusView()",
-      "needsYouView()",
-      "libraryView()",
-      "sourcesOverviewView()",
-      "latestActivityView()",
+    expect(views.map((e) => e.title)).toEqual([
+      "Embedding map",
+      "Manage data sources",
+      "Markdown Document",
+      "Perseus corpus",
+      "Search",
     ]);
-    expect(views.length + devTools.length).toBe(galleryBuiltins().length);
+    // Case-blind: config.toml sits among the capitals.
+    expect(devTools.map((e) => e.title)).toEqual([
+      "Component library",
+      "config.toml",
+      "DACTAL explorer",
+      "Dashboard: Latest activity",
+      "Dashboard: Needs you",
+      "Dashboard: Sources overview",
+      "Dashboard: Sync",
+      "Dashboard: Your library",
+      "Logs",
+      "Pipeline DAG",
+      "Table",
+    ]);
+  });
+
+  it("sorts an entry of any kind into its group by its title", () => {
+    const { views, devTools } = byAudience([
+      { title: "Zebra" },
+      { title: "apple", devTool: true },
+      { title: "Mango" },
+      { title: "Banana", devTool: true },
+    ]);
+    expect(views.map((e) => e.title)).toEqual(["Mango", "Zebra"]);
+    expect(devTools.map((e) => e.title)).toEqual(["apple", "Banana"]);
   });
 
   it("reads a custom component's dev_tool as its devTool", () => {

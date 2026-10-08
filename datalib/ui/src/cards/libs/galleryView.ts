@@ -9,7 +9,9 @@
 // the config, the pipeline graph, the agent entry — is listed after
 // the rest under "Developer tools", a section with a heading and a
 // shaded ground of its own; a building block of a composite (a
-// Dashboard section) is one of them. Picking an
+// Dashboard section) is one of them. Each group is in alphabetical
+// order by title, whatever kind an entry is, with the agent entry last;
+// a custom component carries a small mark saying it is one. Picking an
 // entry REPLACES this card — with the chosen component via
 // ctx.host.setSource, or with a copy of the composite via
 // ctx.host.becomeComposite — so the gallery is a transient "what should
@@ -23,22 +25,27 @@ import { byAudience, galleryBuiltins, type CardMeta } from "../catalog";
 import { resolveIcon } from "../icons";
 import { galleryComposites, loadComposites, savedComposites } from "@/views/composites";
 
-type GalleryEntry = CardMeta & {
-  // Card source the entry expands to, e.g. `gridView()`.
-  source: string;
+// One row of the gallery, whatever it picks.
+type GalleryRow = CardMeta & {
+  // The card source the pick expands to, shown in edit mode; null for a
+  // composite, which is copied rather than called.
+  source: string | null;
+  // A component from the frontend store, not one that ships with the app.
+  custom?: boolean;
+  pick: () => void;
 };
 
-function iconElement(token: string | null): Element {
+function iconElement(token: string | null, cls = "gv-icon"): Element {
   const icon = resolveIcon(token);
   if (icon.kind === "image") {
     const img = document.createElement("img");
-    img.className = "gv-icon";
+    img.className = cls;
     img.src = icon.url;
     img.alt = "";
     return img;
   }
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("class", "gv-icon");
+  svg.setAttribute("class", cls);
   svg.setAttribute("viewBox", "0 0 24 24");
   svg.setAttribute("aria-hidden", "true");
   const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
@@ -68,6 +75,8 @@ export function galleryView(): CardRender {
          column is narrow — minimal layout shift vs non-dev. */
       .gv-head-line { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 10px; }
       .gv-title { font-weight: 600; }
+      /* The mark of a custom component, after its title. */
+      .gv-custom { align-self: center; width: 12px; height: 12px; color: var(--datalib-muted, #777); }
       .gv-desc { opacity: .65; }
       .gv-src { font: 11px/1.4 ui-monospace, Menlo, monospace; opacity: .5; }
       .gv-foot { padding: 8px 12px; opacity: .55; font-size: 12px; }
@@ -101,75 +110,81 @@ export function galleryView(): CardRender {
       // arguments baked into the source the row expands to. Nothing
       // here knows or cares which namespace an applet wrote — `user`
       // and `slack_work` are read the same way.
-      const custom: GalleryEntry[] = [];
-      for (const [ns, entries] of [...manifest.entries()].sort((a, b) =>
-        a[0].localeCompare(b[0]),
-      )) {
-        for (const [name, meta] of [...entries.entries()].sort((a, b) =>
-          a[0].localeCompare(b[0]),
-        )) {
+      const rows: GalleryRow[] = [];
+      for (const c of galleryComposites()) {
+        rows.push({
+          title: c.name,
+          description: c.description,
+          icon: c.icon,
+          source: null,
+          pick: () => ctx.host.becomeComposite(c.name),
+        });
+      }
+      for (const entry of galleryBuiltins()) {
+        rows.push({ ...entry, pick: () => ctx.host.setSource(entry.source) });
+      }
+      for (const [ns, entries] of manifest.entries()) {
+        for (const [name, meta] of entries.entries()) {
           // A tombstone is a redirect, not something to offer.
           if ("renamed_to" in meta) continue;
           // An untitled component is one nobody meant to advertise.
           if (!meta.title.trim()) continue;
-          custom.push({
-            source: gallerySource(ns, name, meta.component_args),
+          const source = gallerySource(ns, name, meta.component_args);
+          rows.push({
+            source,
             title: meta.title,
             description: meta.description,
             icon: meta.icon ?? null,
             devTool: meta.dev_tool === true,
+            custom: true,
+            pick: () => ctx.host.setSource(source),
           });
         }
       }
 
-      function addRow(
-        into: Element,
-        title: string,
-        description: string,
-        icon: string | null,
-        src: string | null,
-        onPick: () => void,
-      ) {
+      function addRow(into: Element, entry: GalleryRow) {
         const row = document.createElement("div");
         row.className = "gv-row";
-        row.addEventListener("click", onPick);
+        row.addEventListener("click", entry.pick);
 
-        row.appendChild(iconElement(icon));
+        row.appendChild(iconElement(entry.icon));
         const text = document.createElement("div");
         text.className = "gv-text";
         const headLine = document.createElement("div");
         headLine.className = "gv-head-line";
         const titleEl = document.createElement("span");
         titleEl.className = "gv-title";
-        titleEl.textContent = title;
+        titleEl.textContent = entry.title;
         headLine.appendChild(titleEl);
+        if (entry.custom) {
+          const mark = iconElement("component", "gv-custom");
+          mark.setAttribute("role", "img");
+          mark.setAttribute("aria-label", "custom component");
+          mark.removeAttribute("aria-hidden");
+          const tip = document.createElementNS("http://www.w3.org/2000/svg", "title");
+          tip.textContent = "A custom component, stored in this library";
+          mark.appendChild(tip);
+          headLine.appendChild(mark);
+        }
         // Edit mode: show what the pick expands to, teaching the
         // source-expression model row by row. Same line as the title
         // while it fits (see .gv-head-line).
-        if (dev && src !== null) {
+        if (dev && entry.source !== null) {
           const code = document.createElement("span");
           code.className = "gv-src";
-          code.textContent = src;
+          code.textContent = entry.source;
           headLine.appendChild(code);
         }
         const desc = document.createElement("div");
         desc.className = "gv-desc";
-        desc.textContent = description;
+        desc.textContent = entry.description;
         text.append(headLine, desc);
         row.appendChild(text);
         into.appendChild(row);
       }
 
-      const addEntry = (into: Element, entry: GalleryEntry) =>
-        addRow(into, entry.title, entry.description, entry.icon, entry.source, () =>
-          ctx.host.setSource(entry.source),
-        );
-
-      for (const c of galleryComposites()) {
-        addRow(wrap, c.name, c.description, c.icon, null, () => ctx.host.becomeComposite(c.name));
-      }
-      const { views, devTools } = byAudience([...galleryBuiltins(), ...custom]);
-      for (const entry of views) addEntry(wrap, entry);
+      const { views, devTools } = byAudience(rows);
+      for (const entry of views) addRow(wrap, entry);
 
       // The tools for working on the library itself, apart from the
       // views of its data.
@@ -183,18 +198,17 @@ export function galleryView(): CardRender {
       note.textContent = "logs, the config, the pipeline, components, building blocks";
       heading.append("Developer tools", note);
       section.appendChild(heading);
-      for (const entry of devTools) addEntry(section, entry);
-      // Last, after even the user's own components: the escape hatch
-      // for when nothing above fits. No source line in edit mode — the
-      // component name is minted on pick.
-      addRow(
-        section,
-        "New component, built by an agent",
-        "Create a fresh component and hand it to a coding agent to build.",
-        "component",
-        null,
-        () => void createComponentWithAgent(ctx.host),
-      );
+      for (const entry of devTools) addRow(section, entry);
+      // Last, out of the alphabet: the escape hatch for when nothing
+      // above fits. No source line in edit mode — the component name is
+      // minted on pick.
+      addRow(section, {
+        title: "New component, built by an agent",
+        description: "Create a fresh component and hand it to a coding agent to build.",
+        icon: "component",
+        source: null,
+        pick: () => void createComponentWithAgent(ctx.host),
+      });
       wrap.appendChild(section);
 
       if (dev) {

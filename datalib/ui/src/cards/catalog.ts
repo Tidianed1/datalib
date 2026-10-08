@@ -223,13 +223,17 @@ export function cardMeta(source: string): CardMeta | null {
   };
 }
 
-/// `entries` as the gallery lists them: the views of the data first,
-/// then the developer tools, each in the order given.
-export function byAudience<E extends { devTool?: boolean }>(
+/// `entries` as the gallery lists them: the views of the data, then
+/// the developer tools, each group in alphabetical order by title
+/// (case-blind), whichever kind of entry each one is.
+export function byAudience<E extends { title: string; devTool?: boolean }>(
   entries: E[],
 ): { views: E[]; devTools: E[] } {
+  const sorted = [...entries].sort((a, b) =>
+    a.title.localeCompare(b.title, undefined, { sensitivity: "base" }),
+  );
   return {
-    views: entries.filter((e) => !e.devTool),
-    devTools: entries.filter((e) => e.devTool),
+    views: sorted.filter((e) => !e.devTool),
+    devTools: sorted.filter((e) => e.devTool),
   };
 }

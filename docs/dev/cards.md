@@ -139,18 +139,23 @@ creates a `galleryView()` card — the **new-card gallery**
 (`datalib/ui/src/cards/libs/galleryView.ts`). It lists, each with a
 short description:
 
-1. the composites (`views/composites.ts`), the Dashboard first; picking
-   one replaces the gallery card with a copy of it
-   (`host.becomeComposite`);
-2. the builtins `cards/catalog.ts` offers, `sourcesView` first;
+1. the composites (`views/composites.ts`); picking one replaces the
+   gallery card with a copy of it (`host.becomeComposite`);
+2. the builtins `cards/catalog.ts` offers;
 3. every titled component in the frontend store, each expanding to its
    qualified name called with its stored `component_args` — so one
    component appears once per namespace with its own arguments
    (`comp.slack_work.channels("slack_work")`,
-   `comp.slack_personal.channels(…)`);
+   `comp.slack_personal.channels(…)`) — and each with a small mark
+   after its title saying it is a custom component;
 4. a "build a component with an agent" entry that mints a fresh
    component seeded with `agentSeedView` (the in-card hand-off
    instructions) and repoints the card at it.
+
+The first three kinds are listed together, not kind by kind: the views
+of the data, then the developer tools (next section), each group in
+alphabetical order by title (`byAudience` in `cards/catalog.ts`). The
+agent entry is last among the developer tools.
 
 A builtin in the gallery takes no arguments, so one that needs them
 offers a parameter-less stand-in: `documentView`'s is
