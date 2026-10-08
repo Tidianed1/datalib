@@ -35,6 +35,12 @@ pub fn mirror_options(config: &LightroomConfig) -> Result<MirrorOptions> {
     })
 }
 
+pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
+    let pool = ingest::mirror::open_mirror(&datalib_etl::raw_layout::entities_db(raw_dir)).await?;
+    pool.close().await;
+    Ok(())
+}
+
 pub fn plan_ingest(
     ctx: PlanContext,
     config: LightroomConfig,

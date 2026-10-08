@@ -97,6 +97,7 @@ its id, which arrives in the environment.
 | `DATALIB_READS` | a JSON object, input path → the version the runner started this invocation against; an input with no version yet is absent. A version for what you *read*, where the output's own would say less (the qmd index reports a hash of this) |
 | `DATALIB_DAG_NOW` | the run's pinned timestamp (RFC 3339). Stamp times with this instead of sampling your own clock, so one run's outputs agree |
 | `DATALIB_DAG_RESET` | set only by a reset, and then this invocation is a reset, not a run: see § Reset |
+| `DATALIB_DAG_MIGRATE` | set only on an ingest step, by the launch's migrate pass, and then this invocation fetches nothing: see § Migrate |
 | `DATALIB_DAG_CHECKPOINT_CADENCE` | set when the config has `checkpoint_cadence`: the most seconds you should let pass between checkpoints |
 | `RUST_LOG` | the run's log filter, in `tracing-subscriber`'s grammar, built from the config's `log_level` ([`logging.md`](logging.md) § "Where a line comes from"). A `RUST_LOG` already set where the runner was started is passed through instead. A step in another language may honor it or ignore it; what it prints is kept regardless |
 
@@ -486,6 +487,20 @@ the file **and** reset the ingest step, together. Deleting the file
 alone leaves edge rows naming bytes that are gone, and the download
 does not fetch what its edge rows say it already has.
 
+## Migrate (built-in ingest steps)
+
+Before the loop takes any request, the process that holds the runner
+lock invokes each built-in ingest step whose raw store another build
+wrote, once, with `DATALIB_DAG_MIGRATE` set to `store`
+([dag README](../../datalib/backend/dag/README.md) § "Upgrading a
+root"). `datalib-step` then opens the raw store with the provider's
+migration ladder and closes it: every rung, the additive DDL and an
+old blob store's conversion run, and each is sealed to `main`. It reads
+no params and reaches no network or file; a source with no raw store
+yet is left without one. It reports the store's head as the step's
+version, and the runner records that and keeps the step's last success.
+A custom command is never invoked this way.
+
 ## Signals: graceful cancellation (optional)
 
 On cancellation (Ctrl-C, the UI's Stop, or the step turned off) the runner sends your
@@ -572,8 +587,8 @@ params file as the provider's **function-specific** config — the ingest
 step carries the provider's download config (`common` envelope, the method table
 block, …), the render step only the render knobs (nothing for most
 providers; beeper/signal `period`, perseus `alignment_pairs`, email
-`outlink_format`/`only_render_labels`) — honors `DATALIB_DAG_NOW` and
-`DATALIB_DAG_RESET`, stops at its next consistent point on SIGINT and
+`outlink_format`/`only_render_labels`) — honors `DATALIB_DAG_NOW`,
+`DATALIB_DAG_RESET` and `DATALIB_DAG_MIGRATE`, stops at its next consistent point on SIGINT and
 commits there, and emits versions where it has them (the grid index claims its dolt commit hash). Use it as the
 reference implementation.
 

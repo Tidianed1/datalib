@@ -55,6 +55,11 @@ pub const ENV_NOW: &str = "DATALIB_DAG_NOW";
 /// runner then forgets the step ever succeeded, so the next run does its
 /// work from the start.
 pub const ENV_RESET: &str = "DATALIB_DAG_RESET";
+/// Set by the launch-time migrate pass, and then an ingest step fetches
+/// nothing: it opens what the value names — always `store` — so the
+/// store climbs its migration ladder and is sealed, and exits. The step
+/// keeps its last success; what reads the store sees its new version.
+pub const ENV_MIGRATE: &str = "DATALIB_DAG_MIGRATE";
 /// Seconds between a step's checkpoints, at most — see
 /// `config::CheckpointCadence`.
 pub const ENV_CHECKPOINT_CADENCE: &str = "DATALIB_DAG_CHECKPOINT_CADENCE";

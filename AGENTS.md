@@ -665,6 +665,7 @@ upstream (block types, MIME types), free-form display text
 | who names a latchkey account a browser login adds | `AccountNaming` | `http/src/connect.rs` |
 | what kind of trouble a sign-in or probe ran into | `IssueKind` | `probe/src/issue.rs` (`datalib_probe`) |
 | a probe the wizard polls | `ProbeState` | `http/src/probe.rs` |
+| how the launch's migrate pass stands with one raw store | `MigrateState` | `http/src/supervisor.rs` |
 | the list a picker loads | `ProbeList` | `probe/src/lib.rs` (`datalib_probe`) |
 | the `grid_rows.provider` tag | `Provider` | `schema/src/providers.rs` |
 | what a step could not fully do to a record | `Outcome`, `Reason`, `ScopeKind`, `Severity`, `Stage` | `problems/src/lib.rs` (`datalib_problems`) |

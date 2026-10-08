@@ -2,7 +2,8 @@
 //! §2.8): it holds `runner-lock` for as long as it is up, runs the loop
 //! whenever a request is open, and between busy periods settles a step
 //! turned off or on into the record, runs a reset and deletes a removed
-//! group's tree.
+//! group's tree. Before its first request it migrates the raw stores
+//! another build wrote (`docs/dev/plans/upgrade_on_launch.md`).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -45,6 +46,33 @@ pub enum PurgeAnswer {
 /// long enough for an idle loop, far short of a sync.
 const PURGE_WAIT: Duration = Duration::from_secs(5);
 
+/// The launch's migrate pass, as `/api/config` reports it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct Upgrade {
+    /// The pass is running: nothing syncs until it is done.
+    pub migrating: bool,
+    /// Every raw store the pass took on, in the order it takes them.
+    pub stores: Vec<MigrateRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct MigrateRow {
+    pub step: String,
+    pub state: MigrateState,
+    pub error: Option<String>,
+}
+
+/// How the migrate pass stands with one raw store. Mirrored by hand in
+/// `datalib/ui/src/api.ts`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MigrateState {
+    Waiting,
+    Running,
+    Done,
+    Failed,
+}
+
 /// How the rest of the server reaches the loop: whether a sync is
 /// running, where to write intent, and how to stop it all.
 #[derive(Clone)]
@@ -52,6 +80,7 @@ pub struct SyncControl {
     root: Arc<PathBuf>,
     runs_the_loop: Arc<AtomicBool>,
     busy: Arc<AtomicBool>,
+    upgrade: Arc<Mutex<Upgrade>>,
     /// For what no announcement carries: a reset, queued in memory.
     nudge: Arc<Notify>,
     /// The handlers' own connection, beside the loop's.
@@ -69,6 +98,7 @@ impl SyncControl {
             root,
             runs_the_loop: Arc::new(AtomicBool::new(false)),
             busy: Arc::new(AtomicBool::new(false)),
+            upgrade: Arc::new(Mutex::new(Upgrade::default())),
             nudge: Arc::new(Notify::new()),
             mailbox: Arc::new(OnceCell::new()),
             resets: Arc::new(Mutex::new(Vec::new())),
@@ -87,6 +117,13 @@ impl SyncControl {
         } else {
             datalib_dag::lock::runner_is_held(&self.root)
         }
+    }
+
+    pub fn upgrade(&self) -> Upgrade {
+        self.upgrade
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub async fn mailbox(&self) -> anyhow::Result<&Store> {
@@ -176,6 +213,8 @@ pub struct HostConfig {
     /// `datalib-dag --now` is to one run. For fixtures, whose output must
     /// not depend on the day they were built.
     pub now: Option<String>,
+    /// Where the migrate pass says it moved, so the page asks again.
+    pub announce: Option<crate::watch::RootTx>,
 }
 
 pub async fn run(cfg: HostConfig) {
@@ -214,6 +253,7 @@ async fn host(cfg: &HostConfig) {
         }
         Err(e) => tracing::error!("supervisor: could not take over from the last loop: {e:#}"),
     }
+    migrate_on_launch(cfg).await;
     tracing::info!("supervisor: running the loop on {}", root.display());
     host::run_idle(&store, &mut listener, &mut ServerPeriods { cfg }, &mut stop).await;
     store.close().await;
@@ -275,6 +315,95 @@ impl host::Periods for ServerPeriods<'_> {
     async fn nudged(&self) {
         self.cfg.control.nudge.notified().await;
     }
+}
+
+/// Migrate every raw store another build wrote, one at a time, before
+/// the loop takes any request: no render then reads a raw store in an old
+/// shape. A request opened meanwhile waits for the loop. A store that
+/// fails is reported and the rest go on.
+async fn migrate_on_launch(cfg: &HostConfig) {
+    let root = cfg.control.root.clone();
+    let Ok(checked) = load_config(&root) else {
+        return;
+    };
+    let build = datalib_dag::supervisor::upgrade::Build::this();
+    let targets =
+        datalib_dag::supervisor::upgrade::raw_stores_to_migrate(&root, &checked.graph, &build)
+            .await;
+    if targets.is_empty() {
+        return;
+    }
+    tracing::info!(stores = ?targets, "supervisor: migrating the raw stores another build wrote");
+    let set = |f: &dyn Fn(&mut Upgrade)| {
+        f(&mut cfg
+            .control
+            .upgrade
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()));
+        if let Some(tx) = &cfg.announce {
+            let _ = tx.send(crate::watch::RootEvent::UpgradeChanged.into());
+        }
+    };
+    set(&|u| {
+        *u = Upgrade {
+            migrating: true,
+            stores: targets
+                .iter()
+                .map(|step| MigrateRow {
+                    step: step.clone(),
+                    state: MigrateState::Waiting,
+                    error: None,
+                })
+                .collect(),
+        }
+    });
+    cfg.control.busy.store(true, Ordering::SeqCst);
+    let run_id = datalib_dag::scheduler::new_run_id();
+    let now = now(cfg);
+    let runner = host::step_env(
+        &checked.cfg,
+        cfg.binary_dir.as_deref(),
+        &extra_path(),
+        &now,
+        &run_id,
+    )
+    .map(|env| {
+        let sink: Arc<dyn EventSink> = match host::start_record(&root, &checked.cfg, &run_id, &now)
+        {
+            Some(record) => Arc::new(record),
+            None => Arc::new(datalib_dag::events::NoopSink),
+        };
+        Runner::new(root.as_path()).sink(sink).child_env(env.vars)
+    });
+    for (i, step) in targets.iter().enumerate() {
+        set(&|u| u.stores[i].state = MigrateState::Running);
+        let error = match &runner {
+            Ok(runner) => match runner
+                .migrate(&checked.graph, std::slice::from_ref(step))
+                .await
+            {
+                Ok(done) => done.into_iter().next().and_then(|m| m.error),
+                Err(e) => Some(format!("{e:#}")),
+            },
+            Err(e) => Some(format!("{e:#}")),
+        };
+        match &error {
+            None => tracing::info!(step, "supervisor: migrated the raw store"),
+            Some(why) => {
+                tracing::error!(step, "supervisor: could not migrate the raw store: {why}")
+            }
+        }
+        set(&|u| {
+            u.stores[i].state = if error.is_none() {
+                MigrateState::Done
+            } else {
+                MigrateState::Failed
+            };
+            u.stores[i].error = error.clone();
+        });
+    }
+    cfg.control.busy.store(false, Ordering::SeqCst);
+    set(&|u| u.migrating = false);
 }
 
 /// The lock, once whoever holds it lets go. Until then a `datalib-dag`

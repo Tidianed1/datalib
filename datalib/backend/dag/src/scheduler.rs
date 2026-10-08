@@ -152,64 +152,18 @@ impl Runner {
         store: &crate::supervisor::store::Store,
     ) -> Result<()> {
         for step in steps {
-            let &i = graph
-                .by_id
-                .get(step)
-                .with_context(|| format!("--reset {step}: no such step"))?;
-            let spec = &graph.steps[i];
-            let StepRun::Subprocess { argv, env, .. } = &spec.run else {
-                anyhow::bail!("--reset {step}: not a subprocess step");
-            };
-            let ctx = StepCtx {
-                step_id: spec.id.clone(),
-                group: spec.group.clone(),
-                group_type: spec.group_type.clone(),
-                function: spec.function.clone(),
-                data_root: self.data_root.clone(),
-                inputs: vec![],
-                changed_inputs: vec![],
-                reads: BTreeMap::new(),
-                progress: StepProgress::new(spec.id.clone(), self.sink.clone()),
-                checkpoint: crate::step::CheckpointSink::disconnected(),
-                stop: StopSignal::never(),
-            };
-            let mut child_env = (*self.child_env).clone();
-            child_env.insert(
-                crate::subprocess::ENV_RESET.to_string(),
-                "store".to_string(),
-            );
-            self.sink.emit(&Event::StepStart {
-                step: spec.id.clone(),
-                attempt: 1,
-                builtin: argv
-                    .first()
-                    .is_some_and(|prog| crate::config::is_datalib_step(prog)),
-            });
-            let result =
-                crate::subprocess::run_subprocess(argv, env, None, &child_env, 1, &ctx, &self.sink)
-                    .await;
-            let (status, error) = match &result {
-                Ok(_) => (RunState::Succeeded, None),
-                Err(e) => (RunState::Failed, Some(format!("{:#}", e.error))),
-            };
-            self.sink.emit(&Event::StepFinish {
-                step: spec.id.clone(),
-                status,
-                error: error.clone(),
-                exit_code: None,
-                signal: None,
-            });
-            if let Some(error) = error {
-                anyhow::bail!("reset {step}: {error}");
-            }
+            let (i, reported) = self
+                .invoke_once(graph, step, crate::subprocess::ENV_RESET)
+                .await
+                .map_err(|e| anyhow::anyhow!("reset {step}: {e}"))?;
             // Emptied, not gone: what reads it sees a new version and runs,
             // which is how the emptiness reaches the grid; and the step
             // keeps no history, so its next run starts from nothing.
             let fingerprint = &graph.fingerprints[i];
-            let reported = result.map(|o| o.outputs).unwrap_or_default();
-            let version = reported_version(spec, fingerprint, &reported)?.unwrap_or_else(|| {
-                fresh_version(fingerprint, &format!("reset-{}", uuid::Uuid::now_v7()))
-            });
+            let version = reported_version(&graph.steps[i], fingerprint, &reported)?
+                .unwrap_or_else(|| {
+                    fresh_version(fingerprint, &format!("reset-{}", uuid::Uuid::now_v7()))
+                });
             let saved = store.load_record().await.context("load the record")?;
             let mut state = saved.clone();
             state.steps.insert(
@@ -226,6 +180,125 @@ impl Runner {
         }
         Ok(())
     }
+
+    /// Bring the named ingest steps' raw stores to this build's shape,
+    /// fetching nothing: each is invoked once with
+    /// `DATALIB_DAG_MIGRATE=store` (`step_protocol.md` § Migrate). One
+    /// that fails is reported and the rest go on: a store this build
+    /// cannot open costs that source, not the launch.
+    pub async fn migrate(&self, graph: &Graph, steps: &[StepId]) -> Result<Vec<Migrated>> {
+        let store = crate::supervisor::store::Store::open(&self.data_root).await?;
+        let mut out = Vec::new();
+        for step in steps {
+            let error = match self
+                .invoke_once(graph, step, crate::subprocess::ENV_MIGRATE)
+                .await
+            {
+                Ok((i, reported)) => record_migrated(graph, i, &reported, &store)
+                    .await
+                    .err()
+                    .map(|e| format!("{e:#}")),
+                Err(e) => Some(e),
+            };
+            out.push(Migrated {
+                step: step.clone(),
+                error,
+            });
+        }
+        store.close().await;
+        Ok(out)
+    }
+
+    /// One invocation of `step` with `env_key=store`, outside any run of
+    /// the loop: no inputs, no retries, no stop.
+    async fn invoke_once(
+        &self,
+        graph: &Graph,
+        step: &StepId,
+        env_key: &str,
+    ) -> std::result::Result<(usize, Vec<ArtifactState>), String> {
+        let &i = graph
+            .by_id
+            .get(step)
+            .ok_or_else(|| "no such step".to_string())?;
+        let spec = &graph.steps[i];
+        let StepRun::Subprocess { argv, env, .. } = &spec.run else {
+            return Err("not a subprocess step".to_string());
+        };
+        let ctx = StepCtx {
+            step_id: spec.id.clone(),
+            group: spec.group.clone(),
+            group_type: spec.group_type.clone(),
+            function: spec.function.clone(),
+            data_root: self.data_root.clone(),
+            inputs: vec![],
+            changed_inputs: vec![],
+            reads: BTreeMap::new(),
+            progress: StepProgress::new(spec.id.clone(), self.sink.clone()),
+            checkpoint: crate::step::CheckpointSink::disconnected(),
+            stop: StopSignal::never(),
+        };
+        let mut child_env = (*self.child_env).clone();
+        child_env.insert(env_key.to_string(), "store".to_string());
+        self.sink.emit(&Event::StepStart {
+            step: spec.id.clone(),
+            attempt: 1,
+            builtin: argv
+                .first()
+                .is_some_and(|prog| crate::config::is_datalib_step(prog)),
+        });
+        let result =
+            crate::subprocess::run_subprocess(argv, env, None, &child_env, 1, &ctx, &self.sink)
+                .await;
+        let error = result.as_ref().err().map(|e| format!("{:#}", e.error));
+        self.sink.emit(&Event::StepFinish {
+            step: spec.id.clone(),
+            status: if error.is_none() {
+                RunState::Succeeded
+            } else {
+                RunState::Failed
+            },
+            error: error.clone(),
+            exit_code: None,
+            signal: None,
+        });
+        match result {
+            Ok(o) => Ok((i, o.outputs)),
+            Err(_) => Err(error.unwrap_or_default()),
+        }
+    }
+}
+
+/// The store's new head is the step's version, so what reads it is
+/// stale; everything else the record says of the step stands.
+async fn record_migrated(
+    graph: &Graph,
+    i: usize,
+    reported: &[ArtifactState],
+    store: &crate::supervisor::store::Store,
+) -> Result<()> {
+    let Some(version) = reported_version(&graph.steps[i], &graph.fingerprints[i], reported)? else {
+        return Ok(());
+    };
+    let saved = store.load_record().await.context("load the record")?;
+    let mut state = saved.clone();
+    let entry = state.steps.entry(graph.steps[i].id.clone()).or_default();
+    if entry.version.as_deref() == Some(version.as_str()) {
+        return Ok(());
+    }
+    entry.version = Some(version);
+    store
+        .save_record(&saved, &state)
+        .await
+        .context("save the record")
+}
+
+/// How one step's migrate went: `error` is `None` when its store is now
+/// in this build's shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Migrated {
+    pub step: StepId,
+    pub error: Option<String>,
 }
 
 /// Terminal state of one step in one run.

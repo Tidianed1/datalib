@@ -655,6 +655,21 @@ export type ConfigResponse = {
   // an `npx -y latchkey@<pin>` fallback. Spliced into the Setup tab's
   // copy-pasteable credential snippets.
   latchkey_cli: string;
+  // The launch's upgrade (docs/dev/plans/upgrade_on_launch.md): the raw
+  // stores being migrated, then what is offered for a re-render.
+  upgrade: Upgrade;
+};
+
+/// Mirrors `supervisor::MigrateState`.
+export type MigrateState = "waiting" | "running" | "done" | "failed";
+
+export type Upgrade = {
+  // The migrate pass is running: nothing syncs until it is done.
+  migrating: boolean;
+  stores: { step: string; state: MigrateState; error: string | null }[];
+  // Writers whose store is in a shape this build does not write: the
+  // roots of the re-render the app offers. Empty while migrating.
+  rerender: string[];
 };
 
 export type NewerRoot = {
@@ -1237,8 +1252,8 @@ export function fetchRequests(signal?: AbortSignal): Promise<SyncRequest[]> {
 
 /// Sync `roots` and everything downstream of them, one request per
 /// source they belong to; no roots syncs every source.
-export async function openRequest(roots: string[]): Promise<SyncRequest[]> {
-  return (await (await post("/api/requests", { roots })).json()) as SyncRequest[];
+export async function openRequest(roots: string[], by?: string): Promise<SyncRequest[]> {
+  return (await (await post("/api/requests", { roots, by })).json()) as SyncRequest[];
 }
 
 export async function stopRequest(id: string): Promise<void> {

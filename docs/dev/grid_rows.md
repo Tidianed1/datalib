@@ -142,13 +142,12 @@ rather than an error.
 On an existing root, a render store and the grid index change shape only
 when the step that writes them runs, and the loop runs a step only when
 it is stale. Step 5 is what makes them stale: each store's shape is in
-its writer's fingerprint. The next sync that reaches the grid index —
-whichever source it was for — pulls in every render step whose store is
-in the old shape, runs it before the index, and then runs the index,
-whether or not anything new came in upstream
-([dag README](../../datalib/backend/dag/README.md) § "What the loop
-runs, and what makes a step stale"). The
-render step then sees its own DDL hash moved (it is one of the render
+its writer's fingerprint. After the upgrade the app asks whether to
+re-render every store in the old shape, and a yes runs those render
+steps and then the index, whether or not anything new came in upstream;
+until then a source's own sync re-renders that source
+([dag README](../../datalib/backend/dag/README.md) § "Upgrading a
+root"). The render step then sees its own DDL hash moved (it is one of the render
 params, `_store_schema`) and re-renders every document into the new
 shape, and the grid index rebuilds itself from the stores.
 

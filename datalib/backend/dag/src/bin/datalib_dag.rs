@@ -364,6 +364,22 @@ async fn main() -> Result<()> {
         if let Some(p) = parallelism {
             runner = runner.parallelism(p);
         }
+        // Before any step runs, the raw stores another build wrote are
+        // brought to this one's shape (docs/dev/plans/upgrade_on_launch.md);
+        // the http server does the same when it takes the lock.
+        let build = datalib_dag::supervisor::upgrade::Build::this();
+        let behind =
+            datalib_dag::supervisor::upgrade::raw_stores_to_migrate(&data_root, &graph, &build)
+                .await;
+        #[allow(clippy::disallowed_macros)]
+        for m in runner.migrate(&graph, &behind).await? {
+            if let Some(error) = &m.error {
+                eprintln!(
+                    "datalib-dag: could not migrate {}'s raw store: {error}",
+                    m.step
+                );
+            }
+        }
         if !reset.is_empty() {
             runner.reset(&graph, &reset).await?;
         }

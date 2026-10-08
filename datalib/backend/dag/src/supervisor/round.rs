@@ -22,7 +22,7 @@ use crate::scheduler::{
     fresh_version, invoke_with_retry, mark_running, new_run_id, now_stamp, reported_version,
     step_summary, QueueLedger, RunReport, Runner, StepReport, StepStatus,
 };
-use crate::step::{Exit, FailureKind, StepCtx, StepError, StepOutcome, StopSignal};
+use crate::step::{Exit, FailureKind, StepCtx, StepError, StepId, StepOutcome, StopSignal};
 use crate::supervisor::record::{CurrentRun, Record};
 use crate::version::UNKNOWN;
 
@@ -1305,6 +1305,30 @@ fn facts_of(graph: &Graph, state: &Record) -> Facts {
     Facts { sinks, steps }
 }
 
+/// The writers whose store is in a shape this build does not write, and
+/// that are not turned off: what a launch offers to re-render. The rule is
+/// the tick's (`tick::in_old_shape`).
+pub fn old_shape_writers(graph: &Graph, state: &Record) -> Vec<StepId> {
+    let facts = facts_of(graph, state);
+    graph
+        .steps
+        .iter()
+        .enumerate()
+        .filter(|&(i, spec)| {
+            let off = state
+                .steps
+                .get(&spec.id)
+                .is_some_and(|s| s.turned_off_by.is_some());
+            !off && super::tick::in_old_shape(
+                spec.store_shape.as_deref(),
+                &graph.fingerprints[i],
+                &facts.steps[i],
+            )
+        })
+        .map(|(_, spec)| spec.id.clone())
+        .collect()
+}
+
 /// The versions an invocation was started against, keyed the way the
 /// record keys them: by the producer's output path.
 fn paths_of(graph: &Graph, consumed: &Consumed) -> HashMap<String, String> {
@@ -1794,12 +1818,13 @@ mod tests {
         spec
     }
 
-    /// #993: a build that moved the render store's shape, then a sync of
-    /// `a` alone. The index read `b`'s render store in the old shape,
-    /// because nothing asked for `b`'s render. It must run first, without
-    /// `b`'s download, and its record must name the shape it wrote.
+    /// A build that moved the render store's shape, then a sync of `a`
+    /// alone: it re-renders `a` and leaves `b`'s render in the old shape,
+    /// which `old_shape_writers` names. The re-render a launch offers runs
+    /// that list, without `b`'s download, and the record then names the
+    /// shape it wrote.
     #[tokio::test]
-    async fn a_sync_of_one_source_re_renders_another_whose_store_is_in_an_old_shape() {
+    async fn a_render_in_an_old_shape_waits_for_the_rerender_offer() {
         let root = tempfile::tempdir().unwrap();
         let b_raw = Arc::new(AtomicU32::new(0));
         let b_render = Arc::new(AtomicU32::new(0));
@@ -1824,17 +1849,35 @@ mod tests {
             .unwrap();
         assert_eq!(b_render.load(Ordering::SeqCst), 1);
 
+        let graph = build("shape-2");
+        let record = crate::supervisor::record::recorded(root.path()).await;
+        assert_eq!(old_shape_writers(&graph, &record), ["a/render", "b/render"]);
         Runner::new(root.path())
-            .run_roots(&build("shape-2"), &["a/raw"])
+            .run_roots(&graph, &["a/raw"])
             .await
             .unwrap();
-        assert_eq!(b_render.load(Ordering::SeqCst), 2, "pulled into a's sync");
-        assert_eq!(b_raw.load(Ordering::SeqCst), 1, "its download was not");
+        assert_eq!(
+            b_render.load(Ordering::SeqCst),
+            1,
+            "not pulled into a's sync"
+        );
+        let record = crate::supervisor::record::recorded(root.path()).await;
+        let offer = old_shape_writers(&graph, &record);
+        assert_eq!(offer, ["b/render"]);
+
+        let roots: Vec<&str> = offer.iter().map(String::as_str).collect();
+        Runner::new(root.path())
+            .run_roots(&graph, &roots)
+            .await
+            .unwrap();
+        assert_eq!(b_render.load(Ordering::SeqCst), 2);
+        assert_eq!(b_raw.load(Ordering::SeqCst), 1, "its download did not run");
         let record = crate::supervisor::record::recorded(root.path()).await;
         assert_eq!(
             record.steps["b/render"].store_shape.as_deref(),
             Some("shape-2")
         );
+        assert!(old_shape_writers(&graph, &record).is_empty());
         assert_eq!(
             record.steps["index/grid"].reads.get("b/render"),
             record.steps["b/render"].version.as_ref(),

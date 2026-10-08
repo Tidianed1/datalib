@@ -75,8 +75,7 @@ The loop runs what open **requests** want. A request is a row in
 `system/supervisor.sqlite` naming its **roots** — the steps a Sync was
 pressed on, or every step with no inputs for `datalib-dag` with no
 `--sync` — and who opened it (`opened_by`). Its **scope** is the roots and everything
-downstream of them, plus any writer of a store in an old shape that a step
-in it reads (below). Anyone may open one, or ask one to stop, or turn a
+downstream of them. Anyone may open one, or ask one to stop, or turn a
 step off: that is a row too. Only the process holding `runner-lock` runs the
 loop, and it hears of new rows because whoever writes one announces it
 (below, "What wakes the loop"). A **run** is one busy period of the loop — from taking a
@@ -118,9 +117,8 @@ starts** in a tick, visited in topological order, iff:
 
 1. **it is not running**: one instance of a step at a time;
 2. **it is not turned off**;
-3. **an open request wants it**: some request's scope (its roots,
-   everything downstream, and the writers of old-shape stores those
-   read) holds it;
+3. **an open request wants it**: some request's scope (its roots and
+   everything downstream) holds it;
 4. **it has not failed for every request that wants it**: its last run
    failed, after that request opened, on the inputs and definition it has
    now. A run the loop asked to stop, and that stopped, is neither a
@@ -151,22 +149,20 @@ built-in function's store; a test in `datalib_step` keeps it equal to the
 real DDL.
 
 Being stale is not enough on its own, because a step runs only when a
-request reaches it (rule 3): a sync of one source would run the grid
-index over every other source's render store in whatever shape the
-build before left it. So **a store in an old shape is pulled into the
-scope of any request that reaches a step reading it.** A store is in an
-old shape when its writer last succeeded under another definition and
-the record (`steps.store_shape`) says that definition wrote another
-shape, or says nothing. Only the writer is pulled in, not its own inputs
-or its other readers, and a reader that is turned off pulls nothing.
-Rule 6 then holds the reader until that writer has finished, streaming
-or not, since what it has sealed so far may still be in the old shape.
-A writer stale for any other reason — its download moved, a params edit
-that kept the shape — still waits for a request of its own. When the
-reader runs over an old store anyway (its writer failed, or is turned
-off), the reader is the backstop: `grid_index` compares a render store's
-`_datalib_meta.schema_hash` with the shape it reads, and leaves a store
-in another shape as the index had it, with a warning.
+request reaches it (rule 3), and a sync of one source never reaches
+another source's render. A store is in an **old shape** when its writer
+last succeeded under another definition and the record
+(`steps.store_shape`) says that definition wrote another shape, or says
+nothing (`tick::in_old_shape`). `round::old_shape_writers` lists those
+writers, and after an upgrade the app offers to re-render them: one
+request rooted at that list (below, "Upgrading a root"). Until someone
+does, a sync of one source re-renders that source only, and the grid
+index reads every other render store as it is: it compares a render
+store's `_datalib_meta.schema_hash` with the shape it reads, and leaves
+a store in another shape as the index had it, with a warning. Rule 6
+holds a reader until a running writer of an old-shape store has
+finished, streaming or not, since what it has sealed so far may still
+be in the old shape.
 
 A step that waits says why, in its row's `state_detail`: `waiting for
 a`, `waiting for c, which reads what this writes`, `waiting for lock
@@ -225,6 +221,25 @@ step that reads something is rebuilt at once, and a reset download is
 not refilled — what reads it runs instead, so its documents leave the
 grid, and its next Sync downloads everything again. The design is
 [`plans/supervisor.md`](../../../docs/dev/plans/supervisor.md).
+
+## Upgrading a root
+
+A new build can change the shape of a raw store too, and a render reads
+its raw store. So before the loop takes any request, the process that
+holds `runner-lock` — the http server when it starts, `datalib-dag` when
+it runs on its own — migrates every raw store another build wrote:
+`supervisor/upgrade.rs` names the built-in ingest steps whose store's
+`_datalib_meta` names another build (or none), and `Runner::migrate`
+invokes each once with `DATALIB_DAG_MIGRATE=store`. The step opens its
+store with its migration ladder and closes it, fetching nothing
+(`docs/dev/step_protocol.md` § Migrate); the record keeps its last
+success and takes the store's new head as its version, so what reads it
+is stale. A store that cannot be migrated is a failed invocation on its
+row and costs that source only. The app shows a blocking screen while
+this runs, then offers the re-render above.
+`datalib/backend/datalib_step/raw_shapes/` holds the raw shape every
+release left, and a test migrates each one
+([`raw_shapes/README.md`](../datalib_step/raw_shapes/README.md)).
 
 ## What keeps steps apart: locks
 

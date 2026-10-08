@@ -13,6 +13,12 @@ use datalib_etl_web::http::LatchkeySettings;
 
 use crate::ingest;
 
+pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
+    let db = ingest::RawDb::open(&datalib_etl::raw_layout::entities_db(raw_dir)).await?;
+    db.close().await;
+    Ok(())
+}
+
 /// Ingest wave: `api` walks claude.ai, `export` ingests an unpacked
 /// bulk export from its `path`. `validate` has already refused both.
 pub fn plan_ingest(ctx: PlanContext, config: ClaudeConfig) -> Result<Vec<Box<dyn DataProcessor>>> {

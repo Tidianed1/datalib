@@ -3,7 +3,7 @@
 //! What a source type, a group, a function and an ingest method are, and
 //! how a step id is made from them: `docs/dev/config_model.md`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_etl::processor::{DataProcessor, PlanContext};
@@ -371,6 +371,46 @@ pub fn plan(
             datalib_etl_fsindex
         ),
     })
+}
+
+/// Bring the raw store under `raw_dir` to this build's shape and seal it.
+/// The provider opens it with its migration ladder and closes it; nothing
+/// is fetched, and no params are read.
+pub async fn migrate(step_type: &str, raw_dir: &Path) -> Result<()> {
+    let source_type = SourceType::parse(step_type)
+        .with_context(|| format!("unknown source type {step_type:?}"))?;
+    match source_type {
+        SourceType::Claude => datalib_etl_claude::processor::migrate(raw_dir).await,
+        SourceType::Chatgpt => datalib_etl_chatgpt::processor::migrate(raw_dir).await,
+        SourceType::Slack => datalib_etl_slack::processor::migrate(raw_dir).await,
+        SourceType::Github => datalib_etl_github::processor::migrate(raw_dir).await,
+        SourceType::Gitlab => datalib_etl_gitlab::processor::migrate(raw_dir).await,
+        SourceType::Notion => datalib_etl_notion::processor::migrate(raw_dir).await,
+        SourceType::Email => datalib_etl_email::processor::migrate(raw_dir).await,
+        SourceType::Beeper => datalib_etl_beeper::processor::migrate(raw_dir).await,
+        SourceType::Calendar => datalib_etl_calendar::processor::migrate(raw_dir).await,
+        SourceType::Contacts => datalib_etl_contacts::processor::migrate(raw_dir).await,
+        SourceType::Linkedin => datalib_etl_linkedin::processor::migrate(raw_dir).await,
+        SourceType::Facebook => datalib_etl_facebook::processor::migrate(raw_dir).await,
+        SourceType::GoogleTakeout => datalib_etl_google_takeout::processor::migrate(raw_dir).await,
+        SourceType::Airvisual => datalib_etl_airvisual::processor::migrate(raw_dir).await,
+        SourceType::Media => datalib_etl_media::processor::migrate(raw_dir).await,
+        SourceType::Pdf => datalib_etl_pdf::processor::migrate(raw_dir).await,
+        SourceType::Perseus => datalib_etl_perseus::processor::migrate(raw_dir).await,
+        SourceType::Garmin => datalib_etl_garmin::processor::migrate(raw_dir).await,
+        SourceType::Yolink => datalib_etl_yolink::processor::migrate(raw_dir).await,
+        SourceType::Signal => datalib_etl_signal::processor::migrate(raw_dir).await,
+        SourceType::Whatsapp => datalib_etl_whatsapp::processor::migrate(raw_dir).await,
+        SourceType::ClaudeCode => datalib_etl_claude_code::processor::migrate(raw_dir).await,
+        SourceType::Codex => datalib_etl_codex::processor::migrate(raw_dir).await,
+        SourceType::SmsBackupRestore => {
+            datalib_etl_sms_backup_restore::processor::migrate(raw_dir).await
+        }
+        SourceType::Lightroom => datalib_etl_lightroom::processor::migrate(raw_dir).await,
+        SourceType::AppleMessages => datalib_etl_apple_messages::processor::migrate(raw_dir).await,
+        SourceType::ApplePhotos => datalib_etl_apple_photos::processor::migrate(raw_dir).await,
+        SourceType::Fsindex => datalib_etl_fsindex::processor::migrate(raw_dir).await,
+    }
 }
 
 #[cfg(test)]

@@ -16,6 +16,7 @@ mod hints;
 mod ingest;
 mod introspect;
 mod methods;
+mod migrate;
 mod probe;
 mod published;
 mod qmd_index;
@@ -37,7 +38,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use datalib_dag::subprocess::{
-    ENV_CHECKPOINT_CADENCE, ENV_DATA_ROOT, ENV_NOW, ENV_RESET, ENV_STEP,
+    ENV_CHECKPOINT_CADENCE, ENV_DATA_ROOT, ENV_MIGRATE, ENV_NOW, ENV_RESET, ENV_STEP,
 };
 use datalib_dag::FailureKind;
 
@@ -406,6 +407,9 @@ async fn run(
             let env = StepEnv::from_env()?;
             if let Ok(part) = std::env::var(ENV_RESET) {
                 return reset::run(&env, data_root, &part, emitter).await;
+            }
+            if let Ok(part) = std::env::var(ENV_MIGRATE) {
+                return migrate::run(&env, data_root, &part).await;
             }
             run_function(
                 env,
