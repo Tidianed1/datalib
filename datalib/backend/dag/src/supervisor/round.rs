@@ -583,13 +583,17 @@ impl Runner {
                 t.states
             );
 
-            // Seals before joins: a step sends its seal before its task can
-            // finish, so a queued seal predates a queued join.
+            // Not `biased`: a producer re-announces its seal until its
+            // consumer has run, so a loop slower than that cadence always
+            // has a seal waiting, and a seal-first select never reaches the
+            // join that would run the consumer.
             tokio::select! {
-                biased;
                 Some(signal) = checkpoints.recv() => {
-                    self.on_signal(graph, signal, &mut facts, &mut state, &mut changed_now,
-                        &mut queue, &mut slots).await;
+                    // Every one queued in one turn, so repeats cost one tick.
+                    for signal in std::iter::once(signal).chain(queued(&mut checkpoints)) {
+                        self.on_signal(graph, signal, &mut facts, &mut state, &mut changed_now,
+                            &mut queue, &mut slots).await;
+                    }
                 }
                 Some(()) = wait_for_stop(&mut stop_rx), if !cancelled => {
                     // The host is going: stop what runs and take nothing
@@ -602,6 +606,13 @@ impl Runner {
                     config_moved |= heard.iter().any(|line| line == CONFIG_CHANGED);
                 }
                 joined = set.join_next() => {
+                    // Seals before joins: a step sends its seal before its
+                    // task can finish, so every seal this join follows is
+                    // queued by now.
+                    for signal in queued(&mut checkpoints) {
+                        self.on_signal(graph, signal, &mut facts, &mut state, &mut changed_now,
+                            &mut queue, &mut slots).await;
+                    }
                     let (id, attempts, res) = joined
                         .expect("a live task implies a joinable one")
                         .context("step task panicked")?;
@@ -1182,6 +1193,11 @@ async fn wait_for_stop(rx: &mut Option<watch::Receiver<bool>>) -> Option<()> {
         std::future::pending::<()>().await;
     }
     Some(())
+}
+
+/// What is waiting on the channel now, without waiting for more.
+fn queued<T>(rx: &mut tokio::sync::mpsc::UnboundedReceiver<T>) -> Vec<T> {
+    std::iter::from_fn(|| rx.try_recv().ok()).collect()
 }
 
 /// `v` over a new graph: `from_old[i]` is where step `i` of the new graph
