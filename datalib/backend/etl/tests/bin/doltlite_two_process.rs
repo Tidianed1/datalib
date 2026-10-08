@@ -288,6 +288,12 @@ async fn history(args: &Args) -> Result<Value> {
 async fn one_pinned_pass(reader: &doltlite_raw::Reader, cursor: Option<&str>) -> Result<String> {
     let pool = reader.pool();
     let pin = reader.pin();
+    // `grid_index` asks a render store's shape before it reads anything.
+    anyhow::ensure!(
+        datalib_store_meta::read(pool).await?.is_some(),
+        "no _datalib_meta at {}",
+        pin.commit()
+    );
     let _rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM entities")
         .fetch_one(pool)
         .await?;
@@ -365,8 +371,10 @@ async fn double_open(args: &Args) -> Result<Value> {
 /// Seed and commit, then open a SQL transaction, insert into it, announce
 /// readiness and wait to be killed. With `--commit` the transaction is
 /// committed at the SQL level first, so the rows sit in the working set —
-/// uncommitted to doltlite — when the kill lands. Never returns on its own:
-/// the test's `kill -9` is the whole point.
+/// uncommitted to doltlite — when the kill lands. With `--dolt-commit` as
+/// well, they are then `dolt_commit`ted on the writer's branch and never
+/// published: the state between `commit_run`'s two halves. Never returns
+/// on its own: the test's `kill -9` is the whole point.
 async fn hang(args: &Args) -> Result<Value> {
     let db = args.path("db")?;
     let pool = doltlite_raw::open(&db, &[TABLE_DDL])
@@ -404,6 +412,12 @@ async fn hang(args: &Args) -> Result<Value> {
             .execute(&mut *conn)
             .await
             .context("COMMIT")?;
+    }
+    if args.flag("dolt-commit") {
+        sqlx::query_scalar::<_, Option<String>>("SELECT dolt_commit('-Am', 'stranded')")
+            .fetch_one(&mut *conn)
+            .await
+            .context("dolt_commit on the writer's branch")?;
     }
     write_atomic(&args.path("ready-out")?, b"ready")?;
     std::future::pending::<()>().await;

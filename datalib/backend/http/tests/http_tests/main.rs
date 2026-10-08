@@ -27,3 +27,4 @@ mod support;
 mod sync_loop;
 mod ui_events;
 mod ui_state;
+mod watch_os;

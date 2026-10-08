@@ -143,6 +143,14 @@ pub fn render_params(outlink: Option<OutlinkFormat>, only_labels: &[String]) -> 
     })
 }
 
+/// What [`render_all`] did with the threads it was handed.
+pub struct Rendered {
+    pub buckets: Buckets,
+    /// The threads the label filter keeps out, by bucket key: left out
+    /// on purpose, so their documents go.
+    pub excluded: Vec<String>,
+}
+
 pub fn render_all(
     parsed: &ParsedEmail,
     root: &std::path::Path,
@@ -151,7 +159,7 @@ pub fn render_all(
     only_labels: &[String],
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-) -> Result<Buckets> {
+) -> Result<Rendered> {
     let elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64);
     tracing::info!(
         source = source_id,
@@ -210,19 +218,26 @@ pub fn render_all(
     // Thread-level inclusion: keep the whole thread if ANY of its
     // emails is filed under an allowed mailbox, so conversations
     // aren't fragmented across the filter boundary.
-    let in_scope = |bucket: &&super::parse::EmailThreadBucket| {
-        !bucket.emails.is_empty()
-            && label_allow.as_ref().is_none_or(|allow| {
-                bucket.emails.iter().any(|em| {
-                    bucket
-                        .joins
-                        .mailboxes
-                        .get(&em.id)
-                        .is_some_and(|ids| ids.iter().any(|m| allow.contains(m)))
-                })
+    let allowed = |bucket: &&super::parse::EmailThreadBucket| {
+        label_allow.as_ref().is_none_or(|allow| {
+            bucket.emails.iter().any(|em| {
+                bucket
+                    .joins
+                    .mailboxes
+                    .get(&em.id)
+                    .is_some_and(|ids| ids.iter().any(|m| allow.contains(m)))
             })
+        })
     };
-    let threads: Vec<_> = parsed.docs.iter().filter(in_scope).collect();
+    let (threads, filtered): (Vec<_>, Vec<_>) = parsed
+        .docs
+        .iter()
+        .filter(|bucket| !bucket.emails.is_empty())
+        .partition(allowed);
+    let excluded = filtered
+        .iter()
+        .map(|b| ids::thread(source_id, &b.account_id, &b.thread_id).uuid)
+        .collect();
     // One document per thread. Each thread is built as it renders:
     // building means parsing every `.eml` and converting its HTML, which
     // for a large mailbox is minutes of work nobody would see.
@@ -241,7 +256,10 @@ pub fn render_all(
             .render_chat(&chat, &bundle)
             .context("email chat-common render")?;
     }
-    Ok(renderer.finish().buckets)
+    Ok(Rendered {
+        buckets: renderer.finish().buckets,
+        excluded,
+    })
 }
 
 /// The `accounts` row is a JMAP `Account` object, a Gmail stand-in
@@ -460,6 +478,7 @@ fn build_chat(
             kind_label: None,
             source_ref: Some(UpstreamRef::new(email_id.entity_kind, email_id.natural_key)),
             is_aside: false,
+            branch: Vec::new(),
             unread,
             recipients: parsed_eml.recipients.clone(),
             problems,

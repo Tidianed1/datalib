@@ -38,5 +38,7 @@ rust_test(
     crate = ":datalib_etl_linkedin_render",
     edition = "2021",
     deps = [
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
     ],
 )

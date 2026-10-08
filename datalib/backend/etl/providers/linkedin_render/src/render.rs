@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::{render_all as cc_render_all, RenderProfile};
@@ -34,7 +34,10 @@ use datalib_schema::providers::Provider;
 ///     Email — rather than the export's column names.
 /// v7: a post of several lines loses the quotes the export puts around
 ///     each line.
-pub const RENDER_VERSION: u32 = 7;
+/// v8: a connection's photo reaches the index as the URL the app serves
+///     it at.
+/// v9: a photo no browser draws (the SVG ghost avatar) has no URL.
+pub const RENDER_VERSION: u32 = 9;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -85,13 +88,11 @@ pub fn render(
             let pin = db.pin().expect("a reader is pinned at open").clone();
             let mut loaded = Vec::new();
             for table in message_tables() {
-                // A feed the user didn't export has no table; treat a
-                // load error as "absent" rather than failing the render.
                 loaded.push((
                     table,
-                    datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), table)
+                    datalib_etl::doltlite_raw::load_payloads_with_id_if_present(db.pool(), table)
                         .await
-                        .unwrap_or_default(),
+                        .with_context(|| format!("load {table}"))?,
                 ));
             }
             let changed = changed_rows(db.pool(), range, &pin, &message_tables()).await?;
@@ -209,6 +210,7 @@ fn build_chats(
                     kind_label: None,
                     source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
                     is_aside: false,
+                    branch: Vec::new(),
                     unread: false,
                     recipients: Vec::new(),
                     problems,

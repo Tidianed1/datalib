@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use datalib_contact_schema::DatalibContact;
+use datalib_contact_schema::NormalizedContact;
 use datalib_etl::bulk::BulkUpsertable;
 use datalib_etl::doltlite_raw::StoreKind;
 use datalib_etl::stop::StopFlag;
@@ -261,14 +261,32 @@ pub struct GridIndexSummary {
     pub sources_failed: Vec<(String, String)>,
 }
 
-/// Whole-index counts by severity, for the step's report.
-pub async fn problem_counts(
+/// The scope key of the one problem the index records itself: a
+/// source's render store it could not read. Every other row in the
+/// index is a copy of a source's.
+pub const UNREADABLE_STORE_KEY: &str = "render_store";
+
+/// What a row the index recorded itself is about, in words; `None` for
+/// any other key.
+pub fn about(scope_key: &str) -> Option<String> {
+    (scope_key == UNREADABLE_STORE_KEY).then(|| "this source's render store".to_string())
+}
+
+/// Counts by severity of the problems the index recorded itself, for
+/// the step's report. The copies are counted by the steps that found
+/// them; counting them here too would show each one twice.
+pub async fn own_problem_counts(
     pool: &SqlitePool,
 ) -> Result<HashMap<datalib_schema::problems::Severity, i64>> {
-    let rows = sqlx::query("SELECT severity, COUNT(*) FROM problems GROUP BY severity")
-        .fetch_all(pool)
-        .await
-        .context("count the index's problems")?;
+    let rows = sqlx::query(
+        "SELECT severity, COUNT(*) FROM problems \
+         WHERE scope_kind = ? AND scope_key = ? GROUP BY severity",
+    )
+    .bind(datalib_schema::problems::ScopeKind::Entity.as_str())
+    .bind(UNREADABLE_STORE_KEY)
+    .fetch_all(pool)
+    .await
+    .context("count the index's own problems")?;
     let mut out = HashMap::new();
     for r in rows {
         let word: String = r.try_get(0)?;
@@ -304,15 +322,14 @@ pub(crate) async fn replace_source_problems(
     Ok(())
 }
 
-/// A render store written in a shape this build does not read: a column
-/// its rows are decoded by is not there. The render step rebuilds it the
-/// next time it runs.
+/// A render store that lacks a table or column this build reads, though
+/// its `_datalib_meta` names this shape: treated as one in another shape.
+/// The render step rebuilds it the next time it runs.
 fn written_in_another_shape(e: &anyhow::Error) -> bool {
     e.chain().any(|c| {
-        matches!(
-            c.downcast_ref::<sqlx::Error>(),
-            Some(sqlx::Error::ColumnNotFound(_))
-        )
+        c.downcast_ref::<sqlx::Error>()
+            .and_then(datalib_etl::pin::missing_schema)
+            .is_some()
     })
 }
 
@@ -321,32 +338,37 @@ fn written_in_another_shape(e: &anyhow::Error) -> bool {
 /// wholesale, which is what clears it.
 fn unreadable_store_problem(
     source_id: &str,
-    now: &datalib_time::StoredStamp,
     why: &str,
     severity: datalib_schema::problems::Severity,
 ) -> ProblemRow {
     use datalib_schema::problems::{Outcome, Problem, Reason, Scope, Stage};
-    let mut row = ProblemRow::new(
+    ProblemRow::new(
         source_id,
         Stage::Render,
-        Scope::Entity("render_store"),
+        Scope::Entity(UNREADABLE_STORE_KEY),
         None,
         Outcome::Dropped,
         Problem::record(Reason::RenderFailed, why).severity(severity),
         None,
-    );
-    row.first_seen_at_utc = now.utc.clone();
-    row.last_seen_at_utc = now.utc.clone();
-    row.tz_offset = now.tz_offset.clone();
-    row
+    )
 }
 
 const OLDER_SHAPE: &str = "its render store is in an older shape; sync this source to re-render it";
 
 async fn record_unreadable_store(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
-    row: &ProblemRow,
+    row: ProblemRow,
+    now: &datalib_time::StoredStamp,
 ) -> Result<()> {
+    let earlier = sqlx::query("SELECT * FROM problems WHERE problem_uuid = ?")
+        .bind(&row.problem_uuid)
+        .fetch_optional(&mut **conn)
+        .await
+        .context("read the unreadable-store warning")?
+        .map(|r| ProblemRow::from_row(&r))
+        .transpose()?;
+    let row = row.stamped(earlier.as_ref(), &now.utc, now.tz_offset.as_deref());
+    let row = &row;
     sqlx::query("DELETE FROM problems WHERE problem_uuid = ?")
         .bind(&row.problem_uuid)
         .execute(&mut **conn)
@@ -453,7 +475,13 @@ pub async fn open_index(db_path: &Path) -> Result<SqlitePool> {
         .await
         .with_context(|| format!("open the grid index at {}", db_path.display()))?;
     init_schema(&pool).await?;
-    datalib_store_meta::write(&pool, StoreKind::GridIndex, &schema_hash(), 0)
+    // Its `problems` is built in this shape, so it starts at the shared
+    // ladder's top.
+    let versions = datalib_store_meta::Versions {
+        schema: 0,
+        shared: datalib_store_meta::ladder::top(datalib_etl::doltlite_raw::SHARED_LADDER),
+    };
+    datalib_store_meta::write(&pool, StoreKind::GridIndex, &schema_hash(), versions)
         .await
         .context("write _datalib_meta for the grid index")?;
     datalib_etl::doltlite_raw::commit_run(&pool, "schema: grid index")
@@ -582,7 +610,7 @@ pub struct RenderedMarkdown {
     pub edges: Vec<EdgeRow>,
     /// The people this document describes or mentions, as its source
     /// describes them; owned by the document like its edges.
-    pub contacts: Vec<DatalibContact>,
+    pub contacts: Vec<NormalizedContact>,
     /// What render could not do while producing this document: records
     /// dropped, fields nulled, lossy rules that fired. Travels with the
     /// document so the rows and the record of what was lost commit together.
@@ -823,6 +851,43 @@ fn read_source(
         );
         return Ok(None);
     };
+    let read = read_open_store(&store, stanza, out_dir, cursor, indexed, pass);
+    store.close();
+    match read {
+        Err(e) if written_in_another_shape(&e) => {
+            tracing::warn!(
+                source = %stanza,
+                error = %format!("{e:#}"),
+                "this render store lacks a table or column this build reads; \
+                 indexing the other sources and leaving this one as it was \
+                 until it re-renders"
+            );
+            Ok(Some(SourceRead::Unreadable))
+        }
+        read => read.map(Some),
+    }
+}
+
+fn read_open_store(
+    store: &crate::indexed_markdown::IndexedMarkdownStore,
+    stanza: &str,
+    out_dir: &Path,
+    cursor: Option<&str>,
+    indexed: Option<&HashSet<String>>,
+    pass: &mut PassCounts,
+) -> Result<SourceRead> {
+    if !store
+        .in_this_shape()
+        .with_context(|| format!("read the shape of {stanza}'s render store"))?
+    {
+        tracing::warn!(
+            source = %stanza,
+            "this render store is in a shape this build does not read; \
+             indexing the other sources and leaving this one as it was \
+             until it re-renders"
+        );
+        return Ok(SourceRead::Unreadable);
+    }
     let pin = store.pin().expect("a reader is pinned at open").clone();
     let scan = store
         .changed_since(cursor, &pin)
@@ -863,25 +928,12 @@ fn read_source(
             )
         }
     }
-    let docs = match store.documents_matching(out_dir, scan.render.as_ref(), &pin) {
-        Ok(docs) => docs,
-        Err(e) if written_in_another_shape(&e) => {
-            tracing::warn!(
-                source = %stanza,
-                error = %format!("{e:#}"),
-                "this render store is in a shape this build cannot read; \
-                 indexing the other sources and leaving this one as it was \
-                 until it re-renders"
-            );
-            store.close();
-            return Ok(Some(SourceRead::Unreadable));
-        }
-        Err(e) => return Err(e.context(format!("read documents from {stanza}"))),
-    };
+    let docs = store
+        .documents_matching(out_dir, scan.render.as_ref(), &pin)
+        .with_context(|| format!("read documents from {stanza}"))?;
     let problems = store
         .problems_at_pin()
         .with_context(|| format!("read problems from {stanza}"))?;
-    store.close();
     let present: HashSet<&str> = docs.iter().map(|d| d.markdown_uuid.as_str()).collect();
     let removed = match &scan.render {
         // An id the diff named that the store no longer has is a deletion.
@@ -902,12 +954,12 @@ fn read_source(
             .cloned()
             .collect(),
     };
-    Ok(Some(SourceRead::Read {
+    Ok(SourceRead::Read {
         docs,
         removed,
         problems,
         head: scan.new_head,
-    }))
+    })
 }
 
 /// Write one source's changes, problems and cursor in one transaction
@@ -932,16 +984,16 @@ async fn apply_source(
     let res = async {
         let (docs, removed, problems, head) = match read {
             SourceRead::Unreadable => {
-                let row = unreadable_store_problem(stanza, now, OLDER_SHAPE, Severity::Warning);
+                let row = unreadable_store_problem(stanza, OLDER_SHAPE, Severity::Warning);
                 let mut guard = write_lock.acquire().await?;
-                record_unreadable_store(guard.conn(), &row).await?;
+                record_unreadable_store(guard.conn(), row, now).await?;
                 summary.sources_unreadable.push(stanza.to_string());
                 return Ok(true);
             }
             SourceRead::Failed(why) => {
-                let row = unreadable_store_problem(stanza, now, &why, Severity::Error);
+                let row = unreadable_store_problem(stanza, &why, Severity::Error);
                 let mut guard = write_lock.acquire().await?;
-                record_unreadable_store(guard.conn(), &row).await?;
+                record_unreadable_store(guard.conn(), row, now).await?;
                 summary.sources_failed.push((stanza.to_string(), why));
                 return Ok(true);
             }
@@ -1342,7 +1394,7 @@ async fn upsert_markdown(
 async fn insert_source_contact(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
     markdown_uuid: &str,
-    contact: &DatalibContact,
+    contact: &NormalizedContact,
 ) -> Result<()> {
     let json = serde_json::to_string(contact).context("serialize a source contact")?;
     let seen = contact.seen.as_ref();
@@ -1598,6 +1650,7 @@ mod insert_round_trip_tests {
             touched_at: Some("2026-06-03T09:30:00-07:00".into()),
             is_document: true,
             author: Some("Jean-Luc Picard".into()),
+            author_handle: Some("email:picard@enterprise.org".into()),
             account: Some("acct-1701".into()),
             project: Some("proj-1701".into()),
             org_uuid: Some("org-1701".into()),
@@ -1721,6 +1774,7 @@ mod write_lock_tests {
             touched_at: None,
             is_document: true,
             author: None,
+            author_handle: None,
             account: Some("acct-test".into()),
             project: None,
             org_uuid: None,
@@ -2372,22 +2426,13 @@ mod source_cursor_tests {
     /// Put a source's store back in the shape a build before
     /// `grid_rows.preview` wrote: the column is `text` there.
     async fn into_older_shape(root: &Path, source: &str) {
-        let path = crate::indexed_markdown::path_for(&rendered_root(root, source));
-        let writer = datalib_etl::doltlite_raw::open_derived(
-            &path,
-            &[],
-            datalib_etl::doltlite_raw::StoreKind::Render,
+        alter_store(
+            root,
+            source,
+            "ALTER TABLE grid_rows RENAME COLUMN preview TO text",
+            "an older build's shape",
         )
-        .await
-        .unwrap();
-        sqlx::query("ALTER TABLE grid_rows RENAME COLUMN preview TO text")
-            .execute(&writer)
-            .await
-            .unwrap();
-        datalib_etl::doltlite_raw::commit_run(&writer, "an older build's shape")
-            .await
-            .unwrap();
-        writer.close().await;
+        .await;
     }
 
     /// A render store an older build wrote, and whose source has not
@@ -2431,6 +2476,11 @@ mod source_cursor_tests {
                 .unwrap();
         assert_eq!(severity, "warning");
         assert!(sample.contains("sync"), "{sample}");
+        assert_eq!(
+            super::own_problem_counts(&pool).await.unwrap(),
+            std::collections::HashMap::from([(datalib_schema::problems::Severity::Warning, 1)]),
+            "the index found this one itself, so its row counts it"
+        );
 
         // Its next render rebuilds the store in the current shape.
         render(root, "stale", &[doc(root, "stale", "md-s", "stale body")]);
@@ -2508,9 +2558,9 @@ mod source_cursor_tests {
         assert_eq!(errors, 0, "the error goes once the store reads");
     }
 
-    /// Put a source's store back in the shape a build before
-    /// `source_contacts` wrote: the table is not there.
-    async fn without_source_contacts(root: &Path, source: &str) {
+    /// Run `sql` on a source's store as its owner would and commit it,
+    /// leaving `_datalib_meta` as it was.
+    async fn alter_store(root: &Path, source: &str, sql: &str, message: &str) {
         let path = crate::indexed_markdown::path_for(&rendered_root(root, source));
         let writer = datalib_etl::doltlite_raw::open_derived(
             &path,
@@ -2519,53 +2569,111 @@ mod source_cursor_tests {
         )
         .await
         .unwrap();
-        sqlx::query("DROP TABLE source_contacts")
+        // Audited: test-only; every caller passes a literal or a table
+        // name from the store's own DDL.
+        sqlx::query(sqlx::AssertSqlSafe(sql.to_string()))
             .execute(&writer)
             .await
             .unwrap();
-        datalib_etl::doltlite_raw::commit_run(&writer, "a build before source_contacts")
+        datalib_etl::doltlite_raw::commit_run(&writer, message)
             .await
             .unwrap();
         writer.close().await;
     }
 
-    /// A store last rendered by a build that had no `source_contacts`
-    /// failed the diff with "no such table: dolt_diff_source_contacts",
-    /// and its render step, up to date, never re-rendered it. A table the
-    /// store does not have holds no changes; the diff must say so, and
-    /// still see the table once a re-render adds it.
+    async fn rows_of(pool: &SqlitePool, source: &str) -> Vec<String> {
+        sqlx::query_scalar(
+            "SELECT g.uuid FROM grid_rows g JOIN markdowns m USING (markdown_uuid) \
+              WHERE m.source_id = ? ORDER BY g.uuid",
+        )
+        .bind(source)
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    }
+
+    /// A store from a build before #962 lacked `source_contacts`, failed
+    /// the diff, and kept every other source out of the grid. The next
+    /// table added to the render DDL is the same store again, so this
+    /// drops each table in turn: whichever it is, the pass indexes the
+    /// other source and keeps this one's rows as they were.
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_store_without_a_newer_table_still_diffs() {
-        let td = tempdir().unwrap();
-        let root = td.path();
-        let pool = index_pool(root).await;
-        let sources = ["old".to_string()];
-        render(root, "old", &[doc(root, "old", "md-1", "one")]);
-        without_source_contacts(root, "old").await;
-        build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
-            .await
-            .unwrap();
+    async fn a_store_missing_any_one_table_costs_only_its_own_source() {
+        for (table, _) in crate::indexed_markdown::store_tables() {
+            let td = tempdir().unwrap();
+            let root = td.path();
+            let pool = index_pool(root).await;
+            // "damaged" sorts first, so a pass that stops on it reaches nothing.
+            let sources = ["damaged".to_string(), "fresh".to_string()];
+            render(root, "damaged", &[doc(root, "damaged", "md-d", "kept")]);
+            build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
+                .await
+                .unwrap();
 
-        let s = build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
-            .await
-            .expect("an unchanged store diffs to nothing");
-        assert_eq!(s.markdowns_total, 0, "nothing changed, so nothing is read");
-        assert!(s.sources_failed.is_empty(), "{:?}", s.sources_failed);
+            render(root, "fresh", &[doc(root, "fresh", "md-f", "fresh body")]);
+            render(root, "damaged", &[doc(root, "damaged", "md-d2", "more")]);
+            alter_store(
+                root,
+                "damaged",
+                &format!("DROP TABLE {table}"),
+                "a build without this table",
+            )
+            .await;
+            let s = build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
+                .await
+                .unwrap_or_else(|e| panic!("without {table}: {e:#}"));
+            assert!(
+                s.sources_failed.is_empty(),
+                "without {table}: {:?}",
+                s.sources_failed
+            );
+            assert_eq!(rows_of(&pool, "fresh").await, ["md-f"], "without {table}");
+            assert!(
+                rows_of(&pool, "damaged")
+                    .await
+                    .contains(&"md-d".to_string()),
+                "without {table}: the damaged source's rows stay"
+            );
+            pool.close().await;
+        }
+    }
 
-        render(
-            root,
-            "old",
-            &[
-                doc(root, "old", "md-1", "one"),
-                doc(root, "old", "md-2", "two"),
-            ],
-        );
-        let s = build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
-            .await
-            .expect("a diff across the commit that adds the table");
-        assert!(s.sources_failed.is_empty(), "{:?}", s.sources_failed);
-        assert_eq!(s.markdowns_total, 1, "only the new document is read");
-        assert_eq!(index_row_count(&pool).await, 2);
+    /// A store whose `_datalib_meta` names another shape is not read at
+    /// all: one way for every table and column it may lack, and one
+    /// warning. A store with no `_datalib_meta` predates every shape.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_store_whose_meta_names_another_shape_is_left_unread() {
+        for change in [
+            "UPDATE _datalib_meta SET value = 'an-older-shape' WHERE key = 'schema_hash'",
+            "DROP TABLE _datalib_meta",
+        ] {
+            let td = tempdir().unwrap();
+            let root = td.path();
+            let pool = index_pool(root).await;
+            let sources = ["old".to_string()];
+            render(root, "old", &[doc(root, "old", "md-1", "one")]);
+            build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
+                .await
+                .unwrap();
+
+            render(root, "old", &[doc(root, "old", "md-2", "two")]);
+            alter_store(root, "old", change, "another build's shape").await;
+            let s = build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
+                .await
+                .unwrap();
+            assert_eq!(s.sources_unreadable, ["old"], "{change}");
+            assert_eq!(s.markdowns_total, 0, "{change}: nothing was read");
+            assert_eq!(rows_of(&pool, "old").await, ["md-1"], "{change}");
+
+            // Its next render writes this build's shape, and it reads again.
+            render(root, "old", &[doc(root, "old", "md-2", "two")]);
+            let s = build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
+                .await
+                .unwrap();
+            assert!(s.sources_unreadable.is_empty(), "{change}");
+            assert_eq!(rows_of(&pool, "old").await, ["md-1", "md-2"], "{change}");
+            pool.close().await;
+        }
     }
 
     async fn index_row_count(pool: &SqlitePool) -> i64 {
@@ -2835,10 +2943,9 @@ mod source_cursor_tests {
             !first_seen.is_empty(),
             "the render store's stamp came through"
         );
-        let counts = super::problem_counts(&pool).await.unwrap();
-        assert_eq!(
-            counts.get(&datalib_schema::problems::Severity::Warning),
-            Some(&1)
+        assert!(
+            super::own_problem_counts(&pool).await.unwrap().is_empty(),
+            "a copy is counted by the source's step, not the index"
         );
 
         // Fixed: the same document renders clean. The index only reads

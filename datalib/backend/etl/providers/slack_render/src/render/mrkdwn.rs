@@ -3,8 +3,10 @@
 
 use std::collections::BTreeMap;
 
-use datalib_etl_render::html::{code_span_parts, escape_text, md_link_dest};
+use datalib_etl_render::html::{code_span_parts, escape_md_inline, escape_md_syntax, md_link_dest};
 use datalib_etl_render::inputs::Lookup;
+use datalib_etl_render::message::chip_link;
+use datalib_handle::Handle;
 use once_cell::sync::Lazy;
 use regex::{Captures, Regex};
 
@@ -49,17 +51,22 @@ pub fn emojize_shortcodes(text: &str) -> String {
 pub struct Labels<'a> {
     pub users: Lookup<'a, BTreeMap<String, String>>,
     pub channels: Lookup<'a, BTreeMap<String, String>>,
+    /// The workspace the text is from: a user mention's handle is
+    /// scoped to it.
+    pub team_id: &'a str,
 }
 
 /// Mentions and emoji only, as plain text — what a thread title needs,
 /// without the rest of the CommonMark conversion.
 pub fn resolve_mentions(text: &str, labels: Labels<'_>) -> String {
     let replaced = USER_REF
-        .replace_all(text, |caps: &Captures<'_>| user_replacement(caps, labels))
+        .replace_all(text, |caps: &Captures<'_>| {
+            format!("@{}", user_label(caps, labels, slack_encode))
+        })
         .into_owned();
     let replaced = CHANNEL_REF
         .replace_all(&replaced, |caps: &Captures<'_>| {
-            channel_replacement(caps, labels)
+            format!("#{}", channel_label(caps, labels, slack_encode))
         })
         .into_owned();
     decode_entities(&emojize_shortcodes(&replaced))
@@ -73,47 +80,104 @@ fn decode_entities(text: &str) -> String {
         .replace("&amp;", "&")
 }
 
-fn user_replacement(caps: &Captures<'_>, labels: Labels<'_>) -> String {
-    let uid = &caps[1];
-    // A label inside the mention is message text, entities and all; a
-    // name from the users table is plain and is escaped to match.
-    let label = caps.get(2).map(|m| m.as_str().to_string());
-    let resolved = label
-        .or_else(|| labels.users.get(uid).map(|name| escape_text(name)))
-        .unwrap_or_else(|| uid.to_string());
-    format!("@{resolved}")
+/// Plain text as Slack writes it in a message: [`decode_entities`]'s
+/// inverse.
+fn slack_encode(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
-fn channel_replacement(caps: &Captures<'_>, labels: Labels<'_>) -> String {
+/// Who a `<@U…>` names, through `name`: a label inside the mention is
+/// message text, entities and all, and is decoded before `name` sees it;
+/// a name from the users table is plain already.
+fn user_label(caps: &Captures<'_>, labels: Labels<'_>, name: fn(&str) -> String) -> String {
+    let uid = &caps[1];
+    match caps.get(2) {
+        Some(label) => name(&decode_entities(label.as_str())),
+        None => labels
+            .users
+            .get(uid)
+            .map_or_else(|| uid.to_string(), |n| name(n)),
+    }
+}
+
+/// A `<@U…>` in a body: a chip link naming the user (`chip_link`), so
+/// the viewer draws who they are; `@Name` as plain text where the id
+/// makes no handle. The name is what the message showed, as
+/// [`user_label`] reads it.
+fn user_mention(caps: &Captures<'_>, labels: Labels<'_>) -> String {
+    let shown = format!(
+        "@{}",
+        emojize_shortcodes(&user_label(caps, labels, str::to_string))
+    );
+    match Handle::slack(labels.team_id, &caps[1]) {
+        Some(handle) => chip_link(&shown, &handle),
+        None => escape_md_inline(&shown),
+    }
+}
+
+fn channel_label(caps: &Captures<'_>, labels: Labels<'_>, name: fn(&str) -> String) -> String {
     let cid = &caps[1];
-    let label = caps.get(2).map(|m| m.as_str().to_string());
-    let resolved = label
-        .filter(|l| !l.is_empty())
-        .or_else(|| labels.channels.get(cid).map(|name| escape_text(name)))
-        .unwrap_or_else(|| cid.to_string());
-    format!("#{resolved}")
+    match caps.get(2).map(|m| m.as_str()).filter(|l| !l.is_empty()) {
+        Some(label) => name(&decode_entities(label)),
+        None => labels
+            .channels
+            .get(cid)
+            .map_or_else(|| cid.to_string(), |n| name(n)),
+    }
+}
+
+/// A person's or a channel's name on a markdown line, emoji shortcodes
+/// and all.
+fn md_name(name: &str) -> String {
+    escape_md_inline(&emojize_shortcodes(name))
 }
 
 /// Render Slack mrkdwn `text` into CommonMark. A `<#C…|name>` carries
 /// its own label; a bare `<#C…>` or `<#C…|>` is looked up in
 /// `labels.channels`.
+///
+/// Markdown's own syntax in what someone typed — a `[x](url)`, a `# `,
+/// a `|` — is escaped first, since Slack shows it as typed. A name
+/// stands in as a placeholder until the end, so none of the passes that
+/// read mrkdwn can read into it.
 pub fn to_commonmark(text: &str, labels: Labels<'_>) -> String {
-    let mut out = text.to_string();
+    let mut names: Vec<String> = Vec::new();
+    let mut hold = |md: String| {
+        names.push(md);
+        format!("{NAME_OPEN}{}{NAME_CLOSE}", names.len() - 1)
+    };
 
-    out = USER_REF
-        .replace_all(&out, |caps: &Captures<'_>| user_replacement(caps, labels))
-        .into_owned();
+    let mut out = escape_typed_markdown(text);
+
+    // A mention is a chip link in text, and `@Name` in code, which shows
+    // what it holds literally.
+    out = code_parts_whole_constructs(&out)
+        .into_iter()
+        .map(|(part, is_code)| {
+            USER_REF
+                .replace_all(&part, |caps: &Captures<'_>| {
+                    if is_code {
+                        format!("@{}", user_label(caps, labels, slack_encode))
+                    } else {
+                        hold(user_mention(caps, labels))
+                    }
+                })
+                .into_owned()
+        })
+        .collect();
 
     out = CHANNEL_REF
         .replace_all(&out, |caps: &Captures<'_>| {
-            channel_replacement(caps, labels)
+            hold(format!("#{}", channel_label(caps, labels, md_name)))
         })
         .into_owned();
 
     out = SUBTEAM_REF
         .replace_all(&out, |caps: &Captures<'_>| {
             let name = caps.get(1).map(|m| m.as_str()).unwrap_or("group");
-            format!("@{name}")
+            hold(format!("@{}", md_name(&decode_entities(name))))
         })
         .into_owned();
 
@@ -126,8 +190,11 @@ pub fn to_commonmark(text: &str, labels: Labels<'_>) -> String {
             let url = decode_entities(&caps[1]);
             match caps.get(2).map(|m| m.as_str()) {
                 Some(label) if !label.is_empty() && label != &caps[1] => {
-                    let label = label.replace('[', "\\[").replace(']', "\\]");
-                    format!("[{label}]({})", md_link_dest(&url))
+                    format!(
+                        "[{}]({})",
+                        escape_md_syntax(&label.replace(['\r', '\n'], " "), false),
+                        md_link_dest(&url)
+                    )
                 }
                 _ => format!("<{}>", url.replace('<', "%3C").replace('>', "%3E")),
             }
@@ -151,8 +218,89 @@ pub fn to_commonmark(text: &str, labels: Labels<'_>) -> String {
     out = decode_entities_where_literal(&out);
 
     out = terminate_blockquotes(&out);
-    emojize_shortcodes(&out)
+    out = emojize_shortcodes(&out);
+    NAME_HELD
+        .replace_all(&out, |caps: &Captures<'_>| {
+            caps[1]
+                .parse::<usize>()
+                .ok()
+                .and_then(|n| names.get(n).cloned())
+                .unwrap_or_default()
+        })
+        .into_owned()
 }
+
+/// Brackets a held name's index: private-use characters, which Slack
+/// text has no business carrying.
+const NAME_OPEN: char = '\u{E000}';
+const NAME_CLOSE: char = '\u{E001}';
+static NAME_HELD: Lazy<Regex> = Lazy::new(|| Regex::new("\u{E000}([0-9]+)\u{E001}").unwrap());
+
+/// [`escape_md_syntax`] over what someone typed: not inside a `<…>`,
+/// which is Slack's own markup (a typed `<` arrives as `&lt;`), and not
+/// inside code, which shows literally anyway. The `<…>`s are held aside
+/// while the code is found, so a backtick in a link's label cannot pair
+/// with one outside it.
+fn escape_typed_markdown(text: &str) -> String {
+    let mut constructs: Vec<String> = Vec::new();
+    let masked = SLACK_CONSTRUCT.replace_all(text, |caps: &Captures<'_>| {
+        constructs.push(caps[0].to_string());
+        format!("{CONSTRUCT_OPEN}{}{CONSTRUCT_CLOSE}", constructs.len() - 1)
+    });
+    let mut out = String::with_capacity(text.len() + 8);
+    for (part, is_code) in code_span_parts(&masked) {
+        if is_code {
+            out.push_str(part);
+        } else {
+            let starts_line = out.is_empty() || out.ends_with('\n');
+            // A `!` typed straight before a construct that becomes a
+            // link would make that link an image.
+            let escaped = escape_md_syntax(part, starts_line).replace(
+                &format!("!{CONSTRUCT_OPEN}"),
+                &format!("\\!{CONSTRUCT_OPEN}"),
+            );
+            out.push_str(&escaped);
+        }
+    }
+    CONSTRUCT_HELD
+        .replace_all(&out, |caps: &Captures<'_>| {
+            caps[1]
+                .parse::<usize>()
+                .ok()
+                .and_then(|n| constructs.get(n).cloned())
+                .unwrap_or_default()
+        })
+        .into_owned()
+}
+
+/// [`code_span_parts`] over Slack text, with each `<…>` construct kept
+/// whole inside one part: a mention's label may hold a backtick, which
+/// must not open a code span that cuts the mention in two.
+fn code_parts_whole_constructs(text: &str) -> Vec<(String, bool)> {
+    let mut constructs: Vec<String> = Vec::new();
+    let masked = SLACK_CONSTRUCT.replace_all(text, |caps: &Captures<'_>| {
+        constructs.push(caps[0].to_string());
+        format!("{CONSTRUCT_OPEN}{}{CONSTRUCT_CLOSE}", constructs.len() - 1)
+    });
+    code_span_parts(&masked)
+        .into_iter()
+        .map(|(part, is_code)| {
+            let whole = CONSTRUCT_HELD.replace_all(part, |caps: &Captures<'_>| {
+                caps[1]
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|n| constructs.get(n).cloned())
+                    .unwrap_or_default()
+            });
+            (whole.into_owned(), is_code)
+        })
+        .collect()
+}
+
+static SLACK_CONSTRUCT: Lazy<Regex> = Lazy::new(|| Regex::new(r"<[^<>]*>").unwrap());
+const CONSTRUCT_OPEN: char = '\u{E002}';
+const CONSTRUCT_CLOSE: char = '\u{E003}';
+static CONSTRUCT_HELD: Lazy<Regex> = Lazy::new(|| Regex::new("\u{E002}([0-9]+)\u{E003}").unwrap());
 
 /// Slack's entities stay entities in running text, so a `<b>` someone
 /// typed shows as typed rather than being read as HTML. They are decoded
@@ -223,6 +371,7 @@ mod tests {
         Labels {
             users: INPUTS.lookup("users", &USERS),
             channels: INPUTS.lookup("channels", &CHANNELS),
+            team_id: "T01",
         }
     }
 
@@ -230,6 +379,7 @@ mod tests {
         Labels {
             users: INPUTS.lookup("users", &NONE),
             channels: INPUTS.lookup("channels", &NONE),
+            team_id: "T01",
         }
     }
 
@@ -240,7 +390,8 @@ mod tests {
         assert_eq!(to_commonmark("~old~ news", lbl), "~~old~~ news");
         assert_eq!(
             to_commonmark("hi <@U_PICARD>!", lbl),
-            "hi @Jean-Luc Picard!"
+            "hi [@Jean-Luc Picard](slack://user?team=T01&id=U_PICARD \
+             \"@Jean-Luc Picard (slack:T01/U_PICARD)\")!"
         );
         assert_eq!(
             to_commonmark("<https://slack.com|Slack>", lbl),
@@ -324,6 +475,120 @@ mod tests {
             resolve_mentions("&lt;b&gt; &amp; co", lbl),
             "<b> & co",
             "a thread title is plain text; Title escapes it"
+        );
+    }
+
+    /// Slack shows markdown's syntax as typed; markdown-it would have
+    /// made a link, an image, a heading and a table of it (#992).
+    #[test]
+    fn markdown_typed_into_slack_renders_as_typed() {
+        let lbl = no_labels();
+        assert_eq!(
+            to_commonmark("[x](https://e.test) ![](https://t.test/i.png) a|b", lbl),
+            "\\[x\\](https://e.test) !\\[\\](https://t.test/i.png) a\\|b"
+        );
+        assert_eq!(
+            to_commonmark("# not a heading\n---\n- item *bold*", lbl),
+            "\\# not a heading\n\\---\n\\- item **bold**"
+        );
+        assert_eq!(
+            to_commonmark("`[x](y)` and <https://x.test/[a]|[b]>", lbl),
+            "`[x](y)` and [\\[b\\]](https://x.test/[a])"
+        );
+    }
+
+    /// A name from the users or channels table, or a mention's own label,
+    /// is text on a markdown line (#992).
+    #[test]
+    fn a_name_in_markdown_renders_as_typed() {
+        static ODD: Lazy<BTreeMap<String, String>> = Lazy::new(|| {
+            BTreeMap::from([("U_Q".to_string(), "[Q](https://e.test) *".to_string())])
+        });
+        let lbl = Labels {
+            users: INPUTS.lookup("users", &ODD),
+            channels: INPUTS.lookup("channels", &ODD),
+            team_id: "T01",
+        };
+        assert_eq!(
+            to_commonmark("hi <@U_Q> and <@U_X|`b`&lt;i&gt;>", lbl),
+            "hi [@\\[Q\\](https://e.test) \\*](slack://user?team=T01&id=U_Q \
+             \"@[Q](https://e.test) * (slack:T01/U_Q)\") \
+             and [@\\`b\\`&lt;i&gt;](slack://user?team=T01&id=U_X \
+             \"@`b`<i> (slack:T01/U_X)\")",
+            "a name in markdown is text in the link, and the title is the name as shown"
+        );
+        assert_eq!(
+            resolve_mentions("hi <@U_Q> and <@U_X|a&amp;b>", lbl),
+            "hi @[Q](https://e.test) * and @a&b",
+            "a thread title is plain text; Title escapes it"
+        );
+    }
+
+    /// A mention is the one link a Slack body carries that the viewer
+    /// resolves: a chip with the user's handle. The thread title, plain
+    /// text, keeps `@Name`.
+    #[test]
+    fn a_mention_is_a_chip_link_and_a_title_stays_plain() {
+        let lbl = labels();
+        assert_eq!(
+            to_commonmark("<@U_DATA|Data>, report", lbl),
+            "[@Data](slack://user?team=T01&id=U_DATA \"@Data (slack:T01/U_DATA)\"), report"
+        );
+        assert_eq!(
+            to_commonmark("<@U_NOBODY> there?", lbl),
+            "[@U_NOBODY](slack://user?team=T01&id=U_NOBODY \"@U_NOBODY (slack:T01/U_NOBODY)\") there?",
+            "an id with no profile is still the person"
+        );
+        assert_eq!(
+            resolve_mentions("<@U_DATA>, report", lbl),
+            "@Lt. Cmdr. Data, report"
+        );
+        let no_team = Labels {
+            users: INPUTS.lookup("users", &USERS),
+            channels: INPUTS.lookup("channels", &CHANNELS),
+            team_id: "",
+        };
+        assert_eq!(
+            to_commonmark("<@U_DATA> there?", no_team),
+            "@Lt. Cmdr. Data there?",
+            "no workspace, no handle: plain text"
+        );
+    }
+
+    /// Code shows what it holds, so a mention there is `@Name`, not the
+    /// markdown of a link; outside the code beside it, it is still a chip.
+    #[test]
+    fn a_mention_in_code_is_its_name_as_text() {
+        let lbl = labels();
+        assert_eq!(
+            to_commonmark("ask `<@U_DATA>` or <@U_DATA>", lbl),
+            "ask `@Lt. Cmdr. Data` or [@Lt. Cmdr. Data](slack://user?team=T01&id=U_DATA \
+             \"@Lt. Cmdr. Data (slack:T01/U_DATA)\")"
+        );
+        assert_eq!(
+            to_commonmark("```\n<@U_DATA>, <@U_X|a&amp;b>\n```", lbl),
+            "```\n@Lt. Cmdr. Data, @a&b\n```"
+        );
+    }
+
+    /// A `!` typed straight before a mention or a labelled link stays a
+    /// `!`; unescaped, markdown reads the link after it as an image.
+    #[test]
+    fn a_bang_before_a_construct_is_not_an_image() {
+        let lbl = labels();
+        assert_eq!(
+            to_commonmark("wow!<@U_DATA>", lbl),
+            "wow\\![@Lt. Cmdr. Data](slack://user?team=T01&id=U_DATA \
+             \"@Lt. Cmdr. Data (slack:T01/U_DATA)\")"
+        );
+        assert_eq!(
+            to_commonmark("!<https://x.test/i.png|pic>", lbl),
+            "\\![pic](https://x.test/i.png)"
+        );
+        assert_eq!(
+            to_commonmark("hi! there", lbl),
+            "hi! there",
+            "a lone `!` is left alone"
         );
     }
 

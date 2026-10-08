@@ -1,4 +1,4 @@
-//! Map parsed vCards into `DatalibContact`s and hand them to the shared
+//! Map parsed vCards into `NormalizedContact`s and hand them to the shared
 //! [`datalib_etl_contact_common`] renderer.
 
 use std::collections::HashMap;
@@ -6,7 +6,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use datalib_contact_schema::{ContactHandle, ContactKind, DatalibContact, Detail, Photo};
+use datalib_contact_schema::{ContactHandle, ContactKind, Detail, NormalizedContact, Photo};
 use datalib_etl::progress::Progress;
 use datalib_etl_contact_common::{render_all as cc_render_all, ContactDoc, ContactRenderProfile};
 use datalib_etl_render::grid_index::RenderedMarkdown;
@@ -27,8 +27,11 @@ use datalib_schema::providers::Provider;
 /// moved; to 5 when labels came from `X-ABLabel` and every `TYPE`,
 /// `CREATED` became `created_at`, and groups listed their members; to 7
 /// when a card listed the groups it is in, and to 8 when its `CATEGORIES`
-/// joined them.
-pub const RENDER_VERSION: u32 = 9;
+/// joined them; to 10 when a `+1` number without ten digits after the 1
+/// stopped having a handle; to 12 when a card's photo reached the index
+/// as the URL the app serves it at.
+/// 13: a photo no browser draws has no URL.
+pub const RENDER_VERSION: u32 = 13;
 
 /// Every card by `(addressbook, UID)`, for a group to name its members.
 type Cards<'a> = HashMap<(&'a str, &'a str), &'a ParsedContact>;
@@ -137,7 +140,7 @@ fn normalize(
     } else {
         ContactKind::Person
     };
-    let mut person = DatalibContact::new(source_id, id.natural_key.clone(), kind);
+    let mut person = NormalizedContact::new(source_id, id.natural_key.clone(), kind);
     let mut inputs = contact.inputs.clone();
     // The group's name is on this page, and its card is where the
     // membership lives: a member added or dropped re-renders this card.
@@ -170,7 +173,7 @@ fn normalize(
         person.members.push(name);
     }
     person.names = contact.display_name.iter().cloned().collect();
-    person.org = contact.org.as_ref().map(|org| org.replace(';', " — "));
+    person.org = (!contact.org.is_empty()).then(|| contact.org.join(" — "));
     person.title = contact.title.clone();
     person.handles.extend(
         contact
@@ -188,7 +191,7 @@ fn normalize(
         // ADR is `;`-separated: PO box; ext; street; locality; region; postcode; country
         person.details.push(Detail::new(
             field_label("Address", &a.label()),
-            a.value.replace(';', ", "),
+            a.text_list(';').join(", "),
         ));
     }
     person.note = contact.note.clone();
@@ -302,7 +305,7 @@ mod tests {
             emails: vec![prop("jlp@enterprise", Some("WORK"))],
             phones: vec![prop("+1-555", Some("WORK"))],
             addresses: vec![prop(";;Ready Room;Deck 1;;;", Some("WORK"))],
-            org: Some("Starfleet;USS Enterprise".to_string()),
+            org: vec!["Starfleet".to_string(), "USS Enterprise".to_string()],
             title: Some("Captain".to_string()),
             note: Some("Make it so.".to_string()),
             photo: None,
@@ -400,7 +403,7 @@ mod tests {
             emails: Vec::new(),
             phones: Vec::new(),
             addresses: Vec::new(),
-            org: None,
+            org: Vec::new(),
             title: None,
             note: None,
             inputs: vec![Input::new("contacts", "row-group")],

@@ -32,7 +32,8 @@ use datalib_schema::providers::Provider;
 ///     bits (`datalib_id`'s v8 layout). Every uuid moved, `chat_uuid`
 ///     among them.
 /// v5: an incoming message's author carries the sender's `tel:` handle.
-pub const RENDER_VERSION: u32 = 5;
+/// v6: a `+1` number without ten digits after the 1 has no handle.
+pub const RENDER_VERSION: u32 = 6;
 
 /// Projection for [`BlobBundle::load_many`] over the SMS CAS edge: the
 /// `ref_name` ({message_id}/{partname}) is the bundle key; `content_type`
@@ -171,7 +172,7 @@ async fn load_blobs(
     }
     BlobBundle::load_many(
         db.pool(),
-        db.cas().pool(),
+        Some(db.cas().pool()),
         SMS_BLOB_PROJECTION,
         refs_by_chat,
     )
@@ -323,6 +324,7 @@ fn item(source_id: &str, v: &Value) -> NormalizedChatItem {
                 kind_label: None,
                 source_ref: source_ref.clone(),
                 is_aside: false,
+                branch: Vec::new(),
                 unread: false,
                 recipients: Vec::new(),
                 problems: Vec::new(),
@@ -385,6 +387,7 @@ fn item(source_id: &str, v: &Value) -> NormalizedChatItem {
                 kind_label: None,
                 source_ref: source_ref.clone(),
                 is_aside: false,
+                branch: Vec::new(),
                 // Only an explicit `read="0"` on a message someone else
                 // sent: an older store's rows carry no `read` at all.
                 unread: !is_me && v.get("read").and_then(Value::as_bool) == Some(false),

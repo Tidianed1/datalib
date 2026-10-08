@@ -30,6 +30,7 @@ rust_library(
     ],
     deps = [
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/web:datalib_etl_web",
         "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/etl/providers/slack_config:datalib_etl_slack_config",
         "//datalib/backend/probe:datalib_probe",
@@ -91,12 +92,15 @@ rust_test(
         "RUST_TEST_THREADS": "1",
         "SLACK_FIXTURE_DIR": "datalib/backend/etl/providers/slack/tests/fixtures/slack_api",
     },
+    proc_macro_deps = ["@datalib_crates//:async-trait"],
     deps = [
         "//datalib/backend/etl/providers/slack_config:datalib_etl_slack_config",
         "//datalib/backend/etl/providers/slack_render:datalib_etl_slack_render",
         "//datalib/backend/etl/render:datalib_etl_render",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/web:datalib_etl_web",
         "//datalib/backend/pin:datalib_pin",
+        "//datalib/backend/probe:datalib_probe",
         ":datalib_etl_slack",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:insta",

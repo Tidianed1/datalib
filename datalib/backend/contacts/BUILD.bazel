@@ -5,20 +5,27 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 # applet is its one writer. Bazel-only.
 rust_library(
     name = "datalib_contacts",
-    srcs = ["src/lib.rs"],
+    srcs = [
+        "src/lib.rs",
+        "src/schema.rs",
+    ],
     crate_name = "datalib_contacts",
     edition = "2021",
+    proc_macro_deps = ["//datalib/backend/etl/macros:datalib_etl_macros"],
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "//datalib/backend/contact_schema:datalib_contact_schema",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/handle:datalib_handle",
         "//datalib/backend/store_meta:datalib_store_meta",
+        # For the `BulkUpsertable` impl `PortableTable` generates.
+        "//datalib/backend/table:datalib_table",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",
+        "@datalib_crates//:tracing",
         "@datalib_crates//:uuid",
     ],
 )

@@ -308,12 +308,12 @@ holds for everything inside it too. When a card opens cards
 (`openCards`), they land in the nearest container above the opener that
 is not solidified, and that container's layout decides where: Columns
 drop what was right of the opener's column and add the chain; a Split or
-Page insert it after the opener's child; Tabs take it as one new
-tab — a Columns container holding the chain, under the opener's tab —
-so what those cards open lands beside them. The outermost container is
-never solidified, so an open always lands somewhere. A link or the
-toolbar (Logs, Data sources, a search) opens its cards the same way, in
-a new tab holding a Columns container.
+Page insert it after the opener's child; Tabs give each card a tab of
+its own, filling it, under the tab of the card before. The outermost
+container is never solidified, so an open always lands somewhere. A
+card opened from the toolbar (Logs, Data sources, a search) is a tab of
+its own. A link opens its cards as one tab holding a Columns container,
+so what they open lands beside them.
 
 **What shows.** Outside edit mode a solidified subtree shows no card
 chrome, so a composite such as the Dashboard (a Page of its five
@@ -524,6 +524,15 @@ programs against:
   (`cards/JsonTree.ce.vue`), the source link at the process's commit,
   the process itself. Its *keep* / *exclude* buttons narrow the log
   beside it through the bus (`log.query`, a token for the query bar).
+- `personView(handle, { seenIn })` — one person (`cards/PersonCard.ce.vue`,
+  its rules in `cards/person.ts`): your contact, when the handle is
+  linked to one, and each source's record of them from `/people`, a
+  section per source, never merged. The source named by `seenIn` —
+  where the chip that opened it was — leads, marked "seen here". A
+  person chip's double-click opens it (`personSource` in
+  `cards/cardSources.ts`); it offers the search for everything from
+  them, and *Create contact* for an unlinked handle where a contacts
+  app is configured.
 - `configView()` — `config.toml` itself, edited directly, saved through
   the backend's loader. Reloads on the root's `config_changed` frame
   and, a beat sooner, on the `config.written` bus topic a card publishes
@@ -602,7 +611,7 @@ own layout shape and decodes to nothing when it cannot be read.
 | `datetime` | an ISO stamp that is the record's (when a message was sent) | the date and time it names; sorts on the instant |
 | `quantity` | `{value, unit, note, detail}` | one figure by its unit (`count` grouped, `seconds` as "25 min"), or `note` in its place — a word, muted — when there is none; the reasoning on hover |
 | `timeseries` | `{value, unit, samples, detail, window_secs}` | the value and its change over the window, over a sparkline scaled to its own range; each value names its own window, so minutes of bytes and days of items share a table |
-| `identity` | `{id, label, icon, detail}` | icon + label, id on hover; the icon is a *token* (`slack`, `step:ingest`) the viewer maps to an asset |
+| `identity` | `{id, label, icon, detail, entity}` | icon + label, id on hover; the icon is a *token* (`slack`, `step:ingest`) the viewer maps to an asset. An id that is a person's handle as a URI (`mailto:…`), or an `entity` naming a group or step (`datalib:group/slack`), draws as a chip instead, see below |
 | `status` | `{key, label, at, last_success_at, detail}` | a glyph for the key (a spinner while running), when it got there, the reason on hover |
 | `chips` | `[{kind, text, title}]` | a row of chips |
 | `actions` | `[{id, label, enabled, hint, disabled_reason, danger, on}]` | buttons, or a switch when `on` is set; the card supplies the handler for each id, and an id with no handler draws nothing |
@@ -612,6 +621,15 @@ The producer resolves, the viewer presents: an `identity` arrives with
 its label already looked up, because only the producer can, and the
 viewer decides what the icon token looks like. An action is an *id*,
 never a URL — a URL arriving as data would be a capability.
+
+One layer is joined in the viewer, deliberately: what a chip names. An
+identity cell that is a chip — a person's Author cell, a group's Source
+cell — arrives with what the producer knows, and the viewer asks a
+resolver what it names now: the contact a person linked, the name the
+config gives a group today, a step's status. Those move while the row
+does not, so they are joined where they are live, and one link made in
+a document redraws every grid showing it. How, and what a chip does on
+click: [`chips.md`](chips.md) §"In a grid".
 
 `GET /api/manage/rows` and the `unified_index` applet's `/search` are
 the two producers. The applet resolves the search grid's Source

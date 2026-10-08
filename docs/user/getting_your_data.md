@@ -103,8 +103,7 @@ pick — Signal, Google Chat and the rest Beeper bridges.
 
 On macOS the directory is `~/Library/Application Support/BeeperTexts`;
 no credentials. Lightly used — expect rough edges. It never notices a
-deletion, and `always_clear_before_ingest` is the wrong fix here (the
-provider's `INGEST.md` says why).
+deletion (the provider's `INGEST.md` says why).
 
 ## CalDAV
 
@@ -144,8 +143,8 @@ conversations.
 A one-time registration, then a browser login. ChatGPT uses a bearer
 access token rather than a cookie, and latchkey can go and fetch it
 for you. The app's Add Data Source wizard does both from its
-**Sign in with browser** button (and **Check account** then lists the
-account's conversations to pick from); by hand it is:
+**Sign in with browser** button (and **Load conversations** then lists
+the account's conversations to pick from); by hand it is:
 
 ```sh
 latchkey services register chatgpt \
@@ -408,19 +407,16 @@ nothing else; `addressbooks` narrows it to the address books you name.
 
 ## Garmin
 
-`type = "garmin"` — Garmin Connect's API, with its own login rather
-than latchkey (`api`). Mirrors per-day health metrics (sleep, heart
+`type = "garmin"` — Garmin Connect's API through latchkey (`api`). Mirrors per-day health metrics (sleep, heart
 rate, stress, body battery, HRV, SpO₂, …), weigh-ins, activities with
 their original FIT files, devices, records, gear, badges, workouts and
 goals; the weigh-ins render as one page with an interactive plot.
 
-Garmin's API wants a bearer minted by a signed request that latchkey
-cannot make, so the provider signs in on its own. Run
-`datalib-step login garmin` once — it asks for your Garmin email,
-password and the MFA code Garmin emails you, and writes a token that
-lasts about a year under `~/.garth` (a token from the `garth` Python
-tool works too). Then add the source from the wizard or from the
-`all_sources.toml` example; `since` says how far back to mirror. The
+latchkey reaches Garmin through its Garmin plugin, which the Add a
+source dialog installs into `~/.latchkey/plugins/garmin` the first time
+you sign in there. Sign in with the browser, or import a token folder
+the `garth` Python tool wrote (`~/.garth`). The sign-in lasts about a
+year. `since` says how far back to mirror. The
 first sync makes one request per metric per day since `since`, so a
 long history takes a while; later syncs re-read only the trailing week.
 
@@ -575,9 +571,8 @@ data**, request the full archive, and unzip it when the email arrives
 unzip ~/Downloads/Complete_LinkedInDataExport_*.zip -d ~/backups/LinkedInDataExport
 ```
 
-Point `export.path` at that directory. Each export is complete, so
-`all_sources.toml` sets `always_clear_before_ingest = true` to let a
-newer export drop what LinkedIn stopped including.
+Point `export.path` at that directory, and unzip each newer export over
+it or in its place.
 
 ## Local files
 
@@ -645,7 +640,9 @@ reports this service's credential as `invalid` even when it works;
 only a real request tells you.
 
 To mirror only part of the workspace, list the pages in `api.roots`
-(page ids or paste-able URLs); everything under them comes along.
+(page ids or paste-able URLs); every page linked under them comes
+along. A database embedded in one of those pages does not: its rows
+are mirrored only by the whole-workspace default.
 
 ## PDFs
 

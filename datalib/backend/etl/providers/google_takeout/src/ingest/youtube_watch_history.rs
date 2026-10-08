@@ -1,12 +1,13 @@
 //! `YouTube and YouTube Music/history/watch-history.html` walker.
 
 use datalib_etl::download_problems::SkippedRecord;
-use datalib_etl::fsscan;
+use datalib_etl::run_problems::RunProblems;
+use datalib_etl_files::fsscan;
 use datalib_problems::{Problem, Severity};
 
 use anyhow::Result;
-use datalib_etl::file_checkpoint::{self, SnapshotCounts};
 use datalib_etl::progress::Progress;
+use datalib_etl_files::file_checkpoint::{self, SnapshotCounts};
 use serde_json::json;
 
 use super::db::RawDb;
@@ -22,13 +23,18 @@ pub async fn ingest(
     db: &RawDb,
     scan: &fsscan::Scan,
     progress: &Progress,
+    found: &RunProblems,
 ) -> Result<SnapshotCounts> {
     let mut skipped = None;
     let n = file_checkpoint::ingest_snapshot(db.pool(), SCOPE, scan.file(FILE_REL), |bytes| {
         let skipped = skipped.insert(Vec::new());
         let html = String::from_utf8_lossy(bytes);
         let mut rows: Vec<YoutubeWatchRow> = Vec::new();
-        for cell in mdl_html::iter_cells(&html) {
+        let cells: Vec<&str> = mdl_html::iter_cells(&html).collect();
+        if cells.is_empty() {
+            return Err(super::unknown_layout(FILE_REL, "holds no activity cells"));
+        }
+        for &cell in &cells {
             let anchors = mdl_html::iter_anchors(cell);
             // The first anchor is the video; channel anchor is second
             // when present. We tolerate cells that only have a video.
@@ -84,10 +90,14 @@ pub async fn ingest(
                 channel_id,
             });
         }
-        Ok(Some(rows))
+        super::require_some_read(FILE_REL, cells.len(), rows.len())?;
+        Ok(rows)
     })
     .await?;
-    super::report_skipped_if_read(db, "youtube_watch_history", skipped).await;
+    // `None`: the file was unchanged, and last run's rows still hold.
+    if let Some(skipped) = skipped {
+        found.skipped("youtube_watch_history", skipped);
+    }
     progress.set_message(&format!("youtube_watch_history: {}", n.written));
     Ok(n)
 }

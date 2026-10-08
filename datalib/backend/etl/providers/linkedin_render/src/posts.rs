@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::{render_all as cc_render_all, RenderProfile};
@@ -70,14 +70,14 @@ pub fn render_posts(
                 return Ok(None);
             };
             let pin = db.pin().expect("a reader is pinned at open").clone();
-            // A feed the user didn't export has no table; treat a load
-            // error as "absent" rather than failing the render.
-            let shares = datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), "shares")
-                .await
-                .unwrap_or_default();
-            let comments = datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), "comments")
-                .await
-                .unwrap_or_default();
+            let shares =
+                datalib_etl::doltlite_raw::load_payloads_with_id_if_present(db.pool(), "shares")
+                    .await
+                    .context("load shares")?;
+            let comments =
+                datalib_etl::doltlite_raw::load_payloads_with_id_if_present(db.pool(), "comments")
+                    .await
+                    .context("load comments")?;
             let changed = changed_rows(db.pool(), range, &pin, &["shares", "comments"]).await?;
             // Closed, not dropped: the next open of this store is a
             // second connection until this one is actually gone.
@@ -280,6 +280,7 @@ fn me_item(
         kind_label: None,
         source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
         is_aside: false,
+        branch: Vec::new(),
         unread: false,
         recipients: Vec::new(),
         problems,
@@ -312,6 +313,7 @@ fn post_placeholder(
         kind_label: None,
         source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
         is_aside: false,
+        branch: Vec::new(),
         unread: false,
         recipients: Vec::new(),
         problems: Vec::new(),

@@ -50,6 +50,8 @@ rust_library(
         "src/manage/problems.rs",
         "src/manage/status.rs",
         "src/manage/summary.rs",
+        "src/plugins.rs",
+        "src/probe.rs",
         "src/prometheus.rs",
         "src/remote_media.rs",
         "src/request_log.rs",
@@ -80,14 +82,18 @@ rust_library(
     # `$(execpath)` expands to the execroot-relative path of the
     # directory output — usable directly from rustc's CWD (execroot).
     # The guide .md files are `include_str!`'d by the `/agent/cards.md`
-    # and `/agent/config.md` handlers.
+    # and `/agent/config.md` handlers, the plugin's files by plugins.rs.
     compile_data = [
         ":ui_dist_host",
         "src/agent_cards_guide.md",
         "src/agent_config_guide.md",
+        "//third-party/latchkey-garmin:plugin",
     ],
     rustc_env = {
         "DATALIB_UI_DIST": "$(execpath :ui_dist_host)",
+        # Absolute, because `include_str!` resolves a relative path from
+        # the source file, which rules_rust has copied under bazel-out.
+        "LATCHKEY_GARMIN_DIR": "$${pwd}/third-party/latchkey-garmin",
     },
     visibility = ["//datalib:__subpackages__"],
     deps = [
@@ -101,6 +107,7 @@ rust_library(
         "//datalib/backend/history:datalib_history",
         "//datalib/backend/migrate_config:datalib_migrate_config",
         "//datalib/backend/pin:datalib_pin",
+        "//datalib/backend/probe:datalib_probe",
         "//datalib/backend/runs:datalib_runs",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/store_meta:datalib_store_meta",
@@ -158,6 +165,8 @@ _SLICES = {
     "request_log_test": "request_log::",
     "server_log_test": "server_log::",
     "ui_events_test": "ui_events::",
+    # Waits on the OS's filesystem events, which a busy disk delays.
+    "watch_os_test": "watch_os::",
 }
 
 rust_test(
@@ -228,6 +237,16 @@ rust_test_slice(
 rust_test_slice(
     name = "ui_events_test",
     filter = _SLICES["ui_events_test"],
+    test = ":http_tests",
+)
+
+# The few watch tests that need the OS's own filesystem events, alone:
+# fseventsd delays every client's events when the disk is busy, and the
+# heaviest tests in the tree are what keeps it busy.
+rust_test_slice(
+    name = "watch_os_test",
+    filter = _SLICES["watch_os_test"],
+    tags = ["exclusive"],
     test = ":http_tests",
 )
 
