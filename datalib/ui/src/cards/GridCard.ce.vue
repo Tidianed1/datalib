@@ -75,7 +75,13 @@ import { oneAtATime, subscribeLive } from "@/live";
 import { encodeColumns } from "@/router/columns";
 import { KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
 import { followFrame, isDarkTheme } from "@/grid/gridFrame";
-import { filterToken, keepExcludeEntries, withToken, type FilterEntry } from "@/grid/query";
+import {
+  filterToken,
+  keepExcludeEntries,
+  searchDelay,
+  withToken,
+  type FilterEntry,
+} from "@/grid/query";
 import { onAfterMenuShowFit, perOpening } from "@/grid/menu";
 import { newlyPicked } from "@/grid/selection";
 import { copySelectedRowsOnKey } from "@/grid/copyRows";
@@ -170,8 +176,14 @@ const error = ref<SearchFailure | null>(null);
 // A failed search leaves the previous query's rows painted; say so, or
 // the count above them reads as the answer to what is typed.
 const showingStale = computed(
-  () => error.value !== null && rows.value.length > 0 && shownQuery.value !== query.value,
+  () =>
+    (error.value !== null || unfinished.value !== null) &&
+    rows.value.length > 0 &&
+    shownQuery.value !== query.value,
 );
+// Why the search cannot read what is typed — often a filter not
+// finished yet (`is:do`). The rows of the last query it could read stay.
+const unfinished = ref<string | null>(null);
 // A free-text search failed in qmd, and came back with no rows.
 const qmdError = ref<string | null>(null);
 // Free text asked of a root no sync has built a qmd index for yet.
@@ -712,6 +724,8 @@ async function runSearch(q: string, refresh = false) {
   try {
     // The card shows a failure itself, beside the rows it concerns.
     const r = await fetchRows<Row>(url, q, limit, ctrl.signal, { toast: false }, { sort, through });
+    unfinished.value = r.refused?.[0] ?? null;
+    if (unfinished.value !== null) return;
     rowsSpec = { row_key: r.row_key, document: r.document, free_text: r.free_text };
     if (r.columns?.length && JSON.stringify(r.columns) !== JSON.stringify(columns.value)) {
       columns.value = r.columns;
@@ -820,6 +834,8 @@ async function runGrouped(q: string, refresh: boolean) {
   qmdIndexMissing.value = false;
   try {
     const r = await fetchGroups<Row>(q, by.join(","), ctrl.signal, url);
+    unfinished.value = r.refused?.[0] ?? null;
+    if (unfinished.value !== null) return;
     const windows = new Map(r.groups.map((g) => [groupKey(g.values), unread(g, r.at)]));
     if (again) {
       await Promise.all(
@@ -944,13 +960,13 @@ function redrawGroupRows() {
   grid.render();
 }
 
-watch(query, (q) => {
+watch(query, (q, before) => {
   if (debounceTimer) clearTimeout(debounceTimer);
   seekingSelection = false;
-  // Show the spinner immediately on input change — otherwise the 150ms
+  // Show the spinner immediately on input change — otherwise the
   // debounce leaves the user staring at the old rows with no feedback.
   loading.value = true;
-  debounceTimer = setTimeout(() => runSearch(q), 150);
+  debounceTimer = setTimeout(() => runSearch(q), searchDelay(before, q, qmd()));
   saveState();
 });
 
@@ -2028,6 +2044,10 @@ onBeforeUnmount(() => {
     </div>
 
     <p v-if="qmdError" class="qmd-error" role="alert">Free-text search failed: {{ qmdError }}</p>
+    <p v-if="unfinished" class="query-unread" role="status">
+      {{ unfinished }}
+      <template v-if="showingStale">The rows below are from the previous search.</template>
+    </p>
     <p v-if="qmdIndexMissing" class="qmd-unbuilt" role="status">
       Free-text search starts working once the first sync builds the search index.
     </p>
@@ -2145,6 +2165,7 @@ onBeforeUnmount(() => {
 .error-retry:hover {
   background: var(--datalib-border);
 }
+.query-unread,
 .qmd-unbuilt {
   padding: 0.4rem 0.6rem;
   border: 1px solid var(--datalib-border);
