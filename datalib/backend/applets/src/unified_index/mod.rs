@@ -1117,8 +1117,8 @@ fn strip_frontmatter(text: &str) -> &str {
 mod tests {
     use super::*;
 
-    /// What `source_id:` hands qmd: every positive id, by either spelling;
-    /// nothing for a negated one or for `datalib`, which has no collection.
+    /// What `source_id:` hands qmd: every positive id; nothing for a
+    /// negated one or for `datalib`, which has no collection.
     #[test]
     fn source_ids_become_the_collections_qmd_searches() {
         let scope = |q: &str| collection_scope(&parse_query(q));
@@ -1126,7 +1126,7 @@ mod tests {
             |names: &[&str]| CollectionScope::Only(names.iter().map(|n| n.to_string()).collect());
         assert_eq!(scope("tea"), CollectionScope::All);
         assert_eq!(scope("tea source_id:a"), only(&["a"]));
-        assert_eq!(scope("tea source_id:a source_name:b"), only(&["a", "b"]));
+        assert_eq!(scope("tea source_id:a source_id:b"), only(&["a", "b"]));
         assert_eq!(scope("tea -source_id:a"), CollectionScope::All);
         assert_eq!(scope("tea -source_id:a source_id:b"), only(&["b"]));
         assert_eq!(
