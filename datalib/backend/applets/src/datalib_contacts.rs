@@ -1,7 +1,8 @@
 //! `datalib-applet datalib_contacts` — the contacts app: the one writer of
 //! `datalib_curated/datalib_contacts/`, serving what a chip needs to resolve a
-//! handle, what its popover needs to create or link a contact, and the
-//! photo a person put on one.
+//! handle, what its popover needs to create or link a contact, the
+//! photo a person put on one, and the draft a contact is edited through
+//! on its card.
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -17,6 +18,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use datalib_contacts::drafts::ContactEdit;
 use datalib_contacts::{ContactKind, Store};
 use datalib_handle::Handle;
 use serde::Deserialize;
@@ -77,6 +79,15 @@ fn routes(store: Arc<Store>) -> Router {
         .route("/unlink", post(unlink))
         .route("/stopped_working", post(stopped_working))
         .route("/rename", post(rename))
+        .route("/contact/{contact_id}/edit", get(edit_of))
+        .route(
+            "/contact/{contact_id}/draft",
+            post(open_draft)
+                .get(draft_view)
+                .put(autosave)
+                .delete(discard),
+        )
+        .route("/contact/{contact_id}/draft/save", post(save))
         .route(
             "/photo/{contact_id}",
             get(photo)
@@ -110,6 +121,9 @@ fn refused(e: anyhow::Error) -> ApiError {
         "no contact",
         "is not a photo",
         "the photo is",
+        "has no draft",
+        "a field needs an id",
+        "two fields share",
     ]
     .iter()
     .any(|m| msg.contains(m));
@@ -324,6 +338,80 @@ async fn rename(
     Ok(Json(json!({ "found": found })))
 }
 
+async fn edit_of(
+    State(store): AppState,
+    Path(contact_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    match store.edit_of(&contact_id).await.map_err(refused)? {
+        Some(e) => Ok(Json(json!(e))),
+        None => Err(ApiError(
+            StatusCode::NOT_FOUND,
+            format!("no contact {contact_id}"),
+        )),
+    }
+}
+
+/// The contact's draft, cut now if it has none.
+async fn open_draft(
+    State(store): AppState,
+    Path(contact_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(json!(store
+        .draft(&contact_id)
+        .await
+        .map_err(refused)?)))
+}
+
+async fn draft_view(
+    State(store): AppState,
+    Path(contact_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    match store.draft_view(&contact_id).await.map_err(refused)? {
+        Some(v) => Ok(Json(json!(v))),
+        None => Err(ApiError(
+            StatusCode::NOT_FOUND,
+            format!("{contact_id} has no draft"),
+        )),
+    }
+}
+
+async fn autosave(
+    State(store): AppState,
+    Path(contact_id): Path<String>,
+    Json(edit): Json<ContactEdit>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    store.autosave(&contact_id, &edit).await.map_err(refused)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct SaveBody {
+    /// The published commit the card last showed.
+    seen: String,
+}
+
+/// `{"outcome": "saved", "commit"}`, or `{"outcome": "stale", "view"}`
+/// when the contact moved since `seen`: nothing was saved, and the card
+/// shows what changed.
+async fn save(
+    State(store): AppState,
+    Path(contact_id): Path<String>,
+    Json(body): Json<SaveBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(json!(store
+        .save(&contact_id, &body.seen)
+        .await
+        .map_err(refused)?)))
+}
+
+async fn discard(
+    State(store): AppState,
+    Path(contact_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    store.discard(&contact_id).await.map_err(refused)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -347,6 +435,97 @@ mod tests {
             .await
             .unwrap();
         (status, String::from_utf8_lossy(&body).into_owned())
+    }
+
+    async fn call(
+        app: &Router,
+        method: &str,
+        path: &str,
+        body: serde_json::Value,
+    ) -> (StatusCode, serde_json::Value) {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&body).unwrap_or_default())
+    }
+
+    /// The card's whole round: open a draft, autosave, find the save
+    /// refused after a rename it had not seen, save again having seen it.
+    #[tokio::test]
+    async fn a_draft_is_opened_autosaved_refused_when_stale_and_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&datalib_contacts::store_path(dir.path()))
+            .await
+            .unwrap();
+        let id = store
+            .create("William Riker", ContactKind::Person, &[])
+            .await
+            .unwrap();
+        let store = Arc::new(store);
+        let app = routes(store.clone());
+        let draft = format!("/contact/{id}/draft");
+
+        let (status, _) = call(&app, "GET", &draft, json!(null)).await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "no draft before one is opened"
+        );
+        let (status, view) = call(&app, "POST", &draft, json!(null)).await;
+        assert_eq!(status, StatusCode::OK, "{view}");
+        let seen = view["published_commit"].as_str().unwrap().to_string();
+
+        let edit = json!({
+            "name": "Will Riker",
+            "note": null,
+            "fields": [{"field_id": "f1", "kind": "title", "label": null,
+                        "value": "First officer", "copied_from": null}],
+        });
+        let (status, body) = call(&app, "PUT", &draft, edit).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        store.rename(&id, "Number One").await.unwrap();
+
+        let save = format!("{draft}/save");
+        let (status, body) = call(&app, "POST", &save, json!({ "seen": seen })).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["outcome"], "stale", "{body}");
+        assert_eq!(body["view"]["published"]["name"], "Number One");
+        let seen = body["view"]["published_commit"].as_str().unwrap();
+
+        let (_, body) = call(&app, "POST", &save, json!({ "seen": seen })).await;
+        assert_eq!(body["outcome"], "saved", "{body}");
+        let (_, published) = call(&app, "GET", &format!("/contact/{id}/edit"), json!(null)).await;
+        assert_eq!(published["name"], "Will Riker");
+        assert_eq!(published["fields"][0]["value"], "First officer");
+
+        let (status, body) = call(
+            &app,
+            "PUT",
+            &draft,
+            json!({"name": "", "note": null, "fields": []}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "the draft is gone: {body}");
+
+        drop(app);
+        Arc::try_unwrap(store)
+            .ok()
+            .expect("the router is gone")
+            .close()
+            .await;
     }
 
     /// A photo up to the store's limit is taken, and one over it is
