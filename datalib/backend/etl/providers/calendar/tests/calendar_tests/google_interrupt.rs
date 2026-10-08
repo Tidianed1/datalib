@@ -1,6 +1,6 @@
 //! A Google Calendar download cut off at any request, then run again,
 //! ends with the store an uninterrupted run leaves
-//! (docs/dev/plans/sync_state.md §8). The primary calendar lists over
+//! (`datalib_etl_web::interrupt`). The primary calendar lists over
 //! two pages; run from an empty store, and from the store that run left
 //! against calendars where a series was cancelled, an event edited, one
 //! added and the away team's one event cancelled.

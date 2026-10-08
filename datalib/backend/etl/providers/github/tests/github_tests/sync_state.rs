@@ -1,5 +1,5 @@
 //! What is owed is what the searches listed minus what the store holds
-//! (docs/dev/plans/sync_state.md §2). Each test here was written against
+//! (docs/dev/data_architecture_ingestion.md, "What is left to fetch"). Each test here was written against
 //! the old code and watched failing before the mechanism it names was
 //! replaced.
 

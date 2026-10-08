@@ -312,10 +312,11 @@ pub struct Profile {
 
 pub async fn list_labels(user_id: &str, client: &Client) -> Result<Vec<Label>> {
     let v = get_json(&format!("{BASE}/{user_id}/labels"), client).await?;
-    Ok(v.get("labels")
+    let labels = v
+        .get("labels")
         .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(Label::from_json).collect())
-        .unwrap_or_default())
+        .context("labels.list answered without a `labels` list")?;
+    Ok(labels.iter().filter_map(Label::from_json).collect())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

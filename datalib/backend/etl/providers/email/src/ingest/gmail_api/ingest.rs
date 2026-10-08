@@ -75,8 +75,11 @@ impl LabelIndex {
                 moves.entry(by_name).or_insert_with(|| Some(id.clone()));
             }
         }
+        // Every account has the system labels, so a list that names
+        // nothing is a server that answered oddly; it must not take every
+        // label off every email.
         let prefix = labels::gmail_mailbox_prefix(account_id);
-        for id in held {
+        for id in held.iter().filter(|_| !listed.is_empty()) {
             if id.starts_with(&prefix) && !listed.contains(id.as_str()) {
                 moves.insert(id.clone(), None);
             }

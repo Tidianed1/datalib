@@ -137,8 +137,8 @@ where
 const CONFIG_PREFIX: &str = "config:";
 
 /// What a run could not do as a whole. Each variant is a sweep-key
-/// prefix, so [`report_run`] can replace the last run's rows of every
-/// kind at once.
+/// prefix, so a run that reaches its end can replace the last run's rows
+/// of every kind at once.
 #[derive(
     Debug,
     Clone,

@@ -7,7 +7,7 @@
 //! its content satisfies (`held_version` in the table's `_bookkeeping`
 //! sidecar, with the stamp of the fetch that landed it). What is *owed*
 //! is the difference, asked of the store each time and never stored:
-//! docs/dev/plans/sync_state.md.
+//! docs/dev/data_architecture_ingestion.md, "What is left to fetch".
 //!
 //! The listing can come from anywhere: a delta's answer, an
 //! enumeration's pages, a calendar, the rows of another table, or the

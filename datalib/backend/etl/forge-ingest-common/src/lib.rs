@@ -12,7 +12,7 @@
 //! cursor. What is held is the change-request table's sidecar
 //! `held_version`, written in the one transaction that writes the
 //! record and its children. Owed is the difference, fetched through
-//! `datalib_etl_web::owed` (docs/dev/plans/sync_state.md).
+//! `datalib_etl_web::owed` (docs/dev/data_architecture_ingestion.md, "What is left to fetch").
 
 pub mod client;
 

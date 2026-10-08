@@ -1,5 +1,5 @@
 //! A download cut off at any request, then run again, ends with the
-//! store an uninterrupted run leaves (docs/dev/plans/sync_state.md §8).
+//! store an uninterrupted run leaves (`datalib_etl_web::interrupt`).
 //! The tape is two meters reporting every six hours over three weeks,
 //! and then, for the run from an earlier store, ten more days plus one
 //! reading that arrived late, inside the overlap the next run re-asks.

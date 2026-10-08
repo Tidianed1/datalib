@@ -5,7 +5,7 @@
 //! stretch never asked for look the same. So a walk over a range records
 //! the spans it covered, in the transaction that stores what it found
 //! there, and what is left to walk is the range wanted minus the spans
-//! held (docs/dev/plans/sync_state.md §2). A newest stored row is never
+//! held (docs/dev/data_architecture_ingestion.md, "What is left to fetch"). A newest stored row is never
 //! read as "fetched up to here".
 //!
 //! A span's ends are strings that sort the way the range does: ISO

@@ -1,5 +1,5 @@
 //! What a DAV collection lists, kept in the provider's raw store so it
-//! outlives a run (docs/dev/plans/sync_state.md §2).
+//! outlives a run (docs/dev/data_architecture_ingestion.md, "What is left to fetch").
 //!
 //! - `dav_resources`: one row per object a listing named as present,
 //!   with the etag it was listed at. Its `_bookkeeping` sidecar's

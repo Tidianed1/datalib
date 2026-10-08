@@ -134,7 +134,7 @@ impl Mirror {
 
 // ── Gmail fixtures ──────────────────────────────────────────────────
 
-const GMAIL: &str = "https://gmail.googleapis.com/gmail/v1/users/me";
+pub const GMAIL: &str = "https://gmail.googleapis.com/gmail/v1/users/me";
 
 pub fn put_gmail(playback: &Path, url: &str, body: &Value) {
     put_gmail_response(playback, url, &json_response(body));

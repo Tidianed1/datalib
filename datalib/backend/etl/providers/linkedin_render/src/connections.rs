@@ -1,7 +1,7 @@
 //! Render LinkedIn `connections` as first-class contacts through the
 //! shared [`datalib_etl_contact_common`] renderer.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use datalib_contact_schema::{ContactHandle, ContactKind, Detail, NormalizedContact, Photo};
 use datalib_etl::progress::Progress;
 use datalib_etl_contact_common::{render_all as cc_render_all, ContactDoc, ContactRenderProfile};
@@ -46,13 +46,14 @@ pub fn render_connections(
                 return Ok(None);
             };
             let pin = db.pin().expect("a reader is pinned at open").clone();
-            // A user who excluded connections has no table; treat a load
-            // error as "absent" rather than failing the whole render.
-            let rows = datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), "connections")
-                .await
-                .unwrap_or_default();
+            let rows = datalib_etl::doltlite_raw::load_payloads_with_id_if_present(
+                db.pool(),
+                "connections",
+            )
+            .await
+            .context("load connections")?;
             // Photos, if any were fetched, keyed by the connection's URL.
-            let photos = load_photo_blobs(&db).await.unwrap_or_default();
+            let photos = load_photo_blobs(&db).await?;
             let changed =
                 changed_rows(db.pool(), range, &pin, &["connections", "contact_photos"]).await?;
             // Closed, not dropped: the next open of this store is a
@@ -190,6 +191,56 @@ fn field<'a>(p: &'a Value, key: &str) -> &'a str {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn render(raw: &std::path::Path) -> Result<FeedOutcome> {
+        let source = Source {
+            raw_dir: raw,
+            out_dir: raw,
+            name: "linkedin",
+            account: None,
+            account_inputs: &[],
+            range: datalib_etl_render::inputs::RawRange {
+                cursor: None,
+                pin: None,
+                stale: None,
+            },
+        };
+        render_connections(&source, &Progress::noop(), &mut |_| Ok(()))
+    }
+
+    /// A connections table that failed to load read as an export without
+    /// it, so every connection's document was rendered from nothing and
+    /// swept, with the step reporting success. Only a table that does not
+    /// exist is "no rows".
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_connections_table_that_will_not_load_fails_the_render() {
+        let d = tempfile::tempdir().unwrap();
+        let raw = d.path();
+        let db = RawDb::open(&db_path_for(raw)).await.unwrap();
+        datalib_etl::doltlite_raw::commit_run(db.pool(), "an export without connections")
+            .await
+            .unwrap();
+        db.close().await;
+        assert!(
+            render(raw).is_ok(),
+            "a table the export did not carry is no rows"
+        );
+
+        let db = RawDb::open(&db_path_for(raw)).await.unwrap();
+        sqlx::query("CREATE TABLE connections (id TEXT PRIMARY KEY)")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO connections (id) VALUES ('c1')")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        datalib_etl::doltlite_raw::commit_run(db.pool(), "connections it cannot read")
+            .await
+            .unwrap();
+        db.close().await;
+        assert!(render(raw).is_err());
+    }
 
     fn row() -> Value {
         json!({

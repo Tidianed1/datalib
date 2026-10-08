@@ -127,7 +127,10 @@ the two diffs agree — and deletes the row. It runs for a JMAP
 `Mailbox/changes` destroy, for a row a full `Mailbox/get` did not list,
 for a Gmail label `labels.list` no longer lists, and for a name-keyed
 row no message carries after an mbox run read every file (with no
-label filter).
+label filter). A listing that names nothing moves nothing, in both
+JMAP and Gmail: every account has its system mailboxes, so an empty
+list is a server that answered oddly. A Gmail reply with no `labels`
+list at all fails the run.
 
 **A mailbox's counts are volatile.** JMAP's `totalEmails`,
 `unreadEmails`, `totalThreads` and `unreadThreads` go to the sidecar's

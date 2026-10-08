@@ -11,7 +11,7 @@
 //! difference, asked of the store each time and never stored.
 //! `listed_whole` names the scopes (a mailbox, a label, or the account)
 //! an enumeration has listed to its end. The rule and why:
-//! docs/dev/plans/sync_state.md §2.
+//! docs/dev/data_architecture_ingestion.md, "What is left to fetch".
 
 use std::collections::BTreeSet;
 

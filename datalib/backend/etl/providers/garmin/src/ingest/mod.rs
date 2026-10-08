@@ -6,7 +6,7 @@
 //! UPSERT-by-upstream-id makes the overlap free.
 //!
 //! No walk keeps a cursor. What a run fetches is what the window wants
-//! less what the store holds (docs/dev/plans/sync_state.md, the shared
+//! less what the store holds (docs/dev/data_architecture_ingestion.md, "What is left to fetch"; the shared
 //! form in `datalib_etl_web::owed`): a day is held by its row and the date
 //! it is final from, the activity listing by `coverage` spans, a detail
 //! and a file by the listing version they were answered for. Each kind

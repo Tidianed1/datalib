@@ -1,13 +1,22 @@
 # Sync state: what is owed is what upstream listed, minus what we hold
 
-**Status: decided 2026-10-05; steps 0 to 6 of §7 are built: every network source is on one owed query and one fetch loop (§10), every local source names its units of completeness (§11), and the reference description is `data_architecture_ingestion.md` § "What is left to fetch" and § "Local inputs".** This is the design and
-the order of work. It came out of the audit in
-[`audits/2026-10-05_loose_ends.md`](../audits/2026-10-05_loose_ends.md)
+**Status: landed (2026-10-05 to 2026-10-06), kept as the record.**
+Every step of §7 is built: every network source works out what it owes
+from what upstream listed and what the store holds, through one owed
+query and one fetch loop (§10), and every local source names its units
+of completeness (§11). The reference is
+[`data_architecture_ingestion.md`](../../data_architecture_ingestion.md)
+§ "What is left to fetch" and § "Local inputs", and the interruption
+test is `datalib_etl_web::interrupt`. The PRs: #1008, #1010, #1012,
+#1015, #1018, #1025, #1031, #1037, #1042, #1044, #1047.
+
+This came out of the audit in
+[`audits/2026-10-05_loose_ends.md`](../../audits/2026-10-05_loose_ends.md)
 and a read of the four downloads with the most resume state (Slack,
-email, Notion, Garmin). The bugs in §6 were traced in the code by one
-reader each and are **not reproduced**; each wants a failing test before
-its fix. Line numbers are at `c68906bff`. Where this file and the tree
-disagree, the tree wins.
+email, Notion, Garmin). The bugs in §6 were traced when this was
+written and fixed, each with a failing test first, in the step that
+moved its provider. What follows describes the tree as it was
+decided and built; check a claim against the code before repeating it.
 
 ## 1. The problem
 
