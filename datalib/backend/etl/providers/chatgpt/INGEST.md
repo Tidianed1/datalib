@@ -47,7 +47,10 @@ the write, because the API returns them in a different order on every
 fetch and an unchanged conversation has to serialize identically to
 itself (`canonicalize_conversation_payload`). Every other array keeps
 the order the API sent — `mapping.*.children` is branch order,
-`content.parts` reading order. Stock `sqlite3` cannot open the store;
+`content.parts` reading order. A message id is unique within its
+conversation, not across them: a conversation branched into a new chat
+repeats the original's (`../chatgpt_render/TRANSLATE.md` §"A message id
+is not unique across conversations"). Stock `sqlite3` cannot open the store;
 `docs/dev/doltlite.md` has the one-pipe export.
 
 The `_bookkeeping` sidecars (`fetched_at_utc`, `attempt_count`,

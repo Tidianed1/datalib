@@ -50,7 +50,9 @@ use serde_json::Value;
 /// v12: the words beside an image, quotes of uploaded files and named
 ///     entities are kept; empty steps are left out; cited pages are
 ///     listed after the text.
-pub const RENDER_VERSION: u32 = 12;
+/// v13: a message is keyed within its conversation, since a branched
+///     conversation repeats the original's message ids.
+pub const RENDER_VERSION: u32 = 13;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -184,7 +186,7 @@ fn build_chat(
             ItemKind::Attachment
         };
 
-        let msg_id = ids::message(source_id, &m.message_id, ms);
+        let msg_id = ids::message(source_id, &conv_id, &m.message_id, ms);
         items.push(NormalizedChatItem {
             message_uuid: msg_id.uuid.clone(),
             author_handle: None,
