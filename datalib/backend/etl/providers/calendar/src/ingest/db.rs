@@ -46,6 +46,13 @@ pub struct LoadedGoogleEvent {
     pub event: serde_json::Value,
 }
 
+/// A row render could not read, and what it held instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnreadableRow {
+    pub id: String,
+    pub sample: String,
+}
+
 impl RawDb {
     async fn upsert<T: BulkUpsertable>(&self, rows: &[T], what: &str) -> Result<()> {
         if rows.is_empty() {
@@ -360,7 +367,7 @@ impl RawDb {
             .collect())
     }
 
-    pub async fn load_ics_objects(&self) -> Result<Vec<LoadedIcsObject>> {
+    pub async fn load_ics_objects(&self) -> Result<(Vec<LoadedIcsObject>, Vec<UnreadableRow>)> {
         let rows = sqlx::query(
             "SELECT id, calendar_id, uid, json_extract(payload, '$.ics') AS ics
              FROM ics_objects ORDER BY id",
@@ -368,20 +375,29 @@ impl RawDb {
         .fetch_all(self.pool())
         .await
         .context("select ics_objects")?;
-        Ok(rows
-            .into_iter()
-            .filter_map(|r| {
-                Some(LoadedIcsObject {
-                    id: r.try_get("id").ok()?,
-                    calendar_id: r.try_get("calendar_id").ok()?,
-                    uid: r.try_get("uid").ok()?,
-                    ics: r.try_get::<Option<String>, _>("ics").ok().flatten()?,
-                })
-            })
-            .collect())
+        let mut out = Vec::with_capacity(rows.len());
+        let mut unreadable = Vec::new();
+        for r in rows {
+            let id: String = r.try_get("id").unwrap_or_default();
+            let ics: Option<String> = r.try_get::<Option<String>, _>("ics").ok().flatten();
+            let Some(ics) = ics else {
+                unreadable.push(UnreadableRow {
+                    id,
+                    sample: "the payload holds no `ics` text".into(),
+                });
+                continue;
+            };
+            out.push(LoadedIcsObject {
+                id,
+                calendar_id: r.try_get("calendar_id").unwrap_or_default(),
+                uid: r.try_get("uid").unwrap_or_default(),
+                ics,
+            });
+        }
+        Ok((out, unreadable))
     }
 
-    pub async fn load_google_events(&self) -> Result<Vec<LoadedGoogleEvent>> {
+    pub async fn load_google_events(&self) -> Result<(Vec<LoadedGoogleEvent>, Vec<UnreadableRow>)> {
         let rows = sqlx::query(
             "SELECT id, calendar_id, json(payload) AS payload FROM google_events ORDER BY id",
         )
@@ -389,11 +405,18 @@ impl RawDb {
         .await
         .context("select google_events")?;
         let mut out = Vec::with_capacity(rows.len());
+        let mut unreadable = Vec::new();
         for r in rows {
             let id: String = r.try_get("id").unwrap_or_default();
             let payload: Option<String> = r.try_get("payload").ok().flatten();
-            let Some(event) = payload.and_then(|p| serde_json::from_str(&p).ok()) else {
-                tracing::warn!(event = "calendar_google_payload_unreadable", id = %id, "a stored Google event is not JSON; skipped it");
+            let Some(event) = payload
+                .as_deref()
+                .and_then(|p| serde_json::from_str(p).ok())
+            else {
+                unreadable.push(UnreadableRow {
+                    id,
+                    sample: payload.unwrap_or_else(|| "the payload is not JSON".into()),
+                });
                 continue;
             };
             out.push(LoadedGoogleEvent {
@@ -402,7 +425,7 @@ impl RawDb {
                 event,
             });
         }
-        Ok(out)
+        Ok((out, unreadable))
     }
 }
 
