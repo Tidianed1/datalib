@@ -1,7 +1,8 @@
 // What every card kind says about itself: a title and description for
-// the gallery, and the icon the layouts draw beside its name. A builtin
-// declares it here; a custom component declares the same three fields
-// in its `<name>.json` (api.ts `Meta`). `cardMeta` answers for either,
+// the gallery, the icon the layouts draw beside its name, and whether
+// it is a developer tool. A builtin declares it here; a custom
+// component declares the same fields in its `<name>.json` (api.ts
+// `Meta`, where the last is spelled `dev_tool`). `cardMeta` answers for either,
 // so nothing that draws a card knows which kind it is.
 import type { ViewLibs } from "./types";
 import { cardType } from "./cardId";
@@ -12,6 +13,10 @@ export type CardMeta = {
   description: string;
   // A token cards/icons.ts resolves; null draws the default glyph.
   icon: string | null;
+  // A tool for working on the library or on datalib itself — its logs,
+  // its config, its pipeline, its components — rather than a view of
+  // the data. The gallery lists these apart, under "Developer tools".
+  devTool?: boolean;
 };
 
 type BuiltinMeta = CardMeta & {
@@ -55,12 +60,14 @@ export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
     description:
       "Every line the runner, the steps and the server wrote; pick a run or a process, narrow with the query bar.",
     icon: "log",
+    devTool: true,
     gallery: "logView()",
   },
   configView: {
     title: "config.toml",
     description: "The config file itself, edited directly.",
     icon: "code",
+    devTool: true,
     gallery: "configView()",
   },
   documentPickerView: {
@@ -73,6 +80,7 @@ export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
     title: "DACTAL explorer",
     description: "Query and pivot your data with the DACTAL table UI.",
     icon: "table",
+    devTool: true,
     gallery: "dactalView()",
   },
   perseusView: {
@@ -85,18 +93,21 @@ export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
     title: "Pipeline DAG",
     description: "See your sources' step graph and watch syncs flow through it live.",
     icon: "dag",
+    devTool: true,
     gallery: "sourceDagView()",
   },
   tableView: {
     title: "Table",
     description: "Any endpoint that declares its columns, drawn as a typed table.",
     icon: "table",
+    devTool: true,
     gallery: 'tableView({ url: "/api/manage/rows" })',
   },
   aliasView: {
     title: "Component library",
     description: "List the custom components stored on this instance.",
     icon: "component",
+    devTool: true,
     gallery: "aliasView()",
   },
   documentView: {
@@ -176,7 +187,15 @@ export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
 export function galleryBuiltins(all = false): (CardMeta & { source: string })[] {
   return Object.values(BUILTIN_META).flatMap((m) =>
     m.gallery && (all || !m.galleryHidden)
-      ? [{ title: m.title, description: m.description, icon: m.icon, source: m.gallery }]
+      ? [
+          {
+            title: m.title,
+            description: m.description,
+            icon: m.icon,
+            devTool: m.devTool,
+            source: m.gallery,
+          },
+        ]
       : [],
   );
 }
@@ -193,5 +212,21 @@ export function cardMeta(source: string): CardMeta | null {
   const [, ns, name] = m;
   const meta = frontendManifest.value.get(ns)?.get(followRenames(ns, name) ?? name);
   if (!meta || "renamed_to" in meta) return null;
-  return { title: meta.title, description: meta.description, icon: meta.icon ?? null };
+  return {
+    title: meta.title,
+    description: meta.description,
+    icon: meta.icon ?? null,
+    devTool: meta.dev_tool === true,
+  };
+}
+
+/// `entries` as the gallery lists them: the views of the data first,
+/// then the developer tools, each in the order given.
+export function byAudience<E extends { devTool?: boolean }>(
+  entries: E[],
+): { views: E[]; devTools: E[] } {
+  return {
+    views: entries.filter((e) => !e.devTool),
+    devTools: entries.filter((e) => e.devTool),
+  };
 }

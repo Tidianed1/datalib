@@ -5,7 +5,10 @@
 // cards/catalog.ts offers, then every titled component in the frontend
 // store, then the "build a component with an agent" entry (handoff.ts),
 // which mints a fresh component and walks the user through handing it
-// to a coding agent. A builtin that is a building block (a Dashboard
+// to a coding agent. An entry whose metadata says `devTool` — the logs,
+// the config, the pipeline graph, the agent entry — is listed after
+// the rest under "Developer tools", a section that starts closed
+// outside edit mode. A builtin that is a building block (a Dashboard
 // section) is listed only once "Show every view" is on. Picking an
 // entry REPLACES this card — with the chosen component via
 // ctx.host.setSource, or with a copy of the composite via
@@ -16,7 +19,7 @@ import type { CardRender } from "../types";
 import { ensureFrontend, frontendManifest, gallerySource } from "../frontendRegistry";
 import { createComponentWithAgent } from "@/handoff";
 import { editMode } from "@/editMode";
-import { galleryBuiltins, type CardMeta } from "../catalog";
+import { byAudience, galleryBuiltins, type CardMeta } from "../catalog";
 import { resolveIcon } from "../icons";
 import { galleryComposites, loadComposites, savedComposites } from "@/views/composites";
 
@@ -34,6 +37,27 @@ const showAll = ref(storedShowAll());
 watch(showAll, (on) => {
   try {
     localStorage.setItem(SHOW_ALL_KEY, on ? "1" : "0");
+  } catch {
+    // Blocked storage: the choice lasts as long as the page.
+  }
+});
+
+// Whether "Developer tools" is open, once the person has opened or
+// closed it; kept in this browser. Before that it follows edit mode.
+const DEV_OPEN_KEY = "datalib-gallery-dev-tools";
+function storedDevOpen(): boolean | null {
+  try {
+    const kept = localStorage.getItem(DEV_OPEN_KEY);
+    return kept === null ? null : kept === "1";
+  } catch {
+    return null;
+  }
+}
+const devOpen = ref(storedDevOpen());
+watch(devOpen, (open) => {
+  if (open === null) return;
+  try {
+    localStorage.setItem(DEV_OPEN_KEY, open ? "1" : "0");
   } catch {
     // Blocked storage: the choice lasts as long as the page.
   }
@@ -88,6 +112,11 @@ export function galleryView(): CardRender {
       .gv-desc { opacity: .65; }
       .gv-src { font: 11px/1.4 ui-monospace, Menlo, monospace; opacity: .5; }
       .gv-foot { padding: 8px 12px; opacity: .55; font-size: 12px; }
+      .gv-dev > summary { display: flex; align-items: baseline; gap: 8px; padding: 8px 12px; cursor: pointer; font-weight: 600; list-style: none; border-bottom: 1px solid var(--datalib-border, #8882); background: var(--datalib-hover, rgba(127,127,127,.08)); }
+      .gv-dev > summary::-webkit-details-marker { display: none; }
+      .gv-dev > summary::before { content: "▸"; font-size: 10px; opacity: .7; }
+      .gv-dev[open] > summary::before { content: "▾"; }
+      .gv-dev-note { font-weight: 400; opacity: .65; }
     `;
     root.appendChild(style);
 
@@ -95,11 +124,12 @@ export function galleryView(): CardRender {
     wrap.className = "gv";
     root.appendChild(wrap);
 
-    function paint([manifest, dev, all]: [
+    function paint([manifest, dev, all, , keptOpen]: [
       Map<string, Map<string, import("@/api").Meta>>,
       boolean,
       boolean,
       unknown,
+      boolean | null,
     ]) {
       wrap.replaceChildren();
       const head = document.createElement("div");
@@ -137,11 +167,13 @@ export function galleryView(): CardRender {
             title: meta.title,
             description: meta.description,
             icon: meta.icon ?? null,
+            devTool: meta.dev_tool === true,
           });
         }
       }
 
       function addRow(
+        into: Element,
         title: string,
         description: string,
         icon: string | null,
@@ -175,27 +207,47 @@ export function galleryView(): CardRender {
         desc.textContent = description;
         text.append(headLine, desc);
         row.appendChild(text);
-        wrap.appendChild(row);
+        into.appendChild(row);
       }
 
-      for (const c of galleryComposites()) {
-        addRow(c.name, c.description, c.icon, null, () => ctx.host.becomeComposite(c.name));
-      }
-      for (const entry of [...galleryBuiltins(all), ...custom]) {
-        addRow(entry.title, entry.description, entry.icon, entry.source, () =>
+      const addEntry = (into: Element, entry: GalleryEntry) =>
+        addRow(into, entry.title, entry.description, entry.icon, entry.source, () =>
           ctx.host.setSource(entry.source),
         );
+
+      for (const c of galleryComposites()) {
+        addRow(wrap, c.name, c.description, c.icon, null, () => ctx.host.becomeComposite(c.name));
       }
+      const { views, devTools } = byAudience([...galleryBuiltins(all), ...custom]);
+      for (const entry of views) addEntry(wrap, entry);
+
+      // The tools for working on the library itself, apart from the
+      // views of its data, and closed until asked for outside edit mode.
+      const section = document.createElement("details");
+      section.className = "gv-dev";
+      section.open = keptOpen ?? dev;
+      section.addEventListener("toggle", () => {
+        if (section.open !== (devOpen.value ?? dev)) devOpen.value = section.open;
+      });
+      const summary = document.createElement("summary");
+      const note = document.createElement("span");
+      note.className = "gv-dev-note";
+      note.textContent = "logs, the config, the pipeline, components";
+      summary.append("Developer tools", note);
+      section.appendChild(summary);
+      for (const entry of devTools) addEntry(section, entry);
       // Last, after even the user's own components: the escape hatch
       // for when nothing above fits. No source line in edit mode — the
       // component name is minted on pick.
       addRow(
+        section,
         "New component, built by an agent",
         "Create a fresh component and hand it to a coding agent to build.",
         "component",
         null,
         () => void createComponentWithAgent(ctx.host),
       );
+      wrap.appendChild(section);
 
       if (dev) {
         const foot = document.createElement("div");
@@ -209,7 +261,7 @@ export function galleryView(): CardRender {
 
     void ensureFrontend();
     void loadComposites();
-    const stop = watch([frontendManifest, editMode, showAll, savedComposites], paint, {
+    const stop = watch([frontendManifest, editMode, showAll, savedComposites, devOpen], paint, {
       immediate: true,
     });
     return () => stop();

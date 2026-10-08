@@ -103,6 +103,17 @@ so nothing that draws a card knows which kind it is. An icon is a
 glyph name from `cards/icons.ts`, a source's mark in `src/assets/`, or
 a `data:image/…` URL; anything else draws the generic component glyph.
 
+A card kind can also say it is a **developer tool** (`devTool` in
+`BUILTIN_META`, `"dev_tool": true` in a `<name>.json`): a tool for
+working on the library or on datalib itself — its logs, its config, its
+pipeline, its components — rather than a view of the data. The gallery
+lists every entry that says so, builtin or custom alike, after the rest
+in a "Developer tools" section, with the "build a component with an
+agent" entry last in it. The section starts closed outside edit mode
+and open in it, until the person opens or closes it; that choice is
+kept in the browser. Nothing else reads the field: a developer tool
+opens, pins and saves like any card.
+
 The header around each card has two faces, switched by the **Edit**
 toggle in the status bar (`datalib/ui/src/editMode.ts`, persisted in
 localStorage):
@@ -492,7 +503,8 @@ programs against:
   `documentView` beside the card. Persists `q`/`by`/`sel`. The pure
   half — colours, view, hit-testing — is `cards/embeddingMap.ts`.
 - `galleryView()` — the new-card gallery (see "Titles, icons and edit mode"
-  above); replaces itself with whatever the user picks.
+  above): the views of the data, then the developer tools; replaces
+  itself with whatever the user picks.
 - `agentSeedView(name)` — the in-card hand-off instructions a freshly
   minted, agent-bound component is seeded with (the gallery's agent
   entry stores `() => agentSeedView("<name>")` as the alias source);
