@@ -34,7 +34,10 @@ rust_test(
 # node, and the embedding model — on a few small documents per test.
 rust_test(
     name = "qmd_indexer_tests",
-    size = "small",
+    # Two model loads, which CI's CPU-only runners take far longer over
+    # than a mac's GPU; at `small` it timed out at 60 s beside
+    # qmd_facts_test, the other test that loads the model.
+    size = "medium",
     srcs = ["tests/qmd_indexer_tests.rs"],
     data = [
         "@nodejs_host//:node_bin",
@@ -53,4 +56,5 @@ rust_test(
         "@datalib_crates//:runfiles",
         "@datalib_crates//:tempfile",
     ],
+    tags = ["cpu:2"],
 )
