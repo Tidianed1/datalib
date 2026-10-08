@@ -500,6 +500,42 @@ impl IndexedMarkdownStore {
         })
     }
 
+    /// Which buckets declare each of `inputs`, matched exactly: a
+    /// whole-table declaration does not count as reading one row.
+    pub fn readers_of(&self, inputs: &[Input]) -> Result<Vec<(Input, String)>> {
+        blocking(async {
+            let mut guard = self.write_lock.acquire().await?;
+            let mut out = Vec::new();
+            for chunk in inputs.chunks(datalib_etl::bulk::SQL_CHUNK / 2) {
+                let mut sql = String::from(
+                    "SELECT input_table, input_id, bucket_key FROM render_inputs \
+                     WHERE (input_table, input_id) IN (",
+                );
+                for (i, _) in chunk.iter().enumerate() {
+                    if i > 0 {
+                        sql.push_str(", ");
+                    }
+                    sql.push_str("(?, ?)");
+                }
+                sql.push(')');
+                // Audited: a placeholder run sized from the chunk; every
+                // value is bound.
+                let mut q = sqlx::query_as::<_, (String, String, String)>(sqlx::AssertSqlSafe(sql));
+                for input in chunk {
+                    q = q.bind(&input.table).bind(&input.id);
+                }
+                for (table, id, bucket) in q
+                    .fetch_all(&mut **guard.conn())
+                    .await
+                    .context("read who declares these inputs")?
+                {
+                    out.push((Input::new(table, id), bucket));
+                }
+            }
+            Ok(out)
+        })
+    }
+
     /// Every raw table any bucket declared an input from.
     pub fn input_tables(&self) -> Result<Vec<String>> {
         blocking(async {

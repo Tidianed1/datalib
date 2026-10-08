@@ -15,7 +15,7 @@ use datalib_schema::render_cursor::RenderCursorRow;
 use crate::dispatch::{PlannedSource, Wave};
 use crate::events::{Emitter, OutputClaim};
 use crate::source::StepEnv;
-use datalib_etl_render::indexed_markdown::{blocking, Holdings, IndexedMarkdownStore};
+use datalib_etl_render::indexed_markdown::{blocking, Holdings, IndexedMarkdownStore, WHOLE_TABLE};
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
@@ -435,13 +435,34 @@ pub fn render_source(
         .map(|(bucket, _)| bucket.as_str())
         .collect();
     let last_built_from = store.inputs_of(&silent)?;
+    // Which of those rows a bucket this run built now reads: where they
+    // went when the key a bucket is minted from changed.
+    let built: BTreeSet<&str> = ends
+        .iter()
+        .filter(|(_, e)| e.end == End::Read { empty: false })
+        .map(|(bucket, _)| bucket.as_str())
+        .collect();
+    let asked: Vec<Input> = last_built_from
+        .values()
+        .flatten()
+        .filter(|i| i.id != WHOLE_TABLE)
+        .cloned()
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let moved: HashSet<Input> = store
+        .readers_of(&asked)?
+        .into_iter()
+        .filter(|(_, bucket)| built.contains(bucket.as_str()))
+        .map(|(input, _)| input)
+        .collect();
+    let removed_rows = removed_rows.unwrap_or_default();
     let endings: BTreeMap<String, Ending> = ends
         .into_iter()
         .map(|(bucket, ended)| {
-            let left = match (&removed_rows, last_built_from.get(&bucket)) {
-                (Some(removed), Some(inputs)) => rows_left(inputs, removed),
-                _ => false,
-            };
+            let left = last_built_from
+                .get(&bucket)
+                .is_some_and(|inputs| rows_left(inputs, &removed_rows, &moved));
             let fate = fate(&ended.end, emitted_under.contains(&bucket), left, full_walk);
             let ending = Ending {
                 fate,
@@ -614,11 +635,27 @@ pub(crate) fn fate(end: &End, emitted: bool, rows_left: bool, full_walk: bool) -
     }
 }
 
-/// Whether any raw row a bucket was last built from is one the diff
-/// reports removed. A whole-table input is never evidence: one row of
-/// the table leaving says nothing about the bucket.
-pub(crate) fn rows_left(last_built_from: &[Input], removed: &HashSet<Input>) -> bool {
-    last_built_from.iter().any(|input| removed.contains(input))
+/// Whether the rows a bucket was last built from left it: the diff
+/// reports one of them removed, or every one of them is now read by a
+/// bucket this run built (`moved`) — the bucket's key is minted from a
+/// value that changed, and its rows build that bucket instead. A
+/// whole-table input is never evidence: one row of a table leaving, or
+/// another bucket reading it, says nothing about a bucket that read all
+/// of it.
+pub(crate) fn rows_left(
+    last_built_from: &[Input],
+    removed: &HashSet<Input>,
+    moved: &HashSet<Input>,
+) -> bool {
+    let mut rows = last_built_from
+        .iter()
+        .filter(|i| i.id != WHOLE_TABLE)
+        .peekable();
+    if rows.peek().is_none() {
+        return false;
+    }
+    let rows: Vec<&Input> = rows.collect();
+    rows.iter().any(|i| removed.contains(*i)) || rows.iter().all(|i| moved.contains(*i))
 }
 
 /// One bucket the run looked at, as the seal acts on it.
@@ -1539,18 +1576,33 @@ mod plan_tests {
         }
     }
 
-    /// Evidence is a removed row the bucket named; one row of a table it
-    /// read whole leaving says nothing about it.
+    /// Evidence is a removed row the bucket named, or every row it named
+    /// now read by a bucket the run built; a table it read whole says
+    /// nothing either way.
     #[test]
-    fn rows_left_only_when_a_named_row_was_removed() {
-        let removed: HashSet<Input> = [Input::new("messages", "m2")].into_iter().collect();
+    fn rows_left_only_when_a_named_row_was_removed_or_all_moved() {
+        let thread = || Input::new("threads", "t1");
+        let message = || Input::new("messages", "m2");
+        let users = || Input::whole_table("users");
+        let set = |inputs: Vec<Input>| inputs.into_iter().collect::<HashSet<Input>>();
+        let none = HashSet::new();
+        let built_from = [thread(), message(), users()];
+
+        assert!(rows_left(&built_from, &set(vec![message()]), &none));
+        assert!(!rows_left(&[thread()], &set(vec![message()]), &none));
+        assert!(!rows_left(&[users()], &set(vec![users()]), &none));
+        assert!(!rows_left(&[], &none, &none));
+
         assert!(rows_left(
-            &[Input::new("threads", "t1"), Input::new("messages", "m2")],
-            &removed
+            &built_from,
+            &none,
+            &set(vec![thread(), message()])
         ));
-        assert!(!rows_left(&[Input::new("threads", "t1")], &removed));
-        assert!(!rows_left(&[Input::whole_table("messages")], &removed));
-        assert!(!rows_left(&[], &removed));
+        assert!(
+            !rows_left(&built_from, &none, &set(vec![message()])),
+            "its thread row still builds nothing else: not moved"
+        );
+        assert!(!rows_left(&[users()], &none, &set(vec![users()])));
     }
 
     #[test]

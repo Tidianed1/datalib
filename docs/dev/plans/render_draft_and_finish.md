@@ -1,6 +1,6 @@
 # Render: a document goes only when its rows did
 
-**Status: proposed 2026-10-08; step 0 is built (#1066).** The render
+**Status: proposed 2026-10-08; steps 0 (#1066) and 1 are built.** The render
 half of the 2026-10-05 audit
 ([`audits/2026-10-05_loose_ends.md`](../audits/2026-10-05_loose_ends.md)
 §3.2, §4, and the short version's item 4), checked against the tree at
@@ -137,6 +137,15 @@ bug it closes.
   shim over it so no crate moves yet. Test: one renderer whose build
   fails for one bucket keeps that bucket's document, on a narrowed run
   and on a full walk.
+  *Built as:* no `RunEnd` in the renderers yet; `RenderCtx` gained
+  `exclude_bucket` and `fail_bucket` beside `declare_bucket`, and the
+  rule covers a bucket declared with **no rows** that emitted nothing
+  (one declared with rows and no document is still swept, as before),
+  and a removed row is not the only evidence: every row it was built
+  from now read by a bucket the run built is a re-key, and gone too.
+  Moved: email's label filter to `exclude_bucket`, pdf's failed
+  conversion to `fail_bucket`. The reference is
+  `data_architecture_parse_and_render.md` §"The sweep".
 - **Step 2. The chat-common sources** (fourteen crates): `changed_chats`
   stops calling an unmapped uuid gone; `ctx.load` and `emit` replace the
   shared loader and the hand-written `.md`. Closes 2, 3, 4 for them.

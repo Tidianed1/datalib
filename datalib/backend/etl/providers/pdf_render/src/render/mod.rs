@@ -34,11 +34,17 @@ pub struct RenderSummary {
     pub converted: usize,
     pub failed: usize,
     /// The documents whose conversion failed, by blake3. Their pages are
-    /// stale rather than gone, so the processor leaves them undeclared.
+    /// stale rather than gone.
     pub failed_blake3s: std::collections::HashSet<String>,
-    /// `(document uuid, error)` for each failure, for the processor to
-    /// record as the document's problem.
-    pub failures: Vec<(String, String)>,
+    /// Each failure, for the processor to record as the document's
+    /// problem and its bucket's failure.
+    pub failures: Vec<Failure>,
+}
+
+pub struct Failure {
+    pub blake3: String,
+    pub doc_uuid: String,
+    pub error: String,
 }
 
 /// Load the work list. Split from [`render_targets`] so the async
@@ -164,7 +170,11 @@ pub fn render_targets(
                 // the processor, and a log line beside it.
                 summary.failed += 1;
                 summary.failed_blake3s.insert(t.blake3.clone());
-                summary.failures.push((doc_uuid.clone(), format!("{e:#}")));
+                summary.failures.push(Failure {
+                    blake3: t.blake3.clone(),
+                    doc_uuid: doc_uuid.clone(),
+                    error: format!("{e:#}"),
+                });
                 tracing::warn!(
                     path = %t.rel_path, blake3 = %t.blake3, error = %e,
                     "pdf_render_failed"
