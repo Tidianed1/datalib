@@ -2,6 +2,12 @@
 
 Liberate and own your data. Run powerful AI tools on it, on your terms.
 
+> [!NOTE]
+> **datalib is alpha.** We don't promise stable bytes at rest yet: an
+> upgrade may change how your data is stored on disk, and now and then
+> one may ask you to re-download a source. We aim to carry every data
+> folder forward through upgrades, and to make that a promise soon.
+
 datalib mirrors your personal data — chats, email, messages, contacts,
 documents, photos, health and fitness — out of the services that hold it and into one place
 you own: a folder on your own computer, in open formats, with history.
