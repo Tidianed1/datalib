@@ -407,16 +407,22 @@ pub(crate) async fn run_subprocess(
 /// The part of a step's stderr that belongs in its error message. Every
 /// line is already in the run store; the message is what a person reads
 /// on the Manage row's hover, so it keeps only what they could not guess
-/// from "it failed", and says the cause first: a panic, or the step's own
-/// error lines. After it come the warnings and plain lines that led up to
-/// it. A structured info line — the bulk of a tracing stream — is
-/// dropped, and so is the per-record `problems_recorded` summary, which
-/// says what happened to records rather than why the step ended.
+/// from "it failed", and says the cause first: the last unbroken run of
+/// panic or error lines. After it come the warnings, plain lines and
+/// earlier errors around it, in order. A structured line below `warn` —
+/// the bulk of a tracing stream — is dropped, and so are a panic's
+/// backtrace and the per-record `problems_recorded` summary, which says
+/// what happened to records rather than why the step ended.
 #[derive(Default)]
 struct ErrorTail {
-    cause: Vec<String>,
-    context: Vec<String>,
+    /// Each kept line is numbered, so an earlier cause can rejoin the
+    /// context in its place.
+    seen: u64,
+    cause: Vec<(u64, String)>,
+    context: Vec<(u64, String)>,
+    cause_open: bool,
     in_panic: bool,
+    in_backtrace: bool,
 }
 
 impl ErrorTail {
@@ -432,38 +438,71 @@ impl ErrorTail {
         let structured = msg != raw;
         if structured {
             self.in_panic = false;
+            self.in_backtrace = false;
         }
         let about_records = fields
             .as_ref()
             .and_then(|f| f.get("event"))
             .and_then(|e| e.as_str())
             == Some("problems_recorded");
-        if msg.trim().is_empty()
-            || msg.starts_with("note: run with `RUST_BACKTRACE")
-            || about_records
-            || (structured && *level == LogLevel::Info)
-        {
+        let backtrace_hint = msg.starts_with("note: ") && msg.contains("RUST_BACKTRACE");
+        if msg.trim().is_empty() || backtrace_hint || about_records {
             return;
         }
-        if !structured && msg.starts_with("thread '") && msg.contains(" panicked at ") {
-            self.in_panic = true;
+        if !structured {
+            if msg == "stack backtrace:" {
+                self.in_panic = false;
+                self.in_backtrace = true;
+            }
+            // Every frame line is indented; the first line that is not
+            // ends the backtrace.
+            if self.in_backtrace && (msg == "stack backtrace:" || msg.starts_with(' ')) {
+                return;
+            }
+            self.in_backtrace = false;
+            if msg.starts_with("thread '") && msg.contains(" panicked at ") {
+                self.in_panic = true;
+            }
         }
-        let cause = self.in_panic || (structured && *level == LogLevel::Error);
-        let keep = if cause {
-            &mut self.cause
-        } else {
-            &mut self.context
-        };
-        if keep.len() == Self::KEEP {
-            keep.remove(0);
+        let is_cause = self.in_panic || (structured && *level == LogLevel::Error);
+        if !is_cause {
+            self.cause_open = false;
         }
-        keep.push(msg.clone());
+        if structured && !matches!(level, LogLevel::Warn | LogLevel::Error) {
+            return;
+        }
+        self.seen += 1;
+        let line = (self.seen, msg.clone());
+        if !is_cause {
+            Self::push(&mut self.context, line);
+            return;
+        }
+        if !self.cause_open {
+            self.cause_open = true;
+            self.context.append(&mut self.cause);
+            self.context.sort_by_key(|(n, _)| *n);
+            Self::trim(&mut self.context);
+        }
+        Self::push(&mut self.cause, line);
+    }
+
+    fn push(lines: &mut Vec<(u64, String)>, line: (u64, String)) {
+        lines.push(line);
+        Self::trim(lines);
+    }
+
+    fn trim(lines: &mut Vec<(u64, String)>) {
+        let over = lines.len().saturating_sub(Self::KEEP);
+        lines.drain(..over);
     }
 
     fn join(&self) -> String {
-        let mut lines = self.cause.clone();
-        lines.extend(self.context.iter().cloned());
-        lines.join("\n")
+        self.cause
+            .iter()
+            .chain(&self.context)
+            .map(|(_, line)| line.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
@@ -1414,14 +1453,15 @@ mod tests {
     }
 
     /// The error message a stopped or failed step leaves behind is what
-    /// the Manage row shows on hover. Structured info lines — the
-    /// tracing stream a step writes as JSON — stay in the run store and
-    /// out of the message; a warning's text and a plain line stay in.
+    /// the Manage row shows on hover. Structured info and debug lines —
+    /// the tracing stream a step writes as JSON — stay in the run store
+    /// and out of the message; a warning's text and a plain line stay in.
     #[test]
     fn error_tail_keeps_prose_and_drops_structured_info() {
         let mut tail = ErrorTail::default();
         let lines = [
             r#"{"timestamp":"2026-09-18T20:16:06Z","level":"INFO","fields":{"message":"walked one messages.list page","page":2},"target":"gmail"}"#,
+            r#"{"timestamp":"2026-09-18T20:16:07Z","level":"DEBUG","fields":{"message":"committed"},"target":"datalib_etl::doltlite_raw"}"#,
             r#"{"timestamp":"2026-09-18T20:24:07Z","level":"WARN","fields":{"message":"interrupt checkpoint: store busy"},"target":"datalib_step"}"#,
             "429 too many requests",
         ];
@@ -1438,8 +1478,10 @@ mod tests {
             let line = format!("line {i}");
             tail.consider(&unwrap_line("s", Stream::Stderr, &line), &line);
         }
-        assert_eq!(tail.context.len(), ErrorTail::KEEP);
-        assert_eq!(tail.context.last().map(String::as_str), Some("line 15"));
+        let last: Vec<String> = (ErrorTail::KEEP..ErrorTail::KEEP * 2)
+            .map(|i| format!("line {i}"))
+            .collect();
+        assert_eq!(tail.join(), last.join("\n"));
     }
 
     /// A Takeout ingest once failed with four warnings first and its
@@ -1488,6 +1530,63 @@ mod tests {
         assert_eq!(
             tail.join(),
             "error: fetch the inbox\ncaused by: HTTP 401\n429 from upstream; backing off"
+        );
+    }
+
+    /// A step may log an error and carry on (a forge search that skips a
+    /// scope). Only the last run of error lines is the cause; an earlier
+    /// one is context, in its place among the rest.
+    #[test]
+    fn error_tail_leads_with_the_last_run_of_errors() {
+        let mut tail = ErrorTail::default();
+        for line in [
+            r#"{"level":"ERROR","fields":{"message":"search failed; skipping scope"},"target":"forge"}"#,
+            r#"{"level":"INFO","fields":{"message":"listing the next scope"},"target":"forge"}"#,
+            r#"{"level":"WARN","fields":{"message":"429 from upstream; backing off"},"target":"http"}"#,
+            r#"{"level":"ERROR","fields":{"message":"error: list the issues"},"target":"datalib_step"}"#,
+            r#"{"level":"ERROR","fields":{"message":"caused by: HTTP 401"},"target":"datalib_step"}"#,
+        ] {
+            tail.consider(&unwrap_line("s", Stream::Stderr, line), line);
+        }
+        assert_eq!(
+            tail.join(),
+            "error: list the issues\n\
+             caused by: HTTP 401\n\
+             search failed; skipping scope\n\
+             429 from upstream; backing off"
+        );
+    }
+
+    /// With `RUST_BACKTRACE` in the environment a panic is followed by
+    /// its frames, and keeping the last lines of the panic kept only
+    /// frames. The panic ends where its backtrace starts, and the frames
+    /// stay in the run store.
+    #[test]
+    fn error_tail_leaves_the_backtrace_out() {
+        let mut tail = ErrorTail::default();
+        let mut lines = vec![
+            r#"{"level":"WARN","fields":{"message":"an entry was skipped"},"target":"takeout"}"#
+                .to_string(),
+            "thread 'main' (15274739) panicked at src/ingest/mdl_html.rs:89:23:".into(),
+            "start byte index 48 is not a char boundary".into(),
+            "stack backtrace:".into(),
+        ];
+        for i in 0..ErrorTail::KEEP * 2 {
+            lines.push(format!("  {i:>2}: datalib_etl_takeout::ingest::frame_{i}"));
+            lines.push(format!("             at ./src/ingest/mdl_html.rs:{i}:5"));
+        }
+        lines.push(
+            "note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace."
+                .into(),
+        );
+        for line in &lines {
+            tail.consider(&unwrap_line("s", Stream::Stderr, line), line);
+        }
+        assert_eq!(
+            tail.join(),
+            "thread 'main' (15274739) panicked at src/ingest/mdl_html.rs:89:23:\n\
+             start byte index 48 is not a char boundary\n\
+             an entry was skipped"
         );
     }
 
