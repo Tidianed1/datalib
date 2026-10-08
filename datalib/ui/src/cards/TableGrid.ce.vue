@@ -62,6 +62,9 @@ const props = withDefaults(
     columnOverrides?: Record<string, Partial<Column<T>>>;
     /// How many leading columns stay put while the rest scroll sideways.
     pinnedColumns?: number;
+    /// Widths a person dragged columns to before, by column id: they
+    /// win over a column's declared width when the grid is built.
+    widths?: Record<string, number>;
     /// Pixels per row. Read once, when the grid is built.
     rowHeight?: number;
   }>(),
@@ -85,6 +88,8 @@ const emit = defineEmits<{
   openDocument: [uuid: string];
   /// A tree row was opened or closed.
   rowGroupOpened: [row: T, expanded: boolean];
+  /// A person dragged a column's edge: every column's width now, by id.
+  columnsResized: [widths: Record<string, number>];
 }>();
 
 /// The row's key.
@@ -222,10 +227,15 @@ function buildColumns(): Column<T>[] {
     actions: props.actions,
     onOpenDocument: (uuid) => emit("openDocument", uuid),
     overrides: props.columnOverrides,
-  }).map((c, i) =>
-    // A pinned column hidden would unpin the one after it.
-    i < props.pinnedColumns ? { ...c, excludeFromColumnPicker: true, reorderable: false } : c,
-  );
+  })
+    .map((c) => {
+      const kept = props.widths?.[String(c.id)];
+      return kept ? { ...c, width: kept } : c;
+    })
+    .map((c, i) =>
+      // A pinned column hidden would unpin the one after it.
+      i < props.pinnedColumns ? { ...c, excludeFromColumnPicker: true, reorderable: false } : c,
+    );
   return [
     ...typed,
     {
@@ -449,6 +459,13 @@ function createGrid() {
   b.slickGrid.onCellChange.subscribe(onCellChange);
   b.slickGrid.onDblClick.subscribe(onDblClick);
   b.slickGrid.onSort.subscribe(onSort);
+  b.slickGrid.onColumnsResized.subscribe(() => {
+    const widths: Record<string, number> = {};
+    for (const c of b.slickGrid.getColumns()) {
+      if (c.id !== ORDER && c.width != null) widths[String(c.id)] = c.width;
+    }
+    emit("columnsResized", widths);
+  });
   b.instances?.eventPubSubService?.subscribe<TreeToggleStateChange>(
     "onTreeItemToggled",
     onTreeToggled,

@@ -167,7 +167,8 @@ app") and reads its type off it:
 
 The one gauge the UI looks for is **`queued`** — how much work is ahead
 of you right now, which you usually know even when you cannot know the
-total. The Manage screen's Queue column shows it. Its ETA is the queue
+total. The Manage screen's Status column shows it while the step has
+work queued. Its ETA is the queue
 over the pace work has come off it lately: read off `done_total` when you
 use the `progress_*` form below, otherwise off the falls in your
 `queued`. Every series you report is charted over the run on the
