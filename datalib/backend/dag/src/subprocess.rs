@@ -1236,6 +1236,31 @@ mod tests {
         assert_eq!(queued, vec![7, 0, 3, 0]);
     }
 
+    /// A step that seals and then finishes on the commit it sealed moved
+    /// its output this run. The summary used to keep only the last thing
+    /// it heard, the finish, which matched the seal, and so said
+    /// "unchanged" for an output the round had moved.
+    #[tokio::test]
+    async fn the_summary_says_changed_for_an_output_moved_by_a_seal() {
+        let root = tempfile::tempdir().unwrap();
+        let spec = StepSpec::new(
+            "src/raw",
+            sh(r#"
+                mkdir -p "$DATALIB_DAG_DATA_ROOT/src/raw"
+                echo '{"event":"capabilities","step":"me","streams_output":true}'
+                echo '{"event":"checkpoint","step":"me","version":"v1"}'
+                echo '{"event":"outcome","outputs":[{"path":"src/raw","version":"v1"}]}'
+            "#),
+        );
+        let g = Graph::build(vec![spec]).unwrap();
+        let r = Runner::new(root.path());
+        let first = r.run(&g).await.unwrap();
+        assert!(first.all_ok(), "{first:#?}");
+        assert!(first.step("src/raw").outputs[0].2, "{first:#?}");
+        let second = r.run(&g).await.unwrap();
+        assert!(!second.step("src/raw").outputs[0].2, "{second:#?}");
+    }
+
     /// A seal a child announces on stdout reaches the event stream once.
     /// It used to arrive twice -- forwarded from the wire, and again from
     /// the scheduler when the signal reached it -- so every subprocess
