@@ -26,7 +26,7 @@ use strum::{EnumString, IntoStaticStr, VariantArray};
 
 /// Under the data root: one directory per app whose state a person
 /// curates, so each can be managed or deleted on its own.
-pub const CURATED_DIR: &str = "datalib_curated";
+pub const CURATED_DIR: &str = datalib_runtime::layout::CURATED_DIR;
 pub const APP_DIR: &str = "datalib_contacts";
 pub const STORE_FILE: &str = "contacts.doltlite_db";
 

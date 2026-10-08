@@ -16,6 +16,10 @@ pub const UNIFIED_INDEX_DIR: &str = "unified_index";
 /// to [`UNIFIED_INDEX_DIR`]. Named after the step's function, like every
 /// tree a step writes.
 pub const GRID_DIR: &str = "grid_index";
+/// The top-level tree of the apps whose state a person curates, one
+/// directory per app (`datalib_contacts/`). Nothing can rebuild it, and no
+/// reset or removal of a source touches it.
+pub const CURATED_DIR: &str = "datalib_curated";
 /// The doltlite database file inside [`GRID_DIR`].
 pub const GRID_DB: &str = "db.doltlite_db";
 /// The qmd index's directory, relative to [`UNIFIED_INDEX_DIR`]: the
@@ -78,6 +82,10 @@ pub const LOCK_FILE: &str = "lock";
 
 pub fn system_dir(data_root: &Path) -> PathBuf {
     data_root.join(SYSTEM_DIR)
+}
+
+pub fn curated_dir(data_root: &Path) -> PathBuf {
+    data_root.join(CURATED_DIR)
 }
 
 pub fn unified_index_dir(data_root: &Path) -> PathBuf {

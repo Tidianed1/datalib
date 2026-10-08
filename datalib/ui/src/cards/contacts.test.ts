@@ -18,6 +18,7 @@ import {
   todayPartialDate,
   chipAnchors,
   searchQueryFor,
+  movesPeople,
 } from "./contacts";
 
 function dom(html: string): HTMLElement {
@@ -320,5 +321,13 @@ describe("chip.css", () => {
     expect(getComputedStyle(el).whiteSpace).toBe("nowrap");
     style.remove();
     el.remove();
+  });
+});
+
+describe("movesPeople", () => {
+  it("is a published edit to a curated store, and nothing else", () => {
+    expect(movesPeople({ kind: "table_changed", table: "curated" })).toBe(true);
+    expect(movesPeople({ kind: "table_changed", table: "manage.rows" })).toBe(false);
+    expect(movesPeople({ kind: "index_changed" })).toBe(false);
   });
 });

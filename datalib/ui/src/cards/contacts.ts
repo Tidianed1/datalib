@@ -15,6 +15,7 @@ import { uriFromHandle } from "./chipLinks";
 import { Resolver } from "./resolver";
 import { pushToast } from "@/toasts";
 import { UNIFIED_INDEX } from "@/api";
+import { changed, subscribeLive, type RootEvent } from "@/live";
 
 export const CONTACTS_APPLET = "/applet/datalib_contacts";
 
@@ -395,6 +396,7 @@ let contactsApp = false;
  *  (`resolver.ts`). */
 export const people = new Resolver<Who>(
   async (handles) => {
+    followLive();
     const [mine, sourceContacts] = await Promise.all([resolveHandles(handles), peopleFor(handles)]);
     contactsApp = mine !== null;
     return new Map(
@@ -404,6 +406,27 @@ export const people = new Resolver<Who>(
   // The toast dedupes itself, so a page of chips failing says so once.
   (e) => pushToast(`Contacts: ${e.message}`),
 );
+
+/** Whether a live frame can have moved who a handle is: the contacts
+ *  app published an edit, from this window or any other, or an agent. */
+export function movesPeople(e: RootEvent): boolean {
+  return changed(e, "curated");
+}
+
+/// Subscribed on the first question, for the life of the page, as
+/// `entities` does: an edit made elsewhere is asked about again, each
+/// chip keeping its answer drawn until the new one lands.
+let following = false;
+function followLive() {
+  if (following) return;
+  following = true;
+  subscribeLive({
+    root: (e) => {
+      if (movesPeople(e)) people.revalidate();
+    },
+    resync: () => people.revalidate(),
+  });
+}
 
 /** Whether a contacts app answered the last question, so a chip can offer
  *  to link a handle. */

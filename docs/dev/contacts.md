@@ -408,8 +408,15 @@ Everything is in `datalib/ui/src/cards/`:
   is, for the whole app: the resolver ([`chips.md`](chips.md)
   §"Resolving") over `/people` and the contacts app's `/resolve`; an
   edit (create, link, unlink, no longer works) forgets the handles it
-  touched. `decorateHandles` draws a document's chips and `chipCell` a
-  grid cell's.
+  touched. An edit made anywhere else — another window, an agent —
+  reaches every page as the live stream's `curated` frame, on which
+  `people` asks again: the applet holds its store open, so the OS
+  reports none of its writes, and instead the gateway nudges
+  `datalib-http`'s watch after every write it forwards to an applet;
+  the watch compares each `datalib_curated/` store's head and sends the
+  frame only when one moved (`http/src/watch.rs`). A draft's autosave
+  is no commit, so it sends none. `decorateHandles` draws a document's
+  chips and `chipCell` a grid cell's.
 - `ChatBody.ce.vue` runs the decorate pass over a document's frame and
   owns the popover
   (`HandlePopover.ce.vue`: link to a contact, create one, unlink, mark
