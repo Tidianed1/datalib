@@ -31,9 +31,13 @@ test("the document header does not repeat the raw created_at", async ({ page, re
   await selectRowByUuid(page, pick!.uuid);
 
   const card = page.locator(`.chat-preview[data-markdown-uuid="${pick!.markdown_uuid}"]`);
-  // The body's own stamp being drawn means the document has loaded, so
-  // the header below is the real one and not an empty placeholder.
-  await expect(docBody(card).locator(".msg-ts").first()).toBeVisible({ timeout: 10_000 });
+  // The selected message's own stamp being drawn means the document has
+  // loaded, so the header below is the real one and not an empty
+  // placeholder. Not the document's first stamp: that can sit in a
+  // version of the conversation the page folds away.
+  await expect(
+    docBody(card).locator(`[data-section-uuid="${pick!.uuid}"] .msg-ts`).first(),
+  ).toBeVisible({ timeout: 10_000 });
   const header = card.locator(".chat-header");
   await expect(header).toBeVisible();
   await expect(header).not.toContainText(created_at!);
