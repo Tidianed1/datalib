@@ -133,19 +133,7 @@ impl QmdDaemon {
             ensure_started(&mut guard, &self.cfg, index_file, deadline)?;
             guard.next_id = guard.next_id.wrapping_add(1);
             let id = guard.next_id;
-            let mut arguments = serde_json::json!({
-                "searches": searches,
-                "limit": limit,
-                "rerank": false,
-            });
-            // Scoping happens *inside* retrieval: qmd searches each named
-            // collection and merges, so a source's hits cannot be crowded
-            // out of a global top-N by a larger one. Filtering the results
-            // afterwards — what the applet used to do alone — returns
-            // nothing at all whenever that crowding happens.
-            if let Some(names) = scope.names() {
-                arguments["collections"] = serde_json::json!(names);
-            }
+            let arguments = query_arguments(searches, limit, scope);
             let req = serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": id,
@@ -174,6 +162,30 @@ impl QmdDaemon {
         }
         res
     }
+}
+
+/// The `query` tool's arguments.
+fn query_arguments(
+    searches: serde_json::Value,
+    limit: usize,
+    scope: &CollectionScope,
+) -> serde_json::Value {
+    let mut arguments = serde_json::json!({
+        "searches": searches,
+        "limit": limit,
+        // qmd cuts its merged list to `candidateLimit` (40 unless asked),
+        // rerank or not, whatever `limit` says.
+        "candidateLimit": limit,
+        "rerank": false,
+    });
+    // Scoping happens *inside* retrieval: qmd searches each named
+    // collection and merges, so a source's hits cannot be crowded out of a
+    // global top-N by a larger one. Filtering the results afterwards
+    // returns nothing at all whenever that crowding happens.
+    if let Some(names) = scope.names() {
+        arguments["collections"] = serde_json::json!(names);
+    }
+    arguments
 }
 
 /// Build the MCP `searches` JSON array for a given user query and mode.
@@ -776,6 +788,23 @@ mod tests {
         assert!(!CollectionScope::All.is_empty());
         assert!(!CollectionScope::Only(vec!["a".into()]).is_empty());
         assert_eq!(CollectionScope::All.names(), None);
+    }
+
+    /// Without `candidateLimit`, qmd cuts every answer to 40 however deep
+    /// `limit` asks (`the_merged_answer_is_cut_to_its_candidate_limit` in
+    /// `qmd_facts_test`).
+    #[test]
+    fn a_query_asks_for_as_many_candidates_as_hits() {
+        let args = query_arguments(serde_json::json!([]), 1000, &CollectionScope::All);
+        assert_eq!(args["limit"], 1000);
+        assert_eq!(args["candidateLimit"], 1000);
+        assert!(args.get("collections").is_none());
+        let scoped = query_arguments(
+            serde_json::json!([]),
+            10,
+            &CollectionScope::Only(vec!["slack".into()]),
+        );
+        assert_eq!(scoped["collections"], serde_json::json!(["slack"]));
     }
 
     /// A daemon whose `qmd mcp` is the shell script `script`, over a root
