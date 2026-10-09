@@ -14,7 +14,9 @@ One row per event in the upstream's own shape, keyed
   The `.ics` method splits a file into the same shape, carrying the
   `VTIMEZONE`s each event names.
 - `google_events` — a Google event resource verbatim. A changed or
-  cancelled occurrence is its own row naming its series.
+  cancelled occurrence is its own row naming its series. Its `etag`
+  and `updated` are in the sidecar's `volatile_payload`: Google bumps
+  them on hundreds of events at once with nothing else changed.
 
 `calendars.sync_token` is each calendar's `sync-collection` token. It
 is per calendar, so widening the `calendars` filter needs no scope

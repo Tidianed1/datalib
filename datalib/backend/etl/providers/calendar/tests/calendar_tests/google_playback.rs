@@ -275,6 +275,65 @@ async fn a_window_is_listed_whole_every_run_and_keeps_no_token() {
     assert!(tokens.iter().all(Option::is_none), "{tokens:?}");
 }
 
+/// Google re-lists an event with only its `etag` and `updated` bumped:
+/// the stored payload must not change, or every such touch re-renders
+/// hundreds of events. Render still reads the newer `updated`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_touch_that_bumps_only_etag_and_updated_leaves_the_payload_alone() {
+    let d = tempfile::tempdir().expect("tempdir");
+    let (one, two, store) = (
+        d.path().join("one"),
+        d.path().join("two"),
+        d.path().join("store"),
+    );
+    std::fs::create_dir_all(&store).unwrap();
+    let event = |etag: &str, updated: &str| {
+        json!([{"id": "reception01", "status": "confirmed", "etag": etag, "updated": updated,
+            "summary": "Reception for the Klingon delegation",
+            "start": {"dateTime": "2026-09-18T19:00:00-07:00"}, "end": {"dateTime": "2026-09-18T22:00:00-07:00"}}])
+    };
+    for root in [&one, &two] {
+        calendar_list(root);
+    }
+    fixture(
+        &one,
+        &events_url(PRIMARY, None, None),
+        page(event("\"1\"", "2026-09-01T10:00:00.000Z"), None, Some("s1")),
+    );
+    fixture(
+        &one,
+        &events_url(AWAY, None, None),
+        page(json!([]), None, Some("a1")),
+    );
+    fixture(
+        &two,
+        &events_url(PRIMARY, Some("s1"), None),
+        page(event("\"2\"", "2026-10-09T08:00:00.000Z"), None, Some("s2")),
+    );
+    fixture(
+        &two,
+        &events_url(AWAY, Some("a1"), None),
+        page(json!([]), None, Some("a2")),
+    );
+
+    let payload = |store: std::path::PathBuf| async move {
+        let db = RawDb::open(&db_path_for(&store)).await.unwrap();
+        let p: String = sqlx::query_scalar("SELECT json(payload) FROM google_events")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        let (loaded, _) = db.load_google_events().await.unwrap();
+        db.close().await;
+        (p, loaded[0].event["updated"].clone())
+    };
+    run(&one, &store).await;
+    let (before, _) = payload(store.clone()).await;
+    run(&two, &store).await;
+    let (after, updated) = payload(store.clone()).await;
+    assert_eq!(before, after, "the touch changed the stored payload");
+    assert_eq!(updated, json!("2026-10-09T08:00:00.000Z"));
+}
+
 /// A calendar that would not list is a row, and a run that stopped
 /// before it reached any calendar leaves that row standing: it listed
 /// nothing, so it cannot say the calendar answers again.
