@@ -39,18 +39,18 @@ async function initialize() {
 <template>
   <section class="first-run notice">
     <div class="card">
-      <h2>Create your library</h2>
+      <h2>Initialize data library</h2>
       <p>
-        There is no library in this folder yet:
+        There is no data library in this folder yet:
         <code class="root">{{ folder }}</code>
       </p>
       <p>
-        Creating it downloads nothing and contacts no account. Next, you choose the first thing to
-        copy into it — a Slack workspace, a mailbox, a folder of PDFs.
+        Initializing the data library creates a bare-bones config file. You will be able to add data
+        sources later.
       </p>
       <p v-if="error" class="error" role="alert">{{ error }}</p>
       <button class="primary" :disabled="busy" @click="initialize">
-        {{ busy ? "Creating…" : "Create library" }}
+        {{ busy ? "Initializing…" : "Initialize data library" }}
       </button>
       <details>
         <summary>What this writes to the folder</summary>

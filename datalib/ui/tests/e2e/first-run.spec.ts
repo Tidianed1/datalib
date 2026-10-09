@@ -26,8 +26,8 @@ test("an empty folder gets an explained bootstrap, not a 502", async ({ page, re
 
   // The user is told what will happen before anything is written: the
   // heading, the exact file, and that no source is added for them.
-  await expect(page.getByRole("heading", { name: "Create your library" })).toBeVisible();
-  await expect(page.getByText("downloads nothing and contacts no account")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Initialize data library" })).toBeVisible();
+  await expect(page.getByText("creates a bare-bones config file")).toBeVisible();
   // What the file holds is one click away, closed until asked for.
   const written = page.locator("details");
   await expect(written.getByText("no data sources")).toBeHidden();
@@ -45,7 +45,7 @@ test("an empty folder gets an explained bootstrap, not a 502", async ({ page, re
   await expect(page.getByRole("navigation", { name: "App" })).toContainText("Data Liberation");
   await expect(page.getByRole("searchbox", { name: "Search your data" })).toHaveCount(0);
 
-  await page.getByRole("button", { name: "Create library" }).click();
+  await page.getByRole("button", { name: "Initialize data library" }).click();
 
   // Initializing lands on the Manage view, where a source can be added —
   // a library with no sources is not finished, so there is no
@@ -71,7 +71,7 @@ test("an empty folder gets an explained bootstrap, not a 502", async ({ page, re
   // initialized.
   await page.goto(`${EMPTY_URL}/data_sources`);
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Create your library" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Initialize data library" })).toHaveCount(0);
 
   // The Dashboard of a library with no sources says so where the
   // sources would be, with nothing to sync, and its button opens the
