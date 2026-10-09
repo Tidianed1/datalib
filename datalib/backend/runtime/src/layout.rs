@@ -168,7 +168,7 @@ mod runs_layout_tests {
 
 /// Create `data_root` readable by its owner only, if it does not exist.
 /// Missing parents are created with the process's default mode: they
-/// are the user's own tree (`~/Documents/...`), and only the root holds
+/// are not ours to restrict, and only the root holds
 /// the mirror. The mode is not re-applied to a root that already exists.
 pub fn create_data_root(data_root: &Path) -> std::io::Result<()> {
     if data_root.is_dir() {
