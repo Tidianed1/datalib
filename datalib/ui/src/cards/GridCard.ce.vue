@@ -2249,6 +2249,7 @@ onBeforeUnmount(() => {
           :placeholder="hint"
           class="search-input"
           testid="search-input"
+          :open-card="(source: string) => props.ctx.host.openCards(source)"
           autofocus
           @contextmenu="openFeedbackForSearchBar"
         />

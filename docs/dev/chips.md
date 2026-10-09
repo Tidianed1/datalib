@@ -200,6 +200,13 @@ is a CodeMirror widget whose DOM is `entityCell`'s, resolved through
 `entities` and redrawn when it answers; the query text under it is
 unchanged. The field's host includes `chip.css`.
 
+Its clicks are a text field's: a click selects the chip whole, a
+double-click opens it as text to be edited, the one place a
+double-click does not open what the chip names. The right-click menu
+is the field's (Edit as text, Exclude) followed by `entityMenu`'s, so
+the dashboard or log is still a right-click away
+(`ui/src/search/chipMenu.ts`).
+
 ## Clicks
 
 | | a person | a group | a step |

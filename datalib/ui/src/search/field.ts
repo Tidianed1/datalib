@@ -16,6 +16,7 @@ import {
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import {
   EditorState,
+  Facet,
   Prec,
   StateEffect,
   StateField,
@@ -28,12 +29,32 @@ import {
   ViewPlugin,
   WidgetType,
   keymap,
+  showTooltip,
   type DecorationSet,
   type ViewUpdate,
 } from "@codemirror/view";
 import { fetchSearchKeys, fetchSearchValues, type KeyValues, type SearchKeySpec } from "@/api";
-import { entities, entityCell, type EntityView } from "@/cards/entities";
-import { chipUri, chipWords, completingAt, keyNamed, termValue, words } from "./queryText";
+import { searchSource } from "@/cards/cardSources";
+import {
+  browseQuery,
+  entities,
+  entityCardSource,
+  entityCell,
+  entityCopyText,
+  type EntityView,
+} from "@/cards/entities";
+import { copyToClipboard } from "@/clipboard";
+import { pushToast } from "@/toasts";
+import { fieldChipMenu, toggleNegate, type FieldMenuId } from "./chipMenu";
+import {
+  chipUri,
+  chipWords,
+  completingAt,
+  keyNamed,
+  termValue,
+  words,
+  type Word,
+} from "./queryText";
 
 export const setKeys = StateEffect.define<SearchKeySpec[]>();
 
@@ -70,9 +91,14 @@ function onlySpace(tr: Transaction): boolean {
   return spaces;
 }
 
+/// A chip opened to be edited, by a double-click or its menu.
+const openWord = StateEffect.define<Span>();
+
 const editingField = StateField.define<Span | null>({
   create: () => null,
   update(span, tr) {
+    const opened = tr.effects.find((e) => e.is(openWord));
+    if (opened) return opened.value;
     const head = tr.state.selection.main.head;
     // A pick from the menu is finished: its chip shows at once.
     if (tr.isUserEvent("input.complete")) return null;
@@ -88,27 +114,72 @@ const editingField = StateField.define<Span | null>({
     const mapped = tr.docChanged
       ? { from: tr.changes.mapPos(span.from, -1), to: tr.changes.mapPos(span.to, 1) }
       : span;
-    return mapped.from <= head && head <= mapped.to ? mapped : null;
+    const { from, to } = tr.state.selection.main;
+    return mapped.from <= from && to <= mapped.to ? mapped : null;
   },
 });
 
 const redraw = StateEffect.define<null>();
+
+/// The term whose value a chip draws: the one whose value starts at `pos`.
+function termAt(state: EditorState, pos: number): Word | undefined {
+  return words(state.doc.toString()).find((w) => w.key !== null && w.valueFrom === pos);
+}
+
+/// A chip opened to be edited: its value selected as text, and the menu
+/// offering the key's values.
+function editChip(view: EditorView, w: Word) {
+  view.dispatch({
+    selection: { anchor: w.valueFrom, head: w.to },
+    effects: openWord.of({ from: w.from, to: w.to }),
+    scrollIntoView: true,
+  });
+  startCompletion(view);
+}
+
+/// Clicks on a chip: one selects it whole, so Backspace deletes it and
+/// typing replaces it; two open it to be edited; the right button opens
+/// its menu.
+function onChipMouse(view: EditorView, chip: HTMLElement, e: MouseEvent) {
+  const w = termAt(view.state, view.posAtDOM(chip));
+  if (!w) return;
+  e.preventDefault();
+  view.focus();
+  if (e.type === "contextmenu") {
+    // The chip's menu, not the one the field's host gives the bar.
+    e.stopPropagation();
+    view.dispatch({ effects: showMenu.of(w.valueFrom) });
+  } else if (e.button === 0 && e.detail >= 2) {
+    editChip(view, w);
+  } else if (e.button === 0) {
+    view.dispatch({ selection: { anchor: w.valueFrom, head: w.to } });
+  }
+}
 
 class ChipWidget extends WidgetType {
   constructor(
     readonly uri: string,
     readonly shown: string,
     readonly view: EntityView | undefined,
+    readonly selected: boolean,
   ) {
     super();
   }
   eq(other: ChipWidget): boolean {
-    return other.uri === this.uri && other.shown === this.shown && other.view === this.view;
+    return (
+      other.uri === this.uri &&
+      other.shown === this.shown &&
+      other.view === this.view &&
+      other.selected === this.selected
+    );
   }
-  toDOM(): HTMLElement {
+  toDOM(view: EditorView): HTMLElement {
     const a = entityCell(this.uri, this.shown, this.view, null);
+    if (this.selected) a.classList.add("cm-chip-selected");
     // A chip's href is never followed (docs/dev/chips.md § "Clicks").
     a.addEventListener("click", (e) => e.preventDefault());
+    a.addEventListener("mousedown", (e) => onChipMouse(view, a, e));
+    a.addEventListener("contextmenu", (e) => onChipMouse(view, a, e));
     a.draggable = false;
     return a;
   }
@@ -116,13 +187,15 @@ class ChipWidget extends WidgetType {
 
 function chipDecorations(state: EditorState): DecorationSet {
   const editing = state.field(editingField);
+  const sel = state.selection.main;
   const ranges = chipWords(state.doc.toString(), state.field(keysField))
     .filter(({ word }) => !editing || word.to < editing.from || word.from > editing.to)
-    .map(({ word, uri }) =>
-      Decoration.replace({
-        widget: new ChipWidget(uri, word.value, entities.lookup(uri)),
-      }).range(word.valueFrom, word.to),
-    );
+    .map(({ word, uri }) => {
+      const selected = !sel.empty && sel.from <= word.valueFrom && sel.to >= word.to;
+      return Decoration.replace({
+        widget: new ChipWidget(uri, word.value, entities.lookup(uri), selected),
+      }).range(word.valueFrom, word.to);
+    });
   return Decoration.set(ranges);
 }
 
@@ -153,6 +226,98 @@ const chips = ViewPlugin.fromClass(
       EditorView.atomicRanges.of((view) => view.plugin(p)?.decorations ?? Decoration.none),
   },
 );
+
+/// The chip menu, open on the chip whose value starts at this position.
+const showMenu = StateEffect.define<number | null>();
+
+const menuField = StateField.define<number | null>({
+  create: () => null,
+  update(at, tr) {
+    const asked = tr.effects.find((e) => e.is(showMenu));
+    if (asked) return asked.value;
+    return tr.docChanged || tr.selection ? null : at;
+  },
+  provide: (f) =>
+    showTooltip.from(f, (at) =>
+      at === null
+        ? null
+        : { pos: at, above: false, create: (view) => ({ dom: menuDom(view, at) }) },
+    ),
+});
+
+function menuDom(view: EditorView, at: number): HTMLElement {
+  const dom = document.createElement("div");
+  dom.className = "cm-chip-menu";
+  dom.setAttribute("role", "menu");
+  const w = termAt(view.state, at);
+  const uri =
+    w &&
+    chipWords(view.state.doc.toString(), view.state.field(keysField)).find(
+      (c) => c.word.valueFrom === at,
+    )?.uri;
+  if (!w || !uri) return dom;
+  const name = entities.get(uri)?.label || w.value;
+  for (const entry of fieldChipMenu(uri, name, w.negate)) {
+    if (entry.separator)
+      dom.append(
+        Object.assign(document.createElement("div"), { className: "cm-chip-menu-divider" }),
+      );
+    const item = document.createElement("div");
+    item.className = "cm-chip-menu-item";
+    item.setAttribute("role", "menuitem");
+    item.textContent = entry.label;
+    // On mousedown, so the field keeps its focus.
+    item.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      view.dispatch({ effects: showMenu.of(null) });
+      void runMenu(view, entry.id, w, uri, name);
+    });
+    dom.append(item);
+  }
+  return dom;
+}
+
+async function runMenu(view: EditorView, id: FieldMenuId, w: Word, uri: string, name: string) {
+  const hooks = view.state.facet(hooksFacet);
+  const copy = async (text: string) => {
+    if (await copyToClipboard(text)) pushToast(`Copied ${text}`, "info");
+    else pushToast("The clipboard refused the copy");
+  };
+  switch (id) {
+    case "edit":
+      editChip(view, w);
+      break;
+    case "toggle-negate":
+      view.dispatch({ changes: toggleNegate(w) });
+      break;
+    case "copy-name":
+      await copy(name);
+      break;
+    case "copy-id":
+      await copy(w.value);
+      break;
+    case "copy-both":
+      await copy(entityCopyText(uri, name));
+      break;
+    case "open": {
+      const source = entityCardSource(uri);
+      if (source) hooks?.openCard(source);
+      break;
+    }
+    case "browse": {
+      const q = browseQuery(uri);
+      if (q) hooks?.openCard(searchSource(q));
+      break;
+    }
+  }
+}
+
+/// Escape closes the chip menu before it means anything else.
+function closeMenu(view: EditorView): boolean {
+  if (view.state.field(menuField) === null) return false;
+  view.dispatch({ effects: showMenu.of(null) });
+  return true;
+}
 
 /// What a key's values are, in the menu beside its name.
 function describe(values: KeyValues): string {
@@ -286,6 +451,29 @@ const theme = EditorView.theme({
   },
   ".cm-completionLabel": { overflow: "hidden", textOverflow: "ellipsis" },
   ".cm-chip-option .cm-completionLabel": { display: "none" },
+  ".cm-chip-selected": {
+    outline: "2px solid var(--datalib-accent)",
+    outlineOffset: "1px",
+  },
+  ".cm-chip-menu": {
+    minWidth: "180px",
+    maxWidth: "320px",
+    padding: "4px 0",
+    fontSize: "var(--datalib-font-size)",
+  },
+  ".cm-chip-menu-item": {
+    padding: "5px 14px",
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  },
+  ".cm-chip-menu-item:hover": { background: "var(--datalib-hover, rgb(127 127 127 / 15%))" },
+  ".cm-chip-menu-divider": {
+    height: "1px",
+    background: "var(--datalib-border)",
+    margin: "4px 0",
+  },
   ".cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]": {
     background: "var(--datalib-accent)",
     color: "var(--datalib-accent-fg, #fff)",
@@ -299,7 +487,13 @@ const theme = EditorView.theme({
   },
 });
 
+const hooksFacet = Facet.define<FieldHooks, FieldHooks | undefined>({
+  combine: (values) => values[0],
+});
+
 export type FieldHooks = {
+  /** Open a card beside the field's own: a chip's dashboard, a Browse. */
+  openCard: (source: string) => void;
   /** The table's search, whose `/keys` and `/values` the menu asks. */
   base: () => string;
   /** Enter with no suggestion chosen. */
@@ -310,9 +504,12 @@ export type FieldHooks = {
 
 export function fieldExtensions(hooks: FieldHooks): Extension[] {
   return [
+    hooksFacet.of(hooks),
     keysField,
     editingField,
     chips,
+    menuField,
+    EditorView.focusChangeEffect.of((_state, focusing) => (focusing ? null : showMenu.of(null))),
     history(),
     oneLine,
     theme,
@@ -328,7 +525,12 @@ export function fieldExtensions(hooks: FieldHooks): Extension[] {
       // A source, group or step is drawn as its chip instead of its label.
       optionClass: (c: ChipCompletion) => (c.uri ? "cm-chip-option" : ""),
     }),
-    Prec.highest(keymap.of([{ key: "Tab", run: takeSuggestion }])),
+    Prec.highest(
+      keymap.of([
+        { key: "Tab", run: takeSuggestion },
+        { key: "Escape", run: closeMenu },
+      ]),
+    ),
     Prec.high(
       keymap.of([
         { key: "Enter", run: () => (hooks.onSubmit(), true) },

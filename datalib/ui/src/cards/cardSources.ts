@@ -34,3 +34,8 @@ export type PersonViewOpts = {
 export function personSource(handle: string, opts: PersonViewOpts = {}): string {
   return `personView(${JSON.stringify(handle)}, ${JSON.stringify(opts)})`;
 }
+
+/// The source of a search card on `q`.
+export function searchSource(q: string): string {
+  return `searchView(${JSON.stringify({ q })})`;
+}

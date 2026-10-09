@@ -161,12 +161,19 @@ document *is* the query text:
   Tab takes the chosen one; Tab with none chosen takes the first; Esc
   closes the menu.
 - **Backspace** at a chip's end deletes it whole.
+- **A click on a chip** selects it whole, so Backspace deletes it and
+  typing replaces it. **A double-click** opens it to be edited: its
+  value as text, selected, with the key's values offered. Elsewhere a
+  double-click opens what a chip names; in a text field editing is
+  what a person expects, and the menu still opens it.
+- **A chip's right-click menu** (`search/chipMenu.ts`) is the field's
+  entries, Edit as text and Exclude (or Include, taking the `-` off),
+  then the chip's own (`entityMenu`: copy, open its dashboard or log,
+  browse). People's chips will add changing the key (from, to, cc,
+  with).
 - **For tests**, the editable element carries `data-testid`,
   `role="searchbox"` and `data-query`, the query as it stands:
   Playwright's `fill` works on it, `toHaveValue` does not.
-- **A chip's menu** is `chipMenu`'s (or `entityMenu`'s for a source)
-  plus: change the key (from, to, cc, with), exclude it, and edit it as
-  text, which takes the decoration off that token.
 
 Hand-written `contenteditable` is what this avoids: caret, IME and
 undo handling that WebKit, which the desktop app runs, gets wrong in
@@ -209,8 +216,9 @@ answered from the search terms.
    the toolbar, the search card and the run log; `/keys` and `/values`
    on all three tables; sources, groups and steps as chips; every
    column key's values from the data; the `:` grammar change. "Meaning
-   only" is gone: the Meaning tab does its job. Not yet: a chip's own
-   menu (change the key, exclude, edit as text).
+   only" is gone: the Meaning tab does its job. A click selects a
+   chip, a double-click edits it, and its menu edits, excludes, copies
+   and opens it.
 2. **`from:` from the search terms**, `author_handle:` its alias, partial
    values, the names table and `/suggest`.
 3. **Person kinds from renders** (`search_tabs.md` step 4), then `to:`,

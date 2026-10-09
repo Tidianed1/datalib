@@ -8,6 +8,7 @@
 import { onBeforeUnmount, onMounted, useTemplateRef, watch } from "vue";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, placeholder as placeholderText } from "@codemirror/view";
+import { surface } from "@/surface";
 import { fieldExtensions, keysOf, setKeys } from "./field";
 
 const props = defineProps<{
@@ -17,6 +18,9 @@ const props = defineProps<{
   placeholder?: string;
   label?: string;
   testid?: string;
+  /** Where a chip's menu opens a card; the surface's, beside what is
+   *  showing, when the host has no say. */
+  openCard?: (source: string) => void;
   autofocus?: boolean;
 }>();
 const emit = defineEmits<{
@@ -40,6 +44,7 @@ onMounted(() => {
       extensions: [
         fieldExtensions({
           base: () => props.base,
+          openCard: (source) => (props.openCard ?? surface.value?.showCard)?.(source),
           onSubmit: () => emit("submit"),
           onEscape: () => emit("escape"),
         }),

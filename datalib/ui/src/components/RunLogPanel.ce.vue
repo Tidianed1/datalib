@@ -1165,6 +1165,7 @@ onUnmounted(() => {
         placeholder='Search the log — words, or level:warn -target:sqlx "a phrase"'
         label="Search the log"
         :model-value="query"
+        :open-card="(source: string) => emit('open-card', source)"
         @update:model-value="onQueryInput"
       />
       <label class="rl-level">
