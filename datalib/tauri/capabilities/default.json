@@ -17,7 +17,6 @@
     "allow-launcher-pick",
     "allow-launcher-forget",
     "allow-launcher-open-folder",
-    "allow-launcher-move-legacy",
     "core:window:allow-start-dragging",
     "core:window:allow-internal-toggle-maximize"
   ]

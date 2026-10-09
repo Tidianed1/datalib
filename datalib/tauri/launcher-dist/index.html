@@ -6,8 +6,9 @@
 
   It lists the libraries, each with what the server last wrote down
   about it (sources, size, last sync), and makes a new one from a name
-  or a folder. A plain name is a library in ~/Documents/Datalib, and
-  the first one's name is filled in for you.
+  or a folder. A plain name is a library in the app's libraries folder
+  (`libraries_dir` in src/main.rs), and the first one's name is filled
+  in for you.
 
   This is the ONLY page the shell bundles. Once a library is chosen the
   same window loads the spawned `datalib-http`'s page, which serves the
@@ -173,7 +174,7 @@
       }
       /* A row is the library (a button that opens it, or the same
          content when its folder is gone) and, for a library outside the
-         Datalib folder, a Forget button beside it: two controls side by
+         libraries folder, a Forget button beside it: two controls side by
          side, since a button cannot hold another. */
       .lib {
         display: flex;
@@ -212,7 +213,7 @@
         justify-content: center;
       }
       /* Every row has the slot, so the folder icons line up; a library
-         in the Datalib folder leaves it empty. */
+         in the libraries folder leaves it empty. */
       .forget {
         margin-right: 2px;
       }
@@ -270,20 +271,6 @@
       }
       .lib.missing .facts {
         color: var(--warn-fg);
-      }
-      .legacy {
-        display: flex;
-        align-items: center;
-        gap: 14px;
-        padding: 14px 16px;
-        border-radius: 10px;
-        border: 1px solid var(--accent);
-        background: var(--accent-soft);
-        font-size: 13px;
-        line-height: 1.5;
-      }
-      .legacy .what {
-        flex: 1 1 auto;
       }
       .empty {
         height: 120px;
@@ -381,11 +368,6 @@
           </div>
         </div>
         <p class="error" id="error" role="alert" hidden></p>
-        <!-- TODO(after 2026-11-01): remove with launcher::move_legacy. -->
-        <div class="legacy" id="legacy" hidden>
-          <span class="what" id="legacy-what"></span>
-          <button class="btn primary small" id="legacy-move">Move it</button>
-        </div>
         <div class="list" id="list" hidden></div>
         <div class="empty" id="empty" hidden>Your libraries will be listed here.</div>
       </div>
@@ -571,9 +553,6 @@
           open.addEventListener("click", () => run("launcher_open", { path: r.path }));
           what.append(open);
           where.classList.add("bad");
-        } else if (r.target === "inside_legacy") {
-          what.append("Move your library into Default first.");
-          where.classList.add("bad");
         } else if (r.target === "occupied") {
           what.append(code(r.shown_path), " has other files in it.");
           where.classList.add("bad");
@@ -619,20 +598,6 @@
         if (!$("pop").contains(e.target) && e.target !== $("new")) setPopover(false);
       });
       $("pick").addEventListener("click", () => run("launcher_pick"));
-      $("legacy-move").addEventListener("click", async () => {
-        setBusy(true);
-        $("error").hidden = true;
-        try {
-          await invoke("launcher_move_legacy");
-          $("name").value = "";
-          await render();
-        } catch (e) {
-          fail(e);
-          return;
-        }
-        setBusy(false);
-      });
-
       async function render() {
         const state = await invoke("launcher_state");
         const list = $("list");
@@ -641,22 +606,6 @@
         list.hidden = none;
         $("empty").hidden = !none;
         if (!$("name").value) $("name").value = state.suggested_name;
-        const legacy = state.legacy;
-        $("legacy").hidden = !legacy;
-        if (legacy) {
-          const code = (t) => {
-            const c = document.createElement("code");
-            c.textContent = t;
-            return c;
-          };
-          $("legacy-what").replaceChildren(
-            "Libraries now each have their own folder. Move yours from ",
-            code(legacy.shown_path),
-            " to ",
-            code(legacy.target),
-            "? Close anything else using it first.",
-          );
-        }
         // The first time, the one thing to do is make a library.
         if (none) setPopover(true);
       }

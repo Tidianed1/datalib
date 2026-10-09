@@ -4,16 +4,24 @@
 # it, and a free port.
 
 # The library a run opens: the argument, else the one the desktop app
-# opens first. Not the Datalib folder itself: the app reads a library
-# there as one to move into Default. A leading `~` is expanded here
-# because a quoted argument reaches us with it intact.
+# opens first, `Libraries/Default` in the app's data directory (Tauri's
+# `app_data_dir` for the identifier in tauri/tauri.conf.json). A leading
+# `~` is expanded here because a quoted argument reaches us with it
+# intact.
 dev_library_root() {
   local arg="${1:-}"
   case "$arg" in
-    "")    echo "$HOME/Documents/Datalib/Default" ;;
+    "")    echo "$(dev_app_data_dir)/Libraries/Default" ;;
     "~")   echo "$HOME" ;;
     "~/"*) echo "$HOME/${arg#\~/}" ;;
     *)     echo "$arg" ;;
+  esac
+}
+
+dev_app_data_dir() {
+  case "$(uname -s)" in
+    Darwin) echo "$HOME/Library/Application Support/com.imbue.datalib" ;;
+    *)      echo "${XDG_DATA_HOME:-$HOME/.local/share}/com.imbue.datalib" ;;
   esac
 }
 

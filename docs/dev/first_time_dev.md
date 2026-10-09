@@ -127,9 +127,10 @@ specific ports with `DATALIB_PORT` (Vite) and `DATALIB_BIND`
 (backend). Ctrl-C tears both down.
 
 The data root is the positional arg to `bazelisk run //datalib:dev` (or
-`:serve`), else `~/Documents/Datalib/Default`, the library the desktop
-app opens first (not the `Datalib` folder itself, which the app reads
-as a library to move into `Default`); `dev_library_root` in
+`:serve`), else the library the desktop app opens first:
+`Libraries/Default` in the app's data directory, which on macOS is
+`~/Library/Application Support/com.imbue.datalib/Libraries/Default`;
+`dev_library_root` in
 `datalib/dev_lib.sh` is where both launchers decide it. It is the
 *directory*, not the config file: `datalib-http` takes it as a required
 positional and reads `<root>/config.toml` from inside it.

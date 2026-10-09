@@ -42,7 +42,7 @@ never has to resolve the tauri dependency tree. Drive it with cargo/pnpm:
 # via the config's beforeBuildCommand, compiles the shell, bundles the
 # .app, and launches it. Optional data-root arg skips the folder picker.
 ./run.sh
-./run.sh ~/Documents/Datalib/Default
+./run.sh ~/Work/my-library
 
 # Release bundle → target/release/bundle/macos/Datalib.app. The CLI is
 # pinned by package.json + pnpm-lock.yaml here (never `pnpm dlx`, which
@@ -82,25 +82,22 @@ opens and asks.
 ## The libraries screen
 
 It lists the recent libraries (`~/.datalib/recent-roots.json`), then
-any other library in `~/Documents/Datalib`. Each shows the source
+any other library in the libraries folder: `Libraries` in the app's
+data directory (Tauri's `app_data_dir`), which on macOS is
+`~/Library/Application Support/com.imbue.datalib/Libraries`. macOS asks
+before an app reads `~/Documents` and does not ask for this folder.
+Each shows the source
 count, size and last sync that `datalib-http` last wrote to its
 `system/library-summary.json`; one whose folder is gone stays listed as
 not found. A folder icon at the end of each row opens the library's
 folder in Finder (`launcher_open_folder`, for a library only). A
-library outside the Datalib folder, or one whose folder is gone, can be
+library outside the libraries folder, or one whose folder is gone, can be
 forgotten, with an × left of the icon: it leaves the recent list and its folder is
-left as it is. One in the Datalib folder is always listed while it is
+left as it is. One in the libraries folder is always listed while it is
 there, so it has no Forget.
 
-Before libraries each got a folder, the one library was
-`~/Documents/Datalib` itself. When the screen finds a library there it
-offers to move it into `~/Documents/Datalib/Default` (`move_legacy`:
-every entry renamed into a staging folder, which is then renamed to
-`Default`; it refuses if `Default` exists). Until it is moved, the
-folder's subfolders are its own and are not listed as libraries, and
-no new library goes inside it. This is temporary: a TODO in
-`src/launcher.rs` says when to remove it. "New library" takes a name or a folder: a
-name is a library in `~/Documents/Datalib`, the first one called
+"New library" takes a name or a folder: a
+name is a library in the libraries folder, the first one called
 `Default`; `/…` and `~/…` are taken as they are, and "Create elsewhere…"
 fills one in. A folder that is already a library is opened instead,
 and one with other files in it is refused. The new library's server

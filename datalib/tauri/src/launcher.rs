@@ -15,12 +15,12 @@ pub fn recents_file(home: &Path) -> PathBuf {
     home.join(".datalib").join("recent-roots.json")
 }
 
-/// Where a library given by name lives: `Datalib` in `documents` (the
-/// platform's Documents directory, which the caller resolves — it is
-/// localized and relocatable, so it is not `<home>/Documents`
-/// everywhere).
-pub fn libraries_dir(documents: &Path) -> PathBuf {
-    documents.join("Datalib")
+/// Where a library given by name lives: `Libraries` in `app_data`, the
+/// directory the platform gives this app for its own data (the caller
+/// resolves it). macOS asks before an app reads the Documents folder
+/// and does not ask for this one.
+pub fn libraries_dir(app_data: &Path) -> PathBuf {
+    app_data.join("Libraries")
 }
 
 pub fn record_recent(file: &Path, root: &Path) -> std::io::Result<()> {
@@ -34,103 +34,12 @@ pub fn record_recent(file: &Path, root: &Path) -> std::io::Result<()> {
     write_recents(file, &roots)
 }
 
-/// Whether the screen offers to forget `root`. A library in the Datalib
+/// Whether the screen offers to forget `root`. A library in the libraries
 /// folder is listed because it is there, not because it was opened, so
 /// it stays while it is there; one elsewhere is listed only from the
 /// recent list, and so is one whose folder is gone.
 pub fn forgettable(root: &Path, libraries_dir: &Path) -> bool {
-    if root == libraries_dir && is_data_root(root) {
-        return false;
-    }
     root.parent() != Some(libraries_dir) || !is_data_root(root)
-}
-
-/// A config's top-level `data_root` defaults to the config's own folder,
-/// which moves with it; one written out as the old folder would keep
-/// pointing there. Drop that line, and only that line: any other value
-/// was chosen on purpose.
-fn drop_own_data_root(config: &Path, old_root: &Path) -> std::io::Result<()> {
-    let Ok(text) = std::fs::read_to_string(config) else {
-        return Ok(());
-    };
-    let old = old_root.to_string_lossy();
-    let names_old = |line: &str| {
-        let Some(value) = line.trim().strip_prefix("data_root") else {
-            return false;
-        };
-        let value = value.trim_start().strip_prefix('=').map(str::trim);
-        value
-            .and_then(|v| v.strip_prefix('"')?.strip_suffix('"'))
-            .is_some_and(|v| v.trim_end_matches('/') == old.trim_end_matches('/'))
-    };
-    // Top-level keys come before the first `[` table header.
-    let mut top = true;
-    let mut changed = false;
-    let mut kept = Vec::new();
-    for line in text.split_inclusive('\n') {
-        if line.trim_start().starts_with('[') {
-            top = false;
-        }
-        if top && names_old(line) {
-            changed = true;
-            continue;
-        }
-        kept.push(line);
-    }
-    if changed {
-        std::fs::write(config, kept.concat())?;
-    }
-    Ok(())
-}
-
-// TODO(after 2026-11-01): remove the move of a library at the Datalib
-// folder itself into `Datalib/Default` (`legacy_root`, `move_legacy`,
-// `Target::InsideLegacy`, the launcher's `launcher_move_legacy` and the
-// screen's banner), and the special cases for it in `libraries`,
-// `suggested_name`, `classify` and `forgettable`. By then the libraries
-// made before each got its own folder will have been moved.
-
-/// The library made before libraries each got a folder inside the
-/// Datalib folder: the Datalib folder itself. `None` once it is moved.
-pub fn legacy_root(libraries_dir: &Path) -> Option<PathBuf> {
-    is_data_root(libraries_dir).then(|| libraries_dir.to_path_buf())
-}
-
-/// Move the library at the Datalib folder into `Datalib/Default`, where
-/// a first library goes now, and point the recent list at it. Every
-/// entry is renamed into a staging folder that is then renamed to
-/// `Default`, so a half-done move never looks like a library at either
-/// place. The caller makes sure the library is not open.
-pub fn move_legacy(recents_file: &Path, libraries_dir: &Path) -> std::io::Result<PathBuf> {
-    use std::io::{Error, ErrorKind};
-    if legacy_root(libraries_dir).is_none() {
-        return Err(Error::new(
-            ErrorKind::NotFound,
-            format!("{} is not a library", libraries_dir.display()),
-        ));
-    }
-    let target = libraries_dir.join(DEFAULT_NAME);
-    if target.exists() {
-        return Err(Error::new(
-            ErrorKind::AlreadyExists,
-            format!("{} already exists", target.display()),
-        ));
-    }
-    let staging = libraries_dir.join(".Default-moving");
-    std::fs::create_dir(&staging)?;
-    for entry in std::fs::read_dir(libraries_dir)? {
-        let from = entry?.path();
-        if from == staging {
-            continue;
-        }
-        let name = from.file_name().expect("a directory entry has a name");
-        std::fs::rename(&from, staging.join(name))?;
-    }
-    std::fs::rename(&staging, &target)?;
-    drop_own_data_root(&target.join("config.toml"), libraries_dir)?;
-    forget_recent(recents_file, libraries_dir)?;
-    record_recent(recents_file, &target)?;
-    Ok(target)
 }
 
 /// Take `root` off the recent list. Only the list changes: the library's
@@ -180,9 +89,7 @@ pub struct Library {
 
 /// The recent libraries, newest first, then any other library in
 /// `libraries_dir` by name: one made there and never opened again is
-/// still the person's. While the Datalib folder is itself a library
-/// (see [`legacy_root`]) its subfolders are that library's own, so it
-/// is listed instead of them.
+/// still the person's.
 pub fn libraries(recents_file: &Path, libraries_dir: &Path) -> Vec<Library> {
     let recents = parse_recents(&std::fs::read_to_string(recents_file).unwrap_or_default());
     let mut out: Vec<Library> = recents
@@ -193,15 +100,6 @@ pub fn libraries(recents_file: &Path, libraries_dir: &Path) -> Vec<Library> {
             path,
         })
         .collect();
-    if let Some(legacy) = legacy_root(libraries_dir) {
-        if !out.iter().any(|l| l.path == legacy) {
-            out.push(Library {
-                path: legacy,
-                found: true,
-            });
-        }
-        return out;
-    }
     let mut beside: Vec<PathBuf> = std::fs::read_dir(libraries_dir)
         .into_iter()
         .flatten()
@@ -217,7 +115,7 @@ pub fn libraries(recents_file: &Path, libraries_dir: &Path) -> Vec<Library> {
 /// What the new-library field starts with: the default library's name
 /// until there is one, then nothing.
 pub fn suggested_name(libraries_dir: &Path) -> &'static str {
-    if libraries_dir.join(DEFAULT_NAME).exists() || legacy_root(libraries_dir).is_some() {
+    if libraries_dir.join(DEFAULT_NAME).exists() {
         ""
     } else {
         DEFAULT_NAME
@@ -257,9 +155,6 @@ pub enum Target {
     Occupied,
     /// A file, not a folder.
     NotAFolder,
-    /// Inside the Datalib folder while it is still one library: moving
-    /// that library into `Default` comes first.
-    InsideLegacy,
 }
 
 impl Target {
@@ -269,15 +164,11 @@ impl Target {
             Target::Library => "library",
             Target::Occupied => "occupied",
             Target::NotAFolder => "not_a_folder",
-            Target::InsideLegacy => "inside_legacy",
         }
     }
 }
 
-pub fn classify(dir: &Path, libraries_dir: &Path) -> Target {
-    if legacy_root(libraries_dir).is_some() && dir.starts_with(libraries_dir) {
-        return Target::InsideLegacy;
-    }
+pub fn classify(dir: &Path) -> Target {
     if is_data_root(dir) {
         return Target::Library;
     }
@@ -439,13 +330,13 @@ mod tests {
         assert_eq!(paths(&libraries(&f, &tmp.path().join("none"))), vec![weird]);
     }
 
-    /// A library made in the Datalib folder and never opened again is
+    /// A library made in the libraries folder and never opened again is
     /// listed after the recent ones; one that is both is listed once.
     #[test]
-    fn libraries_in_the_datalib_folder_are_listed_after_the_recent_ones() {
+    fn libraries_in_the_libraries_folder_are_listed_after_the_recent_ones() {
         let tmp = tempfile::tempdir().unwrap();
         let f = tmp.path().join("recent-roots.json");
-        let dir = libraries_dir(&tmp.path().join("Documents"));
+        let dir = libraries_dir(&tmp.path().join("app_data"));
         let work = dir.join("Work");
         let default = dir.join(DEFAULT_NAME);
         let elsewhere = tmp.path().join("elsewhere");
@@ -459,13 +350,13 @@ mod tests {
         assert_eq!(paths(&libraries(&f, &dir)), vec![elsewhere, work, default]);
     }
 
-    /// The Datalib folder's libraries are always listed, so forgetting
+    /// The libraries folder's libraries are always listed, so forgetting
     /// one would not stick; one whose folder is gone can be, or it would
     /// sit on the list for good.
     #[test]
-    fn only_a_library_outside_the_datalib_folder_or_gone_can_be_forgotten() {
+    fn only_a_library_outside_the_libraries_folder_or_gone_can_be_forgotten() {
         let tmp = tempfile::tempdir().unwrap();
-        let dir = libraries_dir(&tmp.path().join("Documents"));
+        let dir = libraries_dir(&tmp.path().join("app_data"));
         let default = dir.join(DEFAULT_NAME);
         let nested = dir.join("nested").join("lib");
         let elsewhere = tmp.path().join("elsewhere");
@@ -477,87 +368,6 @@ mod tests {
         assert!(forgettable(&elsewhere, &dir));
         assert!(forgettable(&nested, &dir));
         assert!(forgettable(&dir.join("Deleted"), &dir));
-    }
-
-    /// Before libraries each had a folder, the Datalib folder was the
-    /// library. Its subfolders are its own then, not libraries to list,
-    /// and nothing new goes inside it until it is moved.
-    #[test]
-    fn a_library_at_the_datalib_folder_is_listed_alone_and_blocks_new_ones_inside() {
-        let tmp = tempfile::tempdir().unwrap();
-        let f = tmp.path().join("recent-roots.json");
-        let dir = libraries_dir(&tmp.path().join("Documents"));
-        make_root(&dir);
-        make_root(&dir.join("looks_like_a_library"));
-
-        assert_eq!(legacy_root(&dir), Some(dir.clone()));
-        assert_eq!(paths(&libraries(&f, &dir)), vec![dir.clone()]);
-        assert!(!forgettable(&dir, &dir));
-        assert_eq!(suggested_name(&dir), "");
-        assert_eq!(classify(&dir.join("Work"), &dir), Target::InsideLegacy);
-        assert_eq!(classify(&tmp.path().join("elsewhere"), &dir), Target::New);
-    }
-
-    #[test]
-    fn moving_the_legacy_library_puts_everything_in_default() {
-        let tmp = tempfile::tempdir().unwrap();
-        let f = tmp.path().join("recent-roots.json");
-        let dir = libraries_dir(&tmp.path().join("Documents"));
-        make_root(&dir);
-        std::fs::create_dir_all(dir.join("system")).unwrap();
-        std::fs::write(dir.join("system/api-token"), "t").unwrap();
-        record_recent(&f, &dir).unwrap();
-
-        let moved = move_legacy(&f, &dir).unwrap();
-        let default = dir.join(DEFAULT_NAME);
-        assert_eq!(moved, default);
-        assert!(default.join("config.toml").is_file());
-        assert!(default.join("system/api-token").is_file());
-        assert!(!dir.join("config.toml").exists());
-        assert_eq!(legacy_root(&dir), None);
-        assert_eq!(paths(&libraries(&f, &dir)), vec![default]);
-    }
-
-    /// A config that spelled out its own folder as `data_root` would
-    /// keep pointing at the old place after the move; that line goes.
-    #[test]
-    fn moving_drops_a_data_root_naming_the_old_folder() {
-        let tmp = tempfile::tempdir().unwrap();
-        let f = tmp.path().join("recent-roots.json");
-        let dir = libraries_dir(&tmp.path().join("Documents"));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join("config.toml"),
-            format!(
-                "data_root = \"{}\"\n\n[[groups]]\nid = \"x\"\ndata_root = \"{}\"\n",
-                dir.display(),
-                dir.display()
-            ),
-        )
-        .unwrap();
-        let moved = move_legacy(&f, &dir).unwrap();
-        let text = std::fs::read_to_string(moved.join("config.toml")).unwrap();
-        assert_eq!(
-            text,
-            format!(
-                "\n[[groups]]\nid = \"x\"\ndata_root = \"{}\"\n",
-                dir.display()
-            ),
-            "only the top-level line naming the old folder goes"
-        );
-    }
-
-    /// A `Default` already there (made by hand, say) is never merged
-    /// into; the move refuses and touches nothing.
-    #[test]
-    fn moving_refuses_when_default_exists() {
-        let tmp = tempfile::tempdir().unwrap();
-        let f = tmp.path().join("recent-roots.json");
-        let dir = libraries_dir(&tmp.path().join("Documents"));
-        make_root(&dir);
-        std::fs::create_dir_all(dir.join(DEFAULT_NAME)).unwrap();
-        assert!(move_legacy(&f, &dir).is_err());
-        assert!(dir.join("config.toml").is_file());
     }
 
     #[test]
@@ -583,16 +393,16 @@ mod tests {
     #[test]
     fn the_first_library_is_suggested_as_default_and_the_next_has_no_suggestion() {
         let tmp = tempfile::tempdir().unwrap();
-        let dir = libraries_dir(&tmp.path().join("Documents"));
+        let dir = libraries_dir(&tmp.path().join("app_data"));
         assert_eq!(suggested_name(&dir), DEFAULT_NAME);
         make_root(&dir.join(DEFAULT_NAME));
         assert_eq!(suggested_name(&dir), "");
     }
 
     #[test]
-    fn a_name_goes_in_the_datalib_folder_and_a_path_is_taken_as_it_is() {
+    fn a_name_goes_in_the_libraries_folder_and_a_path_is_taken_as_it_is() {
         let home = Path::new("/Users/x");
-        let dir = Path::new("/Users/x/Documents/Datalib");
+        let dir = Path::new("/Users/x/Library/Application Support/com.imbue.datalib/Libraries");
         assert_eq!(resolve_new("  ", home, dir), None);
         assert_eq!(resolve_new("Work", home, dir), Some(dir.join("Work")));
         assert_eq!(
@@ -615,7 +425,6 @@ mod tests {
     #[test]
     fn classify_tells_a_new_folder_from_a_library_and_from_someone_elses() {
         let tmp = tempfile::tempdir().unwrap();
-        let none = tmp.path().join("none");
         let empty = tmp.path().join("empty");
         std::fs::create_dir_all(&empty).unwrap();
         let notes = tmp.path().join("notes");
@@ -626,20 +435,17 @@ mod tests {
         let file = tmp.path().join("file");
         std::fs::write(&file, "x").unwrap();
 
-        assert_eq!(classify(&tmp.path().join("missing"), &none), Target::New);
-        assert_eq!(classify(&empty, &none), Target::New);
-        assert_eq!(classify(&lib, &none), Target::Library);
-        assert_eq!(classify(&notes, &none), Target::Occupied);
-        assert_eq!(classify(&file, &none), Target::NotAFolder);
+        assert_eq!(classify(&tmp.path().join("missing")), Target::New);
+        assert_eq!(classify(&empty), Target::New);
+        assert_eq!(classify(&lib), Target::Library);
+        assert_eq!(classify(&notes), Target::Occupied);
+        assert_eq!(classify(&file), Target::NotAFolder);
     }
 
     #[test]
     fn paths_under_home_are_shown_from_the_tilde() {
         let home = Path::new("/Users/x");
-        assert_eq!(
-            tilde(Path::new("/Users/x/Documents/Datalib/Default"), home),
-            "~/Documents/Datalib/Default"
-        );
+        assert_eq!(tilde(Path::new("/Users/x/Work/lib"), home), "~/Work/lib");
         assert_eq!(tilde(home, home), "~");
         assert_eq!(tilde(Path::new("/Volumes/A"), home), "/Volumes/A");
     }
