@@ -17,6 +17,17 @@
   position: absolute;
   inset: 0;
 }
+/* Where a row dragged by its grip lands, across the whole grid. */
+.tg-move-guide {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--datalib-accent);
+  pointer-events: none;
+  z-index: 10;
+  display: none;
+}
 
 .tg-none { color: var(--datalib-muted); opacity: 0.55; }
 
