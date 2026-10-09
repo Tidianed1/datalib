@@ -688,7 +688,7 @@ upstream (block types, MIME types), free-form display text
 | a configured entry upstream does not have; a listing or phase a run could not do | `ProblemReason`, `RunProblemKind` | `etl/src/download_problems.rs` |
 | how a diff group's row differs between two renders | `DiffStatus` | `schema/src/diff_status.rs` |
 | which answer to free text a search asks for | `SearchTab` | `applets/src/unified_index/tabs.rs` |
-| what a term is to its grid row | `TermKind` | `schema/src/terms.rs` (`datalib_schema`) |
+| what a term is to its grid row | `SearchTermKind` | `schema/src/search_terms.rs` (`datalib_schema`) |
 | a config's source type | `SourceType` | `datalib_step/src/source_type.rs` |
 | whether an ingest method reaches a service or reads files | `Reach` | `source_common/src/lib.rs` |
 | which of datalib's stores a file is, in its `_datalib_meta` | `StoreKind` | `store_meta/src/lib.rs` (`datalib_store_meta`) |

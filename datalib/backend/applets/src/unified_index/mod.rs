@@ -22,10 +22,10 @@ mod problems;
 #[cfg(test)]
 mod qmd_search_tests;
 mod results;
+mod search_terms;
 #[cfg(test)]
 mod serve_tests;
 mod tabs;
-mod terms;
 
 use datalib_columns::Identity;
 use datalib_schema::grid_rows::GridRowColumn;
@@ -677,14 +677,14 @@ async fn ranked(
         return Ok((list, key.at, true));
     }
     let (ranking, terms_at) = match (tab, identifiers(parsed)) {
-        (Some(SearchTab::Fields), _) => match terms::fields(&parsed.free_text) {
+        (Some(SearchTab::Fields), _) => match search_terms::fields(&parsed.free_text) {
             Some(m) => from_terms(s, &m).await?.unwrap_or((Vec::new(), Some(None))),
             None => (Vec::new(), None),
         },
         (_, Some(ids)) => match from_terms(s, &ids).await? {
             Some(found) => found,
             None => {
-                tracing::info!("no terms file yet; searching identifiers through qmd");
+                tracing::info!("no search terms file yet; searching identifiers through qmd");
                 (qmd_or_no_index(s, parsed).await?, None)
             }
         },
@@ -729,16 +729,16 @@ async fn ranked(
     Ok((list, listing.at, keep))
 }
 
-/// The terms file's ranking for `m`, and the grid commit the file reflects;
-/// `None` when the root has no terms file yet.
+/// The search terms file's ranking for `m`, and the grid commit the file reflects;
+/// `None` when the root has no search terms file yet.
 async fn from_terms(
     s: &Index,
-    m: &terms::Match,
+    m: &search_terms::Match,
 ) -> Result<Option<(Vec<(String, (f64, String))>, Option<Option<String>>)>, SearchFailure> {
-    Ok(terms::lookup(&s.root, m)
+    Ok(search_terms::lookup(&s.root, m)
         .await
         .map_err(index)?
-        .map(|found| (terms::rank(&found), Some(found.grid_commit))))
+        .map(|found| (search_terms::rank(&found), Some(found.grid_commit))))
 }
 
 /// The Words tab: qmd's keyword index ranked by BM25, read from its own
@@ -768,11 +768,11 @@ async fn words_ranking(
 
 /// The identifiers a search is made of, when it is made of nothing else
 /// and asked for no qmd mode of its own.
-fn identifiers(parsed: &ParsedQuery) -> Option<terms::Match> {
+fn identifiers(parsed: &ParsedQuery) -> Option<search_terms::Match> {
     if parsed.free_text_mode != FreeTextMode::Hybrid {
         return None;
     }
-    terms::identifiers(&parsed.free_text)
+    search_terms::identifiers(&parsed.free_text)
 }
 
 async fn qmd_or_no_index(
@@ -1415,13 +1415,16 @@ mod tests {
         )
         .await
         .unwrap();
-        datalib_etl_render::grid_terms::sync(&pool, &datalib_runtime::layout::grid_terms_db(root))
-            .await
-            .unwrap();
+        datalib_etl_render::search_terms::sync(
+            &pool,
+            &datalib_runtime::layout::search_terms_db(root),
+        )
+        .await
+        .unwrap();
         pool.close().await;
     }
 
-    /// A pasted uuid or address is answered from the terms file, never by
+    /// A pasted uuid or address is answered from the search terms file, never by
     /// qmd. This root has no qmd index, so a search that asked qmd says so,
     /// which is what the same search did before the terms were written.
     #[tokio::test]

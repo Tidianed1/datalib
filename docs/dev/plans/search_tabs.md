@@ -139,7 +139,7 @@ vals_fts  USING fts5(value, content='', contentless_delete=1,
                      tokenize="unicode61 tokenchars '@.-_+:/'")
 ```
 
-`kind` is the `TermKind` enum's code. The FTS5 index covers the
+`kind` is the `SearchTermKind` enum's code. The FTS5 index covers the
 distinct values alone, linked to `vals` by rowid. The tokenizer keeps
 `@ . - _ + : /` inside a word, so a uuid, an email address or
 `slack:T…/U…` is one token, matched exactly. On a real root the
@@ -147,7 +147,7 @@ dictionary took the file from 131 MB (a uuid, a value and a timestamp
 on every term) to 58 MB: there are 4.6 terms per distinct value.
 
 **The terms live in a plain SQLite file beside the grid index,** not
-in it: `unified_index/grid_index/terms.sqlite`, written by `grid_index`
+in it: `unified_index/grid_index/search_terms.sqlite`, written by `grid_index`
 and attached read-only by each reader of a grid commit. Nobody needs
 the terms' history, and a doltlite store keeps it: with 732k terms, 200
 one-document replaces each committed grew a store 35.5 MB and a plain
@@ -171,7 +171,7 @@ test are in [`doltlite.md`](../doltlite.md) § "Full-text search
   `grid_rows` cannot give again, so a missing or damaged one is
   rebuilt, not migrated.
 
-**`kind` is an enum**, `TermKind`, with the usual strum pair, and a
+**`kind` is an enum**, `SearchTermKind`, with the usual strum pair, and a
 new kind is new data, never a schema change. Built: `id`, `container`,
 `from`, `title`, `name`. Planned: the person kinds `to`, `cc`, `bcc`,
 `participant`, `mention` and `reactor`, and `label`; and, if the terms
@@ -280,15 +280,15 @@ and could fold in later too.
 
 0. **The doltlite facts FTS5 needs.** Done in imbue-ai/datalib#1107:
    the facts in `doltlite_facts_test`, the write cost in
-   `doltlite.md`, and the attached terms file beside a sealing writer
+   `doltlite.md`, and the attached search terms file beside a sealing writer
    in `doltlite_two_process_test`.
 1. **The search terms, derived terms only.** Built in this step's PR,
    with one narrowing: only a query made entirely of identifiers is
    answered from the terms; words still go to qmd until the tabs give
    their answer a place. On a real root (122,579 rows) the first pass
    wrote 674,672 terms, 58 MB, with the whole step taking 4.3 s, and a
-   pasted uuid's lookup took 1.5 ms. The terms file, the
-   `TermKind` enum, the derivation in `grid_index`, and bare words and
+   pasted uuid's lookup took 1.5 ms. The search terms file, the
+   `SearchTermKind` enum, the derivation in `grid_index`, and bare words and
    identifiers searched through it. An identifier-only query does not
    ask qmd. Test: a uuid search answers without asking qmd at all (the
    applet tests can give it a daemon that fails on any request).
@@ -297,7 +297,7 @@ and could fold in later too.
    for anything new we rely on.
 3. **Tabs.** Built. The API: `tab=fields|words|meaning` on the search
    and groups endpoints, each tab its own list in the results cache.
-   Fields reads the terms file with any word as the start of one; Words
+   Fields reads the search terms file with any word as the start of one; Words
    reads qmd's `documents_fts` with BM25 (1,000 deep, scoped by
    `source_id:`, each hit placed on the message where its first word
    is); Meaning is qmd's vector query alone. The UI: a small tab strip

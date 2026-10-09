@@ -19,8 +19,8 @@ pub mod edges {
     include!("edges.rs");
 }
 
-pub mod terms {
-    include!("terms.rs");
+pub mod search_terms {
+    include!("search_terms.rs");
 }
 
 pub mod markdowns {
