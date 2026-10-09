@@ -1,6 +1,7 @@
-//! A search made only of identifiers (a uuid, an email address, a handle)
-//! is answered from the grid's terms file, not from qmd: every row that
-//! answers to each of them, best match first. The file and what it holds:
+//! Searches answered from the grid's terms file rather than qmd: the
+//! Fields tab, and a search made only of identifiers (a uuid, an email
+//! address, a handle) whichever tab asks. Every row that answers to each
+//! word, best match first. The file and what it holds:
 //! `datalib_etl_render::grid_terms`.
 
 use std::path::Path;
@@ -13,14 +14,59 @@ use datalib_unified_index::query::{extract_uuid_suffix, is_uuid_shape};
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection};
 
+/// What a search asks the terms file: FTS5 expressions over the terms'
+/// values, each of which a row must answer to, and those it must not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Match {
+    pub include: Vec<String>,
+    pub exclude: Vec<String>,
+}
+
 /// The free text as terms to look up, when every word of it is an
-/// identifier; `None` when any word is not, so the search is qmd's.
-pub fn identifiers(free_text: &str) -> Option<Vec<String>> {
+/// identifier; `None` when any word is not.
+pub fn identifiers(free_text: &str) -> Option<Match> {
     let words = datalib_query::tokenize(free_text);
     if words.is_empty() {
         return None;
     }
-    words.iter().map(|w| identifier(w)).collect()
+    let include = words
+        .iter()
+        .map(|w| identifier(w).map(|id| phrase(&id)))
+        .collect::<Option<Vec<String>>>()?;
+    Some(Match {
+        include,
+        exclude: Vec::new(),
+    })
+}
+
+/// The free text as the Fields tab looks it up: an identifier whole, a
+/// quoted phrase as typed, any other word as the start of one (so a row
+/// shows while its word is still being typed), and a `-` one excluded.
+/// `None` when nothing is required.
+pub fn fields(free_text: &str) -> Option<Match> {
+    let mut m = Match {
+        include: Vec::new(),
+        exclude: Vec::new(),
+    };
+    for word in datalib_query::tokenize(free_text) {
+        let (bucket, word) = match word.strip_prefix('-').filter(|w| !w.is_empty()) {
+            Some(w) => (&mut m.exclude, w.to_string()),
+            None => (&mut m.include, word),
+        };
+        bucket.push(match identifier(&word) {
+            Some(id) => phrase(&id),
+            None if word.len() >= 2 && word.starts_with('"') && word.ends_with('"') => {
+                phrase(&word[1..word.len() - 1])
+            }
+            None => format!("{}*", phrase(&word)),
+        });
+    }
+    (!m.include.is_empty()).then_some(m)
+}
+
+/// `s` as one FTS5 string, a quote inside it doubled so it cannot end it.
+fn phrase(s: &str) -> String {
+    format!("\"{}\"", s.replace('"', "\"\""))
 }
 
 fn identifier(word: &str) -> Option<String> {
@@ -55,10 +101,18 @@ pub struct Hit {
     pub touched_at_utc: Option<String>,
 }
 
-/// The rows every identifier matched, each at its best match: the most
-/// telling kind first (`TermKind::affinity`), then newest. The score is
-/// that affinity, and the words shown are the kind and the value matched.
-pub fn rank(per_identifier: &[Vec<Hit>]) -> Vec<(String, (f64, String))> {
+/// The rows every included expression matched and no excluded one did,
+/// each at its best match: the most telling kind first
+/// (`TermKind::affinity`), then newest. The score is that affinity, and the
+/// words shown are the kind and the value matched.
+pub fn rank(found: &Found) -> Vec<(String, (f64, String))> {
+    let excluded: std::collections::HashSet<&str> = found
+        .excluded
+        .iter()
+        .flatten()
+        .map(|h| h.uuid.as_str())
+        .collect();
+    let per_identifier = &found.included;
     let affinity = |h: &Hit| TermKind::from_code(h.kind).map_or(0, TermKind::affinity);
     let kind = |h: &Hit| TermKind::from_code(h.kind).map_or("term", TermKind::as_str);
     let Some((first, rest)) = per_identifier.split_first() else {
@@ -69,7 +123,7 @@ pub fn rank(per_identifier: &[Vec<Hit>]) -> Vec<(String, (f64, String))> {
         let in_every = rest
             .iter()
             .all(|hits| hits.iter().any(|h| h.uuid == hit.uuid));
-        if !in_every {
+        if !in_every || excluded.contains(hit.uuid.as_str()) {
             continue;
         }
         let slot = best.entry(hit.uuid.as_str()).or_insert(hit);
@@ -95,16 +149,19 @@ pub fn rank(per_identifier: &[Vec<Hit>]) -> Vec<(String, (f64, String))> {
         .collect()
 }
 
-/// What the terms file says about `identifiers`, read in one transaction.
+/// What the terms file says about a [`Match`], read in one transaction:
+/// the hits of each expression, in its order.
+#[derive(Debug, Default)]
 pub struct Found {
-    pub per_identifier: Vec<Vec<Hit>>,
+    pub included: Vec<Vec<Hit>>,
+    pub excluded: Vec<Vec<Hit>>,
     /// The grid commit the file reflects. A ranking read at any other
     /// commit may be one pass out, so it is not kept.
     pub grid_commit: Option<String>,
 }
 
 /// `None` when the root has no terms file yet.
-pub async fn lookup(root: &Path, identifiers: &[String]) -> Result<Option<Found>> {
+pub async fn lookup(root: &Path, m: &Match) -> Result<Option<Found>> {
     let path = datalib_runtime::layout::grid_terms_db(root);
     if !path.exists() {
         return Ok(None);
@@ -124,26 +181,29 @@ pub async fn lookup(root: &Path, identifiers: &[String]) -> Result<Option<Found>
                 .bind(META_GRID_COMMIT)
                 .fetch_optional(&mut conn)
                 .await?;
-        let mut per_identifier = Vec::with_capacity(identifiers.len());
-        for id in identifiers {
-            let hits: Vec<Hit> = sqlx::query_as(
-                "SELECT r.uuid, t.kind, v.value, r.touched_at_utc FROM vals_fts \
-                 JOIN vals v ON v.val_id = vals_fts.rowid \
-                 JOIN terms t ON t.val_id = v.val_id \
-                 JOIN rows r ON r.row_id = t.row_id WHERE vals_fts MATCH ?",
-            )
-            // A phrase, so the identifier is matched whole; an identifier
-            // holds no double quote (`identifier`).
-            .bind(format!("\"{id}\""))
-            .fetch_all(&mut conn)
-            .await?;
-            per_identifier.push(hits);
+        let mut found = Found {
+            grid_commit,
+            ..Found::default()
+        };
+        for (exprs, into) in [
+            (&m.include, &mut found.included),
+            (&m.exclude, &mut found.excluded),
+        ] {
+            for expr in exprs {
+                let hits: Vec<Hit> = sqlx::query_as(
+                    "SELECT r.uuid, t.kind, v.value, r.touched_at_utc FROM vals_fts \
+                     JOIN vals v ON v.val_id = vals_fts.rowid \
+                     JOIN terms t ON t.val_id = v.val_id \
+                     JOIN rows r ON r.row_id = t.row_id WHERE vals_fts MATCH ?",
+                )
+                .bind(expr)
+                .fetch_all(&mut conn)
+                .await?;
+                into.push(hits);
+            }
         }
         sqlx::query("COMMIT").execute(&mut conn).await?;
-        anyhow::Ok(Found {
-            per_identifier,
-            grid_commit,
-        })
+        anyhow::Ok(found)
     }
     .await
     .context("read the terms file");
@@ -155,15 +215,21 @@ pub async fn lookup(root: &Path, identifiers: &[String]) -> Result<Option<Found>
 mod tests {
     use super::*;
 
+    fn includes(m: Option<Match>) -> Option<Vec<String>> {
+        m.map(|m| m.include)
+    }
+
     #[test]
     fn identifiers_are_uuids_and_handles_and_nothing_else() {
         assert_eq!(
-            identifiers("00000000-0000-8B8A-896D-63addc7b31ad"),
-            Some(vec!["00000000-0000-8b8a-896d-63addc7b31ad".to_string()])
+            includes(identifiers("00000000-0000-8B8A-896D-63addc7b31ad")),
+            Some(vec!["\"00000000-0000-8b8a-896d-63addc7b31ad\"".to_string()])
         );
         assert_eq!(
-            identifiers("away-team-00000000-0000-4000-8000-000000000001"),
-            Some(vec!["00000000-0000-4000-8000-000000000001".to_string()])
+            includes(identifiers(
+                "away-team-00000000-0000-4000-8000-000000000001"
+            )),
+            Some(vec!["\"00000000-0000-4000-8000-000000000001\"".to_string()])
         );
         assert_eq!(
             identifiers("Ann@Example.com +1 555 0100"),
@@ -171,15 +237,35 @@ mod tests {
             "a phone number in several words is not one identifier"
         );
         assert_eq!(
-            identifiers("Ann@Example.com slack:T1/U2"),
+            includes(identifiers("Ann@Example.com slack:T1/U2")),
             Some(vec![
-                "email:ann@example.com".to_string(),
-                "slack:T1/U2".to_string()
+                "\"email:ann@example.com\"".to_string(),
+                "\"slack:T1/U2\"".to_string()
             ])
         );
         assert_eq!(identifiers("ann@example.com budget"), None);
         assert_eq!(identifiers("\"ann@example.com\""), None);
         assert_eq!(identifiers(""), None);
+    }
+
+    #[test]
+    fn fields_take_identifiers_whole_phrases_as_typed_and_words_as_prefixes() {
+        assert_eq!(
+            fields("Ann@Example.com budg \"deck twelve\" -spam"),
+            Some(Match {
+                include: vec![
+                    "\"email:ann@example.com\"".into(),
+                    "\"budg\"*".into(),
+                    "\"deck twelve\"".into(),
+                ],
+                exclude: vec!["\"spam\"*".into()],
+            })
+        );
+        assert_eq!(
+            fields("o\"brien").map(|m| m.include),
+            Some(vec!["\"o\"\"brien\"*".into()])
+        );
+        assert_eq!(fields("-spam"), None);
     }
 
     fn hit(uuid: &str, kind: &str, touched: &str) -> Hit {
@@ -191,27 +277,45 @@ mod tests {
         }
     }
 
+    fn found(included: Vec<Vec<Hit>>, excluded: Vec<Vec<Hit>>) -> Found {
+        Found {
+            included,
+            excluded,
+            grid_commit: None,
+        }
+    }
+
     #[test]
     fn rows_rank_by_their_best_kind_then_newest() {
-        let ranked = rank(&[vec![
-            hit("r-name", "name", "2026-03"),
-            hit("r-old", "from", "2026-01"),
-            hit("r-new", "from", "2026-02"),
-            hit("r-id", "id", "2025-01"),
-            hit("r-id", "name", "2026-04"),
-        ]]);
+        let ranked = rank(&found(
+            vec![vec![
+                hit("r-name", "name", "2026-03"),
+                hit("r-old", "from", "2026-01"),
+                hit("r-new", "from", "2026-02"),
+                hit("r-id", "id", "2025-01"),
+                hit("r-id", "name", "2026-04"),
+            ]],
+            Vec::new(),
+        ));
         let order: Vec<&str> = ranked.iter().map(|(u, _)| u.as_str()).collect();
         assert_eq!(order, ["r-id", "r-new", "r-old", "r-name"]);
         assert_eq!(ranked[0].1, (5.0, "id: v".to_string()));
     }
 
     #[test]
-    fn several_identifiers_keep_only_the_rows_matching_every_one() {
-        let ranked = rank(&[
-            vec![hit("a", "from", "1"), hit("b", "from", "1")],
-            vec![hit("b", "container", "1")],
-        ]);
-        assert_eq!(ranked.len(), 1);
-        assert_eq!(ranked[0].0, "b");
+    fn rows_must_match_every_included_word_and_no_excluded_one() {
+        let ranked = rank(&found(
+            vec![
+                vec![
+                    hit("a", "from", "1"),
+                    hit("b", "from", "1"),
+                    hit("c", "from", "1"),
+                ],
+                vec![hit("b", "container", "1"), hit("c", "title", "1")],
+            ],
+            vec![vec![hit("c", "name", "1")]],
+        ));
+        let order: Vec<&str> = ranked.iter().map(|(u, _)| u.as_str()).collect();
+        assert_eq!(order, ["b"]);
     }
 }

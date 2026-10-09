@@ -472,7 +472,15 @@ programs against:
   (`/search/groups?by=source_ref`), write and read its `source_id:`
   filter, and "Meaning only" moves its free text into a
   `qmd_vsearch:` predicate and back, so a filter that was clicked is
-  the one that could have been typed. The toolbar's search box (⌘K)
+  the one that could have been typed. Free text has three answers, a
+  small tab each at the start of that row (`grid/searchTabs.ts`):
+  **Fields** (the terms file), **Words** (BM25 over qmd's keyword
+  index) and **Meaning** (qmd's vectors), the search's `tab=`. All
+  three are asked at once; the first to come back with rows opens,
+  a tab that comes back while another is open shows a dot until it is
+  looked at, and only a click changes the tab shown. The list, the
+  table, its groups and the source chips all show the open tab's
+  answer. The toolbar's search box (⌘K)
   opens one. Its table is the grid below, over the search: row click
   opens the row's document via `host.openCards`; double-click opens it
   as a standalone single-column page in a new tab. Persists
