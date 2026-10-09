@@ -27,7 +27,7 @@ test("while latchkey is asked, the section says so", async ({ page, world, inter
     (r: { host: string; path: string }) => r.host === "slack.com" && r.path === "/api/auth.test",
   );
   await pickTile(page, TILE.slack);
-  const asking = wizard(page).getByText("Asking latchkey how you can sign in…");
+  const asking = wizard(page).getByText("Finding out how you can sign in…");
   await expect(asking).toBeVisible();
   release();
   // The stored token is then checked, and the row says who it reaches.

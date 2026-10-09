@@ -50,7 +50,7 @@ test("Slack: two pasted tokens under two names, both offered back", async ({ pag
     await wizard(page).getByRole("tab", { name: "Paste a key" }).click();
     await box.fill(name);
     await form.getByLabel("Token").fill(TNG.slackToken);
-    await form.getByRole("button", { name: "Store in latchkey" }).click();
+    await form.getByRole("button", { name: "Save sign-in" }).click();
     // Stored, then checked at once.
     await expect(wizard(page).locator(".wiz-probe-ok")).toBeVisible();
   }

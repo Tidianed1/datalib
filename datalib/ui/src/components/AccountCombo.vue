@@ -73,15 +73,15 @@ function onFocusout(ev: FocusEvent) {
     <button
       type="button"
       class="acct-toggle"
-      :aria-label="`Show the ${label} names latchkey holds`"
+      :aria-label="`Show the stored ${label} names`"
       @mousedown.prevent
       @click="toggle"
     >
       ▾
     </button>
     <ul v-if="open" :id="listId" class="acct-list" role="listbox" :aria-label="label">
-      <li v-if="options === null" class="acct-empty">Asking latchkey…</li>
-      <li v-else-if="shown.length === 0" class="acct-empty">latchkey holds none yet</li>
+      <li v-if="options === null" class="acct-empty">Looking…</li>
+      <li v-else-if="shown.length === 0" class="acct-empty">none stored yet</li>
       <li
         v-for="(o, i) in shown"
         :key="o.value || '(no name)'"
