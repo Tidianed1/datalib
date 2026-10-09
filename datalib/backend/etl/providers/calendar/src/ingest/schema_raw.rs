@@ -179,6 +179,12 @@ impl GoogleEventRow {
     }
 }
 
+/// Google bumps an event's `etag` and `updated` without changing
+/// anything else, hundreds of events at a time, so they live in the
+/// sidecar where the diff does not see them. Render still reads
+/// `updated` as the event's `modified_at`.
+pub const GOOGLE_EVENT_VOLATILE_PATHS: &[dr::VolatilePath] = &[&["etag"], &["updated"]];
+
 /// An event row's key: `"{calendar_id}#{uid or Google event id}"`.
 pub fn event_pk(calendar_id: &str, event_key: &str) -> String {
     format!("{calendar_id}#{event_key}")

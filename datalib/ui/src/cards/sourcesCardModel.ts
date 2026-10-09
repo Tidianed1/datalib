@@ -9,6 +9,8 @@ import {
   listGroups,
   listSteps,
   insertEntries,
+  moveGroup,
+  moveAgainstDataFlow,
   removeSteps,
   describeGroup,
   renameGroup,
@@ -73,7 +75,10 @@ the last step’s in pipeline order. <b>Last synced</b> and
 <b>Last success</b> are the fetch step’s. <b>Remove</b> takes the steps and applets
 with it.</p>
 <p>Rows come in the order <code>config.toml</code> lists them. Click a header to sort by
-that column; a third click puts the config's order back.</p>
+that column; a third click puts the config's order back. <b>Drag a group</b> by the grip
+at its left to move it: the move is written to <code>config.toml</code>, with everything
+under the group kept beside it. Groups move only while the table is in the config's
+order, and never above a group they read from.</p>
 <p><b>Name</b> stays in view while the table scrolls sideways. <b>Status</b> leads
 with an icon for what the row is doing or did last, then says when it got there. That
 icon, and the mark before a name — the service a source mirrors, or what a step
@@ -477,6 +482,42 @@ export function useSourcesCard(ctx: CardCtx) {
       next,
       name ? `Renamed ${row.id} to ${name}.` : `Cleared the name of ${row.id}.`,
     );
+  }
+
+  /// Groups are dragged into a new order; nothing else is, and nothing
+  /// while the config cannot be written.
+  function isMovable(row: Row): boolean {
+    return row.kind === "group" && !busy.value && !parseError.value && !configError.value;
+  }
+
+  /// Write a dragged group down where it was dropped. Read off the config
+  /// as the server has it, as `openEdit` does, so a move cannot write back
+  /// over an editor save that has not reached this card yet.
+  async function onRowMove(row: Row, before: Row | null) {
+    if (row.kind !== "group") return;
+    await loadConfig();
+    const name = (id: string) =>
+      rows.value.find((r) => r.kind === "group" && r.id === id)?.name.label ?? id;
+    const against = moveAgainstDataFlow(configText.value, row.id, before?.id ?? null);
+    if (against) {
+      say(
+        false,
+        "reads" in against
+          ? `${row.name.label} can't go above ${name(against.reads)}: it reads what ${name(against.reads)} makes, and the config lists each group below the ones it reads.`
+          : `${row.name.label} can't go below ${name(against.readBy)}: ${name(against.readBy)} reads what it makes, and the config lists each group below the ones it reads.`,
+      );
+      return;
+    }
+    let next: string;
+    try {
+      next = moveGroup(configText.value, row.id, before?.id ?? null);
+    } catch (e) {
+      say(false, (e as Error).message);
+      return;
+    }
+    if (next === configText.value) return;
+    const where = before ? `above ${before.name.label}` : "to the bottom";
+    await writeConfig(next, `Moved ${row.name.label} ${where}.`);
   }
 
   // ── Which groups are open. Remembered per browser, so a reload — or
@@ -955,6 +996,8 @@ export function useSourcesCard(ctx: CardCtx) {
     onCellDoubleClicked,
     onCellEdit,
     onRowGroupOpened,
+    isMovable,
+    onRowMove,
     wizardOpen,
     wizardKey,
     takenIds,

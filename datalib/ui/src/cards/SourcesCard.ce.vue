@@ -45,6 +45,8 @@ const {
   onCellDoubleClicked,
   onCellEdit,
   onRowGroupOpened,
+  isMovable,
+  onRowMove,
   wizardOpen,
   wizardKey,
   takenIds,
@@ -205,10 +207,12 @@ const rowHeight = computed(() => Math.round(28 + 8 * density.value));
         :pinnedColumns="1"
         :columnOverrides="columnOverrides"
         :rowHeight="rowHeight"
+        :movable="isMovable"
         @ready="onGridReady"
         @cellDoubleClick="onCellDoubleClicked"
         @edit="onCellEdit"
         @rowGroupOpened="onRowGroupOpened"
+        @move="onRowMove"
       />
     </div>
 

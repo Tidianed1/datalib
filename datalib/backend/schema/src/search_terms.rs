@@ -3,7 +3,7 @@
 // file per term, so a pasted id or address is one lookup, whatever column
 // holds it. The file, and why it is plain SQLite beside the grid index
 // rather than a table in it: `docs/dev/plans/search_tabs.md` §
-// "`search_terms`".
+// "The search terms".
 
 /// What a term is to its row. Stored as its [`code`](SearchTermKind::code).
 #[derive(

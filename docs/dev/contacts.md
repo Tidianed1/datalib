@@ -57,8 +57,8 @@ above it:
    rebuild. Its answer ranks above every source's.
 
 What is still to build: [`plans/contact_linking.md`](plans/contact_linking.md)
-(merge, groups, `row_handles`, contacts in search, numbers without a
-country code) and [`plans/contact_editing.md`](plans/contact_editing.md)
+(merge, groups, numbers without a country code), [`plans/search_autocomplete.md`](plans/search_autocomplete.md)
+(contacts in search) and [`plans/contact_editing.md`](plans/contact_editing.md)
 (the contact card: its fields, drafts, saving, undo, the export).
 How every chip is written, drawn, resolved and clicked — a person's, a
 group's, a step's — is [`chips.md`](chips.md). This page says what the
@@ -443,42 +443,24 @@ contacts as `/people` ranked them, then the text the source showed.
 **Search cannot yet ask "everything from Riker, whatever handle he
 used".** Links sit over the view, so the index knows handles and
 source contacts and has never heard of a contact. What exists today
-covers part of it:
+covers part of it, and both filters are exact matches:
 
-- **`author_handle:<handle>`** matches rows whose author is exactly
-  that one handle. A grid's Author chip offers it. One handle is one
-  namespace, so `author_handle:email:riker@enterprise.org` misses his
-  Slack messages. The grammar has no OR, so two handles cannot be
-  asked for at once.
-- **`author:<name>`** is a substring match on the author's name as the
-  source showed it. A document's chip offers it ("Everything from
-  <name>"), with the name the chip shows. It reaches across sources, but
-  only where each one spelled the name the same way, and it also finds
-  anyone else whose name contains it.
+- **`author_handle:<handle>`** matches rows whose author is that one
+  handle. A grid's Author chip offers it. One handle is one namespace,
+  so `author_handle:email:riker@enterprise.org` misses his Slack
+  messages, and the grammar has no OR to ask for two.
+- **`author:<name>`** matches rows whose author the source showed under
+  exactly that name. A document's chip offers it ("Everything from
+  <name>"). It reaches across sources only where each spelled the name
+  the same way, and finds anyone else of that name too.
 
-**The planned join happens in the index, at query time**
-([`plans/contact_linking.md`](plans/contact_linking.md) §"Search"):
-
-1. A snapshot step renders each contact as an ordinary document
-   listing its handles.
-2. `grid_index` fills `row_handles`: which rows name which handle, as
-   author, recipient, reactor or mention.
-3. A `contact:` filter joins contact → handles → rows.
-
-**Why a link stays cheap.** No render reads the contacts store, so a
-document holds handles and the names its source showed, never a
-contact. Linking, unlinking or marking a handle stopped changes no
-source's stored markdown: no document renders again, qmd re-indexes
-nothing, and the
-`row_handles` rows for messages stay as they are, since a message names
-the same handles before and after. Under the plan, what moves is the
-one contact's own document, which the snapshot renders again and qmd
-indexes again, and its handle list; the join picks up the rest when
-it runs. `row_handles` itself is filled from documents, so it can load
-the way `source_contact_handles` does: `grid_index` already reads only
-the documents a source changed since the last index (`dolt_diff`),
-not every document. Search follows a link one sync later; chips are
-drawn from the live answer at once.
+**The plan** ([`plans/search_autocomplete.md`](plans/search_autocomplete.md)):
+`from:`, `to:`, `cc:` and `with:` (a person in any role) over the
+search terms' person kinds, and `contact:<id>` as their value, read
+from the contacts store when the search runs and matched against each
+of the contact's handles. So a link changes nothing in the index, no
+document renders again and qmd re-indexes nothing, and search follows
+the link at once, as chips do.
 
 **Keeping the name out of the markdown is a choice, not a rule.**
 Writing a contact's name into each chip link (its text or its title)
@@ -486,8 +468,8 @@ would make a document say who a handle is on its own: readable as a
 plain file, findable by `grep`, and searchable by qmd under the name
 you gave the person. It would cost what the paragraph above saves:
 render would read the contacts store, and a link would render again
-every document naming the handle and send each back through qmd.
-`row_handles` would name exactly those documents, so the cost can stay
+every document naming the handle and send each back through qmd. The
+search terms name exactly those documents, so the cost can stay
 proportional to the link. Nothing in the tree rules it out: chips draw
 from the live answer whatever the link text says.
 [`plans/contact_linking.md`](plans/contact_linking.md) §"Option: the contact's name
@@ -533,11 +515,13 @@ chip in the UI is separate and always uses the latest answer.
 ## Not built
 
 Editing a contact on its card, merge, groups and members, undo, the triage grid of
-unresolved handles, `row_handles`, the `contact:` search filter, a
+unresolved handles, recipients and mentions in the search terms, a
+`contact:` search value, a
 handle for a number without its country code, a handle that stopped
 working in some apps but not others, mentions outside Slack
 (an email's @-mention or +-mention is drawn as a chip from its
 `mailto:` link but recorded nowhere), and a handle for a Beeper
-(Matrix) user: [`plans/contact_linking.md`](plans/contact_linking.md)
-and [`plans/contact_editing.md`](plans/contact_editing.md), §"Order of
-work" in each.
+(Matrix) user: [`plans/contact_linking.md`](plans/contact_linking.md),
+[`plans/contact_editing.md`](plans/contact_editing.md) and
+[`plans/search_autocomplete.md`](plans/search_autocomplete.md),
+§"Order of work" in each.
