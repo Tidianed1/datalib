@@ -25,7 +25,7 @@ test("a pasted token is stored, then checked against the workspace", async ({
   const form = wizard(page).locator(".wiz-paste");
   await wizard(page).getByRole("combobox", { name: "Slack account" }).fill("enterprise");
   await form.getByLabel("Token").fill(TNG.slackToken);
-  await form.getByRole("button", { name: "Store in latchkey" }).click();
+  await form.getByRole("button", { name: "Save sign-in" }).click();
 
   // A successful paste checks the connection by itself — one request,
   // no listing.
@@ -64,7 +64,7 @@ test("a wrong token fails Check connection in a sentence", async ({ page }) => {
   const form = wizard(page).locator(".wiz-paste");
   await wizard(page).getByRole("combobox", { name: "Slack account" }).fill("enterprise");
   await form.getByLabel("Token").fill("xoxp-tng-wrong");
-  await form.getByRole("button", { name: "Store in latchkey" }).click();
+  await form.getByRole("button", { name: "Save sign-in" }).click();
 
   const failed = wizard(page).locator(".wiz-probe-failed");
   await expect(failed).toHaveAttribute("data-issue", "rejected");

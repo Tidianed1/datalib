@@ -98,7 +98,7 @@ test("an app password is pasted, stored and then tested", async ({ page }) => {
   // something is typed or picked there.
   await expect(accountBox(page)).toHaveValue("picard@enterprise.test contacts");
   await expect(form).toContainText("Stored as picard@enterprise.test contacts.");
-  await form.getByRole("button", { name: "Store in latchkey" }).click();
+  await form.getByRole("button", { name: "Save sign-in" }).click();
 
   await expect
     .poll(() => sent)
@@ -134,13 +134,13 @@ test("a read-only token does not silently replace the browser login", async ({ p
   await expect(form).toContainText("Authorization: Bearer …");
   await form.getByLabel("Token").fill("ro-token");
   // A token has no username to name it after, so it waits for a name.
-  await expect(form.getByRole("button", { name: "Store in latchkey" })).toBeDisabled();
+  await expect(form.getByRole("button", { name: "Save sign-in" })).toBeDisabled();
   await accountBox(page).fill("picard@enterprise.test");
   await expect(form).toContainText("Stored as picard@enterprise.test, replacing");
 
   await accountBox(page).fill("picard-readonly");
   await expect(form).not.toContainText("replacing");
-  await form.getByRole("button", { name: "Store in latchkey" }).click();
+  await form.getByRole("button", { name: "Save sign-in" }).click();
 
   await expect
     .poll(() => sent)
@@ -165,7 +165,7 @@ test("a named paste beside the unnamed credential says what it strands", async (
   );
   const form = pasteForm(page);
   await form.getByLabel("Username").fill("picard@enterprise.test");
-  await expect(form).toContainText("also holds an unnamed fastmail-dav credential");
+  await expect(form).toContainText("An unnamed fastmail-dav credential is stored too");
 });
 
 test("under a latchkey gateway nothing is pasted here", async ({ page }) => {

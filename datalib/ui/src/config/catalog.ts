@@ -612,7 +612,7 @@ export const CATALOG: CatalogEntry[] = [
         target: "latchkey_settings.account",
         label: "Google account",
         help:
-          "Which stored Google login to copy. Leave it empty if latchkey holds only one — " +
+          "Which stored Google login to copy. Leave it empty if only one is stored — " +
           "it is required only when the google-gmail service has more than one account, " +
           "and naming the wrong one copies the wrong mailbox.",
       },
@@ -691,7 +691,7 @@ export const CATALOG: CatalogEntry[] = [
         latchkey: true,
         target: "latchkey_settings.account",
         label: "Fastmail account",
-        help: "Which stored Fastmail login to copy. Leave it empty if latchkey holds only one.",
+        help: "Which stored Fastmail login to copy. Leave it empty if only one is stored.",
       },
       {
         kind: "string_list",
@@ -787,7 +787,7 @@ export const CATALOG: CatalogEntry[] = [
         target: "latchkey_settings.account",
         label: "Google account",
         help:
-          "Which stored Google login to copy. Leave it empty if latchkey holds only one " +
+          "Which stored Google login to copy. Leave it empty if only one is stored " +
           "for google-calendar.",
       },
       {
@@ -863,7 +863,7 @@ export const CATALOG: CatalogEntry[] = [
         label: "Fastmail account",
         help:
           "The name the app password is stored under in latchkey — “you@fastmail.com calendar”, " +
-          "say. Leave it empty if latchkey holds only one.",
+          "say. Leave it empty if only one is stored.",
       },
       {
         kind: "string_list",
@@ -942,7 +942,7 @@ export const CATALOG: CatalogEntry[] = [
         kind: "text",
         target: "latchkey_settings.account",
         label: "Latchkey account",
-        help: "Which stored login to use, when latchkey holds more than one for this host.",
+        help: "Which stored login to use, when more than one is stored for this host.",
       },
       {
         kind: "string_list",
@@ -1038,7 +1038,7 @@ export const CATALOG: CatalogEntry[] = [
         label: "Fastmail account",
         help:
           "The name the app password is stored under in latchkey — “you@fastmail.com contacts”, " +
-          "say. Leave it empty if latchkey holds only one.",
+          "say. Leave it empty if only one is stored.",
       },
       {
         kind: "string_list",
@@ -1094,7 +1094,7 @@ export const CATALOG: CatalogEntry[] = [
         kind: "text",
         target: "latchkey_settings.account",
         label: "Latchkey account",
-        help: "Which stored login to use, when latchkey holds more than one for this host.",
+        help: "Which stored login to use, when more than one is stored for this host.",
       },
       {
         kind: "string_list",

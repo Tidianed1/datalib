@@ -22,8 +22,8 @@ async function importTokens(page: import("@playwright/test").Page, folder: strin
   await wizard(page).getByRole("combobox", { name: "Garmin account" }).fill("picard");
   const form = wizard(page).locator(".wiz-paste");
   await form.getByLabel("Token folder").fill(folder);
-  await form.getByRole("button", { name: "Store in latchkey" }).click();
-  await expect(form).toContainText("Stored in latchkey.");
+  await form.getByRole("button", { name: "Save sign-in" }).click();
+  await expect(form).toContainText("Sign-in saved.");
 }
 
 test("importing a garth folder installs the plugin, then Check connection reaches Garmin", async ({

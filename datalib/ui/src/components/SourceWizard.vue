@@ -663,7 +663,7 @@ const signsInAgainAs = computed(() =>
 const accountHelp = computed(() =>
   accountNaming.value === "service"
     ? `${chosen.value?.label ?? "The service"} names each account itself when you sign in. ` +
-      "Pick one latchkey holds, or sign in to add another."
+      "Pick one you have signed in to, or sign in to add another."
     : accountField.value?.help,
 );
 
@@ -826,7 +826,7 @@ async function savePasted() {
     return;
   }
   pasteSecret.value = "";
-  paste.value = { state: "ok", message: "Stored in latchkey." };
+  paste.value = { state: "ok", message: "Sign-in saved." };
   await loadAccounts();
   // The credential is only a guess until something uses it; the check
   // is the cheapest thing that does.
@@ -972,7 +972,7 @@ const accountOptions = computed<AccountOption[] | null>(() =>
           a.credential_status === "valid"
             ? "✓"
             : a.credential_status === "invalid"
-              ? "latchkey reports it invalid"
+              ? "reported invalid"
               : undefined,
       })),
 );
@@ -1372,7 +1372,7 @@ function submit() {
           <span class="wiz-label">Your {{ chosen.label }} account</span>
           <div class="wiz-controls">
             <p v-if="accounts === null" class="wiz-help wiz-conn-asking" role="status">
-              Asking latchkey how you can sign in…
+              Finding out how you can sign in…
             </p>
             <IssueNote
               v-if="accountsFailure"
@@ -1432,7 +1432,7 @@ function submit() {
                 >). Sign in where that gateway is managed, then press <b>Check connection</b>.
               </p>
               <p v-if="installsPlugin && signInWays.length" class="wiz-help wiz-plugin-note">
-                latchkey reaches {{ chosen.label }} through a plugin. Signing in installs it into
+                Signing in to {{ chosen.label }} first installs a plugin into
                 <code>{{ installsPlugin }}</code
                 >.
               </p>
@@ -1570,22 +1570,22 @@ function submit() {
                   </label>
                   <p v-if="pasteNeedsName" class="wiz-help">
                     <template v-if="pasteLandsOn.kind === 'unnamed'">
-                      Name the {{ accountField?.label ?? "account" }} above: latchkey stores this
-                      credential under that name.
+                      Name the {{ accountField?.label ?? "account" }} above: this credential is
+                      stored under that name.
                     </template>
                     <template v-else-if="pasteLandsOn.kind === 'replaces'">
                       Stored as <code>{{ pasteLandsOn.account }}</code
-                      >, replacing the <code>{{ service }}</code> credential latchkey already holds
-                      under that name — every source that uses it gets this one. Choose another name
-                      above to keep it.
+                      >, replacing the <code>{{ service }}</code> credential already stored under
+                      that name — every source that uses it gets this one. Choose another name above
+                      to keep it.
                     </template>
                     <template v-else>
                       Stored as <code>{{ accountValue }}</code
                       >.
                       <template v-if="pasteLandsOn.besideUnnamed">
-                        latchkey also holds an unnamed <code>{{ service }}</code> credential; with
-                        both stored, it won’t pick one for a source that names no account, so name
-                        an account in those sources too.
+                        An unnamed <code>{{ service }}</code> credential is stored too; with both, a
+                        source that names no account cannot be given one, so name an account in
+                        those sources too.
                       </template>
                     </template>
                   </p>
@@ -1600,7 +1600,7 @@ function submit() {
                       "
                       @click="savePasted"
                     >
-                      {{ paste.state === "saving" ? "Storing…" : "Store in latchkey" }}
+                      {{ paste.state === "saving" ? "Saving…" : "Save sign-in" }}
                     </button>
                   </div>
                   <IssueNote
@@ -1611,9 +1611,6 @@ function submit() {
                   />
                   <p v-else-if="paste.message" class="wiz-help">
                     {{ paste.message }}
-                  </p>
-                  <p class="wiz-help">
-                    From a terminal instead: <code>{{ setCommand }}</code>
                   </p>
                 </div>
               </div>
@@ -1636,9 +1633,17 @@ function submit() {
                 :where="signInWhere"
               />
               <p class="wiz-help wiz-conn-intro">
-                Sign-ins are kept by latchkey, under its <code>{{ service }}</code> service. Datalib
-                never stores them itself.
+                Your sign-in is kept outside this library’s folder; datalib never stores it itself.
               </p>
+              <details class="wiz-help wiz-conn-how">
+                <summary>How sign-ins are stored</summary>
+                <p>
+                  latchkey keeps them, under its <code>{{ service }}</code> service.
+                  <template v-if="signInWays.includes('paste')">
+                    To store one from a terminal instead: <code>{{ setCommand }}</code>
+                  </template>
+                </p>
+              </details>
             </template>
           </div>
         </section>
@@ -2591,6 +2596,12 @@ function submit() {
 }
 .wiz-link:hover {
   text-decoration: underline;
+}
+.wiz-conn-how summary {
+  cursor: pointer;
+}
+.wiz-conn-how p {
+  margin: 4px 0 0;
 }
 .wiz-conn-intro,
 .wiz-conn-note {
