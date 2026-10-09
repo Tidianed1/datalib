@@ -42,7 +42,7 @@ write the one index file under `unified_index/qmd_aggregator/`):
 │   └── indexed_markdown.doltlite_db  #   its rows, edges + render problems
 ├── unified_index/                  # derived; carries a CACHEDIR.TAG
 │   ├── grid_index/db.doltlite_db   # the grid_rows SQL index — query this
-│   ├── grid_index/search_terms.sqlite     # each row's ids, handles and names, full-text (plain SQLite)
+│   ├── grid_index/search_terms.sqlite     # each row's ids, people, labels and names, full-text (plain SQLite)
 │   └── qmd_aggregator/qmd/index.sqlite  # semantic search index
 └── system/                         # the server's own state
     ├── supervisor.sqlite           # sync requests, steps turned off, and the loop's record (plain SQLite)
@@ -311,8 +311,9 @@ Pick the surface that fits the question:
   made only of uuids and handles (an email address, `tel:+…`,
   `slack:T…/U…`) is looked up in `grid_index/search_terms.sqlite`, not sent to
   qmd: every row that answers to each one, best match first, with
-  `score` saying how (5 its own id, 4 its author, 3 what it is in,
-  2 its title, 1 a name it shows) and `snippet` naming the match.
+  `score` saying how (5 its own id, 4 its author or an addressee,
+  3 someone copied or what it is in, 2 its title or a label, 1 a name
+  it shows) and `snippet` naming the match.
   `tab=` picks how free text is answered, each its own list:
   `fields` (the search terms file, any word as the start of one), `words`
   (every document's text by BM25, from qmd's keyword index) or

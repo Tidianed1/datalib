@@ -1358,6 +1358,7 @@ mod tests {
                 render_version: 1,
                 rows: vec![row],
                 sections: Vec::new(),
+                search_terms: Vec::new(),
                 edges: Vec::new(),
                 contacts: Vec::new(),
                 problems: Vec::new(),
