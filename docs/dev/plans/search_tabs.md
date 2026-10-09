@@ -235,10 +235,11 @@ and could fold in later too.
    Built: the applet names every collection `store_collections` holds.
 2. **Restart only when the index file is replaced.** Watch its inode,
    not its mtime; a new collection is covered by step 1. Built, with 1.
-3. **Map only the hits.** Look up `WHERE qmd_path IN (…)` for the paths
-   qmd returned, instead of reading every row. That needs an index on
-   `qmd_path`. The alternative is to keep the map per index commit.
-   Measure both.
+3. **Map only the hits.** Built: the rows behind the paths qmd returned
+   are looked up through an expression index on `qmd_path` with case and
+   every `-`/`_` dropped (qmd folds both), then kept only where the path
+   matches exactly. On a real root, 40 hits took 2.8 ms against
+   1.5–1.9 s for reading every row; building the index took 1.5 s once.
 4. **The vector scan itself.** Each big source is a scan of every
    vector. Splitting the vectors per collection, or a smaller vector
    type, is a change in qmd, not here; note it upstream and measure

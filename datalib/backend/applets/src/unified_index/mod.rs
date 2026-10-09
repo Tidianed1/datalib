@@ -752,10 +752,11 @@ async fn qmd_ranking(
     .await
     .map_err(|e| anyhow::anyhow!("qmd task join error: {e}"))??;
 
+    let hit_paths: Vec<String> = hits.iter().map(|h| h.path.clone()).collect();
     let refs = repo
-        .grid_row_refs()
+        .grid_row_refs_for_hits(&hit_paths)
         .await
-        .map_err(|e| anyhow::anyhow!("grid_row_refs: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("the rows behind qmd's hits: {e}"))?;
     let idx = GridIndex::new((**root).clone(), refs);
     // Map hits to grid rows in rank order, keeping only the top hit per
     // markdown document so the result list stays concise — a single chat that

@@ -390,7 +390,8 @@ pub fn schema_hash() -> String {
     datalib_store_meta::schema_hash(
         index_ddl()
             .chain(GRID_ROWS_INDEXES.iter().map(|(_table, ddl)| *ddl))
-            .chain(DOCUMENT_LOOKUP_INDEXES.iter().copied()),
+            .chain(DOCUMENT_LOOKUP_INDEXES.iter().copied())
+            .chain(QMD_HIT_INDEXES.iter().copied()),
     )
 }
 
@@ -403,6 +404,14 @@ pub(crate) const DOCUMENT_LOOKUP_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS edges_by_src_markdown ON edges (src_markdown_uuid)",
     // A chip asks who a handle is.
     "CREATE INDEX IF NOT EXISTS source_contact_handles_by_handle ON source_contact_handles (handle)",
+];
+
+/// What a qmd hit is mapped to its rows by
+/// (`datalib_schema::grid_rows::qmd_path_key`). Only the index the search
+/// reads pays for it on each write: nothing maps a hit to a render store.
+const QMD_HIT_INDEXES: &[&str] = &[
+    "CREATE INDEX IF NOT EXISTS grid_rows_by_qmd_path_key ON grid_rows \
+     (replace(replace(lower(qmd_path), '-', ''), '_', ''))",
 ];
 
 /// Indexes an older build made and this one no longer reads. Every write
@@ -452,7 +461,10 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
     // them. Only here: every render store has a `grid_rows` too, and only
     // the index the grid reads wants to pay for these on every write.
     let search = GRID_ROWS_INDEXES.iter().map(|(_table, ddl)| *ddl);
-    for ddl in search.chain(DOCUMENT_LOOKUP_INDEXES.iter().copied()) {
+    for ddl in search
+        .chain(DOCUMENT_LOOKUP_INDEXES.iter().copied())
+        .chain(QMD_HIT_INDEXES.iter().copied())
+    {
         sqlx::query(ddl)
             .execute(pool)
             .await
@@ -2232,6 +2244,35 @@ mod schema_reconcile_tests {
             "a matching schema must not be rebuilt; the rows that make the \
              index incremental would be thrown away on every run"
         );
+    }
+
+    /// The qmd hit index is on the key the search computes: the same
+    /// expression, and the same value Rust gives for every path.
+    #[tokio::test]
+    async fn the_qmd_path_key_is_alike_in_sql_and_in_rust() {
+        use datalib_schema::grid_rows::{qmd_path_key, QMD_PATH_KEY_SQL};
+        assert!(
+            super::QMD_HIT_INDEXES[0].contains(QMD_PATH_KEY_SQL),
+            "the index is not on the key the search uses"
+        );
+        let dir = tempdir().unwrap();
+        let pool = open_pool(&dir.path().join("grid.doltlite_db")).await;
+        for path in [
+            "Google_Calendar/render_markdown/Week__12/all.md",
+            "slack-work/render_markdown/c-1/x_-_y.md",
+            "notion/render_markdown/Café/Ünïcode.md",
+        ] {
+            // Audited: the expression is a literal.
+            let sql: String = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                "SELECT {} FROM (SELECT ? AS qmd_path)",
+                QMD_PATH_KEY_SQL
+            )))
+            .bind(path)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(sql, qmd_path_key(path), "{path}");
+        }
     }
 
     /// An index an older build made, for a search key since retired, is

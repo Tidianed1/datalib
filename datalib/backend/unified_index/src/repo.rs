@@ -111,7 +111,13 @@ pub trait IndexRepo: Send + Sync {
         markdown_uuids: &[String],
     ) -> Result<std::collections::HashMap<String, PathBuf>, RepoError>;
 
-    async fn grid_row_refs(&self) -> Result<Vec<GridRowRef>, RepoError>;
+    /// The rows behind the files qmd's hits name, matched as
+    /// `qmd::norm_path` matches them: what a hit is mapped to its rows by,
+    /// without reading every row.
+    async fn grid_row_refs_for_hits(
+        &self,
+        hit_paths: &[String],
+    ) -> Result<Vec<GridRowRef>, RepoError>;
 
     /// Every row that is a whole document, with just what the embedding
     /// map shows of it. Empty for a root with no index yet.
@@ -148,7 +154,7 @@ pub trait IndexRepo: Send + Sync {
 
     /// List rendered documents (the `markdowns` table), newest first,
     /// for the document-picker card. Returns an empty Vec for an empty
-    /// or missing store — like [`grid_row_refs`](Self::grid_row_refs),
+    /// or missing store — like [`grid_row_refs_for_hits`](Self::grid_row_refs_for_hits),
     /// a bare data root just means there's nothing to pick yet.
     async fn list_docs(&self, _limit: usize) -> Result<Vec<DocRow>, RepoError> {
         Ok(Vec::new())
