@@ -107,10 +107,11 @@ onUnmounted(() => stop?.());
 
 <template>
   <main class="datalib-shell" data-feedback-root>
-    <!-- The toolbar: the app and
-         library names, and the search box. -->
+    <!-- The toolbar: the app and library names, and the search box. The
+         first-run screen keeps the names, which are the way back to the
+         other libraries; there is nothing yet to sync or search. -->
     <nav
-      v-if="!gate"
+      v-if="!gate || gate === 'first-run'"
       class="datalib-toolbar"
       :class="{ 'datalib-toolbar--titlebar': underTitleBar }"
       aria-label="App"
@@ -119,8 +120,10 @@ onUnmounted(() => stop?.());
       <div class="datalib-toolbar-start" data-tauri-drag-region>
         <LibraryCrumb :config-path="config?.path ?? null" />
       </div>
-      <div class="datalib-toolbar-sync" data-tauri-drag-region><SyncProgressChrome /></div>
-      <div class="datalib-toolbar-search"><CommandBox /></div>
+      <template v-if="!gate">
+        <div class="datalib-toolbar-sync" data-tauri-drag-region><SyncProgressChrome /></div>
+        <div class="datalib-toolbar-search"><CommandBox /></div>
+      </template>
     </nav>
 
     <!-- The gates had the shell's padding before the cards went
