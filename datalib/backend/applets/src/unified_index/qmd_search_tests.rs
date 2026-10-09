@@ -263,7 +263,7 @@ async fn free_text_without_a_qmd_index_says_it_is_not_built() {
 }
 
 /// Each tab answers the same words its own way, and keeps its answer apart
-/// from the others': Fields from the terms file, each row saying which of
+/// from the others': Fields from the search terms file, each row saying which of
 /// its terms matched; Words by BM25 from qmd's keyword index, best first;
 /// Meaning from qmd's vectors alone.
 #[tokio::test]
@@ -283,7 +283,7 @@ async fn each_tab_answers_free_text_its_own_way() {
             .split_once(": ")
             .expect("a fields hit names its term");
         assert!(
-            datalib_schema::terms::TermKind::parse(kind).is_some(),
+            datalib_schema::search_terms::SearchTermKind::parse(kind).is_some(),
             "{kind}"
         );
         assert!(value.to_lowercase().contains("enterprise"), "{value}");

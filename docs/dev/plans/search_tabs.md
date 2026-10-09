@@ -11,7 +11,7 @@ ships, run on a copy of the index. Each SQL timing includes about
 Today a free-text search is one qmd hybrid query (keyword and vector,
 merged), and the grid shows nothing until it answers. This plan runs
 three searches at once, each shown in its own tab: a full-text match
-over everything a row answers to (`grid_row_terms`), qmd's keyword
+over everything a row answers to (`search_terms`), qmd's keyword
 search, and qmd's vector search. A tab
 is greyed out until its search answers, and what a tab shows never
 changes while you look at it.
@@ -71,7 +71,7 @@ indexes it already has:
 
 | tab | what answers it | pages |
 |---|---|---|
-| **Fields** | `grid_row_terms` (below): every id, person, label and title a row answers to, in one full-text index | without limit, like every SQL search |
+| **Fields** | `search_terms` (below): every id, person, label and title a row answers to, in one full-text index | without limit, like every SQL search |
 | **Words** | qmd's keyword (BM25) query over every document's whole text | qmd's ranked list |
 | **Meaning** ("QMD semantic (vector)") | qmd's vector query | qmd's ranked list |
 
@@ -121,7 +121,7 @@ its WAL included) directly with BM25 and page it without limit, rather
 than going through `qmd mcp` at all. Its keyword query took 0.07–0.5 s
 through qmd; read directly it needs no daemon and no model.
 
-### `grid_row_terms`: everything a row answers to, in one tall table
+### `search_terms`: everything a row answers to, in one tall table
 
 A row answers to more than its columns hold. An email has one
 `author_handle` in `grid_rows`, but also its To, Cc and Bcc, its
@@ -138,7 +138,7 @@ vals_fts  USING fts5(value, content='', contentless_delete=1,
                      tokenize="unicode61 tokenchars '@.-_+:/'")
 ```
 
-`kind` is the `TermKind` enum's code. The FTS5 index covers the
+`kind` is the `SearchTermKind` enum's code. The FTS5 index covers the
 distinct values alone, linked to `vals` by rowid. The tokenizer keeps
 `@ . - _ + : /` inside a word, so a uuid, an email address or
 `slack:T…/U…` is one token, matched exactly. On a real root the
@@ -146,7 +146,7 @@ dictionary took the file from 131 MB (a uuid, a value and a timestamp
 on every term) to 58 MB: there are 4.6 terms per distinct value.
 
 **The terms live in a plain SQLite file beside the grid index,** not
-in it: `unified_index/grid_index/terms.sqlite`, written by `grid_index`
+in it: `unified_index/grid_index/search_terms.sqlite`, written by `grid_index`
 and attached read-only by each reader of a grid commit. Nobody needs
 the terms' history, and a doltlite store keeps it: with 732k terms, 200
 one-document replaces each committed grew a store 35.5 MB and a plain
@@ -170,7 +170,7 @@ test are in [`doltlite.md`](../doltlite.md) § "Full-text search
   `grid_rows` cannot give again, so a missing or damaged one is
   rebuilt, not migrated.
 
-**`kind` is an enum** (`TermKind`: `id`, `from`, `to`, `cc`, `bcc`,
+**`kind` is an enum** (`SearchTermKind`: `id`, `from`, `to`, `cc`, `bcc`,
 `participant`, `mention`, `label`, `title`, `name`, …) with the usual
 strum/serde pair, and a new kind is new data, never a schema change.
 Each kind has an affinity, a pure function in code (`affinity(kind)`):
@@ -256,13 +256,13 @@ and could fold in later too.
    the facts in `doltlite_facts_test`, the write cost in
    `doltlite.md`, and the attached terms file beside a sealing writer
    in `doltlite_two_process_test`.
-1. **`grid_row_terms`, derived terms only.** Built in this step's PR,
+1. **`search_terms`, derived terms only.** Built in this step's PR,
    with one narrowing: only a query made entirely of identifiers is
    answered from the terms; words still go to qmd until the tabs give
    their answer a place. On a real root (122,579 rows) the first pass
    wrote 674,672 terms, 58 MB, with the whole step taking 4.3 s, and a
-   pasted uuid's lookup took 1.5 ms. The terms file, the
-   `TermKind` enum, the derivation in `grid_index`, and bare words and
+   pasted uuid's lookup took 1.5 ms. The search terms file, the
+   `SearchTermKind` enum, the derivation in `grid_index`, and bare words and
    identifiers searched through it. An identifier-only query does not
    ask qmd. Test: a uuid search answers without asking qmd at all (the
    applet tests can give it a daemon that fails on any request).
@@ -271,7 +271,7 @@ and could fold in later too.
    for anything new we rely on.
 3. **Tabs.** Built. The API: `tab=fields|words|meaning` on the search
    and groups endpoints, each tab its own list in the results cache.
-   Fields reads the terms file with any word as the start of one; Words
+   Fields reads the search terms file with any word as the start of one; Words
    reads qmd's `documents_fts` with BM25 (1,000 deep, scoped by
    `source_id:`, each hit placed on the message where its first word
    is); Meaning is qmd's vector query alone. The UI: a small tab strip

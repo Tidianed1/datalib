@@ -1,6 +1,7 @@
-//! The grid's terms file, `unified_index/grid_index/terms.sqlite`: every
-//! term each `grid_rows` row answers to (`datalib_schema::terms`), kept in
-//! step with the grid index after each `grid_index` pass. It is a pure
+//! The grid's search terms file,
+//! `unified_index/grid_index/search_terms.sqlite`: every term each
+//! `grid_rows` row answers to (`datalib_schema::search_terms`), kept in step
+//! with the grid index after each `grid_index` pass. It is a pure
 //! function of `grid_rows` at one commit: the file records the commit it
 //! reflects and moves to the next by `dolt_diff`, or is built whole when it
 //! cannot. Plain SQLite, so it keeps no history of itself.
@@ -9,8 +10,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use datalib_schema::terms::{
-    terms_of, TermSource, META_GRID_COMMIT, META_SHAPE, TERMS_DDL, TERMS_SHAPE,
+use datalib_schema::search_terms::{
+    search_terms_of, SearchTermSource, META_GRID_COMMIT, META_SHAPE, TERMS_DDL, TERMS_SHAPE,
 };
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::SqliteConnection;
@@ -45,7 +46,7 @@ pub struct Synced {
     pub terms: usize,
 }
 
-/// Bring the terms file at `terms_path` to the grid index's head. A store
+/// Bring the search terms file at `terms_path` to the grid index's head. A store
 /// without doltlite has no head, and no terms.
 pub async fn sync(grid: &SqlitePool, terms_path: &Path) -> Result<Synced> {
     let Some(head) = datalib_etl::doltlite_raw::head_commit(grid).await? else {
@@ -82,7 +83,7 @@ async fn open_in_shape(path: &Path) -> Result<SqlitePool> {
     tracing::info!(
         was = shape.as_deref().unwrap_or(""),
         now = TERMS_SHAPE,
-        "the terms file is in another shape; building it again"
+        "the search terms file is in another shape; building it again"
     );
     pool.close().await;
     std::fs::remove_file(path).with_context(|| format!("remove {}", path.display()))?;
@@ -94,7 +95,10 @@ async fn open_in_shape(path: &Path) -> Result<SqlitePool> {
 }
 
 async fn sync_open(grid: &SqlitePool, terms: &SqlitePool, head: &str) -> Result<Synced> {
-    let mut conn = terms.acquire().await.context("acquire the terms file")?;
+    let mut conn = terms
+        .acquire()
+        .await
+        .context("acquire the search terms file")?;
     let recorded = meta(&mut conn, META_GRID_COMMIT).await?;
     let shape = meta(&mut conn, META_SHAPE).await?;
     match plan(recorded.as_deref(), shape.as_deref(), head) {
@@ -121,7 +125,7 @@ async fn sync_open(grid: &SqlitePool, terms: &SqlitePool, head: &str) -> Result<
                         from = %from,
                         error = %format!("{e:#}"),
                         "could not diff the grid index from the commit the terms \
-                         reflect; building the terms file whole"
+                         reflect; building the search terms file whole"
                     );
                     whole(grid, &mut conn, head).await
                 }
@@ -133,9 +137,9 @@ async fn sync_open(grid: &SqlitePool, terms: &SqlitePool, head: &str) -> Result<
 
 async fn whole(grid: &SqlitePool, conn: &mut SqliteConnection, head: &str) -> Result<Synced> {
     // Audited: the column list is a literal.
-    let rows: Vec<TermSource> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+    let rows: Vec<SearchTermSource> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT {} FROM grid_rows",
-        TermSource::COLUMNS
+        SearchTermSource::COLUMNS
     )))
     .fetch_all(grid)
     .await
@@ -150,16 +154,16 @@ async fn whole(grid: &SqlitePool, conn: &mut SqliteConnection, head: &str) -> Re
 
 /// The rows behind `uuids` that the grid still holds; a removed row has
 /// none, and only loses its terms.
-async fn rows_by_uuid(grid: &SqlitePool, uuids: &[String]) -> Result<Vec<TermSource>> {
+async fn rows_by_uuid(grid: &SqlitePool, uuids: &[String]) -> Result<Vec<SearchTermSource>> {
     let mut out = Vec::new();
     for chunk in uuids.chunks(CHUNK) {
         // Audited: a placeholder per value, every value bound.
         let sql = format!(
             "SELECT {} FROM grid_rows WHERE uuid IN ({})",
-            TermSource::COLUMNS,
+            SearchTermSource::COLUMNS,
             placeholders(chunk.len(), 1)
         );
-        let mut q = sqlx::query_as::<_, TermSource>(sqlx::AssertSqlSafe(sql));
+        let mut q = sqlx::query_as::<_, SearchTermSource>(sqlx::AssertSqlSafe(sql));
         for uuid in chunk {
             q = q.bind(uuid);
         }
@@ -174,7 +178,7 @@ async fn rows_by_uuid(grid: &SqlitePool, uuids: &[String]) -> Result<Vec<TermSou
 async fn write(
     conn: &mut SqliteConnection,
     replace: Option<&[String]>,
-    rows: &[TermSource],
+    rows: &[SearchTermSource],
     head: &str,
 ) -> Result<usize> {
     sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
@@ -227,9 +231,9 @@ async fn write(
                 }
             }
         }
-        let terms: Vec<(&TermSource, datalib_schema::terms::Term)> = rows
+        let terms: Vec<(&SearchTermSource, datalib_schema::search_terms::SearchTerm)> = rows
             .iter()
-            .flat_map(|row| terms_of(row).into_iter().map(move |t| (row, t)))
+            .flat_map(|row| search_terms_of(row).into_iter().map(move |t| (row, t)))
             .collect();
         for chunk in terms.chunks(CHUNK) {
             // Audited: four placeholders per term, every value bound.
@@ -297,7 +301,7 @@ async fn write(
         }
         Err(e) => {
             let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
-            Err(e).context("write the terms file")
+            Err(e).context("write the search terms file")
         }
     }
 }
@@ -357,7 +361,7 @@ mod tests {
     use crate::grid_index::{apply_one, delete_markdown, open_index, RenderedMarkdown, WriteLock};
     use datalib_schema::grid_rows::GridRow;
     use datalib_schema::providers::Provider;
-    use datalib_schema::terms::TermKind;
+    use datalib_schema::search_terms::SearchTermKind;
 
     /// A document of one row: its uuid, its author's handle, its title.
     fn doc(root: &Path, uuid: &str, handle: &str, title: &str) -> RenderedMarkdown {
@@ -405,7 +409,7 @@ mod tests {
             let pool = open_index(&datalib_core::layout::grid_index_db(&root))
                 .await
                 .unwrap();
-            let terms = datalib_core::layout::grid_terms_db(&root);
+            let terms = datalib_core::layout::search_terms_db(&root);
             Grid {
                 _dir: dir,
                 root,
@@ -442,7 +446,7 @@ mod tests {
             let mut hits: Vec<(String, String)> = coded
                 .into_iter()
                 .map(|(uuid, code)| {
-                    let kind = TermKind::from_code(code).expect("a known kind");
+                    let kind = SearchTermKind::from_code(code).expect("a known kind");
                     (uuid, kind.as_str().to_string())
                 })
                 .collect();
