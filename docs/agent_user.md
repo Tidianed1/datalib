@@ -318,7 +318,8 @@ Pick the surface that fits the question:
   `tab=` picks how free text is answered, each its own list:
   `fields` (the search terms file, any word as the start of one), `words`
   (every document's text by BM25, from qmd's keyword index) or
-  `meaning` (qmd's vectors alone); with no `tab`, the free text goes to
+  `meaning` (qmd's vectors alone: the 20 nearest documents across every
+  source, or within one under `source_id:`); with no `tab`, the free text goes to
   qmd's hybrid query, identifiers aside. It answers a page: `limit=` rows from `offset=`, with `total`
   and the `next_offset`; `sort=created_at:desc,author` orders by grid
   columns in turn. `GET /applet/unified_index/search/groups?q=…&by=kind`

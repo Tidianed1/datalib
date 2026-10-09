@@ -109,12 +109,15 @@ contains it, which Fields already found.
 Fields pages without limit through the grid's existing SQL paging.
 
 Words and Meaning are ranked lists, so each is cut somewhere. The
-daemon now sends `candidateLimit`, which lifted the merged cut of 40
-for free (a hybrid search for one common word went from 40 hits to 224
-on a real root). What remains is qmd's own: each sub-query takes the
-best 20 documents of each collection, hard-coded and out of reach of
-the MCP arguments (fact 7 in `qmd_behaviour.md`). That is a fair depth
-for Meaning, where nearness past the first few is noise. It is too
+daemon sends `candidateLimit`, which lifts the merged cut of 40. What
+remains is qmd's own: each sub-query takes the best 20 documents of
+each collection it searches, hard-coded and out of reach of the MCP
+arguments (fact 7 in `qmd_behaviour.md`), and an unscoped search is
+one search over every collection, so Meaning is the 20 nearest
+documents in all, or 20 of one source under `source_id:`. Naming every
+collection would reach 20 of each, but ranked by source rather than
+by nearness (fact 8). Twenty is a fair depth for Meaning, where
+nearness past the first few is noise. It is too
 shallow for Words, where a keyword match far down the list is still a
 real match: the Words tab should read qmd's own FTS5 table
 (`documents_fts` in `index.sqlite`, plain SQLite that doltlite reads,
@@ -258,12 +261,15 @@ and could fold in later too.
 
 ## Making qmd's tabs fast in themselves
 
-1. **Name the collections on every request.** An unscoped query
+1. **Reach every collection, as one list.** An unscoped query
    searches the collections the server read at startup (fact 3 in
-   `qmd_behaviour.md`), so the daemon sends the configured list.
-   `source_id:` already scopes a query to its source's collection,
-   which is what makes a scoped vector query take under a second.
-   Built: the applet names every collection `store_collections` holds.
+   `qmd_behaviour.md`), and naming them all ranks each apart and
+   interleaves them by rank (fact 8). Built: an unscoped search sends
+   `collections: []`, every collection the index holds ranked
+   together (fact 4); `source_id:` scopes a query to its source's
+   collection, which is what makes a scoped vector query take under a
+   second. Found by the fixture test in which every document searches
+   for itself (`search_finds_itself_tests.rs`).
 2. **Restart only when the index file is replaced.** Watch its inode,
    not its mtime; a new collection is covered by step 1. Built, with 1.
 3. **Map only the hits.** Built: the rows behind the paths qmd returned
