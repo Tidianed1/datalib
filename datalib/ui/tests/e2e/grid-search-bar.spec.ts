@@ -64,7 +64,7 @@ test("a column dropped on the search bar keeps the rows with a value in it", asy
   await page.evaluate(() =>
     (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.dropOnSearch("author_ref"),
   );
-  await expect(page.getByTestId("search-input")).toHaveValue("author:*");
+  await expect(page.getByTestId("search-input")).toHaveAttribute("data-query", "author:*");
   await expect(page.locator(".grid-column .status")).toContainText(`(of ${withAuthor})`);
 
   // A column the search has no term for says so, and the query stays.
@@ -72,7 +72,7 @@ test("a column dropped on the search bar keeps the rows with a value in it", asy
     (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.dropOnSearch("snippet"),
   );
   await expect(page.locator(".datalib-toast", { hasText: "cannot filter by" })).toBeVisible();
-  await expect(page.getByTestId("search-input")).toHaveValue("author:*");
+  await expect(page.getByTestId("search-input")).toHaveAttribute("data-query", "author:*");
 });
 
 /// Every column but Score and Contents has a search key, so a cell's
@@ -93,7 +93,11 @@ test("a cell's right-click keeps only its value, in any column", async ({ page }
     "touched_at",
   );
   await searchMenuItem(page, /Keep only Touched=/).click();
-  await expect(page.getByTestId("search-input")).toHaveValue(`touched_at:"${touched}"`);
+  await expect(page.getByTestId("search-input")).toHaveAttribute(
+    "data-query",
+    // A term splits at its first colon, so the stamp's own need no quotes.
+    `touched_at:${touched}`,
+  );
   await gridSettled(page);
   const held = await page.evaluate(() =>
     (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.rows().map((r) => r.touched_at),

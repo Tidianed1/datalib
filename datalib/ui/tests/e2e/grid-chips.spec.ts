@@ -63,13 +63,13 @@ test("right-click on the chip offers its copies, and a double-click opens the pe
     .toBe(value);
 
   const bar = page.locator('[data-testid="search-input"]');
-  const query = await bar.inputValue();
+  const query = (await bar.getAttribute("data-query")) ?? "";
   await chip.dblclick();
   const card = page.locator(".person");
   await expect(card.locator(".person-name")).not.toHaveText("", { timeout: 10_000 });
   await expect(card.locator(".person-section").first()).toHaveClass(/person-seen-here/);
   // The grid's own search is left as it was.
-  await expect(bar).toHaveValue(query);
+  await expect(bar).toHaveAttribute("data-query", query);
 });
 
 /// The Source cell is a group chip (docs/dev/chips.md): datalib-http

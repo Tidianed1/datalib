@@ -135,7 +135,8 @@ import {
 import { searchFailure, type SearchFailure } from "./searchFailure";
 import { DEFAULT_QUERY, PLAIN_HINT, searchPlaceholder } from "./searchDefaults";
 import SearchList from "./SearchList.ce.vue";
-import { freeText, meaningOnly, pickedSource, setMeaningOnly, setSource } from "./search";
+import { freeText, pickedSource, setSource } from "./search";
+import SearchField from "@/search/SearchField.vue";
 import { iconUrl } from "@/config/icons";
 import { lastSearchView, rememberSearchView, type SearchViewId } from "./searchViewPref";
 import { pushToast } from "@/toasts";
@@ -1185,14 +1186,9 @@ onMounted(loadSources);
 
 const allCount = computed(() => sources.value.reduce((n, g) => n + g.count, 0));
 const source = computed(() => pickedSource(query.value));
-const meaning = computed(() => meaningOnly(query.value));
-const hasFreeText = computed(() => freeText(query.value) !== "");
 
 function pickSource(id: string | null) {
   query.value = setSource(query.value, id);
-}
-function setMeaning(on: boolean) {
-  query.value = setMeaningOnly(query.value, on);
 }
 
 // Restore the selected row from persisted state after rows load (or
@@ -2247,11 +2243,12 @@ onBeforeUnmount(() => {
   <div ref="cardEl" class="grid-column">
     <div class="search-bar">
       <div ref="searchWrapEl" class="search-input-wrap">
-        <input
+        <SearchField
           v-model="query"
+          :base="url"
           :placeholder="hint"
           class="search-input"
-          data-testid="search-input"
+          testid="search-input"
           autofocus
           @contextmenu="openFeedbackForSearchBar"
         />
@@ -2267,24 +2264,6 @@ onBeforeUnmount(() => {
           ×
         </button>
       </div>
-      <label
-        v-if="isSearch"
-        class="meaning-check"
-        :class="{ 'is-off': !hasFreeText }"
-        :title="
-          hasFreeText
-            ? 'Match on meaning alone, not on the words themselves'
-            : 'Type some words first: this ranks them by meaning alone'
-        "
-      >
-        <input
-          type="checkbox"
-          :checked="meaning"
-          :disabled="!hasFreeText"
-          @change="setMeaning(($event.target as HTMLInputElement).checked)"
-        />
-        Meaning only
-      </label>
     </div>
 
     <!-- The chips change the search; the switch, at the row's end and
@@ -2562,21 +2541,6 @@ onBeforeUnmount(() => {
 .view-tab.is-on svg {
   color: var(--datalib-accent);
 }
-.meaning-check {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-  color: var(--datalib-muted);
-}
-.meaning-check.is-off {
-  opacity: 0.6;
-}
-.meaning-check input {
-  margin: 0;
-  accent-color: var(--datalib-accent);
-}
 .source-chips {
   flex: 1 1 auto;
   min-width: 0;
@@ -2631,6 +2595,9 @@ onBeforeUnmount(() => {
   color: var(--datalib-fg);
   border: 1px solid var(--datalib-border);
   border-radius: 4px;
+}
+.search-input:focus-within {
+  border-color: var(--datalib-accent);
 }
 .search-clear {
   position: absolute;

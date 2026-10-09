@@ -24,7 +24,7 @@ async function expectDefaults(page: Page, request: APIRequestContext) {
   expect(documents, "the fixture has documents").toBeGreaterThan(0);
   expect(await total(request, ""), "and rows inside them").toBeGreaterThan(documents);
 
-  await expect(page.getByTestId("search-input")).toHaveValue("is:document");
+  await expect(page.getByTestId("search-input")).toHaveAttribute("data-query", "is:document");
   await expect(page.locator(".grid-column .status")).toContainText(`(of ${documents})`);
   await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 15_000 });
   await gridSettled(page);
@@ -51,12 +51,12 @@ test("the grid opens one row per document, Contents second", async ({ page, requ
 test("a cleared default stays cleared", async ({ page, request }) => {
   const every = await total(request, "");
   await page.goto(GRID);
-  await expect(page.getByTestId("search-input")).toHaveValue("is:document");
+  await expect(page.getByTestId("search-input")).toHaveAttribute("data-query", "is:document");
   await page.getByTestId("search-clear").click();
   await expect(page.locator(".grid-column .status")).toContainText(`(of ${every})`);
 
   await page.reload();
-  await expect(page.getByTestId("search-input")).toHaveValue("");
+  await expect(page.getByTestId("search-input")).toHaveAttribute("data-query", "");
   await expect(page.locator(".grid-column .status")).toContainText(`(of ${every})`);
 });
 
@@ -66,8 +66,8 @@ test("the empty search bar suggests a source this library has", async ({ page, r
   await page.goto(GRID);
   await page.getByTestId("search-clear").click();
   const input = page.getByTestId("search-input");
-  await expect(input).toHaveAttribute("placeholder", /source_id:/);
-  const hint = (await input.getAttribute("placeholder"))!;
+  await expect(input).toHaveAttribute("aria-placeholder", /source_id:/);
+  const hint = (await input.getAttribute("aria-placeholder"))!;
   const source = /source_id:(\S+?)[,)]/.exec(hint)?.[1];
   expect(source, hint).toBeTruthy();
   expect(source).not.toBe("datalib");

@@ -30,7 +30,7 @@ test.describe("toolbar", () => {
     await expect(shownTabName(page)).toHaveText("Search: warp");
     await expect(tabLabels(page)).toHaveCount(4);
     // The box empties, ready for the next search.
-    await expect(searchBox(page)).toHaveValue("");
+    await expect(searchBox(page)).toHaveAttribute("data-query", "");
   });
 
   test("Ctrl+K puts the caret in the search box", async ({ page }) => {

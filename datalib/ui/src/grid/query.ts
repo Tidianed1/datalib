@@ -6,14 +6,18 @@
 /// `value` as one token: bare when it can be, double-quoted otherwise.
 /// Mirrors `datalib_query::quote` (`\"` and `\\` escape inside quotes).
 export function quoteValue(v: string): string {
-  const needsQuotes = v === "" || /[\s:"]/.test(v) || v.startsWith("-");
-  if (!needsQuotes) return v;
-  const escaped = v.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  return `"${escaped}"`;
+  return /[\s:"]/.test(v) || v === "" || v.startsWith("-") ? quoted(v) : v;
 }
 
+/// A term's value may hold a colon, since a term splits at its first one
+/// (`from:email:a@b.c`). Mirrors `datalib_query::term`.
 export function filterToken(key: string, value: string, exclude: boolean): string {
-  return `${exclude ? "-" : ""}${key}:${quoteValue(value)}`;
+  const bare = !(/[\s"]/.test(value) || value === "" || value.startsWith("-"));
+  return `${exclude ? "-" : ""}${key}:${bare ? value : quoted(value)}`;
+}
+
+function quoted(v: string): string {
+  return `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
 /// `query` with `token` appended as its own word — unless that exact

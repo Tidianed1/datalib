@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { plainWords, replaceToken, searchDelay, tokenValue, withToken } from "../src/grid/query";
+import {
+  filterToken,
+  plainWords,
+  quoteValue,
+  replaceToken,
+  searchDelay,
+  tokenValue,
+  withToken,
+} from "../src/grid/query";
 
 describe("replaceToken", () => {
   it("puts the token where the key's word was, and keeps the rest", () => {
@@ -58,5 +66,17 @@ describe("searchDelay", () => {
   it("does not wait for words nothing ranks", () => {
     expect(searchDelay("warp co", "warp cor", false)).toBe(150);
     expect(searchDelay("warp", "", true)).toBe(150);
+  });
+});
+
+/// Mirrors `datalib_query::term_round_trips_through_parse`: a term's value
+/// may hold a colon, a free word may not.
+describe("filterToken", () => {
+  it("quotes a value only where the grammar needs it", () => {
+    expect(filterToken("k", "plain", false)).toBe("k:plain");
+    expect(filterToken("k", "a:b", false)).toBe("k:a:b");
+    expect(filterToken("k", "two words", true)).toBe('-k:"two words"');
+    expect(filterToken("k", "-leading", false)).toBe('k:"-leading"');
+    expect(quoteValue("a:b")).toBe('"a:b"');
   });
 });
