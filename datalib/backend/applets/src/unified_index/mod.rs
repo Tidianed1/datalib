@@ -24,6 +24,7 @@ mod qmd_search_tests;
 mod results;
 #[cfg(test)]
 mod serve_tests;
+mod tabs;
 mod terms;
 
 use datalib_columns::Identity;
@@ -42,6 +43,7 @@ use datalib_unified_index::search::SearchRow;
 use datalib_unified_index::sort::Sort;
 use datalib_unified_index::view;
 use serde::{Deserialize, Serialize};
+use tabs::SearchTab;
 
 /// The step protocol's data-root variable, which the gateway sets for every
 /// applet it starts.
@@ -223,10 +225,14 @@ pub struct SearchParams {
     /// The group whose rows to list, as `[[column, value], …]` (see
     /// `grouping`); none for the whole search.
     pub within: Option<String>,
+    /// Which answer to free text: the grid's own fields, the words of the
+    /// documents, or their meaning. None answers as before tabs.
+    pub tab: Option<SearchTab>,
 }
 
 /// Which part of a search one request asks for.
 struct PageSpec<'a> {
+    tab: Option<SearchTab>,
     sort: &'a [Sort],
     within: &'a [Within],
     offset: usize,
@@ -357,6 +363,7 @@ async fn search_handler(
         }
     };
     let spec = PageSpec {
+        tab: p.tab,
         sort: &sort,
         within: &within,
         offset,
@@ -399,6 +406,7 @@ async fn search_handler(
             },
             "qmd_error": qmd_error,
             "qmd_index_missing": qmd_index_missing,
+            "tab": p.tab.map(SearchTab::as_str),
         }),
         rows,
         total: page.total as u64,
@@ -414,6 +422,8 @@ pub struct GroupParams {
     pub q: Option<String>,
     /// The grid columns to group by, outermost first: `source_ref,kind`.
     pub by: String,
+    /// As on [`SearchParams::tab`].
+    pub tab: Option<SearchTab>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -463,7 +473,7 @@ async fn groups_handler(
             return Json(out);
         }
     };
-    match group_list(&s, &q, &parsed, &by).await {
+    match group_list(&s, &q, &parsed, &by, p.tab).await {
         Ok(grouping) => {
             let sources = columns::Sources::read(&s.root);
             out.truncated = grouping.truncated;
@@ -496,12 +506,13 @@ async fn group_list(
     q: &str,
     parsed: &ParsedQuery,
     by: &[GridRowColumn],
+    tab: Option<SearchTab>,
 ) -> Result<datalib_unified_index::group::Grouping, SearchFailure> {
     let among = if parsed.free_text.is_empty() {
         None
     } else {
         let head = s.repo.head().await.map_err(index)?;
-        let (list, _) = ranked(s, q, parsed, head).await?;
+        let (list, _, _) = ranked(s, q, parsed, head, tab).await?;
         Some(list.iter().map(|e| e.uuid.clone()).collect::<Vec<_>>())
     };
     s.repo
@@ -538,7 +549,7 @@ async fn search_page(
     parsed: &ParsedQuery,
     spec: PageSpec<'_>,
 ) -> Result<Page, SearchFailure> {
-    let (list, at) = search_results(s, q, parsed, spec.sort, spec.within).await?;
+    let (list, at) = search_results(s, q, parsed, spec.tab, spec.sort, spec.within).await?;
     let limit = results::reaching(&list, spec.offset, spec.limit, spec.through);
     let (entries, next_offset) = results::page(&list, spec.offset, limit);
     let uuids: Vec<String> = entries.iter().map(|e| e.uuid.clone()).collect();
@@ -575,11 +586,13 @@ async fn search_results(
     s: &Index,
     q: &str,
     parsed: &ParsedQuery,
+    tab: Option<SearchTab>,
     sort: &[Sort],
     within: &[Within],
 ) -> Result<(Arc<Vec<results::Entry>>, Option<String>), SearchFailure> {
     let key = results::Key {
         q: q.to_string(),
+        tab,
         sort: sort.to_vec(),
         within: within.to_vec(),
         at: s.repo.head().await.map_err(index)?,
@@ -587,7 +600,7 @@ async fn search_results(
     if let Some(list) = s.results.get(&key) {
         return Ok((list, key.at));
     }
-    let (list, at) = if parsed.free_text.is_empty() {
+    let (list, at, keep) = if parsed.free_text.is_empty() {
         let listing = s
             .repo
             .ordered_uuids(parsed, sort, within)
@@ -598,9 +611,9 @@ async fn search_results(
             .into_iter()
             .map(|uuid| results::Entry { uuid, hit: None })
             .collect();
-        (list, listing.at)
+        (list, listing.at, true)
     } else {
-        let (ranked, ranked_at) = ranked(s, q, parsed, key.at.clone()).await?;
+        let (ranked, ranked_at, keep) = ranked(s, q, parsed, key.at.clone(), tab).await?;
         if sort.is_empty() && within.is_empty() {
             return Ok((ranked, ranked_at));
         }
@@ -620,52 +633,68 @@ async fn search_results(
                 uuid,
             })
             .collect();
-        (list, listing.at)
+        (list, listing.at, keep)
     };
     let list = Arc::new(list);
     // Filed under the commit it was actually read at, which is the key's
     // unless a seal landed between the two reads.
-    s.results.put(
-        results::Key {
-            at: at.clone(),
-            ..key
-        },
-        list.clone(),
-    );
+    if keep {
+        s.results.put(
+            results::Key {
+                at: at.clone(),
+                ..key
+            },
+            list.clone(),
+        );
+    }
     Ok((list, at))
 }
 
 /// qmd's ranking of a free-text search, narrowed to its structured terms:
 /// the list every sort and group of it is cut from, so qmd runs once per
 /// search and commit rather than once per group.
+/// With the commit it was read at, and whether it may be kept: one read
+/// from terms written for another commit may be a pass out.
 async fn ranked(
     s: &Index,
     q: &str,
     parsed: &ParsedQuery,
     at: Option<String>,
-) -> Result<(Arc<Vec<results::Entry>>, Option<String>), SearchFailure> {
+    tab: Option<SearchTab>,
+) -> Result<(Arc<Vec<results::Entry>>, Option<String>, bool), SearchFailure> {
     let key = results::Key {
         q: q.to_string(),
+        tab,
         sort: Vec::new(),
         within: Vec::new(),
         at,
     };
     if let Some(list) = s.results.get(&key) {
-        return Ok((list, key.at));
+        return Ok((list, key.at, true));
     }
     let _turn = s.results.turn(&key).await;
     if let Some(list) = s.results.get(&key) {
-        return Ok((list, key.at));
+        return Ok((list, key.at, true));
     }
-    let (ranking, terms_at) = match identifiers(parsed) {
-        Some(ids) => match terms::lookup(&s.root, &ids).await.map_err(index)? {
-            Some(found) => (terms::rank(&found.per_identifier), Some(found.grid_commit)),
+    let (ranking, terms_at) = match (tab, identifiers(parsed)) {
+        (Some(SearchTab::Fields), _) => match terms::fields(&parsed.free_text) {
+            Some(m) => from_terms(s, &m).await?.unwrap_or((Vec::new(), Some(None))),
+            None => (Vec::new(), None),
+        },
+        (_, Some(ids)) => match from_terms(s, &ids).await? {
+            Some(found) => found,
             None => {
                 tracing::info!("no terms file yet; searching identifiers through qmd");
                 (qmd_or_no_index(s, parsed).await?, None)
             }
         },
-        None => (qmd_or_no_index(s, parsed).await?, None),
+        (Some(SearchTab::Words), None) => (words_ranking(s, parsed).await?, None),
+        (Some(SearchTab::Meaning), None) => {
+            let mut by_meaning = parsed.clone();
+            by_meaning.free_text_mode = FreeTextMode::Vsearch;
+            (qmd_or_no_index(s, &by_meaning).await?, None)
+        }
+        (None, None) => (qmd_or_no_index(s, parsed).await?, None),
     };
     let uuids: Vec<String> = ranking.iter().map(|(uuid, _)| uuid.clone()).collect();
     let listing = s
@@ -697,12 +726,49 @@ async fn ranked(
             list.clone(),
         );
     }
-    Ok((list, listing.at))
+    Ok((list, listing.at, keep))
+}
+
+/// The terms file's ranking for `m`, and the grid commit the file reflects;
+/// `None` when the root has no terms file yet.
+async fn from_terms(
+    s: &Index,
+    m: &terms::Match,
+) -> Result<Option<(Vec<(String, (f64, String))>, Option<Option<String>>)>, SearchFailure> {
+    Ok(terms::lookup(&s.root, m)
+        .await
+        .map_err(index)?
+        .map(|found| (terms::rank(&found), Some(found.grid_commit))))
+}
+
+/// The Words tab: qmd's keyword index ranked by BM25, read from its own
+/// table so a source can answer with more than the 20 documents `qmd mcp`
+/// takes from each.
+async fn words_ranking(
+    s: &Index,
+    parsed: &ParsedQuery,
+) -> Result<Vec<(String, (f64, String))>, SearchFailure> {
+    let Some(query) = datalib_unified_index::qmd::lex::fts5_query(&parsed.free_text) else {
+        return Ok(Vec::new());
+    };
+    let Some(reader) = QmdIndexReader::open(&s.root)
+        .await
+        .map_err(|e| SearchFailure::Qmd(format!("open the qmd index: {e}")))?
+    else {
+        return Err(SearchFailure::NoIndex);
+    };
+    let scope = collection_scope(parsed);
+    let hits = reader.keyword_hits(&query, scope.names(), QMD_DEPTH).await;
+    reader.close().await;
+    let hits = hits.map_err(|e| SearchFailure::Qmd(format!("qmd's keyword index: {e}")))?;
+    rows_of_hits(&s.root, &s.repo, &hits, parsed)
+        .await
+        .map_err(|e| SearchFailure::Qmd(format!("{e:#}")))
 }
 
 /// The identifiers a search is made of, when it is made of nothing else
 /// and asked for no qmd mode of its own.
-fn identifiers(parsed: &ParsedQuery) -> Option<Vec<String>> {
+fn identifiers(parsed: &ParsedQuery) -> Option<terms::Match> {
     if parsed.free_text_mode != FreeTextMode::Hybrid {
         return None;
     }
@@ -751,7 +817,17 @@ async fn qmd_ranking(
     })
     .await
     .map_err(|e| anyhow::anyhow!("qmd task join error: {e}"))??;
+    rows_of_hits(root, repo, &hits, parsed).await
+}
 
+/// qmd's hits as grid rows: one row per document, at its best-ranked hit,
+/// with the hit's score and the words it matched.
+async fn rows_of_hits(
+    root: &std::sync::Arc<PathBuf>,
+    repo: &DynIndexRepo,
+    hits: &[datalib_unified_index::qmd::QmdHit],
+    parsed: &ParsedQuery,
+) -> anyhow::Result<Vec<(String, (f64, String))>> {
     let hit_paths: Vec<String> = hits.iter().map(|h| h.path.clone()).collect();
     let refs = repo
         .grid_row_refs_for_hits(&hit_paths)
@@ -766,7 +842,7 @@ async fn qmd_ranking(
     // visible.
     // An `is:document` search wants the document a hit is in, not the
     // message it landed on — which the SQL filter would then drop.
-    let ranked = idx.ranked_rows_one_per_doc(&hits, parsed.documents() == Some(true), |h| {
+    let ranked = idx.ranked_rows_one_per_doc(hits, parsed.documents() == Some(true), |h| {
         tracing::error!(path = %h.path, score = h.score, "a qmd hit resolved to no grid rows");
     });
     Ok(ranked
@@ -1413,6 +1489,17 @@ mod tests {
         limit: usize,
         sort: Option<&str>,
     ) -> SearchResponse {
+        search_tab(s, q, None, offset, limit, sort).await
+    }
+
+    pub(super) async fn search_tab(
+        s: &Index,
+        q: &str,
+        tab: Option<SearchTab>,
+        offset: Option<usize>,
+        limit: usize,
+        sort: Option<&str>,
+    ) -> SearchResponse {
         let params = SearchParams {
             q: Some(q.to_string()),
             limit: Some(limit),
@@ -1420,6 +1507,7 @@ mod tests {
             sort: sort.map(String::from),
             through: None,
             within: None,
+            tab,
         };
         search_handler(State(s.clone()), Query(params)).await.0
     }
@@ -1457,6 +1545,7 @@ mod tests {
             .expect("a committed index answers with its commit");
         let key = results::Key {
             q: String::new(),
+            tab: None,
             sort: Vec::new(),
             within: Vec::new(),
             at: Some(at.clone()),
@@ -1544,9 +1633,19 @@ mod tests {
     }
 
     pub(super) async fn groups(s: &Index, q: &str, by: &str) -> GroupsResponse {
+        groups_tab(s, q, by, None).await
+    }
+
+    pub(super) async fn groups_tab(
+        s: &Index,
+        q: &str,
+        by: &str,
+        tab: Option<SearchTab>,
+    ) -> GroupsResponse {
         let params = GroupParams {
             q: Some(q.to_string()),
             by: by.to_string(),
+            tab,
         };
         groups_handler(State(s.clone()), Query(params)).await.0
     }
@@ -1564,6 +1663,7 @@ mod tests {
             sort: None,
             through: None,
             within: Some(within.to_string()),
+            tab: None,
         };
         search_handler(State(s.clone()), Query(params)).await.0
     }
