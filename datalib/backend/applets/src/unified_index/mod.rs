@@ -30,7 +30,7 @@ mod serve_tests;
 mod tabs;
 
 use datalib_columns::Identity;
-use datalib_schema::grid_rows::GridRowColumn;
+use datalib_schema::grid_rows::{GridRow, GridRowColumn};
 use datalib_unified_index::db::datalib_source_id;
 use datalib_unified_index::grid_columns::GridColumn;
 use datalib_unified_index::group::Within;
@@ -116,6 +116,8 @@ pub fn serve(port: u16) -> Result<()> {
         let app = Router::new()
             .route("/search", get(search_handler))
             .route("/search/groups", get(groups_handler))
+            .route("/search/keys", get(search_keys))
+            .route("/search/values", get(search_values))
             .route("/qmd_state", post(qmd_state))
             .route("/docs", get(list_docs))
             .route("/people", post(people))
@@ -123,6 +125,8 @@ pub fn serve(port: u16) -> Result<()> {
             .route("/embedding_map/matches", get(map::matches_handler))
             .route("/problems", get(problems::handler))
             .route("/problems/groups", get(problems::groups_handler))
+            .route("/problems/keys", get(problems::keys_handler))
+            .route("/problems/values", get(problems::values_handler))
             .route("/chat/{markdown_uuid}", get(chat))
             .route("/asset/{markdown_uuid}/{*rel}", get(asset))
             .route(
@@ -1126,6 +1130,36 @@ async fn people(
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
+}
+
+/// The keys the search bar offers as a person types.
+async fn search_keys() -> Json<Vec<datalib_columns::SearchKeySpec>> {
+    Json(columns::keys_of::<GridRow>())
+}
+
+/// `GET /search/values?key=…&typed=…&q=…`: what the search bar suggests
+/// for one key's value. The rest of the query narrows it by its
+/// structured terms; its free text does not, which would be a qmd search
+/// per keystroke.
+async fn search_values(
+    State(s): State<Index>,
+    Query(p): Query<columns::ValuesParams>,
+) -> Result<Json<Vec<datalib_columns::ValueSuggestion>>, (StatusCode, String)> {
+    let suggested = match columns::value_source::<GridRow>(&p.key) {
+        columns::ValueSource::Words(words) => Ok(columns::words_holding(&words, &p.typed)),
+        columns::ValueSource::Column(column) => s
+            .repo
+            .value_counts(&parse_query(&p.q), column, &p.typed)
+            .await
+            .map(columns::counted),
+        columns::ValueSource::Nothing => Ok(Vec::new()),
+    };
+    suggested.map(Json).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("suggest values: {e}"),
+        )
+    })
 }
 
 async fn list_docs(State(s): State<Index>) -> Result<Json<Vec<DocRow>>, StatusCode> {

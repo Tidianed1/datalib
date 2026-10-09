@@ -1,9 +1,9 @@
 // The Search card: one query, shown as a list with a preview or as a
-// table, whichever was picked last, with source chips and "Meaning only" that write the query the
-// person could have typed.
+// table, whichever was picked last, with source chips that write the query the person could
+// have typed.
 
 import { test, expect, type Page } from "@playwright/test";
-import { GRID, shownCards } from "./grid-helpers";
+import { GRID, shownCards, typeInto } from "./grid-helpers";
 
 // In the tab shown: a tab switched away from keeps its cards mounted.
 const input = (page: Page) => shownCards(page).getByTestId("search-input");
@@ -30,14 +30,14 @@ test("the list and the table are two views of one query", async ({ page }) => {
   // The table asks nothing until it is shown.
   await expect(shownCards(page).locator(".grid-box .slickgrid-container")).toHaveCount(0);
 
-  await input(page).fill("is:document -kind:nothing");
+  await typeInto(input(page), "is:document -kind:nothing");
   await expect(listShows(page)).toHaveAttribute("data-shown-query", "is:document -kind:nothing");
 
   await viewTab(page, "Table").click();
   await expect(tableShows(page)).toHaveAttribute("data-shown-query", "is:document -kind:nothing");
   await expect(shownCards(page).locator(".grid-box .slickgrid-container")).toBeVisible();
   await expect(results(page).first()).toBeHidden();
-  await expect(input(page)).toHaveValue("is:document -kind:nothing");
+  await expect(input(page)).toHaveAttribute("data-query", "is:document -kind:nothing");
 
   // The view is kept with the card.
   await page.reload();
@@ -79,28 +79,15 @@ test("a source chip writes the source filter, and a typed one lights the chip", 
   await expect(chips(page).first()).toContainText("All");
   await expect(chips(page).first()).toHaveAttribute("aria-pressed", "true");
   await chips(page).nth(1).click();
-  await expect(input(page)).toHaveValue(/^is:document source_id:\S+$/);
+  await expect(input(page)).toHaveAttribute("data-query", /^is:document source_id:\S+$/);
   await expect(chips(page).nth(1)).toHaveAttribute("aria-pressed", "true");
-  const narrowed = await input(page).inputValue();
+  const narrowed = (await input(page).getAttribute("data-query")) ?? "";
   await expect(tableShows(page)).toHaveAttribute("data-shown-query", narrowed);
 
   await chips(page).first().click();
-  await expect(input(page)).toHaveValue("is:document");
+  await expect(input(page)).toHaveAttribute("data-query", "is:document");
   await expect(chips(page).nth(1)).toHaveAttribute("aria-pressed", "false");
 
-  await input(page).fill(narrowed);
+  await typeInto(input(page), narrowed);
   await expect(chips(page).nth(1)).toHaveAttribute("aria-pressed", "true");
-});
-
-test("Meaning only moves the typed words into qmd_vsearch, and back", async ({ page }) => {
-  await page.goto(GRID);
-  const meaning = shownCards(page).getByRole("checkbox", { name: "Meaning only" });
-  // Nothing to rank in a query of filters alone.
-  await expect(meaning).toBeDisabled();
-  await input(page).fill("is:document warp");
-  await meaning.check();
-  await expect(input(page)).toHaveValue("is:document qmd_vsearch:warp");
-  await expect(meaning).toBeChecked();
-  await meaning.uncheck();
-  await expect(input(page)).toHaveValue("is:document warp");
 });

@@ -1,6 +1,6 @@
 # Search autocomplete: a person, a source, a value as a chip
 
-*Proposal (2026-10-09). Nothing here is built. It builds on the search terms
+*Proposal (2026-10-09). Step 1 of the order of work is built. It builds on the search terms
 file from [`search_tabs.md`](search_tabs.md) §"The search terms" and changes
 what that plan says the search terms hold; the facts it cites about the tree
 were read that day.*
@@ -98,23 +98,30 @@ longer waits for it.
 
 ## Suggestions
 
-Two routes on the `unified_index` applet:
+**One mechanism for every searchable table.** Each answers the same two
+routes beside its search, and the field is handed only that base:
 
-- **`GET /keys`**: each key the table has, its aliases, what its value
-  is (`person`, `source`, a closed vocabulary with its words, or text).
-  Read from `SearchTable::KEYS`, so the run log, whose keys name groups
-  and steps, can offer chips the same way later.
-- **`GET /suggest?key=from&q=rik`**: for a person key, the contacts
-  whose name holds `q` first (the contacts app's `GET /search`, each
-  with its handles), then handles that appear in that role (any person
-  kind for `with:`) whose value or a name they were seen under holds
-  `q`. Ranked by how many rows name the handle in that role, then by
-  the newest. Each answer carries the value to write; the chip resolves
-  as every person chip does (`people` in `contacts.ts`).
+| route | answers |
+|---|---|
+| `<base>/keys` | each key, its aliases, and what its values are (`datalib_columns::KeyValues`: `text`, `words`, `source`, `group`, `step`, `stamp`; `person` comes with step 2) |
+| `<base>/values?key=&typed=&q=` | the key's values holding `typed` (case-blind), among the rows the rest of the query `q` keeps, most rows first, with their counts; a closed set's words, in their own order |
 
-`source_id:` and the closed vocabularies need no route of their own:
-the page already has the configured sources (`entities`), and
-`/keys` carries the words.
+The bases are `/applet/unified_index/search` and
+`/applet/unified_index/problems` (`applets/src/unified_index/columns.rs`:
+`keys_of`, `value_source`, read from each table's `SearchTable`) and
+`/api/log` (`datalib_runs::log_values`, read from the log's own
+`KEYS`). A column's values are one `GROUP BY` over the rows the rest
+of the query keeps (`unified_index/src/group.rs::values_sql`), so
+`source_id:slack channel:` offers Slack's channels. Free text does not
+narrow them, which would be a qmd search per keystroke.
+
+A person key's values (step 2) come through the same route: your
+contacts whose name holds `typed` first (the contacts app's
+`GET /search`, each with its handles), then handles that appear in
+that role (any person kind for `with:`) whose value or a name they
+were seen under holds `typed`, ranked by how many rows name the handle
+in that role. The chip resolves as every person chip does (`people` in
+`contacts.ts`).
 
 **Two things the search terms file gains for this:**
 
@@ -131,25 +138,44 @@ the page already has the configured sources (`entities`), and
 
 ## The field
 
-One component, `SearchField`, used by `CommandBox` and `GridCard`, so
-both grid bars behave the same; the run log and the map can follow.
+One component, `SearchField` (`ui/src/search/`), used by `CommandBox`,
+`GridCard` and `RunLogPanel`; the map's box can follow.
 It is built on **CodeMirror 6** (MIT; the UI bundle's notices come
 from `scripts/third_party_notices.sh`), a single-line editor whose
 document *is* the query text:
 
-- **A chip is a decoration** over the token of an identity value
-  (`Decoration.replace` with a widget), drawn where it was typed, and
-  the cursor steps over it as one unit (`atomicRanges`). Copy is the
-  text, undo is the editor's.
-- **Suggestions** are CodeMirror's autocomplete, fed by `/suggest` and
-  `/keys`. The menu opens with nothing chosen, so Enter still searches
-  what was typed. ↓ and ↑ choose; Enter or Tab takes the chosen one;
-  Tab with none chosen takes the first; Esc closes the menu.
-- **Backspace** after a chip selects it, and a second Backspace
-  deletes it.
-- **A chip's menu** is `chipMenu`'s (or `entityMenu`'s for a source)
-  plus: change the key (from, to, cc, with), exclude it, and edit it as
-  text, which takes the decoration off that token.
+- **A chip is a decoration** over the value of an identity term
+  (`Decoration.replace` with a widget), drawn where it was typed; the
+  key stays text before it (`from:` beside `to:` says the role). The
+  cursor steps over it as one unit (`atomicRanges`). Copy is the
+  text, undo is the editor's. The widget's DOM is `entityCell`, the
+  grid's own chip (and `chipCell` for a person), drawn with the host's
+  `chip.css`.
+- **The word being typed stays text** until the cursor leaves it, so
+  `source_id:sla` is not drawn as a source named "sla"; a pick from
+  the menu is drawn at once.
+- **Suggestions** are CodeMirror's autocomplete, fed by `/keys` and
+  `/values`, a source, group or step drawn as its chip there too.
+  Taking a key opens its values. The menu opens with nothing chosen,
+  so Enter still searches what was typed. ↓ and ↑ choose; Enter or
+  Tab takes the chosen one; Tab with none chosen takes the first; Esc
+  closes the menu.
+- **Backspace** at a chip's end deletes it whole.
+- **A click on a chip** selects it whole, so Backspace deletes it and
+  typing replaces it. **A double-click** opens it to be edited: its
+  value as text, selected, with the key's values offered. Elsewhere a
+  double-click opens what a chip names; in a text field editing is
+  what a person expects, and the menu still opens it.
+- **A chip's right-click menu** (`search/chipMenu.ts`) is the field's
+  entries, Edit as text and Exclude (or Include, taking the `-` off),
+  then the chip's own (`entityMenu`: copy, open its dashboard or log,
+  browse). People's chips will add changing the key (from, to, cc,
+  with).
+- **For tests**, the editable element carries `data-testid`,
+  `role="searchbox"` and `data-query`, the query as it stands. A spec
+  types into it with `typeInto` (`tests/e2e/grid-helpers.ts`), and
+  reads it with `toHaveAttribute("data-query", …)`: Playwright's `fill`
+  leaves it unchanged in WebKit, and `toHaveValue` has no value to read.
 
 Hand-written `contenteditable` is what this avoids: caret, IME and
 undo handling that WebKit, which the desktop app runs, gets wrong in
@@ -188,10 +214,13 @@ answered from the search terms.
 
 ## Order of work
 
-1. **`SearchField`, with sources and words.** The component, `/keys`,
-   `source_id:` as group chips, the closed vocabularies, the `:`
-   grammar change. The "Meaning only" checkbox goes: the Meaning tab
-   does its job. No work on the search terms.
+1. **`SearchField`, with sources and words.** Built: the component in
+   the toolbar, the search card and the run log; `/keys` and `/values`
+   on all three tables; sources, groups and steps as chips; every
+   column key's values from the data; the `:` grammar change. "Meaning
+   only" is gone: the Meaning tab does its job. A click selects a
+   chip, a double-click edits it, and its menu edits, excludes, copies
+   and opens it.
 2. **`from:` from the search terms**, `author_handle:` its alias, partial
    values, the names table and `/suggest`.
 3. **Person kinds from renders** (`search_tabs.md` step 4), then `to:`,

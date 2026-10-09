@@ -297,6 +297,14 @@ drawn, so call `expandGroup` first; `readRow` says so when it gives up.
 The rule for any new helper: **a reader must not return the same value
 for "absent" and "not there yet".**
 
+**Type into a search field with `typeInto`, never `fill`.** Every
+search bar is a CodeMirror editor (`ui/src/search/`). In WebKit,
+Playwright's `fill` leaves it as it was and reports no error, so a
+spec that fills one waits on a search that never starts.
+`typeInto` in [`grid-helpers.ts`](/datalib/ui/tests/e2e/grid-helpers.ts)
+selects what is there and types over it, and the field's
+`data-query` attribute is what to assert on.
+
 **Take related values from one drawing.** Two separate reads can
 straddle a redraw. For example, the status from before a sync can sit
 beside the stamp that sync just wrote, which reads as the sync having

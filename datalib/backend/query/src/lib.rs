@@ -52,19 +52,34 @@ pub fn parse(s: &str) -> Vec<Token> {
 /// The token for a term, quoted as the grammar needs. What "keep only" and
 /// "exclude all" append to a query; `parse` reads it back as one `Term`.
 pub fn term(key: &str, value: &str, negate: bool) -> String {
-    format!("{}{key}:{}", if negate { "-" } else { "" }, quote(value))
+    let value = if bare(value, true) {
+        value.to_string()
+    } else {
+        quoted(value)
+    };
+    format!("{}{key}:{value}", if negate { "-" } else { "" })
 }
 
 /// `value` as one token: bare when it can be, double-quoted otherwise.
 pub fn quote(value: &str) -> String {
-    let bare = !value.is_empty()
+    if bare(value, false) {
+        return value.to_string();
+    }
+    quoted(value)
+}
+
+/// Whether `value` reads back as itself unquoted. A term's value may hold
+/// a colon, since a term splits at its first one (`from:email:a@b.c`); a
+/// free word with one would read back as a term.
+fn bare(value: &str, in_term: bool) -> bool {
+    !value.is_empty()
         && !value.starts_with('-')
         && !value
             .chars()
-            .any(|c| c.is_whitespace() || c == ':' || c == '"');
-    if bare {
-        return value.to_string();
-    }
+            .any(|c| c.is_whitespace() || c == '"' || (c == ':' && !in_term))
+}
+
+fn quoted(value: &str) -> String {
     let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
     format!("\"{escaped}\"")
 }
@@ -213,6 +228,12 @@ mod tests {
         }
         assert_eq!(term("k", "plain", false), "k:plain");
         assert_eq!(term("k", "two words", false), "k:\"two words\"");
+        assert_eq!(term("k", "a:b", false), "k:a:b");
+        assert_eq!(
+            quote("a:b"),
+            "\"a:b\"",
+            "a free word with a colon would be a term"
+        );
     }
 
     #[test]

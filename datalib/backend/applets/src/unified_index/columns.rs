@@ -10,15 +10,16 @@ use std::path::Path;
 
 use datalib_columns::{
     source_catalog, ColumnSearch, ColumnSpec, ColumnType, DocumentLink, Entity, FreeTextMatch,
-    Identity, RowsSpec,
+    Identity, KeyValues, RowsSpec, SearchKeySpec, ValueSuggestion,
 };
 use datalib_handle::{Handle, HandleKind};
-use datalib_query::table::{FreeText, SearchTable};
+use datalib_query::table::{Column, FreeText, SearchTable};
 use datalib_schema::grid_rows::{GridRow, GridRowColumn};
 use datalib_unified_index::db::datalib_source_id;
 use datalib_unified_index::grid_columns::GridColumn;
 use datalib_unified_index::search::SearchRow;
 use datalib_unified_index::view::{self, View};
+use serde::Deserialize;
 
 /// The Author cell (docs/dev/chips.md § "In a grid"): the handle
 /// as a URI for its id, so the viewer resolves it as it does a chip link
@@ -78,6 +79,101 @@ pub fn free_text_of<T: SearchTable>() -> FreeTextMatch {
         FreeText::Qmd => FreeTextMatch::Qmd,
         FreeText::Like(_) => FreeTextMatch::Like,
     }
+}
+
+/// Every key `T`'s search reads (`datalib_unified_index::query`), with
+/// what its values are.
+pub fn keys_of<T: SearchTable>() -> Vec<SearchKeySpec> {
+    let key = |key, values| SearchKeySpec {
+        key,
+        aliases: &[],
+        values,
+    };
+    let mut keys: Vec<SearchKeySpec> = T::KEYS
+        .iter()
+        .map(|k| SearchKeySpec {
+            key: k.key,
+            aliases: k.aliases,
+            values: match k.vocabulary {
+                Some(words) => KeyValues::Words { words: words() },
+                // Every table that files its rows under a source names
+                // the column so (AGENTS.md, "A source's id is not its name").
+                None if k.column.as_str() == "source_id" => KeyValues::Source,
+                None => KeyValues::Text,
+            },
+        })
+        .collect();
+    if T::RANGE.is_some() {
+        keys.push(key("before", KeyValues::Stamp));
+        keys.push(key("after", KeyValues::Stamp));
+    }
+    if !T::FLAGS.is_empty() {
+        let words = T::FLAGS.iter().map(|(word, _)| *word).collect();
+        keys.push(key("is", KeyValues::Words { words }));
+    }
+    if matches!(T::FREE_TEXT, FreeText::Qmd) {
+        keys.push(key("qmd", KeyValues::Text));
+        keys.push(key("qmd_vsearch", KeyValues::Text));
+    }
+    keys
+}
+
+/// `…/values?key=…&typed=…&q=…`: one key's values holding `typed`,
+/// among the rows the rest of the query `q` keeps.
+#[derive(Debug, Deserialize)]
+pub struct ValuesParams {
+    pub key: String,
+    #[serde(default)]
+    pub typed: String,
+    #[serde(default)]
+    pub q: String,
+}
+
+/// Where a key's values come from.
+pub enum ValueSource<C> {
+    /// Its closed set.
+    Words(Vec<&'static str>),
+    /// The column's values among the rows.
+    Column(C),
+    /// Nothing to offer: a date, the words free text routes to qmd, a key
+    /// the table does not have.
+    Nothing,
+}
+
+pub fn value_source<T: SearchTable>(key: &str) -> ValueSource<T::Column> {
+    if key == "is" {
+        return ValueSource::Words(T::FLAGS.iter().map(|(word, _)| *word).collect());
+    }
+    match datalib_query::table::key::<T>(key) {
+        Some(k) => match k.vocabulary {
+            Some(words) => ValueSource::Words(words()),
+            None => ValueSource::Column(k.column),
+        },
+        None => ValueSource::Nothing,
+    }
+}
+
+/// The words holding `typed`, case-blind, in their own order.
+pub fn words_holding(words: &[&'static str], typed: &str) -> Vec<ValueSuggestion> {
+    let typed = typed.to_lowercase();
+    words
+        .iter()
+        .filter(|w| w.to_lowercase().contains(&typed))
+        .map(|w| ValueSuggestion {
+            value: (*w).to_string(),
+            count: None,
+        })
+        .collect()
+}
+
+pub fn counted(values: Vec<(String, u64)>) -> Vec<ValueSuggestion> {
+    values
+        .into_iter()
+        .map(|(value, count)| ValueSuggestion {
+            value,
+            count: Some(count),
+        })
+        .collect()
 }
 
 /// The search bar is a grid's one filter: each column says which of its
@@ -275,6 +371,65 @@ impl Sources {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn values_of(keys: &[SearchKeySpec], key: &str) -> KeyValues {
+        keys.iter()
+            .find(|k| k.key == key)
+            .unwrap_or_else(|| panic!("no `{key}:` in {keys:?}"))
+            .values
+            .clone()
+    }
+
+    /// Every key the grid's search reads is offered, each saying what its
+    /// values are, so the bar can draw a source as its chip.
+    #[test]
+    fn the_grid_offers_every_key_it_reads() {
+        let keys = keys_of::<GridRow>();
+        assert_eq!(values_of(&keys, "source_id"), KeyValues::Source);
+        assert_eq!(values_of(&keys, "channel"), KeyValues::Text);
+        assert_eq!(values_of(&keys, "before"), KeyValues::Stamp);
+        assert_eq!(
+            values_of(&keys, "is"),
+            KeyValues::Words {
+                words: vec!["document"]
+            }
+        );
+        assert_eq!(values_of(&keys, "qmd_vsearch"), KeyValues::Text);
+        for k in &keys {
+            let value = match &k.values {
+                KeyValues::Words { words } => words[0],
+                _ => "x",
+            };
+            let q = format!("{}:{value}", k.key);
+            let refused = datalib_unified_index::query::parse_query(&q).refusal();
+            assert_eq!(refused, None, "`{q}` is offered but refused");
+        }
+    }
+
+    #[test]
+    fn a_key_takes_its_values_from_its_words_or_its_column() {
+        assert!(matches!(
+            value_source::<GridRow>("is"),
+            ValueSource::Words(w) if w == ["document"]
+        ));
+        assert!(matches!(
+            value_source::<GridRow>("channel"),
+            ValueSource::Column(GridRowColumn::Channel)
+        ));
+        assert!(matches!(
+            value_source::<GridRow>("before"),
+            ValueSource::Nothing
+        ));
+        assert!(matches!(
+            value_source::<GridRow>("nope"),
+            ValueSource::Nothing
+        ));
+        let held: Vec<String> = words_holding(&["error", "warning", "info"], "R")
+            .into_iter()
+            .map(|v| v.value)
+            .collect();
+        assert_eq!(held, ["error", "warning"]);
+    }
 
     /// The search bar is the grid's one filter: every column a person
     /// might narrow by names its key, and a row field the grid can read

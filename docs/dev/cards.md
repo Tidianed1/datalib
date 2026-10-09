@@ -466,13 +466,17 @@ programs against:
   which a Browse does because it names columns. A card whose view was
   picked keeps it in its own state. A view stays mounted once shown, so
   switching keeps each one's selection and scroll; a hidden view asks
-  nothing and catches up when shown. The query string is the card's
+  nothing and catches up when shown. The search bar is the one search
+  field (`search/SearchField.vue`, on CodeMirror 6), which the toolbar
+  and the run log share: it offers keys and values from the table's
+  `…/keys` and `…/values` and draws a source, group or step value as
+  its chip ([`plans/search_autocomplete.md`](plans/search_autocomplete.md)
+  § "The field"). The query string is the card's
   only record of a search (`cards/search.ts`): the chips for the
   sources the results come from, with their counts
   (`/search/groups?by=source_ref`), write and read its `source_id:`
-  filter, and "Meaning only" moves its free text into a
-  `qmd_vsearch:` predicate and back, so a filter that was clicked is
-  the one that could have been typed. Free text has three answers, a
+  filter, so a filter that was clicked is the one that could have been
+  typed. Free text has three answers, a
   small tab each at the start of that row (`grid/searchTabs.ts`):
   **Fields** (the search terms file), **Words** (BM25 over qmd's keyword
   index) and **Meaning** (qmd's vectors), the search's `tab=`. All

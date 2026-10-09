@@ -30,6 +30,7 @@ import type {
   SlickGrid,
 } from "@slickgrid-universal/common";
 import { filterToken, replaceToken, tokenValue, withToken } from "@/grid/query";
+import SearchField from "@/search/SearchField.vue";
 import { KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
 import { menuSlots, type MenuEntry } from "@/grid/menu";
 import { keepActiveOnRecord } from "@/grid/activeCell";
@@ -470,8 +471,7 @@ function addToken(token: string) {
 defineExpose({ addToken });
 
 /// Typing waits for a pause; a token from the menu applies at once.
-function onQueryInput(ev: Event) {
-  const q = (ev.target as HTMLInputElement).value;
+function onQueryInput(q: string) {
   if (queryTimer) clearTimeout(queryTimer);
   queryTimer = setTimeout(() => setQuery(q), 250);
 }
@@ -1159,13 +1159,14 @@ onUnmounted(() => {
 <template>
   <div ref="panelEl" class="rl-panel" :aria-busy="busy">
     <div class="rl-bar">
-      <input
+      <SearchField
         class="rl-search"
-        type="search"
+        base="/api/log"
         placeholder='Search the log — words, or level:warn -target:sqlx "a phrase"'
-        aria-label="Search the log"
-        :value="query"
-        @input="onQueryInput"
+        label="Search the log"
+        :model-value="query"
+        :open-card="(source: string) => emit('open-card', source)"
+        @update:model-value="onQueryInput"
       />
       <label class="rl-level">
         at least
@@ -1256,7 +1257,7 @@ onUnmounted(() => {
   font: inherit;
   font-size: var(--datalib-font-size);
 }
-.rl-search:focus,
+.rl-search:focus-within,
 .rl-run:focus {
   outline: none;
   border-color: var(--datalib-accent);

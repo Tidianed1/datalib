@@ -22,7 +22,7 @@ const ROWS = ".rl-grid .slick-row:not(.slick-group)";
 /// `src/grid/query.ts` does — spelled out here because a spec runs
 /// outside the app's module graph.
 const quoted = (v: string) =>
-  /[\s:"]/.test(v) || v === "" || v.startsWith("-")
+  /[\s"]/.test(v) || v === "" || v.startsWith("-")
     ? `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`
     : v;
 
@@ -120,7 +120,7 @@ test("a cell's right-click keeps only its value, and the query clears again", as
   // the whole of what the panel shows.
   const launch = await launchOf(dialog);
   const query = dialog.locator(".rl-search");
-  await expect(query).toHaveValue(`min_level:info process_id:${launch}`);
+  await expect(query).toHaveAttribute("data-query", `min_level:info process_id:${launch}`);
   const all = await lineCount(page);
   expect(all).toBeGreaterThan(1);
 
@@ -141,7 +141,10 @@ test("a cell's right-click keeps only its value, and the query clears again", as
   await expect(menuEntry(page, `Exclude all Message=${msg}`)).toBeVisible();
   await keepOnly.click();
 
-  await expect(query).toHaveValue(`min_level:info process_id:${launch} msg:${quoted(msg)}`);
+  await expect(query).toHaveAttribute(
+    "data-query",
+    `min_level:info process_id:${launch} msg:${quoted(msg)}`,
+  );
   // A reload empties the count before it refills, so "fewer than all"
   // alone is met mid-way; wait for the narrowed lines to be there.
   await expect
@@ -160,7 +163,7 @@ test("a cell's right-click keeps only its value, and the query clears again", as
   const clear = menuEntry(page, "Clear the query");
   await rightClick(dialog.locator(ROWS).first().locator('.slick-cell[col-id="msg"]'), clear);
   await clear.click();
-  await expect(query).toHaveValue("");
+  await expect(query).toHaveAttribute("data-query", "");
   // With no query at all, the whole store's newest lines, and the
   // picker says so: the launch was a term, and went with the rest.
   await expect(scope).toHaveValue("*");
@@ -171,9 +174,9 @@ test("a cell's right-click keeps only its value, and the query clears again", as
   const level = dialog.getByLabel("Lowest level to show");
   await expect(level).toHaveValue("trace");
   await level.selectOption("warn");
-  await expect(query).toHaveValue("min_level:warn");
+  await expect(query).toHaveAttribute("data-query", "min_level:warn");
   await level.selectOption("trace");
-  await expect(query).toHaveValue("");
+  await expect(query).toHaveAttribute("data-query", "");
 });
 
 // A log longer than a page opens on its newest lines, at the bottom, and
@@ -335,7 +338,8 @@ test("a selected line opens in full beside the log, and can narrow it", async ({
     .locator(".ll-meta")
     .getByRole("button", { name: /^main$/ })
     .click();
-  await expect(dialog.locator(".rl-search")).toHaveValue(
+  await expect(dialog.locator(".rl-search")).toHaveAttribute(
+    "data-query",
     `min_level:info process_id:${await launchOf(dialog)} thread:main`,
   );
 

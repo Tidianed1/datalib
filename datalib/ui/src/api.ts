@@ -495,6 +495,43 @@ async function getJson<T>(
   return (await r.json()) as T;
 }
 
+/// A key a search bar takes, and what its values are
+/// (`datalib_columns::SearchKeySpec`).
+export type SearchKeySpec = {
+  key: string;
+  aliases: string[];
+  values: KeyValues;
+};
+
+/// `datalib_columns::KeyValues`: what decides how a value is offered and
+/// drawn. A source, group or step is drawn as its chip.
+export type KeyValues = {
+  kind: "text" | "words" | "source" | "group" | "step" | "stamp";
+  words?: string[];
+};
+
+/// `datalib_columns::ValueSuggestion`.
+export type ValueSuggestion = { value: string; count?: number };
+
+/// The keys the search bar at `base` takes: `${base}/keys`, for `base` a
+/// table's search (`/applet/unified_index/search`, `/api/log`).
+export function fetchSearchKeys(base: string, signal?: AbortSignal): Promise<SearchKeySpec[]> {
+  return getJson<SearchKeySpec[]>(`${base}/keys`, signal, { toast: false });
+}
+
+/// What the search bar at `base` suggests for `key`'s value: the values
+/// holding `typed` among the rows the rest of the query `q` keeps.
+export function fetchSearchValues(
+  base: string,
+  key: string,
+  typed: string,
+  q: string,
+  signal?: AbortSignal,
+): Promise<ValueSuggestion[]> {
+  const params = new URLSearchParams({ key, typed, q });
+  return getJson<ValueSuggestion[]>(`${base}/values?${params}`, signal, { toast: false });
+}
+
 export async function fetchHealth(signal?: AbortSignal): Promise<Health> {
   const h = await getJson<Health>("/api/health", signal);
   lastHealth = h;

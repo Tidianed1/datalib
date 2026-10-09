@@ -81,7 +81,7 @@ const browseButton = (page: Page, groupId: string) =>
 async function browse(page: Page, groupId: string, expectQuery: string) {
   await browseButton(page, groupId).click();
   await expect(page.locator(SEARCH)).toBeVisible({ timeout: 30_000 });
-  await expect(page.locator(SEARCH)).toHaveValue(expectQuery);
+  await expect(page.locator(SEARCH)).toHaveAttribute("data-query", expectQuery);
   await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 30_000 });
 }
 
@@ -197,7 +197,7 @@ test("a step's row opens its source, as its group's row does", async ({ page }) 
   await expect(step).toBeEnabled();
   await step.click();
   await expect(page.locator(SEARCH)).toBeVisible({ timeout: 30_000 });
-  await expect(page.locator(SEARCH)).toHaveValue("source_id:slack is:document");
+  await expect(page.locator(SEARCH)).toHaveAttribute("data-query", "source_id:slack is:document");
   await expect(cardOf(page, "source_id:slack")).toBeVisible();
 });
 

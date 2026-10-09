@@ -1,7 +1,7 @@
 // What the Search card's controls decide, as pure functions over the
-// query string, which is the card's only record of a search: the
-// "Meaning only" box and the source chips read it and rewrite it, so a
-// filter that was typed and one that was clicked are the same thing.
+// query string, which is the card's only record of a search: the source
+// chips read it and rewrite it, so a filter that was typed and one that
+// was clicked are the same thing.
 // Also which words of a snippet to mark.
 import { filterToken, isFilterWord, queryWords, unquoteValue } from "@/grid/query";
 
@@ -22,22 +22,6 @@ export function freeText(query: string): string {
     .map((w) => (carriesText(w) ? carried(w) : unquoteValue(w)))
     .filter(Boolean)
     .join(" ");
-}
-
-/// Whether `query` ranks its free text by meaning alone: the last
-/// predicate that carries text decides, as on the backend.
-export function meaningOnly(query: string): boolean {
-  return queryWords(query).filter(carriesText).at(-1)?.startsWith(MEANING) === true;
-}
-
-/// `query` with its free text ranked by meaning alone (inside one
-/// `qmd_vsearch:`) or by words and meaning (as bare words), its filters
-/// left as they are. A query with no free text has nothing to move.
-export function setMeaningOnly(query: string, on: boolean): string {
-  const filters = queryWords(query).filter((w) => isFilterWord(w) && !carriesText(w));
-  const text = freeText(query);
-  if (text === "") return filters.join(" ");
-  return [...filters, on ? filterToken("qmd_vsearch", text, false) : text].join(" ");
 }
 
 /// The one source `query` is narrowed to: the value of its `source_id:`

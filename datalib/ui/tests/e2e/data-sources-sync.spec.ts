@@ -662,7 +662,8 @@ command = "/bin/sh -c 'echo walking page 1 >&2; echo listing failed: 429 too man
     );
     // The pickers write what they pick into the query, which is the
     // whole of what the panel shows.
-    await expect(dialog.locator(".rl-search")).toHaveValue(
+    await expect(dialog.locator(".rl-search")).toHaveAttribute(
+      "data-query",
       /(^| )run:\S+ step:flaky\/ingest attempt:1$/,
     );
     // The line the panel opened on is the runner's word on how the step

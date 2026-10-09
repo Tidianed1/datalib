@@ -1,45 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  freeText,
-  markWords,
-  meaningOnly,
-  pickedSource,
-  setMeaningOnly,
-  setSource,
-} from "../src/cards/search";
-
-describe("Meaning only, as the query says it", () => {
-  /** Only the free text moves; a filter inside the predicate would be searched as words. */
-  it("moves only the free text into a qmd_vsearch predicate, and back", () => {
-    const on = setMeaningOnly("author:worf risa trip", true);
-    expect(on).toBe('author:worf qmd_vsearch:"risa trip"');
-    expect(meaningOnly(on)).toBe(true);
-    const off = setMeaningOnly(on, false);
-    expect(off).toBe("author:worf risa trip");
-    expect(meaningOnly(off)).toBe(false);
-  });
-
-  it("gathers bare words and a typed predicate into one", () => {
-    expect(setMeaningOnly('qmd:"earl grey" hot is:document', true)).toBe(
-      'is:document qmd_vsearch:"earl grey hot"',
-    );
-  });
-
-  it("takes the quotes off a phrase it moves", () => {
-    expect(setMeaningOnly('"earl grey" tea', true)).toBe('qmd_vsearch:"earl grey tea"');
-  });
-
-  it("has nothing to move in a query of filters alone", () => {
-    expect(setMeaningOnly("is:document -kind:contact", true)).toBe("is:document -kind:contact");
-    expect(meaningOnly("is:document")).toBe(false);
-  });
-
-  it("reads the last predicate that carries text, as the backend does", () => {
-    expect(meaningOnly("qmd_vsearch:risa qmd:trip")).toBe(false);
-    expect(meaningOnly("qmd:risa qmd_vsearch:trip")).toBe(true);
-    expect(meaningOnly("risa qmd_vsearch:trip")).toBe(true);
-  });
-});
+import { freeText, markWords, pickedSource, setSource } from "../src/cards/search";
 
 describe("the picked source, as the query says it", () => {
   it("is the one source_id filter, typed or clicked", () => {

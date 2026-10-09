@@ -6,8 +6,11 @@
 //! grouped on the server (`/problems/groups`).
 
 use axum::extract::{Query, State};
+use axum::http::StatusCode;
 use axum::Json;
-use datalib_columns::{Chip, ChipKind, ColumnSpec, ColumnType, DocumentLink, Identity, RowsSpec};
+use datalib_columns::{
+    Chip, ChipKind, ColumnSpec, ColumnType, DocumentLink, Identity, RowsSpec, ValueSuggestion,
+};
 use datalib_problems::{Outcome, ProblemRow, ProblemRowColumn, ScopeKind, Severity};
 use datalib_unified_index::group::Within;
 use datalib_unified_index::problems::{ProblemColumn, ProblemsQuery};
@@ -16,7 +19,10 @@ use datalib_unified_index::sort::Sort;
 use datalib_unified_index::view;
 use serde::{Deserialize, Serialize};
 
-use super::columns::{free_text_of, searchable, Sources};
+use super::columns::{
+    counted, free_text_of, keys_of, searchable, value_source, words_holding, Sources, ValueSource,
+    ValuesParams,
+};
 use super::{grouping, results, Index};
 
 /// As `/search` takes them.
@@ -384,6 +390,34 @@ pub struct GroupOut {
     /// The group's most recently seen problem, which its labels are read
     /// from.
     pub sample: ProblemView,
+}
+
+/// The keys the problems grid's search bar offers as a person types.
+pub async fn keys_handler() -> Json<Vec<datalib_columns::SearchKeySpec>> {
+    Json(keys_of::<ProblemRow>())
+}
+
+/// `GET /problems/values?key=…&typed=…&q=…`: what the search bar
+/// suggests for one key's value.
+pub async fn values_handler(
+    State(s): State<Index>,
+    Query(p): Query<ValuesParams>,
+) -> Result<Json<Vec<ValueSuggestion>>, (StatusCode, String)> {
+    let suggested = match value_source::<ProblemRow>(&p.key) {
+        ValueSource::Words(words) => Ok(words_holding(&words, &p.typed)),
+        ValueSource::Column(column) => s
+            .repo
+            .problem_value_counts(&ProblemsQuery::parse(&p.q), column, &p.typed)
+            .await
+            .map(counted),
+        ValueSource::Nothing => Ok(Vec::new()),
+    };
+    suggested.map(Json).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("suggest values: {e}"),
+        )
+    })
 }
 
 /// `GET /problems/groups?q=…&by=…` — the groups the problems fall into,
