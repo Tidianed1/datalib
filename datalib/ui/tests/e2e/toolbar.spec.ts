@@ -128,6 +128,59 @@ test.describe("toolbar", () => {
     }
   });
 
+  test("the syncing pill counts the sources and lists them with a Stop", async ({ page }) => {
+    // Two sources made to look mid-sync: an open request each, named on
+    // the rows the Sources table is served.
+    const stopped: string[] = [];
+    await page.route("**/api/requests", (route) =>
+      route.fulfill({
+        json: ["r1", "r2"].map((id) => ({
+          id,
+          roots: [],
+          by: "ui",
+          state: "open",
+          stop_requested_by: null,
+          failed_step: null,
+        })),
+      }),
+    );
+    await page.route("**/api/requests/*/stop", (route) => {
+      stopped.push(new URL(route.request().url()).pathname);
+      return route.fulfill({ json: {} });
+    });
+    let names: string[] = [];
+    await page.route("**/api/manage/rows*", async (route) => {
+      const body = await (await route.fetch()).json();
+      const sources = body.rows.filter(
+        (r: { kind: string; type: unknown }) => r.kind === "group" && r.type,
+      );
+      sources[0].stop_request_ids = ["r1"];
+      sources[0].queue = { value: 1204, unit: "count" };
+      sources[1].stop_request_ids = ["r2"];
+      names = [sources[0].name.label, sources[1].name.label];
+      return route.fulfill({ json: body });
+    });
+    await page.goto("/");
+    const pill = page.locator(".sync-indicator");
+    await expect(pill).toHaveText("Syncing 2 sources");
+    await expect(page.locator(".sync-menu")).toHaveCount(0);
+
+    await pill.click();
+    const rows = page.locator(".sync-menu .sync-row");
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(0)).toContainText(names[0]);
+    await expect(rows.nth(0)).toContainText("1,204 to go");
+    await expect(rows.nth(1)).toContainText(names[1]);
+    await rows.nth(1).getByRole("menuitem", { name: "Stop" }).click();
+    await expect.poll(() => stopped).toEqual(["/api/requests/r2/stop"]);
+
+    await page.getByRole("menuitem", { name: "Open Sources" }).click();
+    await expect(page.locator(".sync-menu")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
+    // The Sources card is still asking for its rows through the route.
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+  });
+
   test("the syncing pill is absent when nothing runs", async ({ page }) => {
     await page.goto("/");
     await expect(page.locator(".datalib-toolbar")).toBeVisible();
