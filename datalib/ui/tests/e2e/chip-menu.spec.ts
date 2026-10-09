@@ -63,6 +63,29 @@ test("right-click on a chip opens its menu, and the copies carry name and identi
   await expect(menu).toBeHidden();
 });
 
+/// The document's `img` rule, sized `auto` for attachments, outranked the
+/// mark's own size: a Slack chip's SVG grew to the layout, overlapping
+/// the words beside it and swelling to a hand's width under the pointer.
+test("a chip's mark or photo stays the size of a letter, hovered or not", async ({
+  page,
+  request,
+}) => {
+  const chip = await openADocumentWithAChip(page, request);
+  const leadSize = () =>
+    chip.evaluate((a) => {
+      const lead = a.querySelector("img")!.getBoundingClientRect();
+      const fontPx = parseFloat(getComputedStyle(a).fontSize);
+      return { w: lead.width / fontPx, h: lead.height / fontPx };
+    });
+  for (const hovered of [false, true]) {
+    if (hovered) await chip.hover();
+    const { w, h } = await leadSize();
+    expect(h, `lead height in ems, hovered: ${hovered}`).toBeGreaterThan(0);
+    expect(h, `lead height in ems, hovered: ${hovered}`).toBeLessThanOrEqual(1.5);
+    expect(w, `lead width in ems, hovered: ${hovered}`).toBeLessThanOrEqual(1.5);
+  }
+});
+
 test("the menu's search opens everything from the person", async ({ page, request }) => {
   const chip = await openADocumentWithAChip(page, request);
   await expect(page.locator(SEARCH_INPUT)).toHaveCount(0);

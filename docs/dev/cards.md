@@ -545,7 +545,10 @@ programs against:
   drawn by `TableGrid`, with the row actions and the dialogs they open
   — the wizard, a removal's confirm — teleported to `<body>`. Its
   header says how the last sync went, the config's notices are strips above the table, its status column reads
-  word first ("Failed · 2 hours ago"), and its rows follow the density. Through `host.openCards` it opens beside
+  word first ("Failed · 2 hours ago"), and its rows follow the density. A
+  group row has a grip to drag it into a new place in the config
+  ([`config_model.md`](config_model.md) §"What the Manage screen and
+  the wizard make of it"). Through `host.openCards` it opens beside
   itself a `searchView(...)` for Browse, a `gridView(...)` for a problems count, a
   `logView(...)` for a step's log or the server's, a `historyView(...)`
   for a row's commit history, a `syncDashboardView(...)` for a group's

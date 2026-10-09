@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 use anyhow::{Context, Result};
 use datalib_etl::bulk::{bulk_upsert_in_tx, BulkUpsertable};
+use datalib_etl::doltlite_raw as dr;
 use sqlx::{Row, Sqlite, Transaction};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
@@ -259,9 +260,16 @@ impl RawDb {
     pub async fn upsert_google_events_in_tx(
         tx: &mut Transaction<'_, Sqlite>,
         rows: &[GoogleEventRow],
+        volatile: &[Option<serde_json::Value>],
     ) -> Result<()> {
         let now = datalib_time::IsoOffsetTimestamp::now_local();
-        bulk_upsert_in_tx(tx, rows, &now).await
+        bulk_upsert_in_tx(tx, rows, &now).await?;
+        let volatile: Vec<(&str, &serde_json::Value)> = rows
+            .iter()
+            .zip(volatile)
+            .filter_map(|(row, v)| Some((row.id_and_payload.id.as_str(), v.as_ref()?)))
+            .collect();
+        dr::set_volatile_payloads_in_tx(tx, "google_events", &volatile).await
     }
 
     pub async fn google_event_ids(&self, calendar_id: &str) -> Result<HashSet<String>> {
@@ -398,8 +406,14 @@ impl RawDb {
     }
 
     pub async fn load_google_events(&self) -> Result<(Vec<LoadedGoogleEvent>, Vec<UnreadableRow>)> {
+        // A row written before `etag` and `updated` moved to the sidecar
+        // still has them in its payload; the overlay reads either.
         let rows = sqlx::query(
-            "SELECT id, calendar_id, json(payload) AS payload FROM google_events ORDER BY id",
+            "SELECT e.id, e.calendar_id, json(e.payload) AS payload,
+                    json(b.volatile_payload) AS volatile
+               FROM google_events e
+               LEFT JOIN google_events_bookkeeping b ON b.id = e.id
+              ORDER BY e.id",
         )
         .fetch_all(self.pool())
         .await
@@ -409,9 +423,18 @@ impl RawDb {
         for r in rows {
             let id: String = r.try_get("id").unwrap_or_default();
             let payload: Option<String> = r.try_get("payload").ok().flatten();
+            let volatile: Option<serde_json::Value> = r
+                .try_get::<Option<String>, _>("volatile")
+                .ok()
+                .flatten()
+                .and_then(|v| serde_json::from_str(&v).ok());
             let Some(event) = payload
                 .as_deref()
                 .and_then(|p| serde_json::from_str(p).ok())
+                .map(|p| match &volatile {
+                    Some(v) => dr::overlay(&p, v),
+                    None => p,
+                })
             else {
                 unreadable.push(UnreadableRow {
                     id,
