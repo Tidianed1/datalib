@@ -6,8 +6,8 @@
 <data_root>/<group>/render_markdown/…             the rendered tree + its render store
 <data_root>/unified_index/grid_index/db.doltlite_db   grid_rows / markdowns / edges / problems /
                                                   source_contacts (who each handle is, per source)
-<data_root>/unified_index/grid_index/search_terms.sqlite every id, handle, title and name each grid row
-                                                  answers to, full-text indexed (plain SQLite;
+<data_root>/unified_index/grid_index/search_terms.sqlite every id, handle, title, label and name each
+                                                  grid row answers to, full-text indexed (plain SQLite;
                                                   `grid_index` rewrites it after each pass,
                                                   `etl/render/src/search_terms.rs`)
 <data_root>/unified_index/qmd_aggregator/           the qmd index (plain SQLite inside)

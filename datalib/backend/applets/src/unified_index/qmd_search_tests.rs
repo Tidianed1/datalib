@@ -309,6 +309,36 @@ async fn each_tab_answers_free_text_its_own_way() {
     assert_ne!(uuids(&words), uuids(&meaning), "two tabs gave one answer");
 }
 
+/// A pasted address finds the emails it was copied on, not only the ones
+/// it wrote, and a label is a field like any other: both are terms the
+/// email render supplies, beyond the row's own columns.
+#[tokio::test]
+async fn an_address_finds_the_emails_it_received_and_a_label_its_emails() {
+    let root = fixture_root();
+    let s = index_over(root.path()).await;
+    let snippets = |r: &SearchResponse| -> HashSet<String> {
+        r.rows.iter().map(|row| row.snippet.clone()).collect()
+    };
+
+    let riker = search(&s, "riker@enterprise.starfleet", None, 1_000, None).await;
+    let matched = snippets(&riker);
+    assert!(
+        matched.contains("cc: email:riker@enterprise.starfleet"),
+        "{matched:?}"
+    );
+    assert!(
+        matched.contains("from: email:riker@enterprise.starfleet"),
+        "{matched:?}"
+    );
+
+    let inbox = search_tab(&s, "inbox", Some(SearchTab::Fields), None, 1_000, None).await;
+    assert!(
+        snippets(&inbox).contains("label: Inbox"),
+        "{:?}",
+        snippets(&inbox)
+    );
+}
+
 /// The Words tab is scoped by `source_id:` like any search, and its groups
 /// count the same rows its pages list.
 #[tokio::test]

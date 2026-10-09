@@ -2,16 +2,17 @@
 //! `unified_index/grid_index/search_terms.sqlite`: every term each
 //! `grid_rows` row answers to (`datalib_schema::search_terms`), kept in step
 //! with the grid index after each `grid_index` pass. It is a pure
-//! function of `grid_rows` at one commit: the file records the commit it
-//! reflects and moves to the next by `dolt_diff`, or is built whole when it
-//! cannot. Plain SQLite, so it keeps no history of itself.
+//! function of `grid_rows` and `supplied_search_terms` at one commit: the
+//! file records the commit it reflects and moves to the next by
+//! `dolt_diff`, or is built whole when it cannot. Plain SQLite, so it keeps no history of itself.
 
 use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use datalib_schema::search_terms::{
-    search_terms_of, SearchTermSource, META_GRID_COMMIT, META_SHAPE, TERMS_DDL, TERMS_SHAPE,
+    search_terms_of, SearchTerm, SearchTermKind, SearchTermSource, META_GRID_COMMIT, META_SHAPE,
+    TERMS_DDL, TERMS_SHAPE,
 };
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::SqliteConnection;
@@ -109,9 +110,13 @@ async fn sync_open(grid: &SqlitePool, terms: &SqlitePool, head: &str) -> Result<
         Plan::Since(from) => {
             match datalib_etl::doltlite_raw::changed_keys(grid, "grid_rows", &from, head).await {
                 Ok(changed) => {
-                    let uuids: Vec<String> = changed.into_iter().map(|k| k.key).collect();
+                    let mut uuids: Vec<String> = changed.into_iter().map(|k| k.key).collect();
+                    uuids.extend(changed_supplied_rows(grid, &from, head).await?);
+                    uuids.sort();
+                    uuids.dedup();
                     let rows = rows_by_uuid(grid, &uuids).await?;
-                    let terms = write(&mut conn, Some(&uuids), &rows, head).await?;
+                    let supplied = supplied_by_uuid(grid, &uuids).await?;
+                    let terms = write(&mut conn, Some(&uuids), &rows, &supplied, head).await?;
                     Ok(Synced {
                         plan: "since",
                         rows: uuids.len(),
@@ -144,7 +149,12 @@ async fn whole(grid: &SqlitePool, conn: &mut SqliteConnection, head: &str) -> Re
     .fetch_all(grid)
     .await
     .context("read grid_rows for the terms")?;
-    let terms = write(conn, None, &rows, head).await?;
+    let supplied: Vec<Supplied> =
+        sqlx::query_as("SELECT uuid, kind, value FROM supplied_search_terms")
+            .fetch_all(grid)
+            .await
+            .context("read the supplied search terms")?;
+    let terms = write(conn, None, &rows, &supplied, head).await?;
     Ok(Synced {
         plan: "whole",
         rows: rows.len(),
@@ -172,6 +182,79 @@ async fn rows_by_uuid(grid: &SqlitePool, uuids: &[String]) -> Result<Vec<SearchT
     Ok(out)
 }
 
+/// The rows whose supplied search terms changed between the two commits.
+/// A key of that table is `uuid|kind|value`, and a uuid holds no `|`.
+async fn changed_supplied_rows(grid: &SqlitePool, from: &str, head: &str) -> Result<Vec<String>> {
+    let changed =
+        datalib_etl::doltlite_raw::changed_keys(grid, "supplied_search_terms", from, head).await?;
+    Ok(changed
+        .into_iter()
+        .filter_map(|k| k.key.split('|').next().map(str::to_string))
+        .collect())
+}
+
+/// A `supplied_search_terms` row, as the file needs it.
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct Supplied {
+    uuid: String,
+    kind: String,
+    value: String,
+}
+
+async fn supplied_by_uuid(grid: &SqlitePool, uuids: &[String]) -> Result<Vec<Supplied>> {
+    let mut out = Vec::new();
+    for chunk in uuids.chunks(CHUNK) {
+        // Audited: a placeholder per value, every value bound.
+        let sql = format!(
+            "SELECT uuid, kind, value FROM supplied_search_terms WHERE uuid IN ({})",
+            placeholders(chunk.len(), 1)
+        );
+        let mut q = sqlx::query_as::<_, Supplied>(sqlx::AssertSqlSafe(sql));
+        for uuid in chunk {
+            q = q.bind(uuid);
+        }
+        out.extend(
+            q.fetch_all(grid)
+                .await
+                .context("read changed supplied search terms")?,
+        );
+    }
+    Ok(out)
+}
+
+/// Every term of `rows`: what each derives, and what renders supplied for
+/// it. A supplied term whose row the grid does not hold is no term.
+fn every_term<'a>(
+    rows: &'a [SearchTermSource],
+    supplied: &'a [Supplied],
+) -> Result<Vec<(&'a SearchTermSource, SearchTerm)>> {
+    let by_uuid: std::collections::HashMap<&str, &SearchTermSource> =
+        rows.iter().map(|r| (r.uuid.as_str(), r)).collect();
+    let mut out: Vec<(&SearchTermSource, SearchTerm)> = rows
+        .iter()
+        .flat_map(|row| search_terms_of(row).into_iter().map(move |t| (row, t)))
+        .collect();
+    for term in supplied {
+        let Some(row) = by_uuid.get(term.uuid.as_str()) else {
+            continue;
+        };
+        let kind = SearchTermKind::parse(&term.kind).with_context(|| {
+            format!(
+                "a supplied search term of a kind this build does not know: {:?}",
+                term.kind
+            )
+        })?;
+        out.push((
+            row,
+            SearchTerm {
+                kind,
+                value: term.value.clone(),
+            },
+        ));
+    }
+    Ok(out)
+}
+
 /// One transaction: drop the rows `replace` names (every row, for `None`)
 /// with their terms, write `rows`' terms, drop the values no term uses any
 /// more, and record `head`. Returns the terms written.
@@ -179,6 +262,7 @@ async fn write(
     conn: &mut SqliteConnection,
     replace: Option<&[String]>,
     rows: &[SearchTermSource],
+    supplied: &[Supplied],
     head: &str,
 ) -> Result<usize> {
     sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
@@ -231,10 +315,7 @@ async fn write(
                 }
             }
         }
-        let terms: Vec<(&SearchTermSource, datalib_schema::search_terms::SearchTerm)> = rows
-            .iter()
-            .flat_map(|row| search_terms_of(row).into_iter().map(move |t| (row, t)))
-            .collect();
+        let terms = every_term(rows, supplied)?;
         for chunk in terms.chunks(CHUNK) {
             // Audited: four placeholders per term, every value bound.
             let sql = format!(
@@ -389,6 +470,7 @@ mod tests {
             render_version: 1,
             rows: vec![row],
             sections: Vec::new(),
+            search_terms: Vec::new(),
             edges: Vec::new(),
             contacts: Vec::new(),
             problems: Vec::new(),
@@ -547,6 +629,56 @@ mod tests {
         );
         assert!(!g.holds("Bridge").await, "a removed row's title stays");
         assert!(g.holds("Kept").await);
+    }
+
+    fn supplied(md: &mut RenderedMarkdown, kind: SearchTermKind, value: &str) {
+        md.search_terms
+            .push(datalib_schema::search_terms::SuppliedSearchTerm {
+                uuid: md.markdown_uuid.clone(),
+                kind,
+                value: value.to_string(),
+            });
+    }
+
+    /// A render's own terms (an email's To, its labels) reach the file,
+    /// and a pass in which only they changed still rewrites them: the
+    /// row itself did not move, so `grid_rows`' diff alone would miss it.
+    #[tokio::test]
+    async fn a_renders_supplied_terms_are_written_and_follow_its_rerender() {
+        let g = Grid::new().await;
+        let mut a = doc(&g.root, "c-a", "email:ann@example.com", "Away team");
+        supplied(&mut a, SearchTermKind::To, "email:bo@example.com");
+        supplied(&mut a, SearchTermKind::Label, "Inbox");
+        g.seal(&[a.clone()], &[]).await;
+        sync(&g.pool, &g.terms).await.unwrap();
+        assert_eq!(g.matching("email:bo@example.com").await, [hit("c-a", "to")]);
+        assert_eq!(g.matching("Inbox").await, [hit("c-a", "label")]);
+
+        a.search_terms.retain(|t| t.kind != SearchTermKind::Label);
+        supplied(&mut a, SearchTermKind::Cc, "email:cy@example.com");
+        g.seal(&[a], &[]).await;
+        let next = sync(&g.pool, &g.terms).await.unwrap();
+        assert_eq!((next.plan, next.rows), ("since", 1));
+        assert_eq!(g.matching("Inbox").await, Vec::new());
+        assert_eq!(g.matching("email:cy@example.com").await, [hit("c-a", "cc")]);
+        assert_eq!(g.matching("email:bo@example.com").await, [hit("c-a", "to")]);
+
+        g.seal(&[], &["c-a"]).await;
+        sync(&g.pool, &g.terms).await.unwrap();
+        assert_eq!(g.matching("email:bo@example.com").await, Vec::new());
+    }
+
+    /// A term names one of its document's rows, or it is a render bug the
+    /// search would carry silently.
+    #[tokio::test]
+    async fn a_term_for_a_row_the_document_does_not_have_is_refused() {
+        let g = Grid::new().await;
+        let mut a = doc(&g.root, "c-a", "email:ann@example.com", "Away team");
+        supplied(&mut a, SearchTermKind::To, "email:bo@example.com");
+        a.search_terms[0].uuid = "m-elsewhere".into();
+        let lock = WriteLock::new(g.pool.clone());
+        let err = apply_one(&lock, &g.root, &a).await.unwrap_err();
+        assert!(format!("{err:#}").contains("m-elsewhere"), "{err:#}");
     }
 
     /// A commit the grid no longer has, or a file in another shape, cannot

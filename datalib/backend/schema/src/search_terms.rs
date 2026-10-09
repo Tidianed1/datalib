@@ -31,6 +31,12 @@ pub enum SearchTermKind {
     Title = 4,
     /// A name the row shows: its author, its channel, its account.
     Name = 5,
+    /// The handle of someone the row was addressed to: an email's To.
+    To = 6,
+    /// The handle of someone copied on the row: an email's Cc.
+    Cc = 7,
+    /// Where the row is filed upstream: an email's mailboxes and labels.
+    Label = 8,
 }
 
 impl SearchTermKind {
@@ -58,17 +64,42 @@ impl SearchTermKind {
     }
 
     /// How strongly a match in this kind says the row is the one meant:
-    /// its own id beats its author, which beats what contains it, its
-    /// title, and last a name it shows.
+    /// its own id beats its author or addressee, which beat someone
+    /// copied and what contains it, then its title and labels, and last a
+    /// name it shows.
     pub fn affinity(self) -> u8 {
         match self {
             SearchTermKind::Id => 5,
-            SearchTermKind::From => 4,
-            SearchTermKind::Container => 3,
-            SearchTermKind::Title => 2,
+            SearchTermKind::From | SearchTermKind::To => 4,
+            SearchTermKind::Cc | SearchTermKind::Container => 3,
+            SearchTermKind::Title | SearchTermKind::Label => 2,
             SearchTermKind::Name => 1,
         }
     }
+
+    /// Whether the value is a person's handle, in some role on the row.
+    pub fn is_person(self) -> bool {
+        match self {
+            SearchTermKind::From | SearchTermKind::To | SearchTermKind::Cc => true,
+            SearchTermKind::Id
+            | SearchTermKind::Container
+            | SearchTermKind::Title
+            | SearchTermKind::Name
+            | SearchTermKind::Label => false,
+        }
+    }
+}
+
+/// A term a render supplies for one of its rows, beyond what
+/// [`search_terms_of`] derives from the row's columns: who it was
+/// addressed to, where it is filed. Stored in the render store and the
+/// grid index as a `supplied_search_terms` row
+/// (`crate::supplied_search_terms`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SuppliedSearchTerm {
+    pub uuid: String,
+    pub kind: SearchTermKind,
+    pub value: String,
 }
 
 /// The columns of a `grid_rows` row its terms come from.
@@ -143,10 +174,10 @@ pub fn search_terms_of(row: &SearchTermSource) -> Vec<SearchTerm> {
     out
 }
 
-/// What [`search_terms_of`] derives and how the file lays it out. A file built
-/// under another shape is rebuilt whole, so change it whenever either
-/// changes.
-pub const TERMS_SHAPE: &str = "2";
+/// What [`search_terms_of`] derives, which kinds renders supply, and how
+/// the file lays it out. A file built under another shape is rebuilt
+/// whole, so change it whenever any of them changes.
+pub const TERMS_SHAPE: &str = "3";
 
 /// The search terms file's tables, dictionary-encoded: each grid row once in
 /// `rows`, each distinct value once in `vals`, and a term is three
@@ -235,7 +266,7 @@ mod tests {
                 Some(*kind)
             );
         }
-        assert_eq!(SearchTermKind::parse("bcc"), None);
+        assert_eq!(SearchTermKind::parse("reactor"), None);
         assert_eq!(SearchTermKind::from_code(0), None);
     }
 
@@ -249,6 +280,9 @@ mod tests {
             SearchTermKind::From,
             SearchTermKind::Title,
             SearchTermKind::Name,
+            SearchTermKind::To,
+            SearchTermKind::Cc,
+            SearchTermKind::Label,
         ]
         .into_iter()
         .map(|k| (k, k.code()))
@@ -260,7 +294,10 @@ mod tests {
                 (SearchTermKind::Container, 2),
                 (SearchTermKind::From, 3),
                 (SearchTermKind::Title, 4),
-                (SearchTermKind::Name, 5)
+                (SearchTermKind::Name, 5),
+                (SearchTermKind::To, 6),
+                (SearchTermKind::Cc, 7),
+                (SearchTermKind::Label, 8),
             ]
         );
     }
