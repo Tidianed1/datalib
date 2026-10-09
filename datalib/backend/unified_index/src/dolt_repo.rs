@@ -820,16 +820,27 @@ impl IndexRepo for DoltRepo {
             .collect())
     }
 
-    async fn grid_row_refs(&self) -> Result<Vec<GridRowRef>, RepoError> {
+    async fn grid_row_refs_for_hits(
+        &self,
+        hit_paths: &[String],
+    ) -> Result<Vec<GridRowRef>, RepoError> {
+        use datalib_schema::grid_rows::{qmd_path_key, QMD_PATH_KEY_SQL};
         let Some(mut at) = self.pinned().await? else {
             return Ok(Vec::new());
         };
-        // Audited: `at.grid_rows` is a literal; no values.
+        let mut keys: Vec<String> = hit_paths.iter().map(|p| qmd_path_key(p)).collect();
+        keys.sort();
+        keys.dedup();
+        let wanted = serde_json::to_string(&keys)
+            .map_err(|e| RepoError::Internal(format!("encode hit paths: {e}")))?;
+        // Audited: `at.grid_rows` and the key expression are literals; the
+        // keys are bound.
         let rows = match sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT uuid, kind, COALESCE(qmd_path, '') AS qmd_path, provider, is_document \
-             FROM {}",
-            at.grid_rows
+             FROM {} WHERE {} IN (SELECT value FROM json_each(?))",
+            at.grid_rows, QMD_PATH_KEY_SQL
         )))
+        .bind(wanted)
         .fetch_all(&mut *at.tx)
         .await
         {
@@ -847,6 +858,13 @@ impl IndexRepo for DoltRepo {
                 is_document: r.try_get("is_document").unwrap_or(false),
             });
         }
+        // The key finds every row a hit could name and a few more; the
+        // exact path keeps the right ones.
+        let named: std::collections::HashSet<String> = hit_paths
+            .iter()
+            .map(|p| crate::qmd::mapping::norm_path(p))
+            .collect();
+        out.retain(|r| named.contains(&crate::qmd::mapping::norm_path(&r.qmd_path)));
         Ok(out)
     }
 
