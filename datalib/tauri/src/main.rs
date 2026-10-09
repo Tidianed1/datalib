@@ -122,11 +122,46 @@ fn launcher_state(app: AppHandle) -> serde_json::Value {
                 })
             })
             .collect();
+    // TODO(after 2026-12-09): drop with `launcher::move_from_documents`.
+    let move_from = launcher::offers_move_from_documents(&dir)
+        .then(|| documents_libraries_dir(&app))
+        .flatten()
+        .map(|old| launcher::tilde(&old, &home));
     serde_json::json!({
         "libraries": libraries,
         "libraries_dir": launcher::tilde(&dir, &home),
+        "move_from_documents": move_from,
         "suggested_name": launcher::suggested_name(&dir),
     })
+}
+
+// TODO(after 2026-12-09): remove, with `launcher::move_from_documents`.
+fn documents_libraries_dir(app: &AppHandle) -> Option<PathBuf> {
+    let documents = app.path().document_dir().ok()?;
+    Some(launcher::documents_libraries_dir(&documents))
+}
+
+/// Move the libraries in the Documents folder into the libraries
+/// folder; how many moved. Only from the libraries screen, where no
+/// library is open, and only on a click: reading Documents is what
+/// makes macOS ask the person for permission.
+// TODO(after 2026-12-09): remove, with `launcher::move_from_documents`.
+#[tauri::command]
+fn launcher_move_from_documents(app: AppHandle) -> Result<usize, String> {
+    if app
+        .state::<DataRoot>()
+        .0
+        .lock()
+        .expect("data root lock")
+        .is_some()
+    {
+        return Err("Close the open library first.".into());
+    }
+    let home = home_dir(&app).ok_or("No home directory.")?;
+    let old = documents_libraries_dir(&app).ok_or("No Documents folder.")?;
+    launcher::move_from_documents(&launcher::recents_file(&home), &old, &libraries_dir(&app))
+        .map(|moved| moved.len())
+        .map_err(|e| format!("Could not move the libraries: {e}"))
 }
 
 /// What the new-library field names: the folder, as the popover shows
@@ -463,6 +498,7 @@ fn main() {
             launcher_pick,
             launcher_forget,
             launcher_open_folder,
+            launcher_move_from_documents,
             library_menu,
             library_switch,
             libraries_show,

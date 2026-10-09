@@ -272,6 +272,11 @@
       .lib.missing .facts {
         color: var(--warn-fg);
       }
+      .moved {
+        margin: 10px 2px 0;
+        color: var(--faint);
+        font-size: 12px;
+      }
       .empty {
         height: 120px;
         border: 1.5px dashed var(--border);
@@ -370,6 +375,11 @@
         <p class="error" id="error" role="alert" hidden></p>
         <div class="list" id="list" hidden></div>
         <div class="empty" id="empty" hidden>Your libraries will be listed here.</div>
+        <!-- TODO(after 2026-12-09): remove with launcher::move_from_documents. -->
+        <p class="moved" id="moved" hidden>
+          <span id="moved-what"></span>
+          <button class="link" id="moved-move">Move them here</button>
+        </p>
       </div>
     </main>
 
@@ -598,6 +608,25 @@
         if (!$("pop").contains(e.target) && e.target !== $("new")) setPopover(false);
       });
       $("pick").addEventListener("click", () => run("launcher_pick"));
+      $("moved-move").addEventListener("click", async () => {
+        setBusy(true);
+        $("error").hidden = true;
+        try {
+          const n = await invoke("launcher_move_from_documents");
+          if (n === 0) {
+            fail("No libraries were found there to move.");
+            return;
+          }
+          setPopover(false);
+          $("name").value = "";
+          await render();
+        } catch (e) {
+          fail(e);
+          return;
+        }
+        setBusy(false);
+      });
+
       async function render() {
         const state = await invoke("launcher_state");
         const list = $("list");
@@ -606,6 +635,13 @@
         list.hidden = none;
         $("empty").hidden = !none;
         if (!$("name").value) $("name").value = state.suggested_name;
+        const from = state.move_from_documents;
+        $("moved").hidden = !from;
+        if (from) {
+          const c = document.createElement("code");
+          c.textContent = from;
+          $("moved-what").replaceChildren("Have libraries in ", c, "? ");
+        }
         // The first time, the one thing to do is make a library.
         if (none) setPopover(true);
       }

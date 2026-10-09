@@ -42,6 +42,121 @@ pub fn forgettable(root: &Path, libraries_dir: &Path) -> bool {
     root.parent() != Some(libraries_dir) || !is_data_root(root)
 }
 
+// TODO(after 2026-12-09): remove the move of libraries out of the
+// Documents folder (`offers_move_from_documents`, `move_from_documents`,
+// `drop_own_data_root`, `replace_recent`, the launcher's
+// `launcher_move_from_documents` and the screen's `#moved` line). By
+// then the libraries made while they went in Documents will have been
+// moved.
+
+/// The folder libraries went in before [`libraries_dir`]: `Datalib` in
+/// the platform's Documents directory, which the caller resolves.
+pub fn documents_libraries_dir(documents: &Path) -> PathBuf {
+    documents.join("Datalib")
+}
+
+/// Whether the screen says libraries can be moved out of Documents:
+/// only while the libraries folder holds nothing. This looks at the
+/// libraries folder alone, because macOS asks the person for permission
+/// when an app reads Documents, and they have not asked for anything yet.
+pub fn offers_move_from_documents(libraries_dir: &Path) -> bool {
+    std::fs::read_dir(libraries_dir).map_or(true, |mut entries| entries.next().is_none())
+}
+
+/// Move every library in `old_dir` into `libraries_dir` under its own
+/// name, and point the recent list at the new places. A library that is
+/// `old_dir` itself goes to `Default`. One whose name is taken stays
+/// where it is. Returns the new folders; empty when `old_dir` holds no
+/// library. The caller makes sure no library is open.
+pub fn move_from_documents(
+    recents_file: &Path,
+    old_dir: &Path,
+    libraries_dir: &Path,
+) -> std::io::Result<Vec<PathBuf>> {
+    let found: Vec<(PathBuf, PathBuf)> = if is_data_root(old_dir) {
+        vec![(old_dir.to_path_buf(), libraries_dir.join(DEFAULT_NAME))]
+    } else {
+        let mut inside: Vec<PathBuf> = std::fs::read_dir(old_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| is_data_root(p))
+            .collect();
+        inside.sort();
+        inside
+            .into_iter()
+            .map(|from| {
+                let name = from.file_name().expect("a directory entry has a name");
+                let to = libraries_dir.join(name);
+                (from, to)
+            })
+            .collect()
+    };
+    let mut moved = Vec::new();
+    for (from, to) in found {
+        if to.exists() {
+            continue;
+        }
+        std::fs::create_dir_all(libraries_dir)?;
+        std::fs::rename(&from, &to)?;
+        drop_own_data_root(&to.join("config.toml"), &from)?;
+        replace_recent(recents_file, &from, &to)?;
+        moved.push(to);
+    }
+    Ok(moved)
+}
+
+/// A config's top-level `data_root` defaults to the config's own folder,
+/// which moves with it; one written out as the old folder would keep
+/// pointing there. Drop that line, and only that line: any other value
+/// was chosen on purpose.
+fn drop_own_data_root(config: &Path, old_root: &Path) -> std::io::Result<()> {
+    let Ok(text) = std::fs::read_to_string(config) else {
+        return Ok(());
+    };
+    let old = old_root.to_string_lossy();
+    let names_old = |line: &str| {
+        let Some(value) = line.trim().strip_prefix("data_root") else {
+            return false;
+        };
+        let value = value.trim_start().strip_prefix('=').map(str::trim);
+        value
+            .and_then(|v| v.strip_prefix('"')?.strip_suffix('"'))
+            .is_some_and(|v| v.trim_end_matches('/') == old.trim_end_matches('/'))
+    };
+    // Top-level keys come before the first `[` table header.
+    let mut top = true;
+    let mut changed = false;
+    let mut kept = Vec::new();
+    for line in text.split_inclusive('\n') {
+        if line.trim_start().starts_with('[') {
+            top = false;
+        }
+        if top && names_old(line) {
+            changed = true;
+            continue;
+        }
+        kept.push(line);
+    }
+    if changed {
+        std::fs::write(config, kept.concat())?;
+    }
+    Ok(())
+}
+
+fn replace_recent(file: &Path, from: &Path, to: &Path) -> std::io::Result<()> {
+    let existing = std::fs::read_to_string(file).unwrap_or_default();
+    let roots: Vec<PathBuf> = parse_recents(&existing)
+        .into_iter()
+        .map(|p| if p == from { to.to_path_buf() } else { p })
+        .collect();
+    if roots.is_empty() {
+        return Ok(());
+    }
+    write_recents(file, &roots)
+}
+
 /// Take `root` off the recent list. Only the list changes: the library's
 /// folder and everything in it stay where they are, and opening it again
 /// lists it again.
@@ -368,6 +483,117 @@ mod tests {
         assert!(forgettable(&elsewhere, &dir));
         assert!(forgettable(&nested, &dir));
         assert!(forgettable(&dir.join("Deleted"), &dir));
+    }
+
+    #[test]
+    fn the_move_is_offered_only_while_the_libraries_folder_holds_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = libraries_dir(&tmp.path().join("app_data"));
+        assert!(offers_move_from_documents(&dir));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(offers_move_from_documents(&dir));
+        make_root(&dir.join(DEFAULT_NAME));
+        assert!(!offers_move_from_documents(&dir));
+    }
+
+    /// Each library keeps its name, the recent list keeps its order and
+    /// names the new places, and a folder that is not a library stays.
+    #[test]
+    fn moving_from_documents_brings_each_library_and_repoints_the_recent_list() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("recent-roots.json");
+        let old = documents_libraries_dir(&tmp.path().join("Documents"));
+        let dir = libraries_dir(&tmp.path().join("app_data"));
+        let elsewhere = tmp.path().join("elsewhere");
+        make_root(&old.join("Work"));
+        make_root(&old.join(DEFAULT_NAME));
+        make_root(&elsewhere);
+        std::fs::create_dir_all(old.join("notes")).unwrap();
+        record_recent(&f, &old.join("Work")).unwrap();
+        record_recent(&f, &elsewhere).unwrap();
+
+        let moved = move_from_documents(&f, &old, &dir).unwrap();
+        assert_eq!(moved, vec![dir.join(DEFAULT_NAME), dir.join("Work")]);
+        assert!(dir.join("Work/config.toml").is_file());
+        assert!(!old.join("Work").exists());
+        assert!(old.join("notes").is_dir());
+        assert_eq!(
+            paths(&libraries(&f, &dir)),
+            vec![elsewhere, dir.join("Work"), dir.join(DEFAULT_NAME)]
+        );
+    }
+
+    /// Before libraries each had a folder, the Datalib folder was the
+    /// library; it becomes `Default`.
+    #[test]
+    fn a_library_at_the_old_folder_itself_moves_to_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("recent-roots.json");
+        let old = documents_libraries_dir(&tmp.path().join("Documents"));
+        let dir = libraries_dir(&tmp.path().join("app_data"));
+        make_root(&old);
+        std::fs::create_dir_all(old.join("system")).unwrap();
+        std::fs::write(old.join("system/api-token"), "t").unwrap();
+
+        let moved = move_from_documents(&f, &old, &dir).unwrap();
+        assert_eq!(moved, vec![dir.join(DEFAULT_NAME)]);
+        assert!(dir.join(DEFAULT_NAME).join("system/api-token").is_file());
+        assert!(!old.exists());
+    }
+
+    /// A config that spelled out its own folder as `data_root` would
+    /// keep pointing at the old place after the move; that line goes.
+    #[test]
+    fn moving_drops_a_data_root_naming_the_old_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("recent-roots.json");
+        let old = documents_libraries_dir(&tmp.path().join("Documents"));
+        let dir = libraries_dir(&tmp.path().join("app_data"));
+        let work = old.join("Work");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::write(
+            work.join("config.toml"),
+            format!(
+                "data_root = \"{}\"\n\n[[groups]]\nid = \"x\"\ndata_root = \"{}\"\n",
+                work.display(),
+                work.display()
+            ),
+        )
+        .unwrap();
+        move_from_documents(&f, &old, &dir).unwrap();
+        let text = std::fs::read_to_string(dir.join("Work/config.toml")).unwrap();
+        assert_eq!(
+            text,
+            format!(
+                "\n[[groups]]\nid = \"x\"\ndata_root = \"{}\"\n",
+                work.display()
+            ),
+            "only the top-level line naming the old folder goes"
+        );
+    }
+
+    /// A name already taken in the libraries folder is never merged
+    /// into; that library stays in Documents.
+    #[test]
+    fn moving_leaves_a_library_whose_name_is_taken() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("recent-roots.json");
+        let old = documents_libraries_dir(&tmp.path().join("Documents"));
+        let dir = libraries_dir(&tmp.path().join("app_data"));
+        make_root(&old.join("Work"));
+        std::fs::create_dir_all(dir.join("Work")).unwrap();
+        assert!(move_from_documents(&f, &old, &dir).unwrap().is_empty());
+        assert!(old.join("Work/config.toml").is_file());
+    }
+
+    #[test]
+    fn nothing_in_documents_moves_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("recent-roots.json");
+        let dir = libraries_dir(&tmp.path().join("app_data"));
+        let moved = move_from_documents(&f, &tmp.path().join("Documents/Datalib"), &dir);
+        assert!(moved.unwrap().is_empty());
+        assert!(!f.exists());
     }
 
     #[test]
