@@ -165,7 +165,7 @@ test("a named paste beside the unnamed credential says what it strands", async (
   );
   const form = pasteForm(page);
   await form.getByLabel("Username").fill("picard@enterprise.test");
-  await expect(form).toContainText("also holds an unnamed fastmail-dav credential");
+  await expect(form).toContainText("An unnamed fastmail-dav credential is stored too");
 });
 
 test("under a latchkey gateway nothing is pasted here", async ({ page }) => {

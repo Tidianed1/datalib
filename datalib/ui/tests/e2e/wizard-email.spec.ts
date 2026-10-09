@@ -221,10 +221,7 @@ test("a check names the account; Load fills the label picker, and ticking writes
     wizard(page)
       .getByRole("listbox", { name: / account$/ })
       .getByRole("option"),
-  ).toHaveText([
-    /picard@enterprise\.gov\s*✓/,
-    /riker@enterprise\.gov\s*reported invalid/,
-  ]);
+  ).toHaveText([/picard@enterprise\.gov\s*✓/, /riker@enterprise\.gov\s*reported invalid/]);
   await wizard(page)
     .getByRole("listbox", { name: / account$/ })
     .getByRole("option")

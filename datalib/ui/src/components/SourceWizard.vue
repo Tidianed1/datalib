@@ -1583,8 +1583,8 @@ function submit() {
                       Stored as <code>{{ accountValue }}</code
                       >.
                       <template v-if="pasteLandsOn.besideUnnamed">
-                        An unnamed <code>{{ service }}</code> credential is stored too; with both,
-                        a source that names no account cannot be given one, so name an account in
+                        An unnamed <code>{{ service }}</code> credential is stored too; with both, a
+                        source that names no account cannot be given one, so name an account in
                         those sources too.
                       </template>
                     </template>
