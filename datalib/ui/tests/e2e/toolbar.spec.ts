@@ -1,5 +1,12 @@
 import { test, expect } from "@playwright/test";
-import { cardOf, shownCards, shownTabName, stubClipboard, tabLabels } from "./grid-helpers";
+import {
+  cardOf,
+  shownCards,
+  shownTabName,
+  stubClipboard,
+  tabLabels,
+  typeInto,
+} from "./grid-helpers";
 
 // The chrome around the cards: the toolbar's search box opens a search
 // card on what was typed, and ⌘K (Ctrl+K) reaches it from anywhere;
@@ -23,7 +30,7 @@ test.describe("toolbar", () => {
   test("the search box opens a search card on what was typed", async ({ page }) => {
     await page.goto("/");
     await expect(tabLabels(page)).toHaveText(PINNED);
-    await searchBox(page).fill("warp");
+    await typeInto(searchBox(page), "warp");
     await searchBox(page).press("Enter");
     const card = cardOf(page, 'searchView({"q":"warp"})');
     await expect(card).toBeVisible();

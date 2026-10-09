@@ -3,7 +3,7 @@
 // have typed.
 
 import { test, expect, type Page } from "@playwright/test";
-import { GRID, shownCards } from "./grid-helpers";
+import { GRID, shownCards, typeInto } from "./grid-helpers";
 
 // In the tab shown: a tab switched away from keeps its cards mounted.
 const input = (page: Page) => shownCards(page).getByTestId("search-input");
@@ -30,7 +30,7 @@ test("the list and the table are two views of one query", async ({ page }) => {
   // The table asks nothing until it is shown.
   await expect(shownCards(page).locator(".grid-box .slickgrid-container")).toHaveCount(0);
 
-  await input(page).fill("is:document -kind:nothing");
+  await typeInto(input(page), "is:document -kind:nothing");
   await expect(listShows(page)).toHaveAttribute("data-shown-query", "is:document -kind:nothing");
 
   await viewTab(page, "Table").click();
@@ -88,6 +88,6 @@ test("a source chip writes the source filter, and a typed one lights the chip", 
   await expect(input(page)).toHaveAttribute("data-query", "is:document");
   await expect(chips(page).nth(1)).toHaveAttribute("aria-pressed", "false");
 
-  await input(page).fill(narrowed);
+  await typeInto(input(page), narrowed);
   await expect(chips(page).nth(1)).toHaveAttribute("aria-pressed", "true");
 });

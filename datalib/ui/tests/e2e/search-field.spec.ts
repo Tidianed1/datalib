@@ -3,7 +3,7 @@
 // over the query it still is (docs/dev/plans/search_autocomplete.md).
 
 import { test, expect, type Page } from "@playwright/test";
-import { GRID, shownCards } from "./grid-helpers";
+import { GRID, shownCards, typeInto } from "./grid-helpers";
 
 const field = (page: Page) => shownCards(page).getByTestId("search-input");
 const menu = (page: Page) => shownCards(page).locator(".cm-tooltip-autocomplete");
@@ -12,7 +12,7 @@ test("a key, then a source picked from its values, is drawn as the source's chip
   page,
 }) => {
   await page.goto(GRID);
-  await field(page).fill("is:document");
+  await typeInto(field(page), "is:document");
   await field(page).press("End");
   await field(page).pressSequentially(" sou");
   await expect(menu(page).getByText("source_id:", { exact: true })).toBeVisible();
@@ -43,7 +43,7 @@ test("a key, then a source picked from its values, is drawn as the source's chip
 /// hand is a search, not a pick.
 test("Enter with no suggestion chosen leaves the typed value as it is", async ({ page }) => {
   await page.goto(GRID);
-  await field(page).fill("");
+  await typeInto(field(page), "");
   await field(page).pressSequentially("source_id:sla");
   await expect(menu(page)).toBeVisible();
   await field(page).press("Enter");
@@ -56,7 +56,7 @@ const slackChip = (page: Page) => field(page).locator('a.chip[data-entity="datal
 /// typed stays text until the cursor leaves it.
 test("a click selects a chip, and typing replaces it", async ({ page }) => {
   await page.goto(GRID);
-  await field(page).fill("is:document source_id:slack ");
+  await typeInto(field(page), "is:document source_id:slack ");
   await slackChip(page).click();
   await expect(slackChip(page)).toHaveClass(/cm-chip-selected/);
   await page.keyboard.type("gith");
@@ -68,7 +68,7 @@ test("a click selects a chip, and typing replaces it", async ({ page }) => {
 /// key's values offered.
 test("a double-click opens a chip to be edited", async ({ page }) => {
   await page.goto(GRID);
-  await field(page).fill("is:document source_id:slack ");
+  await typeInto(field(page), "is:document source_id:slack ");
   await slackChip(page).dblclick();
   await expect(slackChip(page)).toHaveCount(0);
   await expect(field(page)).toContainText("source_id:slack");
@@ -82,7 +82,7 @@ test("a double-click opens a chip to be edited", async ({ page }) => {
 /// own. Exclude adds the dash and keeps the chip.
 test("a chip's menu excludes what it names, and opens it as text", async ({ page }) => {
   await page.goto(GRID);
-  await field(page).fill("is:document source_id:slack ");
+  await typeInto(field(page), "is:document source_id:slack ");
   await slackChip(page).click({ button: "right" });
   const chipMenu = shownCards(page).locator(".cm-chip-menu");
   await expect(chipMenu.getByRole("menuitem")).toContainText([

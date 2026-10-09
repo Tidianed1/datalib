@@ -280,7 +280,7 @@ export async function searchAndSettle(
   opts: { grid?: Locator; timeout?: number } = {},
 ) {
   const grid = opts.grid ?? page.locator(".grid-wrap");
-  await page.getByTestId("search-input").fill(q);
+  await typeInto(page.getByTestId("search-input"), q);
   await expect(grid).toHaveAttribute("data-shown-query", q, {
     timeout: opts.timeout ?? SEARCH_SETTLE,
   });
@@ -735,4 +735,14 @@ export async function inDocFrame(page: Page, selector: string, timeout = 10_000)
     )
     .toBe(true);
   return hit!;
+}
+
+/// Puts `text` in a search field over what it held, as a person typing
+/// would. Playwright's `fill` leaves the field's CodeMirror editor as it
+/// was in WebKit, with no error, so a spec never fills one.
+export async function typeInto(field: Locator, text: string) {
+  await field.click();
+  await field.press("ControlOrMeta+a");
+  if (text === "") await field.press("Backspace");
+  else await field.page().keyboard.insertText(text);
 }

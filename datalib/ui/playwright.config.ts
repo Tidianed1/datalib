@@ -539,6 +539,8 @@ export default defineConfig({
         /score-sort-order\.spec\.ts/,
         /selected-message-outline\.spec\.ts/,
         /qmd-index-columns\.spec\.ts/,
+        // The search field, a CodeMirror editor: the desktop app's typing.
+        /search-field\.spec\.ts/,
         /column-reveal\.spec\.ts/,
         /yolink-plots\.spec\.ts/,
         /gallery\.spec\.ts/,

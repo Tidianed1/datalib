@@ -172,8 +172,10 @@ document *is* the query text:
   browse). People's chips will add changing the key (from, to, cc,
   with).
 - **For tests**, the editable element carries `data-testid`,
-  `role="searchbox"` and `data-query`, the query as it stands:
-  Playwright's `fill` works on it, `toHaveValue` does not.
+  `role="searchbox"` and `data-query`, the query as it stands. A spec
+  types into it with `typeInto` (`tests/e2e/grid-helpers.ts`), and
+  reads it with `toHaveAttribute("data-query", …)`: Playwright's `fill`
+  leaves it unchanged in WebKit, and `toHaveValue` has no value to read.
 
 Hand-written `contenteditable` is what this avoids: caret, IME and
 undo handling that WebKit, which the desktop app runs, gets wrong in
