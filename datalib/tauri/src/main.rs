@@ -105,6 +105,12 @@ fn version() -> &'static str {
 fn launcher_state(app: AppHandle) -> serde_json::Value {
     let dir = libraries_dir(&app);
     let home = home_dir(&app).unwrap_or_default();
+    // TODO(after 2026-12-09): drop `legacy` and `move_from_documents`
+    // with `launcher::move_from_documents`.
+    let old_dir = documents_libraries_dir(&app);
+    let legacy = old_dir.as_deref().map_or_else(Vec::new, |old| {
+        launcher::libraries_in_documents(&launcher::recents_file(&home), old)
+    });
     let libraries: Vec<serde_json::Value> =
         launcher::libraries(&launcher::recents_file(&home), &dir)
             .into_iter()
@@ -118,16 +124,18 @@ fn launcher_state(app: AppHandle) -> serde_json::Value {
                     "shown_path": elsewhere.then(|| launcher::tilde(&l.path, &home)),
                     "forgettable": launcher::forgettable(&l.path, &dir),
                     "found": l.found,
+                    "legacy": legacy.contains(&l.path),
                     "summary": launcher::summary(&l.path),
                 })
             })
             .collect();
-    // TODO(after 2026-12-09): drop with `launcher::move_from_documents`.
-    let move_from = documents_libraries_dir(&app)
-        .filter(|old| {
-            !launcher::libraries_in_documents(&launcher::recents_file(&home), old).is_empty()
+    let move_from = old_dir.filter(|_| !legacy.is_empty()).map(|old| {
+        serde_json::json!({
+            "count": legacy.len(),
+            "from": launcher::tilde(&old, &home),
+            "to": launcher::tilde(&dir, &home),
         })
-        .map(|old| launcher::tilde(&old, &home));
+    });
     serde_json::json!({
         "libraries": libraries,
         "libraries_dir": launcher::tilde(&dir, &home),

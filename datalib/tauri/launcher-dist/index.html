@@ -41,6 +41,9 @@
         --on-accent: #ffffff;
         --accent-soft: #e8effb;
         --warn-fg: #8a4a00;
+        --on-warn: #ffffff;
+        --warn-soft: #fdf0dc;
+        --warn-border: #e0b877;
         --error-fg: #b42318;
         --font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
         --mono: ui-monospace, "SF Mono", Menlo, monospace;
@@ -60,6 +63,9 @@
           --on-accent: #0d1b33;
           --accent-soft: #233552;
           --warn-fg: #f0b366;
+          --on-warn: #2b1a00;
+          --warn-soft: #3d2c14;
+          --warn-border: #7a5a2a;
           --error-fg: #ff8a80;
         }
       }
@@ -272,10 +278,55 @@
       .lib.missing .facts {
         color: var(--warn-fg);
       }
+      .lib .name .title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .tag {
+        padding: 1px 7px;
+        border-radius: 999px;
+        background: var(--warn-soft);
+        color: var(--warn-fg);
+        font-size: 11px;
+        font-weight: 600;
+        white-space: nowrap;
+      }
       .moved {
-        margin: 10px 2px 0;
-        color: var(--faint);
-        font-size: 12px;
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 14px 16px;
+        border-radius: 10px;
+        border: 1px solid var(--warn-border);
+        background: var(--warn-soft);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      .moved svg {
+        flex: 0 0 auto;
+        margin-top: 1px;
+        color: var(--warn-fg);
+      }
+      .moved .what {
+        flex: 1 1 auto;
+        min-width: 0;
+      }
+      .moved .what strong {
+        display: block;
+        font-size: 14px;
+        color: var(--warn-fg);
+      }
+      .moved .btn {
+        flex: 0 0 auto;
+        align-self: center;
+        background: var(--warn-fg);
+        border-color: var(--warn-fg);
+        color: var(--on-warn);
+        font-weight: 600;
+      }
+      .moved .btn:hover:not(:disabled) {
+        background: color-mix(in srgb, var(--warn-fg) 85%, black);
       }
       .empty {
         height: 120px;
@@ -376,10 +427,15 @@
         <div class="list" id="list" hidden></div>
         <div class="empty" id="empty" hidden>Your libraries will be listed here.</div>
         <!-- TODO(after 2026-12-09): remove with launcher::move_from_documents. -->
-        <p class="moved" id="moved" hidden>
-          <span id="moved-what"></span>
-          <button class="link" id="moved-move">Move them out</button>
-        </p>
+        <div class="moved" id="moved" hidden>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 4l9 15.5H3z" />
+            <path d="M12 10v4.5" />
+            <path d="M12 17v.5" />
+          </svg>
+          <div class="what" id="moved-what"></div>
+          <button class="btn small" id="moved-move"></button>
+        </div>
       </div>
     </main>
 
@@ -468,7 +524,17 @@
         name.className = "name";
         const strong = document.createElement("strong");
         strong.textContent = lib.name;
-        name.append(strong);
+        if (lib.legacy) {
+          const title = document.createElement("span");
+          title.className = "title";
+          const tag = document.createElement("span");
+          tag.className = "tag";
+          tag.textContent = "Legacy location";
+          title.append(strong, tag);
+          name.append(title);
+        } else {
+          name.append(strong);
+        }
         if (lib.shown_path) {
           const path = document.createElement("code");
           path.textContent = lib.shown_path;
@@ -633,16 +699,30 @@
         list.hidden = none;
         $("empty").hidden = !none;
         if (!$("name").value) $("name").value = state.suggested_name;
-        const from = state.move_from_documents;
-        $("moved").hidden = !from;
-        if (from) {
-          const c = document.createElement("code");
-          c.textContent = from;
-          $("moved-what").replaceChildren(
-            "macOS asks for permission to read libraries in ",
-            c,
-            ". ",
+        const move = state.move_from_documents;
+        $("moved").hidden = !move;
+        if (move) {
+          const code = (t) => {
+            const c = document.createElement("code");
+            c.textContent = t;
+            return c;
+          };
+          const one = move.count === 1;
+          const heading = document.createElement("strong");
+          heading.textContent = one
+            ? "1 library is in a legacy location"
+            : `${move.count} libraries are in a legacy location`;
+          const body = document.createElement("span");
+          body.append(
+            "macOS asks for permission before the app can read ",
+            code(move.from),
+            one ? ". Move your library" : ". Move your libraries",
+            " to the new preferred location, ",
+            code(move.to),
+            ".",
           );
+          $("moved-what").replaceChildren(heading, body);
+          $("moved-move").textContent = one ? "Move it" : "Move them";
         }
         // The first time, the one thing to do is make a library.
         if (none) setPopover(true);
