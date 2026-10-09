@@ -269,7 +269,13 @@ and could fold in later too.
 2. **The qmd fixes** ("Making qmd's tabs fast in themselves", 1 to 3)
    and `candidateLimit`, each its own PR, with a `qmd_facts_test` test
    for anything new we rely on.
-3. **Tabs.** The `tab` parameter on the search and groups endpoints,
+3. **Tabs.** The API half is built: `tab=fields|words|meaning` on the
+   search and groups endpoints, each tab its own list in the results
+   cache. Fields reads the terms file with any word as the start of one;
+   Words reads qmd's `documents_fts` with BM25 (1,000 deep, scoped by
+   `source_id:`, each hit placed on the message where its first word
+   is); Meaning is qmd's vector query alone. The UI half is next: the
+   `tab` parameter on the search and groups endpoints,
    the cache key, three requests from the grid, the tab strip with its
    greyed state and counts, the opening rule. The e2e spec holds the
    qmd answers back (`page.route`) and checks that Fields is on screen,

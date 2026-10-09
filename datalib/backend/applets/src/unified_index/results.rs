@@ -15,6 +15,8 @@ const CAPACITY: usize = 16;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Key {
     pub q: String,
+    /// Which tab's answer: each tab ranks the same words its own way.
+    pub tab: Option<super::tabs::SearchTab>,
     pub sort: Vec<Sort>,
     /// The group whose rows these are; empty for the whole search.
     pub within: Vec<Within>,
@@ -109,6 +111,7 @@ mod tests {
     fn key(q: &str, at: &str) -> Key {
         Key {
             q: q.into(),
+            tab: None,
             sort: Vec::new(),
             within: Vec::new(),
             at: Some(at.into()),

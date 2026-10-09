@@ -312,7 +312,12 @@ Pick the surface that fits the question:
   `slack:T…/U…`) is looked up in `grid_index/terms.sqlite`, not sent to
   qmd: every row that answers to each one, best match first, with
   `score` saying how (5 its own id, 4 its author, 3 what it is in,
-  2 its title, 1 a name it shows) and `snippet` naming the match. It answers a page: `limit=` rows from `offset=`, with `total`
+  2 its title, 1 a name it shows) and `snippet` naming the match.
+  `tab=` picks how free text is answered, each its own list:
+  `fields` (that terms file, any word as the start of one), `words`
+  (every document's text by BM25, from qmd's keyword index) or
+  `meaning` (qmd's vectors alone); with no `tab`, the free text goes to
+  qmd's hybrid query, identifiers aside. It answers a page: `limit=` rows from `offset=`, with `total`
   and the `next_offset`; `sort=created_at:desc,author` orders by grid
   columns in turn. `GET /applet/unified_index/search/groups?q=…&by=kind`
   counts the groups, and `within=[["kind","Chat"]]` on `search` lists

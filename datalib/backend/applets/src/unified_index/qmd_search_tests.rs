@@ -6,7 +6,8 @@
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
-use super::tests::{groups, index_over, search, search_within, uuids};
+use super::tabs::SearchTab;
+use super::tests::{groups, groups_tab, index_over, search, search_tab, search_within, uuids};
 use super::*;
 
 /// A word the fixture's corpus uses across several sources.
@@ -259,4 +260,68 @@ async fn free_text_without_a_qmd_index_says_it_is_not_built() {
         .0;
     assert!(matched.markdown_uuids.is_empty());
     assert_eq!(matched.errors.len(), 1, "{:?}", matched.errors);
+}
+
+/// Each tab answers the same words its own way, and keeps its answer apart
+/// from the others': Fields from the terms file, each row saying which of
+/// its terms matched; Words by BM25 from qmd's keyword index, best first;
+/// Meaning from qmd's vectors alone.
+#[tokio::test]
+async fn each_tab_answers_free_text_its_own_way() {
+    let root = fixture_root();
+    let s = index_over(root.path()).await;
+
+    let fields = search_tab(&s, "enterprise", Some(SearchTab::Fields), None, 1_000, None).await;
+    assert_eq!(fields.query_echo["tab"], "fields");
+    assert!(
+        !fields.rows.is_empty(),
+        "no row's terms start with the word"
+    );
+    for row in &fields.rows {
+        let (kind, value) = row
+            .snippet
+            .split_once(": ")
+            .expect("a fields hit names its term");
+        assert!(
+            datalib_schema::terms::TermKind::parse(kind).is_some(),
+            "{kind}"
+        );
+        assert!(value.to_lowercase().contains("enterprise"), "{value}");
+    }
+
+    let words = search_tab(&s, QUERY, Some(SearchTab::Words), None, 1_000, None).await;
+    assert_eq!(qmd_error(&words), None);
+    assert_eq!(words.query_echo["tab"], "words");
+    let ranked = scores(&words);
+    assert!(
+        ranked.windows(2).all(|w| w[0] >= w[1]),
+        "not best first: {ranked:?}"
+    );
+    assert!(
+        ranked.first() > ranked.last(),
+        "every score ties: {ranked:?}"
+    );
+
+    let meaning = search_tab(&s, QUERY, Some(SearchTab::Meaning), None, 1_000, None).await;
+    assert_eq!(qmd_error(&meaning), None);
+    assert_eq!(meaning.query_echo["tab"], "meaning");
+    assert!(!meaning.rows.is_empty());
+    assert_ne!(uuids(&words), uuids(&meaning), "two tabs gave one answer");
+}
+
+/// The Words tab is scoped by `source_id:` like any search, and its groups
+/// count the same rows its pages list.
+#[tokio::test]
+async fn the_words_tab_narrows_and_groups_like_a_search() {
+    let root = fixture_root();
+    let s = index_over(root.path()).await;
+    let narrowed = format!("{QUERY} source_id:slack");
+    let slack = search_tab(&s, &narrowed, Some(SearchTab::Words), None, 1_000, None).await;
+    assert!(slack.total > 0, "the fixture's slack source has the words");
+    assert!(slack.rows.iter().all(|r| r.source_id == "slack"));
+
+    let all = search_tab(&s, QUERY, Some(SearchTab::Words), None, 1_000, None).await;
+    let by_source = groups_tab(&s, QUERY, "source_ref", Some(SearchTab::Words)).await;
+    let counted: u64 = by_source.groups.iter().map(|g| g.count).sum();
+    assert_eq!(counted, all.total);
 }
