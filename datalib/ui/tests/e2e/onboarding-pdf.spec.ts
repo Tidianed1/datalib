@@ -122,8 +122,8 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     ).toBe(false);
 
     await page.goto(`${BASE}/`);
-    await expect(page.getByRole("heading", { name: "Set up a data library" })).toBeVisible();
-    await page.getByRole("button", { name: "Initialize empty data library" }).click();
+    await expect(page.getByRole("heading", { name: "Initialize data library" })).toBeVisible();
+    await page.getByRole("button", { name: "Initialize data library" }).click();
 
     // ── 3. landing on the sources card ───────────────────────────────
     await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
