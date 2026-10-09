@@ -1,4 +1,5 @@
-//! One embedding per document, read out of the qmd index.
+//! qmd's stored vectors, read out of its index: one embedding per
+//! document for the map, and the documents nearest a query for search.
 //!
 //! qmd keeps its vectors in a sqlite-vec `vec0` table, `vectors_vec`, one
 //! row per chunk keyed `<content hash>_<seq>`. A `vec0` table can only be
@@ -19,7 +20,8 @@
 //! agrees to the last digit.
 //!
 //! qmd's vectors are not unit length, so each chunk is normalised before
-//! a document's chunks are averaged, and the average normalised again.
+//! a document's chunks are averaged, and the average normalised again;
+//! a search divides each chunk's dot product by its length instead.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -226,7 +228,6 @@ pub async fn nearest_documents(
         bail!("the query's embedding is all zeros");
     }
 
-    let t0 = std::time::Instant::now();
     let wanted = serde_json::to_string(&collections.unwrap_or_default())?;
     let documents: Vec<(String, String)> = sqlx::query_as(
         "SELECT path, hash FROM documents \
@@ -247,7 +248,6 @@ pub async fn nearest_documents(
     hashes.sort_unstable();
     hashes.dedup();
 
-    let t_docs = t0.elapsed();
     // Where each chunk of those contents sits in the vector storage.
     let chunks: Vec<(String, i64, i64, i64)> = sqlx::query_as(
         "SELECT cv.hash, cv.pos, r.chunk_id, r.chunk_offset \
@@ -266,7 +266,6 @@ pub async fn nearest_documents(
             .or_default()
             .push((usize::try_from(*offset)?, i));
     }
-    let t_chunks = t0.elapsed();
     let storage_chunks: Vec<i64> = in_chunk.keys().copied().collect();
     let validity: HashMap<i64, Vec<u8>> = sqlx::query_as(
         "SELECT chunk_id, validity FROM vectors_vec_chunks \
@@ -313,7 +312,6 @@ pub async fn nearest_documents(
         }
     }
 
-    let t_scored = t0.elapsed();
     let mut ranked: Vec<(&str, &str, f32, i64)> = documents
         .iter()
         .filter_map(|(path, hash)| {
@@ -333,16 +331,6 @@ pub async fn nearest_documents(
     .await?
     .into_iter()
     .collect();
-    tracing::info!(
-        docs = documents.len(),
-        vectors = chunks.len(),
-        storage_chunks = storage_chunks.len(),
-        docs_ms = t_docs.as_millis() as u64,
-        chunks_ms = (t_chunks - t_docs).as_millis() as u64,
-        score_ms = (t_scored - t_chunks).as_millis() as u64,
-        bodies_ms = (t0.elapsed() - t_scored).as_millis() as u64,
-        "PROTO nearest_documents timing"
-    );
     Ok(ranked
         .into_iter()
         .map(|(path, hash, score, pos)| QmdHit {
