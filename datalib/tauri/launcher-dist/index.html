@@ -691,6 +691,7 @@
         setBusy(false);
       });
 
+      let suggested = "";
       async function render() {
         const state = await invoke("launcher_state");
         const list = $("list");
@@ -698,7 +699,11 @@
         const none = state.libraries.length === 0;
         list.hidden = none;
         $("empty").hidden = !none;
-        if (!$("name").value) $("name").value = state.suggested_name;
+        // A suggestion the person left alone follows the state: once
+        // Default exists it is no longer the name to offer.
+        const name = $("name");
+        if (!name.value || name.value === suggested) name.value = state.suggested_name;
+        suggested = state.suggested_name;
         const move = state.move_from_documents;
         $("moved").hidden = !move;
         if (move) {
