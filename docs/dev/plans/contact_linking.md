@@ -41,55 +41,15 @@ country code have no handle today; giving them one needs a default
 region, a setting of the applet that the render reads through the
 step's params.
 
-## `row_handles`: which rows mention a handle
+## Which rows name a handle: the search terms
 
-`grid_index` fills a derived table, `row_handles(uuid, handle, role)`,
-with `role` one of `author`, `recipient`, `reactor`, `mention`, `self`
-(a contact document's own handles). It is what the triage grid counts
-and what the `contact:` filter joins through. The index still knows
-handles and never contacts.
-
-**A mention counts only where the source marks it up**: Slack's
-`<@U02>` (already a chip link), a Notion user mention, a GitHub
-`@login`. Each carries an exact id. Addresses found in plain text are
-left out: quoted replies repeat every earlier message, so each would be
-counted again in every reply, and signatures add noise.
-
-### What it costs
-
-An estimate to check, not a measurement:
-
-- **Size.** About one entry per message (its author), one per reaction,
-  plus an email's To and Cc: perhaps two or three per grid row, at
-  roughly 100 bytes each and twice that with the handle index. The one
-  root `paged_grids.md` measured holds about 17 KB of index per grid
-  row (bodies and twelve indexes), so this adds a few percent.
-  Doltlite does not compress, so that is the real figure.
-- **Writes.** Keyed `(uuid, handle, role)`, a sync's new entries land
-  together at the tree's right edge, as its grid rows do
-  ([`doltlite.md`](../doltlite.md) § "What a write costs"). The
-  `handle` index scatters — a sync bringing messages from 200 people
-  touches about 200 of its pages — which is exactly what
-  `grid_rows_by_author` already does, one index of the kind grid_rows
-  has twelve of.
-- **Item rows only.** Messages, reactions and contact documents get
-  entries; a chat's document row does not, or a 10,000-message chat
-  would repeat every participant. A document's participants are a join
-  through its items.
-- **No cap on recipients.** To and Cc can run to hundreds, and
-  dropping some would make the record lie. One 300-recipient email is
-  about 60 KB of entries, in proportion to its body. What grows badly
-  is a reply-all thread — forty replies to the same 300 people is
-  12,000 entries saying one thing. If the budget below is missed, the
-  fix is to store each distinct recipient list once and point each
-  email at it (340 entries instead of 12,000), not to drop any.
-- **The triage grid's counts are a scan.** If they are slow at a few
-  million entries, `grid_index` keeps a `handle_counts` table as it
-  goes.
-
-Measure it first on a copy of a real root — counts and sizes only —
-against a budget: the table under 5% of the index, and `grid_index`'s
-incremental pass under 10% slower.
+Which rows name which handle, and in what role, is the person kinds of
+the search terms ([`search_tabs.md`](search_tabs.md) §"The search terms"):
+`from`, `to`, `cc`, `bcc`, `participant`, `mention`, `reactor`. That
+section has the rules for which rows carry a person and what it
+costs. The search terms hold handles and never contacts; the triage grid
+counts them, and a `contact:` value is matched against them
+([`search_autocomplete.md`](search_autocomplete.md)).
 
 ## Linking
 
@@ -132,8 +92,8 @@ longer working.
    the groups it belongs to, or its members if it is a group; and
    "Merge with…". A link made there is an operation like the
    popover's, not part of the card's draft.
-3. **A triage grid** of unresolved handles ranked by how often
-   `row_handles` names them. Linking the top fifty correspondents
+3. **A triage grid** of unresolved handles ranked by how many rows
+   name them in the search terms. Linking the top fifty correspondents
    covers most of a mailbox, and this is where that happens.
 
 **Only a person makes links.** What upstream asserts — this
@@ -178,16 +138,12 @@ searchable gets a snapshot step and rows with a `live_view`.
 
 ## Search
 
-`contact:<name or id>` is answered from the index alone, through what
-the snapshot rendered. Each contact's document lists its own handles in
-`row_handles` (role `self`), and a person's membership in a group is an
-edge from the person's document to the group's, labelled `member of`.
-So the filter finds the contact's document, takes its `self` handles
-and those of every group it has an edge to, and then finds the rows
-that mention any of them. Hits through a group carry the group's chip
-so it is clear why they matched. Like the rest of search, it is as
-fresh as the last sync. The filter is typed by people, so its spelling
-is kept stable once shipped.
+A contact is searched as a value of a person key, `with:contact:<id>`
+or `from:contact:<id>`, expanded into the contact's handles when the
+search runs: [`search_autocomplete.md`](search_autocomplete.md)
+§"Contacts: expanded when the search runs". It follows a link at once
+and needs nothing above. The snapshot is what makes a contact a row of
+its own, found by its name or its note.
 
 ## Option: the contact's name in the markdown
 
@@ -203,7 +159,7 @@ What it would take:
 - **Render reads the contacts store**, at one pinned commit, the way
   it reads its own raw store, and reports which commit it used.
 - **A link renders again only the documents that name its handles.**
-  `row_handles` says which those are; re-rendering every source on
+  the search terms say which those are; re-rendering every source on
   each link would make linking expensive enough to avoid.
 - **The chip still draws from the live answer**, so a document
   rendered before the last link never shows a stale name; the stored
@@ -236,21 +192,22 @@ Two things it does that this plan does not:
   search off. Here a row carries one handle in one role, and
   "involves" is a query.
 
-It also stores each identity once and refers to it by integer id —
-the interning [`row_handles`' costs](#what-it-costs) leave for a
-measurement to ask for.
+It also stores each identity once and refers to it by integer id, as
+the search terms' `vals` table does.
 
 ## Order of work
 
 Phases 1 to 3 (handles end to end, the store and its applet and chips,
 `NormalizedContact` and the source contacts) are built, but for the two
-pieces of phase 1 above: `row_handles`, and mentions outside Slack.
+pieces of phase 1 above: the person kinds in the search terms
+(`search_tabs.md` step 4), and mentions outside Slack.
 
 4. **Linking.** Merge, groups and members, the triage grid, adopting
    a source's handles. The contact card, undo and the export are
    [`contact_editing.md`](contact_editing.md)'s.
-5. **Contacts in search.** The snapshot step, `live_view`, the
-   `contact:` filter.
+5. **Contacts as rows.** The snapshot step and `live_view`. The
+   `contact:` value in search is
+   [`search_autocomplete.md`](search_autocomplete.md)'s.
 6. **Later.** Suggestions, on a branch of the store, so nothing
    automatic reaches `main` without a person accepting it; Lightroom
    face tags; a distinguished "Me" contact seeded from each source's

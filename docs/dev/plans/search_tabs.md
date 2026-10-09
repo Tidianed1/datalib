@@ -1,6 +1,7 @@
 # Search tabs: fields first, then words, then meaning
 
-*Proposal (2026-10-08). Nothing here is built. Every number below was
+*Proposal (2026-10-08). Steps 0 to 2 of the order of work are built;
+the tabs and the terms from renders are not. Every number below was
 read from a real data root that day (122,487 `grid_rows`; a 1.6 GB
 qmd index holding 180,773 vectors for 60,559 documents in 8 sources)
 through its `system/runs/runs.sqlite`, the
@@ -11,7 +12,7 @@ ships, run on a copy of the index. Each SQL timing includes about
 Today a free-text search is one qmd hybrid query (keyword and vector,
 merged), and the grid shows nothing until it answers. This plan runs
 three searches at once, each shown in its own tab: a full-text match
-over everything a row answers to (`grid_row_terms`), qmd's keyword
+over everything a row answers to (the search terms), qmd's keyword
 search, and qmd's vector search. A tab
 is greyed out until its search answers, and what a tab shows never
 changes while you look at it.
@@ -71,7 +72,7 @@ indexes it already has:
 
 | tab | what answers it | pages |
 |---|---|---|
-| **Fields** | `grid_row_terms` (below): every id, person, label and title a row answers to, in one full-text index | without limit, like every SQL search |
+| **Fields** | the search terms (below): every id, person, label and title a row answers to, in one full-text index | without limit, like every SQL search |
 | **Words** | qmd's keyword (BM25) query over every document's whole text | qmd's ranked list |
 | **Meaning** ("QMD semantic (vector)") | qmd's vector query | qmd's ranked list |
 
@@ -121,7 +122,7 @@ its WAL included) directly with BM25 and page it without limit, rather
 than going through `qmd mcp` at all. Its keyword query took 0.07–0.5 s
 through qmd; read directly it needs no daemon and no model.
 
-### `grid_row_terms`: everything a row answers to, in one tall table
+### The search terms: everything a row answers to, in one tall table
 
 A row answers to more than its columns hold. An email has one
 `author_handle` in `grid_rows`, but also its To, Cc and Bcc, its
@@ -170,12 +171,33 @@ test are in [`doltlite.md`](../doltlite.md) § "Full-text search
   `grid_rows` cannot give again, so a missing or damaged one is
   rebuilt, not migrated.
 
-**`kind` is an enum** (`TermKind`: `id`, `from`, `to`, `cc`, `bcc`,
-`participant`, `mention`, `label`, `title`, `name`, …) with the usual
-strum/serde pair, and a new kind is new data, never a schema change.
-Each kind has an affinity, a pure function in code (`affinity(kind)`):
-a row's own id outranks a `to`, a `to` outranks a `cc`, a `title`
-outranks a `name`.
+**`kind` is an enum**, `TermKind`, with the usual strum pair, and a
+new kind is new data, never a schema change. Built: `id`, `container`,
+`from`, `title`, `name`. Planned: the person kinds `to`, `cc`, `bcc`,
+`participant`, `mention` and `reactor`, and `label`; and, if the terms
+come to serve the `author:`, `channel:` and `account:` keys,
+`name` split into one kind for each ([`search_autocomplete.md`](search_autocomplete.md)
+§"The wide columns and the tall search terms"). Each kind has an affinity, a
+pure function in code (`affinity(kind)`): a row's own id outranks a
+`to`, a `to` outranks a `cc`, a `title` outranks a `name`.
+
+**Which rows carry a person, and in what role:**
+
+- **On the item, not the document.** A message, a reaction, an email
+  carries its people; a chat's document row does not, or a
+  10,000-message chat would repeat every participant on it. A
+  document's people are a query over its items.
+- **A mention only where the source marks it up**: Slack's `<@U02>`,
+  a Notion user mention, a GitHub `@login`, each an exact id. Never an
+  address found in running text: quoted replies repeat every earlier
+  message and signatures add noise.
+- **No cap on recipients.** Dropping some would make the record lie.
+  `vals` already stores each address once; what still grows is a
+  reply-all thread, forty replies to the same 300 people being 12,000
+  terms saying one thing. If that misses the budget, store each
+  distinct recipient list once and point each email at it, never drop
+  any. Measure on a copy of a real root first, as the derived terms
+  were, with `grid_index`'s incremental pass under 10% slower.
 
 **One table holds every term, so one query reaches all of them.** The
 uuid columns are in it as `id` terms, `author_handle` as a `from` term,
@@ -205,7 +227,10 @@ edges: each time it loads a document it deletes the terms carrying its
   `-to:…` is `uuid NOT IN` that. These keys are declared beside the
   grid's column keys and read through the same grammar, so a key the
   search does not have is still refused by name. `from:` replaces
-  `author_handle:`, which a person no longer needs to know.
+  `author_handle:`, which a person no longer needs to know. A value
+  that is a handle or a contact matches exactly and anything else
+  matches part of one, and `with:` is a person in any role:
+  [`search_autocomplete.md`](search_autocomplete.md) §"The keys".
 - **Mixed with other terms**, it narrows like any other key:
   `label:work source_id:gmail is:document budget` is the rows matching
   every part.
@@ -215,9 +240,10 @@ the body are what the Words and Meaning tabs search; a preview is only
 the first few hundred characters, so a term made of it would match a
 word near the top of a message and miss the same word further down.
 
-It replaces three things this plan used to list separately: the
-four-column uuid lookup, a separate `grid_row_handles` table, and the
-substring scans of the short fields.
+It replaces three things planned separately: the four-column uuid
+lookup, the substring scans of the short fields, and `row_handles`,
+a table of which rows name which handle in which role: that is the
+terms' person kinds.
 
 **Not `edges`.** An edge leads from a place in one document to a place
 in another, for navigation, and only Perseus writes them
@@ -256,7 +282,7 @@ and could fold in later too.
    the facts in `doltlite_facts_test`, the write cost in
    `doltlite.md`, and the attached terms file beside a sealing writer
    in `doltlite_two_process_test`.
-1. **`grid_row_terms`, derived terms only.** Built in this step's PR,
+1. **The search terms, derived terms only.** Built in this step's PR,
    with one narrowing: only a query made entirely of identifiers is
    answered from the terms; words still go to qmd until the tabs give
    their answer a place. On a real root (122,579 rows) the first pass
