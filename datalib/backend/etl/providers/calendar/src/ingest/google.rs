@@ -10,6 +10,7 @@ use std::collections::HashSet;
 
 use anyhow::{Context, Result};
 use datalib_etl::control::DownloadControl;
+use datalib_etl::doltlite_raw as dr;
 use datalib_etl::progress::Progress;
 use datalib_etl::raw_store::Sealer;
 use datalib_etl::run_problems::{self, RunProblems};
@@ -21,7 +22,7 @@ use serde_json::Value;
 use tracing::warn;
 
 use super::db::RawDb;
-use super::schema_raw::{AccountRow, CalendarRow, GoogleEventRow};
+use super::schema_raw::{AccountRow, CalendarRow, GoogleEventRow, GOOGLE_EVENT_VOLATILE_PATHS};
 use super::{select_calendars, FetchSummary, Window};
 
 pub const HTTP_SERVICE: HttpService = HttpService::GoogleCalendar;
@@ -301,7 +302,8 @@ async fn apply(
     let mut deleted: Vec<String> = Vec::new();
     let mut kept = Vec::new();
     for item in items {
-        let Some(row) = GoogleEventRow::new(calendar_id, item) else {
+        let (content, volatile) = dr::split_volatile(item, GOOGLE_EVENT_VOLATILE_PATHS);
+        let Some(row) = GoogleEventRow::new(calendar_id, &content) else {
             summary.errors += 1;
             seen.unidentified += 1;
             continue;
@@ -310,17 +312,17 @@ async fn apply(
             seen.cancelled.insert(row.event_id.clone());
             deleted.push(row.event_id.clone());
         } else {
-            kept.push(row);
+            kept.push((row, volatile));
         }
     }
-    let rows: Vec<GoogleEventRow> = kept
+    let (rows, volatile): (Vec<GoogleEventRow>, Vec<Option<Value>>) = kept
         .into_iter()
-        .filter(|r| {
+        .filter(|(r, _)| {
             !r.recurring_event_id
                 .as_ref()
                 .is_some_and(|series| seen.cancelled.contains(series))
         })
-        .collect();
+        .unzip();
     for row in &rows {
         seen.listed.insert(row.event_id.clone());
         if known.contains(&row.event_id) {
@@ -329,7 +331,7 @@ async fn apply(
             summary.events_new += 1;
         }
     }
-    RawDb::upsert_google_events_in_tx(tx, &rows).await?;
+    RawDb::upsert_google_events_in_tx(tx, &rows, &volatile).await?;
     let mut wrote = rows.len() as u64;
     if !deleted.is_empty() {
         let mut gone = RawDb::google_occurrences_of(tx, calendar_id, &deleted).await?;

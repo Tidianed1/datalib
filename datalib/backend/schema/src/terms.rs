@@ -2,7 +2,7 @@
 // the people it names, its title, its names. One row of the terms file per
 // term, so a pasted id or address is one lookup, whatever column holds it.
 // The file, and why it is plain SQLite beside the grid index rather than a
-// table in it: `docs/dev/plans/search_tabs.md` § "`grid_row_terms`".
+// table in it: `docs/dev/plans/search_tabs.md` § "The search terms".
 
 /// What a term is to its row. Stored as its [`code`](TermKind::code).
 #[derive(
