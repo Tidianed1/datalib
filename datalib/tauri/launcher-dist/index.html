@@ -6,9 +6,8 @@
 
   It lists the libraries, each with what the server last wrote down
   about it (sources, size, last sync), and makes a new one from a name
-  or a folder. A plain name is a library in the app's libraries folder
-  (`libraries_dir` in src/main.rs), and the first one's name is filled
-  in for you.
+  or a folder. A plain name is a library in ~/Datalib, and the first
+  one's name is filled in for you.
 
   This is the ONLY page the shell bundles. Once a library is chosen the
   same window loads the spawned `datalib-http`'s page, which serves the
@@ -680,7 +679,7 @@
         try {
           const n = await invoke("launcher_move_from_documents");
           if (n === 0) {
-            fail("Nothing moved: a library with the same name is already in the libraries folder.");
+            fail("Nothing moved: a library with the same name is already in the new location.");
             return;
           }
           await render();

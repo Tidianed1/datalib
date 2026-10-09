@@ -42,7 +42,7 @@ never has to resolve the tauri dependency tree. Drive it with cargo/pnpm:
 # via the config's beforeBuildCommand, compiles the shell, bundles the
 # .app, and launches it. Optional data-root arg skips the folder picker.
 ./run.sh
-./run.sh ~/Work/my-library
+./run.sh ~/Datalib/Default
 
 # Release bundle → target/release/bundle/macos/Datalib.app. The CLI is
 # pinned by package.json + pnpm-lock.yaml here (never `pnpm dlx`, which
@@ -82,10 +82,9 @@ opens and asks.
 ## The libraries screen
 
 It lists the recent libraries (`~/.datalib/recent-roots.json`), then
-any other library in the libraries folder: `Libraries` in the app's
-data directory (Tauri's `app_data_dir`), which on macOS is
-`~/Library/Application Support/com.imbue.datalib/Libraries`. macOS asks
-before an app reads `~/Documents` and does not ask for this folder.
+any other library in the libraries folder, `~/Datalib`. It is not in
+`~/Documents`, `~/Desktop` or `~/Downloads` because macOS asks before
+an app reads those.
 Each shows the source
 count, size and last sync that `datalib-http` last wrote to its
 `system/library-summary.json`; one whose folder is gone stays listed as

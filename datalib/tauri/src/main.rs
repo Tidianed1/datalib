@@ -270,7 +270,7 @@ async fn launcher_pick(app: AppHandle) -> Result<bool, String> {
 #[tauri::command]
 fn launcher_forget(app: AppHandle, path: String) -> Result<(), String> {
     if !launcher::forgettable(Path::new(&path), &libraries_dir(&app)) {
-        return Err("A library in the app's libraries folder is always listed.".into());
+        return Err("A library in the Datalib folder is always listed.".into());
     }
     let home = home_dir(&app).ok_or("No home directory.")?;
     launcher::forget_recent(&launcher::recents_file(&home), Path::new(&path))
@@ -453,11 +453,8 @@ fn home_dir(app: &AppHandle) -> Option<PathBuf> {
 }
 
 fn libraries_dir(app: &AppHandle) -> PathBuf {
-    let app_data = app
-        .path()
-        .app_data_dir()
-        .expect("the platform names a data directory for the app");
-    launcher::libraries_dir(&app_data)
+    let home = home_dir(app).expect("the platform names a home directory");
+    launcher::libraries_dir(&home)
 }
 
 fn main() {

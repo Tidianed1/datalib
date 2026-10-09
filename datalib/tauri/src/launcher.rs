@@ -15,12 +15,11 @@ pub fn recents_file(home: &Path) -> PathBuf {
     home.join(".datalib").join("recent-roots.json")
 }
 
-/// Where a library given by name lives: `Libraries` in `app_data`, the
-/// directory the platform gives this app for its own data (the caller
-/// resolves it). macOS asks before an app reads the Documents folder
-/// and does not ask for this one.
-pub fn libraries_dir(app_data: &Path) -> PathBuf {
-    app_data.join("Libraries")
+/// Where a library given by name lives: `Datalib` in the home
+/// directory. Not in Documents, Desktop or Downloads: macOS asks the
+/// person for permission before an app reads those.
+pub fn libraries_dir(home: &Path) -> PathBuf {
+    home.join("Datalib")
 }
 
 pub fn record_recent(file: &Path, root: &Path) -> std::io::Result<()> {
@@ -442,7 +441,7 @@ mod tests {
     fn libraries_in_the_libraries_folder_are_listed_after_the_recent_ones() {
         let tmp = tempfile::tempdir().unwrap();
         let f = tmp.path().join("recent-roots.json");
-        let dir = libraries_dir(&tmp.path().join("app_data"));
+        let dir = libraries_dir(&tmp.path().join("home"));
         let work = dir.join("Work");
         let default = dir.join(DEFAULT_NAME);
         let elsewhere = tmp.path().join("elsewhere");
@@ -462,7 +461,7 @@ mod tests {
     #[test]
     fn only_a_library_outside_the_libraries_folder_or_gone_can_be_forgotten() {
         let tmp = tempfile::tempdir().unwrap();
-        let dir = libraries_dir(&tmp.path().join("app_data"));
+        let dir = libraries_dir(&tmp.path().join("home"));
         let default = dir.join(DEFAULT_NAME);
         let nested = dir.join("nested").join("lib");
         let elsewhere = tmp.path().join("elsewhere");
@@ -483,7 +482,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let f = tmp.path().join("recent-roots.json");
         let old = documents_libraries_dir(&tmp.path().join("Documents"));
-        let dir = libraries_dir(&tmp.path().join("app_data"));
+        let dir = libraries_dir(&tmp.path().join("home"));
         let elsewhere = tmp.path().join("elsewhere");
         make_root(&old.join("Work"));
         make_root(&old.join(DEFAULT_NAME));
@@ -524,7 +523,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let f = tmp.path().join("recent-roots.json");
         let old = documents_libraries_dir(&tmp.path().join("Documents"));
-        let dir = libraries_dir(&tmp.path().join("app_data"));
+        let dir = libraries_dir(&tmp.path().join("home"));
         make_root(&old);
         std::fs::create_dir_all(old.join("system")).unwrap();
         std::fs::write(old.join("system/api-token"), "t").unwrap();
@@ -543,7 +542,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let f = tmp.path().join("recent-roots.json");
         let old = documents_libraries_dir(&tmp.path().join("Documents"));
-        let dir = libraries_dir(&tmp.path().join("app_data"));
+        let dir = libraries_dir(&tmp.path().join("home"));
         let work = old.join("Work");
         std::fs::create_dir_all(&work).unwrap();
         std::fs::write(
@@ -575,7 +574,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let f = tmp.path().join("recent-roots.json");
         let old = documents_libraries_dir(&tmp.path().join("Documents"));
-        let dir = libraries_dir(&tmp.path().join("app_data"));
+        let dir = libraries_dir(&tmp.path().join("home"));
         make_root(&old.join("Work"));
         record_recent(&f, &old.join("Work")).unwrap();
         std::fs::create_dir_all(dir.join("Work")).unwrap();
@@ -587,7 +586,7 @@ mod tests {
     fn no_recent_library_in_documents_moves_nothing() {
         let tmp = tempfile::tempdir().unwrap();
         let f = tmp.path().join("recent-roots.json");
-        let dir = libraries_dir(&tmp.path().join("app_data"));
+        let dir = libraries_dir(&tmp.path().join("home"));
         let moved = move_from_documents(&f, &tmp.path().join("Documents/Datalib"), &dir);
         assert!(moved.unwrap().is_empty());
     }
@@ -615,7 +614,7 @@ mod tests {
     #[test]
     fn the_first_library_is_suggested_as_default_and_the_next_has_no_suggestion() {
         let tmp = tempfile::tempdir().unwrap();
-        let dir = libraries_dir(&tmp.path().join("app_data"));
+        let dir = libraries_dir(&tmp.path().join("home"));
         assert_eq!(suggested_name(&dir), DEFAULT_NAME);
         make_root(&dir.join(DEFAULT_NAME));
         assert_eq!(suggested_name(&dir), "");
@@ -624,7 +623,7 @@ mod tests {
     #[test]
     fn a_name_goes_in_the_libraries_folder_and_a_path_is_taken_as_it_is() {
         let home = Path::new("/Users/x");
-        let dir = Path::new("/Users/x/Library/Application Support/com.imbue.datalib/Libraries");
+        let dir = Path::new("/Users/x/Datalib");
         assert_eq!(resolve_new("  ", home, dir), None);
         assert_eq!(resolve_new("Work", home, dir), Some(dir.join("Work")));
         assert_eq!(
