@@ -992,7 +992,9 @@ def _check_no_hand_rolled_atomic_write(root: Path) -> int:
 # any more still costs a resolve, a lockfile entry and a license review.
 _CARGO_MANIFEST = "datalib/backend/Cargo.toml"
 # `<crate>__<binary>` is the label crate_universe gives a crate's binary.
-_CRATE_LABEL = re.compile(r"@datalib_crates//:([A-Za-z0-9_.-]+?)(?:__[A-Za-z0-9_.-]+)?\"")
+_CRATE_LABEL = re.compile(
+    r"@datalib_crates//:([A-Za-z0-9_.-]+?)(?:__[A-Za-z0-9_.-]+)?\""
+)
 
 
 def _check_cargo_manifest_crates_used(root: Path) -> int:
