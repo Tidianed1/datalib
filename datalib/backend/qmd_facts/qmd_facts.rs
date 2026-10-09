@@ -159,6 +159,11 @@ impl Server {
         if let Some(c) = collections {
             arguments["collections"] = json!(c);
         }
+        self.query_args(arguments)
+    }
+
+    /// [`Server::query`] with the `query` tool's arguments as given.
+    fn query_args(&mut self, arguments: Value) -> Vec<String> {
         let resp = self.call(
             "tools/call",
             json!({"name": "query", "arguments": arguments}),
@@ -290,6 +295,63 @@ fn only_the_first_server_after_a_keyword_update_writes_the_index() {
     assert!(!server.lex("Farpoint", 10, None).is_empty());
     server.stop();
     assert_eq!(stamp(&root.index_file()), after_first);
+}
+
+// ── How much a query returns ────────────────────────────────────────
+
+/// Each sub-query takes the best 20 documents of each collection it
+/// searches, however deep `limit` and `candidateLimit` ask: one source
+/// alone never answers with more.
+#[test]
+fn a_sub_query_takes_twenty_documents_from_a_collection() {
+    let root = Root::new();
+    for i in 0..50 {
+        root.write("bridge", &format!("log-{i}.md"), &warp_log(i));
+    }
+    root.keyword_index(&["bridge"]);
+    let mut server = root.serve();
+    let args = json!({
+        "searches": [{"type": "lex", "query": "warp"}],
+        "limit": 100,
+        "candidateLimit": 100,
+        "rerank": false,
+    });
+    assert_eq!(server.query_args(args).len(), 20);
+    server.stop();
+}
+
+/// The sub-queries' lists are merged, then cut to `candidateLimit`, 40
+/// unless asked, rerank or not: why the daemon sends one.
+#[test]
+fn the_merged_answer_is_cut_to_its_candidate_limit() {
+    let root = Root::new();
+    let decks = ["bridge", "engineering", "sickbay"];
+    for deck in decks {
+        for i in 0..20 {
+            root.write(deck, &format!("log-{i}.md"), &warp_log(i));
+        }
+    }
+    root.keyword_index(&decks);
+    let mut server = root.serve();
+    let asked = |candidates: Option<usize>| {
+        let mut args = json!({
+            "searches": [{"type": "lex", "query": "warp"}],
+            "limit": 100,
+            "collections": decks,
+            "rerank": false,
+        });
+        if let Some(n) = candidates {
+            args["candidateLimit"] = json!(n);
+        }
+        args
+    };
+    assert_eq!(server.query_args(asked(None)).len(), 40);
+    assert_eq!(server.query_args(asked(Some(100))).len(), 60);
+    server.stop();
+}
+
+fn warp_log(i: usize) -> String {
+    format!("# Log {i}\n\nThe Enterprise holds at warp six.\n")
 }
 
 // ── Scoping a query to collections ──────────────────────────────────

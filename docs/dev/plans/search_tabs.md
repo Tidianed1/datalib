@@ -107,14 +107,19 @@ contains it, which Fields already found.
 
 Fields pages without limit through the grid's existing SQL paging.
 
-Words and Meaning are ranked lists, so each is cut somewhere. Today the
-cut is 40, by accident. The daemon passes `candidateLimit`, and each
-tab gets its own depth: Words deep (a keyword match is either there or
-not, so its long tail is still real matches), Meaning shallower (past a
-few hundred, nearness is noise). Measure what a larger
-`candidateLimit` costs before choosing the numbers; the vector scan
-already fetches `limit × 3` candidates per collection, so most of the
-cost is paid either way.
+Words and Meaning are ranked lists, so each is cut somewhere. The
+daemon now sends `candidateLimit`, which lifted the merged cut of 40
+for free (a hybrid search for one common word went from 40 hits to 224
+on a real root). What remains is qmd's own: each sub-query takes the
+best 20 documents of each collection, hard-coded and out of reach of
+the MCP arguments (fact 7 in `qmd_behaviour.md`). That is a fair depth
+for Meaning, where nearness past the first few is noise. It is too
+shallow for Words, where a keyword match far down the list is still a
+real match: the Words tab should read qmd's own FTS5 table
+(`documents_fts` in `index.sqlite`, plain SQLite that doltlite reads,
+its WAL included) directly with BM25 and page it without limit, rather
+than going through `qmd mcp` at all. Its keyword query took 0.07–0.5 s
+through qmd; read directly it needs no daemon and no model.
 
 ### `grid_row_terms`: everything a row answers to, in one tall table
 

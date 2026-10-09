@@ -225,6 +225,17 @@ the facts are about qmd and not about our daemon.
    embedding model anywhere qmd could load one from. Measured on a
    real root, a `lex` query took 0.07–0.23 s and a hybrid one
    5.8–10.6 s on a fresh server.
+7. **Each sub-query takes 20 documents from each collection, and the
+   merged list is cut to `candidateLimit`, 40 unless asked.** qmd's
+   structured search fetches the best 20 of each collection it searches,
+   for each `lex` and each `vec` sub-query (hard-coded in
+   `structuredSearch`, `dist/store.js`), merges them, and keeps the
+   first `candidateLimit`, with rerank off as much as on, whatever
+   `limit` says. `QmdDaemon` sends `candidateLimit` equal to `limit`, so
+   a search reaches 20 per source per sub-query. On a real root with 11
+   sources a hybrid search for one common word went from 40 hits to
+   224, in the same time. One source never answers with more than 20 a
+   sub-query; nothing in the MCP arguments moves that.
 
 What follows for our side. By fact 3, the applet names the collections
 on every query: an unscoped search names every collection
