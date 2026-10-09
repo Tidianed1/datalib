@@ -28,7 +28,7 @@ fn stage_runtime_once() {
 }
 
 /// The fixture's root: its grid index, its qmd index and qmd's model.
-fn fixture_root() -> tempfile::TempDir {
+pub(super) fn fixture_root() -> tempfile::TempDir {
     stage_runtime_once();
     let root = tempfile::tempdir().unwrap();
     datalib_qmd_fixture::materialize_root_with_grid(root.path());
@@ -158,14 +158,14 @@ async fn free_text_groups_the_ranked_rows() {
     let counted: u64 = by_source.groups.iter().map(|g| g.count).sum();
     assert_eq!(counted, ranked.total);
 
-    let slack = by_source
-        .groups
-        .iter()
-        .find(|g| g.values == [Some("slack".to_string())])
-        .expect("the fixture's slack source has hits");
-    let rows = search_within(&s, QUERY, r#"[["source_ref","slack"]]"#, 1_000).await;
-    assert_eq!(rows.total, slack.count);
-    assert!(rows.rows.iter().all(|r| r.source_id == "slack"));
+    let group = &by_source.groups[0];
+    let source = group.values[0]
+        .clone()
+        .expect("a source group names its source");
+    let within = serde_json::json!([["source_ref", source]]).to_string();
+    let rows = search_within(&s, QUERY, &within, 1_000).await;
+    assert_eq!(rows.total, group.count);
+    assert!(rows.rows.iter().all(|r| r.source_id == source));
     assert!(
         rows.rows.iter().all(|r| r.score.is_some()),
         "a group keeps qmd's scores"
