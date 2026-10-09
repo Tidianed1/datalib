@@ -96,13 +96,14 @@ forgotten, with an × left of the icon: it leaves the recent list and its folder
 left as it is. One in the libraries folder is always listed while it is
 there, so it has no Forget.
 
-Libraries used to go in `~/Documents/Datalib`. While the libraries
-folder holds nothing, the screen has a line under the list offering to
-move them here (`move_from_documents`: each library there is renamed
+Libraries used to go in `~/Documents/Datalib`. While the recent list
+names a library there, the screen has a line under the list offering to
+move them out (`move_from_documents`: each such library is renamed
 into the libraries folder under its own name, a library that is
 `~/Documents/Datalib` itself becomes `Default`, and one whose name is
-taken stays). The app does not look in `~/Documents` until that line is
-clicked, since looking is what makes macOS ask for permission. This is
+taken stays). Only the recent list says which libraries are there; the
+app never lists `~/Documents/Datalib`, so a person with nothing there
+is not asked by macOS for permission to read it. This is
 temporary: a TODO in `src/launcher.rs` says when to remove it.
 
 "New library" takes a name or a folder: a

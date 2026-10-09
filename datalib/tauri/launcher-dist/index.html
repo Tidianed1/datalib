@@ -378,7 +378,7 @@
         <!-- TODO(after 2026-12-09): remove with launcher::move_from_documents. -->
         <p class="moved" id="moved" hidden>
           <span id="moved-what"></span>
-          <button class="link" id="moved-move">Move them here</button>
+          <button class="link" id="moved-move">Move them out</button>
         </p>
       </div>
     </main>
@@ -614,11 +614,9 @@
         try {
           const n = await invoke("launcher_move_from_documents");
           if (n === 0) {
-            fail("No libraries were found there to move.");
+            fail("Nothing moved: a library with the same name is already in the libraries folder.");
             return;
           }
-          setPopover(false);
-          $("name").value = "";
           await render();
         } catch (e) {
           fail(e);
@@ -640,7 +638,11 @@
         if (from) {
           const c = document.createElement("code");
           c.textContent = from;
-          $("moved-what").replaceChildren("Have libraries in ", c, "? ");
+          $("moved-what").replaceChildren(
+            "macOS asks for permission to read libraries in ",
+            c,
+            ". ",
+          );
         }
         // The first time, the one thing to do is make a library.
         if (none) setPopover(true);

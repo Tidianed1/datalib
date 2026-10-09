@@ -123,9 +123,10 @@ fn launcher_state(app: AppHandle) -> serde_json::Value {
             })
             .collect();
     // TODO(after 2026-12-09): drop with `launcher::move_from_documents`.
-    let move_from = launcher::offers_move_from_documents(&dir)
-        .then(|| documents_libraries_dir(&app))
-        .flatten()
+    let move_from = documents_libraries_dir(&app)
+        .filter(|old| {
+            !launcher::libraries_in_documents(&launcher::recents_file(&home), old).is_empty()
+        })
         .map(|old| launcher::tilde(&old, &home));
     serde_json::json!({
         "libraries": libraries,
@@ -141,10 +142,9 @@ fn documents_libraries_dir(app: &AppHandle) -> Option<PathBuf> {
     Some(launcher::documents_libraries_dir(&documents))
 }
 
-/// Move the libraries in the Documents folder into the libraries
-/// folder; how many moved. Only from the libraries screen, where no
-/// library is open, and only on a click: reading Documents is what
-/// makes macOS ask the person for permission.
+/// Move the recent libraries in the Documents folder into the
+/// libraries folder; how many moved. Only from the libraries screen,
+/// where no library is open.
 // TODO(after 2026-12-09): remove, with `launcher::move_from_documents`.
 #[tauri::command]
 fn launcher_move_from_documents(app: AppHandle) -> Result<usize, String> {
