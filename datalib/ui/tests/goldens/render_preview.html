@@ -829,17 +829,26 @@ code.hljs {
   background: var(--datalib-accent, #4f46e5);
   color: #fff;
 }
-.handle-photo {
+/* Scoped under the chip so they outrank a document's own `img` rule
+   (`.chat-body img`, sized `auto` for attachments): a mark is an SVG
+   with no size of its own, and `auto` lets it grow to the layout. */
+.handle-chip > .handle-photo {
   /* Decoration, like the disc: a copy carries the name and identifier. */
   user-select: none;
   width: 1.3em;
   height: 1.3em;
+  max-width: none;
+  max-height: none;
+  flex-shrink: 0;
   border-radius: 50%;
   object-fit: cover;
 }
-.handle-mark {
+.handle-chip > .handle-mark {
   width: 0.9em;
   height: 0.9em;
+  max-width: none;
+  max-height: none;
+  flex-shrink: 0;
   opacity: 0.6;
 }
 .handle-linkable::after {
