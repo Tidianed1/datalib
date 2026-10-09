@@ -200,11 +200,12 @@ goes, and the doltlite history keeps them; its attachments stay in
 `blobs.sqlite`, which nothing resets. Then what reads it runs, so its documents leave the grid,
 and its next sync downloads everything again from nothing. Resetting a
 render step (`slack/render_markdown`) instead rebuilds its documents
-from what is downloaded, at once. It needs the
-root to itself, so it runs only when nothing is syncing. With the app
-up, use `POST /api/reset {"targets": ["slack/ingest"], "by":
-"claude"}`: it answers once the store is empty, opens the request that
-carries the emptiness downstream, and refuses while a sync runs. The
+from what is downloaded, at once. With the app up, use `POST /api/reset
+{"targets": ["slack/ingest"], "by": "claude"}`: whatever else is syncing,
+the step is stopped if it runs and emptied at once, and the request that
+carries the emptiness downstream is opened. It answers 204 once the
+store is empty, or 202 if the step had not stopped within ten seconds and
+is emptied once it has. The
 Manage screen's row menu offers the same. With no app up,
 `datalib-dag --reset slack/ingest` empties the store alone; add
 `--sync slack/ingest` to download it again at once.
