@@ -1,7 +1,7 @@
 # Search tabs: fields first, then words, then meaning
 
-*Proposal (2026-10-08). Steps 0 to 2 of the order of work are built;
-the tabs and the terms from renders are not. Every number below was
+*Proposal (2026-10-08). Steps 0 to 3 of the order of work are built;
+the terms from renders are not. Every number below was
 read from a real data root that day (122,487 `grid_rows`; a 1.6 GB
 qmd index holding 180,773 vectors for 60,559 documents in 8 sources)
 through its `system/runs/runs.sqlite`, the

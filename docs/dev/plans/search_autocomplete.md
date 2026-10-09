@@ -20,8 +20,8 @@ on without picking keeps the old behaviour, a value matched as text.
   `author_handle:`, exact. The grammar has AND and a `-` per term, and
   no OR.
 - **The search terms hold one person per row**, its author (`TermKind::From`),
-  and are read only for a query made entirely of identifiers
-  (`applets/src/unified_index/terms.rs`). Recipients, mentions and
+  and are read by the Fields tab and for a query made entirely of
+  identifiers (`applets/src/unified_index/terms.rs`). Recipients, mentions and
   participants are `search_tabs.md` step 4, not built.
 - **Two search bars search the grid**: the toolbar's `CommandBox.vue`,
   which opens a search card, and the card's own input in
@@ -190,7 +190,8 @@ answered from the search terms.
 
 1. **`SearchField`, with sources and words.** The component, `/keys`,
    `source_id:` as group chips, the closed vocabularies, the `:`
-   grammar change. No work on the search terms.
+   grammar change. The "Meaning only" checkbox goes: the Meaning tab
+   does its job. No work on the search terms.
 2. **`from:` from the search terms**, `author_handle:` its alias, partial
    values, the names table and `/suggest`.
 3. **Person kinds from renders** (`search_tabs.md` step 4), then `to:`,
