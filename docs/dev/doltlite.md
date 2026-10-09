@@ -791,6 +791,12 @@ join back, 27 ms and 6 ms.
   waits while its writer commits (not measured here). `synchronous`
   at anything above `OFF` syncs every commit (upstream
   `doc/doltlite/pragmas.md`).
+- **Doltlite cannot write a WAL, but it reads one.** A plain SQLite
+  file another program keeps in WAL mode, as qmd keeps its index, reads
+  through doltlite with the rows only its `-wal` holds, so a reader
+  sees what qmd wrote before any checkpoint. The test reads a pair
+  stock SQLite wrote (`scripts/make_doltlite_wal_fixture.py`). A
+  shell probe saw a row written while the reader ran, too.
 - **`:memory:` works**, commits and diffs included, which is what unit
   tests use.
 - **A primary key that is not `INTEGER` is `NOT NULL`**

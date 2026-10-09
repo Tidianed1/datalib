@@ -738,7 +738,10 @@ async fn qmd_ranking(
 ) -> anyhow::Result<Vec<(String, (f64, String))>> {
     let parsed_for_qmd = parsed.clone();
     let daemon = daemon.clone();
-    let scope = collection_scope(parsed);
+    let scope = match collection_scope(parsed) {
+        CollectionScope::All => every_collection(root).await?,
+        scoped => scoped,
+    };
     let hits = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         let mode = match parsed_for_qmd.free_text_mode {
             FreeTextMode::Hybrid => QueryMode::Hybrid,
@@ -769,6 +772,25 @@ async fn qmd_ranking(
         .into_iter()
         .map(|(row, hit)| (row.uuid.clone(), (hit.score, display_snippet(&hit.snippet))))
         .collect())
+}
+
+/// Every collection the qmd index holds now. A running `qmd mcp` asked
+/// for no collection searches the ones it read at startup, and would miss
+/// a source added since. With no index yet the scope stays open, and the
+/// daemon says the index is missing.
+async fn every_collection(root: &std::path::Path) -> anyhow::Result<CollectionScope> {
+    let Some(reader) = QmdIndexReader::open(root)
+        .await
+        .context("open the qmd index for its collections")?
+    else {
+        return Ok(CollectionScope::All);
+    };
+    let names = reader
+        .collections()
+        .await
+        .context("read the qmd index's collections");
+    reader.close().await;
+    Ok(CollectionScope::Only(names?))
 }
 
 /// The rows qmd ranks for `parsed` that its structured terms also match,
@@ -1269,6 +1291,44 @@ mod tests {
             .await
             .unwrap();
         pool.close().await;
+    }
+
+    /// An unscoped search names every collection the index holds, so a
+    /// running qmd searches a source added after it started; with no
+    /// index yet it stays unscoped, and the daemon says the index is
+    /// missing.
+    #[tokio::test]
+    async fn an_unscoped_search_names_every_collection_the_index_holds() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(
+            every_collection(tmp.path()).await.unwrap(),
+            CollectionScope::All
+        );
+        let path = datalib_unified_index::qmd::qmd_index_path(tmp.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .connect_with(
+                sqlx::sqlite::SqliteConnectOptions::new()
+                    .filename(datalib_runtime::plain_sqlite::uri(&path))
+                    .create_if_missing(true),
+            )
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE store_collections (name TEXT PRIMARY KEY); \
+             INSERT INTO store_collections VALUES ('slack'), ('claude-api')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+        assert_eq!(
+            every_collection(tmp.path()).await.unwrap(),
+            CollectionScope::Only(vec!["claude-api".into(), "slack".into()])
+        );
     }
 
     /// What the `grid_index` step does after its pass.

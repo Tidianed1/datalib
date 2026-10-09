@@ -232,8 +232,9 @@ and could fold in later too.
    `qmd_behaviour.md`), so the daemon sends the configured list.
    `source_id:` already scopes a query to its source's collection,
    which is what makes a scoped vector query take under a second.
+   Built: the applet names every collection `store_collections` holds.
 2. **Restart only when the index file is replaced.** Watch its inode,
-   not its mtime; a new collection is covered by step 1.
+   not its mtime; a new collection is covered by step 1. Built, with 1.
 3. **Map only the hits.** Look up `WHERE qmd_path IN (…)` for the paths
    qmd returned, instead of reading every row. That needs an index on
    `qmd_path`. The alternative is to keep the map per index commit.

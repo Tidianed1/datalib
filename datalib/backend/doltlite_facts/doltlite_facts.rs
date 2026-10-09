@@ -1793,6 +1793,43 @@ mod compat {
         assert!(!wal.exists(), "doltlite made a -wal sidecar");
     }
 
+    /// Doltlite cannot write a WAL, but it reads one: a stock-SQLite file
+    /// in WAL mode, as qmd's index is between checkpoints, reads with the
+    /// rows its `-wal` holds. Without the `-wal` the same file holds only
+    /// what was checkpointed. `scripts/make_doltlite_wal_fixture.py` wrote the
+    /// pair.
+    #[tokio::test]
+    async fn a_plain_sqlite_file_in_wal_mode_is_read_with_its_wal() {
+        let fixture = |name: &str| {
+            let dir =
+                std::env::var("WAL_FIXTURE_DIR").expect("WAL_FIXTURE_DIR is set by the BUILD rule");
+            PathBuf::from(dir)
+                .join(name)
+                .canonicalize()
+                .expect("the fixture is in runfiles")
+        };
+        let count = |dir: &Path| {
+            let db = dir.join("wal.sqlite");
+            async move {
+                let mut c = connect(&db.display().to_string(), true, Duration::from_secs(5)).await;
+                int(&mut c, "SELECT COUNT(*) FROM crew").await
+            }
+        };
+        let both = tempfile::tempdir().unwrap();
+        let main_only = tempfile::tempdir().unwrap();
+        for name in ["wal.sqlite", "wal.sqlite-wal"] {
+            std::fs::copy(fixture(name), both.path().join(name)).unwrap();
+        }
+        std::fs::copy(fixture("wal.sqlite"), main_only.path().join("wal.sqlite")).unwrap();
+        assert_eq!(
+            &std::fs::read(both.path().join("wal.sqlite")).unwrap()[18..20],
+            &[2, 2]
+        );
+
+        assert_eq!(count(both.path()).await, 3);
+        assert_eq!(count(main_only.path()).await, 1);
+    }
+
     /// A plain SQLite file opened through doltlite answers `wal` too, but
     /// keeps a rollback journal: its header never says WAL (bytes 18 and
     /// 19 stay 1), so a reader waits while its writer commits.
