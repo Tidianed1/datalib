@@ -11,7 +11,9 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use crate::db::{build_where, ChatMeta};
-use crate::group::{group_sql, where_within, GroupCount, Grouping, Within, MAX_GROUPS};
+use crate::group::{
+    group_sql, like_pattern, values_sql, where_within, GroupCount, Grouping, Within, MAX_GROUPS,
+};
 use crate::problems::ProblemsQuery;
 use crate::qmd::GridRowRef;
 use crate::query::ParsedQuery;
@@ -376,6 +378,37 @@ impl At {
         Ok((groups, truncated))
     }
 
+    /// The values `column` takes among the rows `where_sql` keeps in
+    /// `table` that hold `typed`, most rows first.
+    async fn value_counts<C: Column>(
+        &mut self,
+        table: &str,
+        where_sql: &str,
+        params: &[String],
+        column: C,
+        typed: &str,
+    ) -> Result<Vec<(String, u64)>, RepoError> {
+        let sql = values_sql(table, where_sql, column);
+        // Audited: as `ordered_keys`; the column is a `&'static str`.
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
+        for p in params {
+            query = query.bind(p);
+        }
+        let rows = match query
+            .bind(like_pattern(typed))
+            .fetch_all(&mut *self.tx)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(e) if is_missing_table(&e, <C::Table as SearchTable>::TABLE) => Vec::new(),
+            Err(e) => return Err(RepoError::Internal(e.to_string())),
+        };
+        Ok(rows
+            .iter()
+            .map(|r| (r.get::<String, _>(0), r.get::<i64, _>(1) as u64))
+            .collect())
+    }
+
     /// The problems `keys` name, in that order; one the snapshot lacks is
     /// left out.
     async fn problems_in(&mut self, keys: &[String]) -> Result<Vec<ProblemRow>, RepoError> {
@@ -588,6 +621,34 @@ impl IndexRepo for DoltRepo {
         // is there and the samples line up with the groups one for one.
         let samples = rows_in(&mut at, &sample_uuids).await?;
         Ok(grouping(keys, samples, truncated, at.commit))
+    }
+
+    async fn value_counts(
+        &self,
+        q: &ParsedQuery,
+        column: GridRowColumn,
+        typed: &str,
+    ) -> Result<Vec<(String, u64)>, RepoError> {
+        let Some(mut at) = self.pinned().await? else {
+            return Ok(Vec::new());
+        };
+        let (where_sql, params) = where_within(q, &[]);
+        at.value_counts(at.grid_rows, &where_sql, &params, column, typed)
+            .await
+    }
+
+    async fn problem_value_counts(
+        &self,
+        q: &ProblemsQuery,
+        column: ProblemRowColumn,
+        typed: &str,
+    ) -> Result<Vec<(String, u64)>, RepoError> {
+        let Some(mut at) = self.pinned().await? else {
+            return Ok(Vec::new());
+        };
+        let (where_sql, params) = where_within(q, &[]);
+        at.value_counts(at.problems, &where_sql, &params, column, typed)
+            .await
     }
 
     async fn rows_by_uuids(&self, uuids: &[String]) -> Result<Vec<SearchRow>, RepoError> {

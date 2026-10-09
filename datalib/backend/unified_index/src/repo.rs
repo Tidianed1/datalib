@@ -72,6 +72,26 @@ pub trait IndexRepo: Send + Sync {
         among: Option<&[String]>,
     ) -> Result<Grouping, RepoError>;
 
+    /// The values `column` takes among the rows `query`'s structured terms
+    /// match, those holding `typed` (case-blind), most rows first: what the
+    /// search bar suggests for a key's value.
+    async fn value_counts(
+        &self,
+        query: &ParsedQuery,
+        column: datalib_schema::grid_rows::GridRowColumn,
+        typed: &str,
+    ) -> Result<Vec<(String, u64)>, RepoError>;
+
+    /// [`IndexRepo::value_counts`], over the problems.
+    async fn problem_value_counts(
+        &self,
+        _query: &ProblemsQuery,
+        _column: ProblemRowColumn,
+        _typed: &str,
+    ) -> Result<Vec<(String, u64)>, RepoError> {
+        Ok(Vec::new())
+    }
+
     /// The rows `uuids` name, in that order; one the index no longer has is
     /// left out.
     async fn rows_by_uuids(&self, uuids: &[String]) -> Result<Vec<SearchRow>, RepoError>;

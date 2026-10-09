@@ -126,6 +126,42 @@ pub struct RowsSpec {
     pub free_text: FreeTextMatch,
 }
 
+/// A key the search bar takes, and what its values are, so the bar can
+/// offer them as a person types.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SearchKeySpec {
+    pub key: &'static str,
+    /// Older spellings it still reads.
+    pub aliases: &'static [&'static str],
+    pub values: KeyValues,
+}
+
+/// A value the search bar offers for a key, with how many rows have it
+/// where that was counted.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ValueSuggestion {
+    pub value: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum KeyValues {
+    /// Whatever is typed.
+    Text,
+    /// One of these words and nothing else.
+    Words { words: Vec<&'static str> },
+    /// A configured source's id, drawn as its group chip.
+    Source,
+    /// Any configured group's id, drawn as its group chip.
+    Group,
+    /// A step's id, `<group>/<function>`, drawn as its step chip.
+    Step,
+    /// A date or a moment, `before:` and `after:`.
+    Stamp,
+}
+
 /// The document a row opens: the first of `fields` the row has a value
 /// in, at the section `anchor` names.
 #[derive(Debug, Clone, PartialEq, Serialize)]

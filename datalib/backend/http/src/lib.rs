@@ -214,6 +214,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/runs/{run}/steps", get(run_steps))
         .route("/api/runs/{run}/log", get(run_log))
         .route("/api/log", get(log_lines))
+        .route("/api/log/keys", get(log_keys))
+        .route("/api/log/values", get(log_values))
         .route("/api/ui/events", post(ui_events::post_events))
         .route(
             "/api/ui/state/{name}",
@@ -2014,9 +2016,87 @@ async fn log_lines(
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))
 }
 
+/// The keys the run log's search bar offers as a person types.
+async fn log_keys() -> Json<Vec<datalib_columns::SearchKeySpec>> {
+    Json(log_key_specs())
+}
+
+#[derive(Debug, Deserialize)]
+struct LogValuesParams {
+    key: String,
+    #[serde(default)]
+    typed: String,
+    #[serde(default)]
+    q: String,
+}
+
+/// `GET /api/log/values?key=…&typed=…&q=…`: what the run log's search
+/// bar suggests for one key's value.
+async fn log_values(
+    State(s): State<AppState>,
+    Query(p): Query<LogValuesParams>,
+) -> Result<Json<Vec<datalib_columns::ValueSuggestion>>, (StatusCode, String)> {
+    let values = datalib_runs::log_values(&s.root, &p.q, &p.key, &p.typed)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(
+        values
+            .into_iter()
+            .map(|(value, count)| datalib_columns::ValueSuggestion { value, count })
+            .collect(),
+    ))
+}
+
+fn log_key_specs() -> Vec<datalib_columns::SearchKeySpec> {
+    use datalib_columns::{KeyValues, SearchKeySpec};
+    use strum::VariantArray;
+    let words = |all: Vec<&'static str>| KeyValues::Words { words: all };
+    datalib_runs::key_names()
+        .into_iter()
+        .map(|key| SearchKeySpec {
+            key,
+            aliases: &[],
+            values: match key {
+                "group" => KeyValues::Group,
+                "step" => KeyValues::Step,
+                "level" | "min_level" => words(
+                    datalib_runs::LogLevel::VARIANTS
+                        .iter()
+                        .map(|l| l.as_str())
+                        .collect(),
+                ),
+                "stream" => words(
+                    datalib_runs::Stream::VARIANTS
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect(),
+                ),
+                _ => KeyValues::Text,
+            },
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The log's bar draws a group or a step as its chip and offers the
+    /// level words; every key it offers is one the log query reads.
+    #[test]
+    fn the_log_offers_every_key_it_reads() {
+        use datalib_columns::KeyValues;
+        let keys = log_key_specs();
+        let values = |key: &str| keys.iter().find(|k| k.key == key).map(|k| k.values.clone());
+        assert_eq!(values("group"), Some(KeyValues::Group));
+        assert_eq!(values("step"), Some(KeyValues::Step));
+        assert_eq!(values("msg"), Some(KeyValues::Text));
+        assert!(
+            matches!(values("min_level"), Some(KeyValues::Words { words }) if words.contains(&"warn"))
+        );
+        let names: Vec<&str> = keys.iter().map(|k| k.key).collect();
+        assert_eq!(names, datalib_runs::key_names());
+    }
 
     fn proxied(content_type: &str, document: embed::DocumentKind) -> Response<Body> {
         proxied_response(applets::ProxyResponse {

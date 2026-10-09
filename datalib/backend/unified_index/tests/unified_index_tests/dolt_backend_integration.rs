@@ -1,7 +1,7 @@
 //! End-to-end integration test for the doltlite backend.
 
 use datalib_query::table::SearchTable;
-use datalib_schema::grid_rows::{GridRow, DDL as GRID_DDL, INDEXES as GRID_INDEXES};
+use datalib_schema::grid_rows::{GridRow, GridRowColumn, DDL as GRID_DDL, INDEXES as GRID_INDEXES};
 use datalib_schema::markdowns::DDL as MARKDOWNS_DDL;
 use datalib_schema::problems::{
     Outcome, Problem, ProblemRow, Reason, Scope, Stage, DDL as PROBLEMS_DDL,
@@ -383,6 +383,66 @@ async fn a_listing_orders_filters_and_reads_back_by_uuid() {
         repo.head().await.unwrap().as_deref(),
         Some(head.as_str()),
         "a seal moves the head, so a cached listing is not reused past it"
+    );
+
+    drop(repo);
+    let _ = std::fs::remove_file(&db_path);
+}
+
+/// What the search bar suggests for a key's value: the values holding
+/// what was typed, among the rows the rest of the query keeps, most rows
+/// first.
+#[tokio::test]
+async fn a_key_suggests_its_values_most_rows_first() {
+    let db_path = unique_db_path();
+    let root = Arc::new(db_path.parent().unwrap().to_path_buf());
+    let writer = writer(&root).await;
+    create_grid_tables(&writer).await;
+    let in_channel = |uuid: &str, path: &str, channel: &str| {
+        let mut row = chat_row(uuid, path);
+        row.channel = Some(channel.to_string());
+        row
+    };
+    insert_rows(
+        &writer,
+        &[
+            in_channel("e-1", "enterprise/a.md", "bridge"),
+            in_channel("e-2", "enterprise/b.md", "bridge"),
+            in_channel("e-3", "enterprise/c.md", "Engineering"),
+            in_channel("e-4", "enterprise/d.md", "50%_off"),
+            in_channel("v-1", "voyager/a.md", "bridge"),
+            chat_row("v-2", "voyager/b.md"),
+        ],
+    )
+    .await;
+    commit(&writer, "rows").await;
+    let repo = DoltRepo::open(root.clone()).await.unwrap();
+    let values = |q: &'static str, typed: &'static str| {
+        let repo = &repo;
+        async move {
+            repo.value_counts(&parse_query(q), GridRowColumn::Channel, typed)
+                .await
+                .unwrap()
+        }
+    };
+    let pairs = |v: &[(&str, u64)]| -> Vec<(String, u64)> {
+        v.iter().map(|(s, n)| (s.to_string(), *n)).collect()
+    };
+
+    assert_eq!(
+        values("", "").await,
+        pairs(&[("bridge", 3), ("50%_off", 1), ("Engineering", 1)])
+    );
+    assert_eq!(values("", "ENG").await, pairs(&[("Engineering", 1)]));
+    assert_eq!(
+        values("", "%").await,
+        pairs(&[("50%_off", 1)]),
+        "a % is itself"
+    );
+    assert_eq!(
+        values("source_id:voyager", "").await,
+        pairs(&[("bridge", 1)]),
+        "the rest of the query narrows the values"
     );
 
     drop(repo);
