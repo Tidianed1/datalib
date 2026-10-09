@@ -1198,6 +1198,85 @@ function extendOverComments(text: string, start: number): number {
   return at;
 }
 
+/// Move a group's `[[groups]]` entry and every step and applet filed
+/// under it to just above `before`'s entries, or below the last group's
+/// when `before` is null — which is how the Sources card's order
+/// changes, since it lists groups in the order their `[[groups]]`
+/// entries are written. The moved entries land together, in the order
+/// they were written, each with its banner: the block the server's
+/// sorter (`datalib_dag::config_order`) moves a group as. Nothing else
+/// changes — the runner follows `inputs`, not the file — and a result
+/// that would parse to different entries is refused (throws), as the
+/// sorter refuses one.
+export function moveGroup(text: string, groupId: string, before: string | null): string {
+  const groups = listGroups(text).filter((g) => g.end > 0);
+  const filed = listSteps(text).filter((s) => s.end > 0);
+  const entriesOf = (id: string) => [
+    ...groups.filter((g) => g.id === id),
+    ...filed.filter((s) => s.group === id),
+  ];
+  const moving = spans(text, entriesOf(groupId));
+  const others = groups.filter((g) => g.id !== groupId);
+  if (moving.length === 0 || before === groupId) return text;
+  let at: number;
+  if (before === null) {
+    const last = others.at(-1);
+    if (!last) return text;
+    at = Math.max(...spans(text, entriesOf(last.id)).map(([, end]) => end));
+  } else {
+    const target = spans(text, entriesOf(before));
+    if (target.length === 0) return text;
+    at = Math.min(...target.map(([start]) => start));
+  }
+  const body = moving.map(([start, end]) => text.slice(start, end).trim()).join("\n\n");
+  const shift = moving
+    .filter(([, end]) => end <= at)
+    .reduce((sum, [start, end]) => sum + (end - start), 0);
+  const placed = at - shift;
+  const next = tidy(splice(cut(text, moving), placed, placed, body));
+  if (declaredEntries(next) !== declaredEntries(text)) {
+    throw new Error("Moving the group would change what the config says; it was left as it is.");
+  }
+  return next;
+}
+
+/// Every entry a config declares, order aside, as one comparable string.
+function declaredEntries(text: string): string {
+  const parsed = parseConfig(text).root;
+  const sorted = (v: unknown) => (Array.isArray(v) ? v : []).map((e) => JSON.stringify(e)).sort();
+  return JSON.stringify([parsed.groups, parsed.steps, parsed.applets].map(sorted));
+}
+
+/// The group a move would put on the wrong side of it, when it would:
+/// above a group whose steps it reads, or below one that reads it. The
+/// file reads in the order data flows (`datalib_dag::config_order`, which
+/// `datalib-step topo-sort-config` restores), and a drag keeps it so.
+export function moveAgainstDataFlow(
+  text: string,
+  groupId: string,
+  before: string | null,
+): { reads: string } | { readBy: string } | null {
+  const steps = listSteps(text).filter((s) => s.kind === "step");
+  const groupOfStep = new Map(steps.map((s) => [s.id, s.group]));
+  const reads = (id: string) =>
+    new Set(
+      steps
+        .filter((s) => s.group === id)
+        .flatMap((s) => s.inputs.map((i) => groupOfStep.get(i)))
+        .filter((g): g is string => !!g && g !== id),
+    );
+  const order = listGroups(text)
+    .map((g) => g.id)
+    .filter((id) => id !== groupId);
+  const at = before === null ? order.length : order.indexOf(before);
+  if (at < 0) return null;
+  const mine = reads(groupId);
+  const below = order.slice(at).find((id) => mine.has(id));
+  if (below) return { reads: below };
+  const above = order.slice(0, at).find((id) => reads(id).has(groupId));
+  return above ? { readBy: above } : null;
+}
+
 /// Replace a source's steps with freshly generated ones, where the first
 /// of them was, so an edit moves nothing. Every cut is made against the
 /// text as parsed, the last first. Only safe when

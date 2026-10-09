@@ -11,6 +11,7 @@ import {
   pickRowMenu,
   pipelineRow as row,
   MANAGE_WITH_CONFIG,
+  TABLE_ROWS,
 } from "./grid-helpers";
 
 async function openManager(page: Page) {
@@ -488,6 +489,58 @@ test("deleting the group takes every step under it", async ({ page }) => {
   // The `[[groups]]` entry, its `[[steps]]`, and any fan-in reference:
   // nothing of it is left in the file.
   await expect(editor).not.toHaveValue(/whole-group/);
+});
+
+/// The `[[groups]]` ids, in the order the config writes them.
+const groupOrder = (config: string) =>
+  [...config.matchAll(/\[\[groups\]\]\nid = "([^"]+)"/g)].map((m) => m[1]);
+
+test("dragging a group by its grip moves it, with every step under it, in the config", async ({
+  page,
+  request,
+}) => {
+  const [first, second] = groupOrder(original);
+  const grip = page.locator(`.tg-grid .slick-row[data-key="group:${second}"] .tg-grip`);
+  const target = nameCell(page, `group:${first}`);
+  await expect(grip).toBeVisible();
+
+  // The gesture is the subject, so it is the real one, retried with its
+  // effect as a pair: a redraw can replace the row under the pointer. A
+  // config already in the new order means an earlier attempt landed.
+  await expect(async () => {
+    if (groupOrder(await savedConfig(request))[0] === second) return;
+    const from = (await grip.boundingBox())!;
+    const to = (await target.boundingBox())!;
+    const x = from.x + from.width / 2;
+    await page.mouse.move(x, from.y + from.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(x, to.y + 2, { steps: 8 });
+    await page.mouse.up();
+    await expect
+      .poll(async () => groupOrder(await savedConfig(request))[0], { timeout: 2_000 })
+      .toBe(second);
+  }, `${second} never moved above ${first}`).toPass({
+    timeout: 15_000,
+    intervals: [250, 500, 1_000],
+  });
+
+  // The table follows the file: the moved group is now the first row.
+  await expect(page.locator(`${TABLE_ROWS}[data-key^="group:"]`).first()).toHaveAttribute(
+    "data-key",
+    `group:${second}`,
+  );
+
+  // Its steps and applets went with it, above the group it was dropped
+  // on, and nothing was added or lost.
+  const after = await savedConfig(request);
+  expect(groupOrder(after).slice(0, 2)).toEqual([second, first]);
+  expect([...groupOrder(after)].sort()).toEqual([...groupOrder(original)].sort());
+  const firstAt = after.indexOf(`[[groups]]\nid = "${first}"`);
+  const filedUnder = new RegExp(`\\]\\]\\ngroup = "${second}"\\n`, "g");
+  const filed = [...after.matchAll(filedUnder)];
+  expect(filed.length).toBeGreaterThan(0);
+  expect(filed.length).toBe([...original.matchAll(filedUnder)].length);
+  for (const entry of filed) expect(entry.index).toBeLessThan(firstAt);
 });
 
 /// The data root: the directory the served config lives in.

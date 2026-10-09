@@ -342,6 +342,14 @@ after its render, and each step below the steps it reads. A file already
 out of that order where no place fits gets the new entries at the end.
 The runner itself reads only `inputs`.
 
+Dragging a group by the grip at the left of its row is how a person
+changes that order (`moveGroup`). The group's `[[groups]]` entry and
+every step and applet filed under it move together, comments included,
+to just above the group it was dropped on — the block `topo-sort-config`
+moves a group as. A drop that would put a group above one it reads, or below one
+that reads it, is refused and the card says why (`moveAgainstDataFlow`),
+so a file in data-flow order stays in it.
+
 `datalib-step topo-sort-config <root>/config.toml` puts a whole file in
 that order (`dag/src/config_order.rs`), keeping the old text as
 `config.toml.bak`; `--check` only says whether it is. Each group, with
