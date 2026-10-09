@@ -269,18 +269,18 @@ and could fold in later too.
 2. **The qmd fixes** ("Making qmd's tabs fast in themselves", 1 to 3)
    and `candidateLimit`, each its own PR, with a `qmd_facts_test` test
    for anything new we rely on.
-3. **Tabs.** The API half is built: `tab=fields|words|meaning` on the
-   search and groups endpoints, each tab its own list in the results
-   cache. Fields reads the terms file with any word as the start of one;
-   Words reads qmd's `documents_fts` with BM25 (1,000 deep, scoped by
+3. **Tabs.** Built. The API: `tab=fields|words|meaning` on the search
+   and groups endpoints, each tab its own list in the results cache.
+   Fields reads the terms file with any word as the start of one; Words
+   reads qmd's `documents_fts` with BM25 (1,000 deep, scoped by
    `source_id:`, each hit placed on the message where its first word
-   is); Meaning is qmd's vector query alone. The UI half is next: the
-   `tab` parameter on the search and groups endpoints,
-   the cache key, three requests from the grid, the tab strip with its
-   greyed state and counts, the opening rule. The e2e spec holds the
-   qmd answers back (`page.route`) and checks that Fields is on screen,
-   that the qmd tabs are greyed, and that their answers arriving changes
-   no row.
+   is); Meaning is qmd's vector query alone. The UI: a small tab strip
+   at the start of the source chips' row, all three asked at once, the
+   first with rows opening, a dot on a tab that came back while another
+   was open, and the list, table, groups and source chips all showing
+   the open tab (`grid/searchTabs.ts`, `search-tabs.spec.ts`). "Meaning
+   only" stays until the search predicate autocomplete work lands, then
+   goes.
 4. **Terms from renders,** and the `to:`, `cc:`, `from:` and `label:`
    keys: the email renders first, then the chat ones.
 5. **More identifier kinds** if wanted: an upstream URL

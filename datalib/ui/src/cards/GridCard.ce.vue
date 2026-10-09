@@ -72,7 +72,18 @@ import {
   type RowsResponse,
   type RowsSpec,
   type SearchRow,
+  type SearchTab,
 } from "@/api";
+import {
+  SEARCH_TABS,
+  isNew,
+  startTabs,
+  tabAnswered,
+  tabPicked,
+  tabRecounted,
+  type TabAnswer,
+  type TabsState,
+} from "@/grid/searchTabs";
 import { useApi } from "@/cards/cardApi";
 import { slugify } from "@/config/sourceSteps";
 import { copyToClipboard } from "@/clipboard";
@@ -195,8 +206,10 @@ let tableBehind = false;
 props.ctx.setHelp(
   isSearch
     ? `
-<p>Type what you are looking for. Plain words are matched by the words they contain and
-by what they mean; tick <b>Meaning only</b> to match on meaning alone. Filters narrow the
+<p>Type what you are looking for. Plain words are answered three ways, a small tab each:
+<b>Fields</b> (the ids, people, titles and names a row answers to), <b>Words</b> (the
+words anywhere in a document) and <b>Meaning</b> (documents about the same thing). The
+first to find something opens; a dot on another says it has found something too. Filters narrow the
 search: <code>author:worf</code>, <code>before:2371-01-01</code>, <code>-kind:contact</code>.</p>
 <p>The chips under the box say which sources the results come from, and how many each;
 pick one to see only its results. A chip and the tick box write a filter into the search
@@ -228,6 +241,8 @@ const qmd = () => rowsSpec?.free_text === "qmd";
 // (what is typed) and not `!loading` (which flips in both directions
 // within one tick, so an observer can miss the transition entirely).
 const shownQuery = ref<string | null>(null);
+/// The tab whose answer the rows on screen are, beside `shownQuery`.
+const shownTab = ref<SearchTab | null>(null);
 const total = ref(0);
 const loading = ref(false);
 const error = ref<SearchFailure | null>(null);
@@ -714,7 +729,11 @@ let win: PagedWindow<Row, number> | null = null;
 /// order, newest first, which the grid shows the other way up: newest at
 /// the bottom, where it opens, with older rows loading above. Rows a
 /// sync adds then land below the ones on screen instead of moving them.
-let shown: { q: string; sort: string | null; tail: boolean } | null = null;
+let shown: { q: string; sort: string | null; tab: SearchTab | null; tail: boolean } | null = null;
+/// Free text's three answers, a tab each; null for a search without it,
+/// which has one answer.
+const tabs = ref<TabsState | null>(null);
+const tab = computed<SearchTab | null>(() => tabs.value?.open ?? null);
 /// A selection restored from the URL may be further down the list than
 /// the first page; the grid loads through it. Typing a new search gives
 /// up on it.
@@ -726,6 +745,7 @@ let seekingSelection = sel.value !== null;
 /// while nothing is grouped.
 let grouped: {
   q: string;
+  tab: SearchTab | null;
   sort: string | null;
   by: string[];
   groups: ServerGroup<Row>[];
@@ -769,12 +789,15 @@ async function runSearch(q: string, refresh = false) {
     loading.value = false;
     return;
   }
+  // Free text shows nothing until a tab opens.
+  if (tabs.value && tabs.value.open === null) return;
   if (groupedBy().length > 0) return runGrouped(q, refresh);
   grouped = null;
   inflight?.abort();
   const ctrl = (inflight = new AbortController());
   const sort = currentSort();
-  const again = refresh && win !== null && shown?.q === q && shown.sort === sort;
+  const t = tab.value;
+  const again = refresh && win !== null && shown?.q === q && shown.sort === sort && shown.tab === t;
   const limit = again ? refreshLimit(win!) : PAGE;
   const through = again
     ? rowKeyOf(win!.rows[win!.rows.length - 1])
@@ -787,7 +810,14 @@ async function runSearch(q: string, refresh = false) {
   qmdIndexMissing.value = false;
   try {
     // The card shows a failure itself, beside the rows it concerns.
-    const r = await fetchRows<Row>(url, q, limit, ctrl.signal, { toast: false }, { sort, through });
+    const r = await fetchRows<Row>(
+      url,
+      q,
+      limit,
+      ctrl.signal,
+      { toast: false },
+      { sort, through, tab: t },
+    );
     unfinished.value = r.refused?.[0] ?? null;
     if (unfinished.value !== null) return;
     rowsSpec = { row_key: r.row_key, document: r.document, free_text: r.free_text };
@@ -797,12 +827,13 @@ async function runSearch(q: string, refresh = false) {
     win = firstWindow(searchPage(r));
     // qmd's rank is not an order in time.
     const ranked = qmd() && !!r.query_echo?.free_text;
-    if (!again) shown = { q, sort, tail: sort === null && !ranked };
+    if (!again) shown = { q, sort, tab: t, tail: sort === null && !ranked };
     rows.value = win.rows;
     total.value = r.total;
     qmdError.value = typeof r.query_echo?.qmd_error === "string" ? r.query_echo.qmd_error : null;
     qmdIndexMissing.value = r.query_echo?.qmd_index_missing === true;
     shownQuery.value = q;
+    shownTab.value = t;
     if (again) showChanged(true);
     else showNew();
   } catch (e) {
@@ -832,7 +863,7 @@ async function loadThrough(through: number, uuid: string | null = null) {
         fetch.limit,
         undefined,
         { toast: false },
-        { offset: fetch.from, sort: search.sort, through: uuid },
+        { offset: fetch.from, sort: search.sort, through: uuid, tab: search.tab },
       );
       if (search !== shown || !win) return;
       const next = withPage(win, fetch.from, searchPage(r));
@@ -889,15 +920,21 @@ async function runGrouped(q: string, refresh: boolean) {
   const ctrl = (inflight = new AbortController());
   const sort = currentSort();
   const by = groupedBy();
+  const t = tab.value;
   const was = grouped;
   const again =
-    refresh && was !== null && was.q === q && was.sort === sort && was.by.join() === by.join();
+    refresh &&
+    was !== null &&
+    was.q === q &&
+    was.tab === t &&
+    was.sort === sort &&
+    was.by.join() === by.join();
   loading.value = true;
   error.value = null;
   qmdError.value = null;
   qmdIndexMissing.value = false;
   try {
-    const r = await fetchGroups<Row>(q, by.join(","), ctrl.signal, url);
+    const r = await fetchGroups<Row>(q, by.join(","), ctrl.signal, url, t);
     unfinished.value = r.refused?.[0] ?? null;
     if (unfinished.value !== null) return;
     const windows = new Map(r.groups.map((g) => [groupKey(g.values), unread(g, r.at)]));
@@ -913,7 +950,7 @@ async function runGrouped(q: string, refresh: boolean) {
             refreshLimit(held!),
             ctrl.signal,
             { toast: false },
-            { sort, within: withinOf(by, g.values), through: rowKey(last) },
+            { sort, within: withinOf(by, g.values), through: rowKey(last), tab: t },
           );
           windows.set(groupKey(g.values), firstWindow(searchPage(page)));
         }),
@@ -921,17 +958,19 @@ async function runGrouped(q: string, refresh: boolean) {
     }
     grouped = {
       q,
+      tab: t,
       sort,
       by,
       groups: r.groups,
       windows,
       counts: countsByKey(r.groups, gettersOf(by)),
     };
-    shown = { q, sort, tail: false };
+    shown = { q, sort, tab: t, tail: false };
     win = null;
     qmdError.value = r.qmd_error ?? null;
     qmdIndexMissing.value = r.qmd_index_missing ?? false;
     shownQuery.value = q;
+    shownTab.value = t;
     showGroups(again ? "refresh" : "new");
   } catch (e) {
     if ((e as { name?: string }).name === "AbortError") return;
@@ -957,7 +996,7 @@ async function loadGroupPage(key: string) {
       fetch.limit,
       undefined,
       { toast: false },
-      { offset: fetch.from, sort: g.sort, within: withinOf(g.by, values) },
+      { offset: fetch.from, sort: g.sort, within: withinOf(g.by, values), tab: g.tab },
     );
     if (grouped !== g) return;
     const next = withPage(g.windows.get(key)!, fetch.from, searchPage(r));
@@ -1035,12 +1074,77 @@ watch(query, (q, before) => {
   debounceTimer = setTimeout(
     () => {
       settledQuery.value = q;
-      void runSearch(q);
+      void startSearch(q);
     },
     searchDelay(before, q, ranked),
   );
   saveState();
 });
+
+/// A new search: free text asks every tab, and the first to come back with
+/// rows shows; a search without it has one answer.
+function startSearch(q: string) {
+  if (!isSearch || freeText(q) === "") {
+    tabsAsked++;
+    tabs.value = null;
+    return runSearch(q);
+  }
+  return askTabs(q, false);
+}
+
+let tabsAsked = 0;
+/// Ask each tab how many rows it has. A recount, after the index moved,
+/// updates the counts and never changes the open tab.
+async function askTabs(q: string, recount: boolean) {
+  const asked = ++tabsAsked;
+  if (!recount) tabs.value = startTabs(q);
+  await Promise.all(
+    SEARCH_TABS.map(async ({ id }) => {
+      const answer = await tabAnswer(q, id);
+      if (asked !== tabsAsked || tabs.value?.q !== q) return;
+      const before = tabs.value.open;
+      tabs.value = recount
+        ? tabRecounted(tabs.value, id, answer)
+        : tabAnswered(tabs.value, id, answer);
+      if (before === null && tabs.value.open !== null) void runSearch(q);
+    }),
+  );
+}
+
+async function tabAnswer(q: string, t: SearchTab): Promise<TabAnswer> {
+  try {
+    const r = await fetchRows<Row>(url, q, 1, undefined, { toast: false }, { tab: t });
+    const failed =
+      r.refused?.[0] ??
+      (typeof r.query_echo?.qmd_error === "string" ? r.query_echo.qmd_error : null) ??
+      (r.query_echo?.qmd_index_missing === true ? "No sync has built the search index yet" : null);
+    if (failed) return { status: "failed", why: failed };
+    return { status: "ready", total: r.total, seen: false };
+  } catch (e) {
+    return { status: "failed", why: searchFailure(e).message };
+  }
+}
+
+function pickTab(t: SearchTab) {
+  if (!tabs.value || tabs.value.open === t) return;
+  tabs.value = tabPicked(tabs.value, t);
+  void runSearch(tabs.value.q);
+}
+
+function tabCount(t: SearchTab): string {
+  const answer = tabs.value?.answers[t];
+  if (!answer || answer.status === "pending") return "…";
+  if (answer.status === "failed") return "!";
+  return answer.total.toLocaleString();
+}
+
+function tabTitle(t: (typeof SEARCH_TABS)[number]): string {
+  const answer = tabs.value?.answers[t.id];
+  if (answer?.status === "pending") return `${t.title}: still looking`;
+  if (answer?.status === "failed") return `${t.title}: ${answer.why}`;
+  if (tabs.value && isNew(tabs.value, t.id)) return `${t.title}: found something, not seen yet`;
+  return t.title;
+}
 
 watch(view, (v) => {
   viewPicked = true;
@@ -1064,13 +1168,19 @@ async function loadSources() {
   if (!isSearch) return;
   const asked = ++sourcesAsked;
   try {
-    const r = await fetchGroups<Row>(sourcesQuery.value, "source_ref");
+    const r = await fetchGroups<Row>(
+      sourcesQuery.value,
+      "source_ref",
+      undefined,
+      SEARCH,
+      tab.value,
+    );
     if (asked === sourcesAsked) sources.value = r.groups;
   } catch {
     /* the chips are a convenience; the search says what went wrong */
   }
 }
-watch(sourcesQuery, loadSources);
+watch([sourcesQuery, tab], loadSources);
 onMounted(loadSources);
 
 const allCount = computed(() => sources.value.reduce((n, g) => n + g.count, 0));
@@ -1282,7 +1392,12 @@ onMounted(nameSourcesInPlaceholder);
 // download is still going.
 const cardEl = ref<HTMLElement | null>(null);
 let unsubscribeLive: (() => void) | null = null;
-const refreshRows = oneAtATime(() => runSearch(query.value, true));
+const refreshRows = oneAtATime(async () => {
+  await Promise.all([
+    runSearch(query.value, true),
+    tabs.value ? askTabs(tabs.value.q, true) : undefined,
+  ]);
+});
 onMounted(() => {
   unsubscribeLive = subscribeLive(
     {
@@ -2175,6 +2290,27 @@ onBeforeUnmount(() => {
     <!-- The chips change the search; the switch, at the row's end and
          last before the results, changes only how they are shown. -->
     <div v-if="isSearch" class="view-row">
+      <div v-if="tabs" class="answer-tabs" role="tablist" aria-label="Answers">
+        <button
+          v-for="t in SEARCH_TABS"
+          :key="t.id"
+          type="button"
+          class="answer-tab"
+          :class="{
+            'is-on': tabs.open === t.id,
+            'is-pending': tabs.answers[t.id].status === 'pending',
+            'is-failed': tabs.answers[t.id].status === 'failed',
+            'is-new': isNew(tabs, t.id),
+          }"
+          role="tab"
+          :aria-selected="tabs.open === t.id"
+          :data-tab="t.id"
+          :title="tabTitle(t)"
+          @click="pickTab(t.id)"
+        >
+          {{ t.label }} <span class="answer-count">{{ tabCount(t.id) }}</span>
+        </button>
+      </div>
       <div v-if="sources.length > 0" class="source-chips" role="group" aria-label="Sources">
         <button
           type="button"
@@ -2225,6 +2361,8 @@ onBeforeUnmount(() => {
       :ctx="ctx"
       :query="settledQuery"
       :active="view === 'list'"
+      :tab="tab"
+      :waiting="tabs !== null && tabs.open === null"
     />
 
     <!-- The table stays laid out while the list shows, so the grid
@@ -2252,7 +2390,7 @@ onBeforeUnmount(() => {
         <button type="button" class="error-retry" @click="runSearch(query)">Retry</button>
       </p>
 
-      <div class="grid-wrap" :data-shown-query="shownQuery">
+      <div class="grid-wrap" :data-shown-query="shownQuery" :data-shown-tab="shownTab">
         <!-- The grid is built into this box by `createGrid`, once the
              applet has declared its columns. -->
         <!-- Two elements: the grid adds classes of its own to the box it
@@ -2323,6 +2461,62 @@ onBeforeUnmount(() => {
 }
 .source-chips {
   padding-bottom: 6px;
+}
+.answer-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  margin-bottom: 6px;
+  border: 1px solid var(--datalib-border);
+  border-radius: 999px;
+}
+.answer-tab {
+  position: relative;
+  height: calc(var(--datalib-control-h) - 6px);
+  padding: 0 8px;
+  font: inherit;
+  font-size: 0.85em;
+  white-space: nowrap;
+  color: var(--datalib-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.answer-tab:hover {
+  color: var(--datalib-fg);
+  background: var(--datalib-hover);
+}
+.answer-tab.is-on {
+  color: var(--datalib-fg);
+  font-weight: 600;
+  background: var(--datalib-hover);
+}
+.answer-tab.is-pending,
+.answer-tab.is-failed {
+  opacity: 0.55;
+}
+.answer-count {
+  font-variant-numeric: tabular-nums;
+}
+.answer-tab.is-pending .answer-count {
+  animation: answer-pending 1.2s ease-in-out infinite;
+}
+@keyframes answer-pending {
+  50% {
+    opacity: 0.3;
+  }
+}
+.answer-tab.is-new::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--datalib-accent);
 }
 .view-tabs {
   flex: 0 0 auto;

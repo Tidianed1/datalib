@@ -4,7 +4,7 @@
 // One of the Search card's two views (GridCard.ce.vue hosts it and owns
 // the query); the other is the table.
 import { onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from "vue";
-import type { SearchResponse, SearchRow } from "@/api";
+import type { SearchResponse, SearchRow, SearchTab } from "@/api";
 import { useApi } from "@/cards/cardApi";
 import type { CardCtx, Teardown } from "./types";
 import { oneAtATime, subscribeLive } from "@/live";
@@ -20,6 +20,11 @@ const props = defineProps<{
   // Whether this view is the one shown. A hidden list asks nothing, and
   // catches up when it is shown again.
   active: boolean;
+  // The answer to free text the host shows; null for a search without
+  // free text. While `waiting`, no tab has opened yet, and the list asks
+  // nothing rather than show an answer that would then be replaced.
+  tab: SearchTab | null;
+  waiting: boolean;
 }>();
 const api = useApi();
 
@@ -33,6 +38,9 @@ const loading = ref(false);
 const picked = ref<SearchRow | null>(null);
 // The query the results on screen answer; null before the first answer.
 const shownQuery = ref<string | null>(null);
+// That query with the tab it was answered in.
+let answered: string | null = null;
+const keyNow = () => `${props.tab ?? ""}\u0000${props.query}`;
 const now = Date.now();
 
 let inflight: AbortController | null = null;
@@ -42,9 +50,16 @@ async function run(keepPick = false) {
   const ctrl = new AbortController();
   inflight = ctrl;
   const q = props.query;
+  const key = keyNow();
   loading.value = true;
   try {
-    const page: SearchResponse = await api.fetchSearch(q, PAGE, ctrl.signal, { toast: false });
+    const page: SearchResponse = await api.fetchSearch(
+      q,
+      PAGE,
+      ctrl.signal,
+      { toast: false },
+      { tab: props.tab },
+    );
     if (ctrl.signal.aborted) return;
     const echo = page.query_echo;
     notice.value =
@@ -58,6 +73,7 @@ async function run(keepPick = false) {
     total.value = page.total;
     nextOffset.value = page.next_offset;
     shownQuery.value = q;
+    answered = key;
     if (!keepPick || !results.value.some((r) => r.uuid === picked.value?.uuid)) {
       picked.value = results.value[0] ?? null;
     }
@@ -76,7 +92,7 @@ async function more() {
       PAGE,
       undefined,
       {},
-      { offset: nextOffset.value },
+      { offset: nextOffset.value, tab: props.tab },
     );
     results.value = [...results.value, ...page.rows];
     nextOffset.value = page.next_offset;
@@ -86,9 +102,9 @@ async function more() {
 }
 
 watch(
-  () => [props.query, props.active] as const,
-  ([q, active]) => {
-    if (active && q !== shownQuery.value) void run();
+  () => [props.query, props.tab, props.waiting, props.active] as const,
+  ([, , waiting, active]) => {
+    if (active && !waiting && keyNow() !== answered) void run();
   },
 );
 
@@ -140,12 +156,15 @@ function when(iso: string | null): string {
 
 const listEl = useTemplateRef<HTMLDivElement>("listEl");
 const refresh = oneAtATime(async () => {
-  if (props.active) await run(true);
-  else shownQuery.value = null;
+  if (props.active && !props.waiting) await run(true);
+  else {
+    shownQuery.value = null;
+    answered = null;
+  }
 });
 let stop: (() => void) | null = null;
 onMounted(() => {
-  if (props.active) void run();
+  if (props.active && !props.waiting) void run();
   stop = subscribeLive(
     {
       root: (e) => {
