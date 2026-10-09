@@ -1,8 +1,6 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
 load("//datalib/backend/unified_index:qmd_fixture.bzl", "QMD_FIXTURE_DATA", "QMD_FIXTURE_ENV")
 
-exports_files(["Cargo.toml"])
-
 # `datalib-applet` — the applet host (see docs/dev/applets.md), one
 # subcommand per applet, the same shape as `datalib-step`.
 #

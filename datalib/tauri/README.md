@@ -34,7 +34,7 @@ temp dir.
 
 **Not owned by Bazel** — this crate is a standalone cargo workspace (see
 the `[workspace]` table in `Cargo.toml`) so that Bazel's crate_universe,
-which ingests `datalib/backend`'s workspace via `crate.from_cargo`,
+which reads `datalib/backend/Cargo.toml` via `crate.from_cargo`,
 never has to resolve the tauri dependency tree. Drive it with cargo/pnpm:
 
 ```sh

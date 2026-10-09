@@ -35,7 +35,7 @@ FROM ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# cmake + perl + pkg-config + libssl-dev   protobuf-src's build script.
+# perl + pkg-config + libssl-dev   native crates' build scripts (ring, onig_sys).
 # lld               rustc on Linux defaults to the deprecated gold
 #                   linker and warns; lld present means we can opt in.
 # git               workspace_status.sh, crate fetches that vendor from git.
@@ -49,7 +49,6 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
-        cmake \
         curl \
         gdb \
         git \

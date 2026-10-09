@@ -261,9 +261,7 @@ third-party/   vendored upstream code.
 
 A provider's config schema is its own crate (`<p>_config`, serde
 structs and nothing else) so anything that needs to *understand* a
-config can link it without the machinery. Those crates have no
-`Cargo.toml` (§"Git: prefer merges over rebases" says why). The
-`<p>_render` split is the same move (see §"Ingest and render are
+config can link it without the machinery. The `<p>_render` split is the same move (see §"Ingest and render are
 separate crates").
 
 ## The sync pipeline
@@ -444,13 +442,6 @@ marks it `merge=union` so the merge itself goes through; then any
 So the resolution is: merge, build, commit. GitHub's merge button knows
 nothing of `.gitattributes` and still reports a conflict when two open
 PRs both touched it — the second one merges main and pushes.
-
-**A new first-party crate is Bazel-only unless it needs a
-`Cargo.toml`.** The lockfile records the Cargo workspace's resolution,
-so a crate with a `Cargo.toml` rewrites it on every branch that adds
-one; a crate with only a `BUILD.bazel` does not (the `<p>_config`
-crates and `datalib_problems` are the pattern). A `Cargo.toml` is
-needed only when something outside bazel has to see the crate.
 
 ## Push early, open the PR early, watch CI, and turn on autofix
 
@@ -706,6 +697,13 @@ Every `deps` / `proc_macro_deps` entry under `datalib/` must be used by
 the crate that names it (`.bazelrc` turns the rustc lint on per crate). A
 dep used only under `#[cfg(test)]` goes on the `rust_test`, not the
 library. A dep needed but never named is kept with `use <crate> as _;`.
+
+A first-party crate has no `Cargo.toml`; its `BUILD.bazel` is the whole
+truth. `datalib/backend/Cargo.toml` lists the third-party crates and
+nothing else, for crate_universe, `cargo deny` and `cargo about`. A new
+one goes there and into the `deps` that take it, then
+`tools/repin_cargo.sh`; `//:lint_repo` refuses an entry no `BUILD.bazel`
+names.
 
 ## Fallbacks: prefer failing loudly to succeeding quietly
 
